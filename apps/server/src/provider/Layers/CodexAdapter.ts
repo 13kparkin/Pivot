@@ -1618,6 +1618,8 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
           stream: "native",
         })
       : undefined);
+  const managedNativeEventLogger =
+    options?.nativeEventLogger === undefined ? nativeEventLogger : undefined;
   const serverSettingsService = yield* ServerSettingsService;
   const runtimeEventQueue = yield* Queue.unbounded<ProviderRuntimeEvent>();
   const sessions = new Map<ThreadId, CodexAdapterSessionContext>();
@@ -1924,7 +1926,11 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
     }).pipe(Effect.asVoid);
 
   yield* Effect.acquireRelease(Effect.void, () =>
-    stopAll().pipe(Effect.andThen(Queue.shutdown(runtimeEventQueue)), Effect.ignore),
+    stopAll().pipe(
+      Effect.andThen(Queue.shutdown(runtimeEventQueue)),
+      Effect.andThen(managedNativeEventLogger?.close() ?? Effect.void),
+      Effect.ignore,
+    ),
   );
 
   return {
