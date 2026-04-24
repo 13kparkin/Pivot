@@ -2,7 +2,7 @@ import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import * as NodeSocket from "@effect/platform-node/NodeSocket";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as NodeCrypto from "node:crypto";
-import { HostProcessEnvironment, HostProcessPlatform } from "@t3tools/shared/hostProcess";
+import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 
 import {
   AuthAccessTokenType,
@@ -15,15 +15,15 @@ import {
   GitCommandError,
   KeybindingRule,
   MessageId,
-  ExternalLauncherCommandNotFoundError,
-  OrchestrationThreadDetailSnapshot,
-  type OrchestrationThreadStreamItem,
+  OpenError,
+  ORCHESTRATION_V2_WS_METHODS,
   type OrchestrationThreadShell,
   TerminalNotRunningError,
   type OrchestrationCommand,
   type OrchestrationEvent,
+  type OrchestrationV2ThreadStreamItem,
   ORCHESTRATION_WS_METHODS,
-  type PreviewEvent,
+  type ProviderKind,
   ProjectId,
   ProviderDriverKind,
   ProviderInstanceId,
@@ -42,24 +42,20 @@ import { RELAY_HEALTH_REQUEST_TYP, RELAY_MINT_REQUEST_TYP } from "@t3tools/share
 import * as RelayClient from "@t3tools/shared/relayClient";
 import { assert, it } from "@effect/vitest";
 import { assertFailure, assertInclude, assertTrue } from "@effect/vitest/utils";
-import * as Clock from "effect/Clock";
-import * as Config from "effect/Config";
-import * as Deferred from "effect/Deferred";
-import * as DateTime from "effect/DateTime";
-import * as Duration from "effect/Duration";
-import * as Effect from "effect/Effect";
-import * as FileSystem from "effect/FileSystem";
-import * as Fiber from "effect/Fiber";
-import * as Layer from "effect/Layer";
-import * as ManagedRuntime from "effect/ManagedRuntime";
-import * as Option from "effect/Option";
-import * as Path from "effect/Path";
-import * as PubSub from "effect/PubSub";
-import * as Queue from "effect/Queue";
-import * as Schema from "effect/Schema";
-import * as Stream from "effect/Stream";
-import * as TestClock from "effect/testing/TestClock";
-import { ChildProcessSpawner } from "effect/unstable/process";
+import {
+  Deferred,
+  Duration,
+  Effect,
+  FileSystem,
+  Fiber,
+  Layer,
+  ManagedRuntime,
+  Option,
+  Path,
+  Queue,
+  Schema,
+  Stream,
+} from "effect";
 import {
   FetchHttpClient,
   HttpBody,
@@ -72,42 +68,43 @@ import {
 import { OtlpSerialization, OtlpTracer } from "effect/unstable/observability";
 import { RpcClient, RpcSerialization } from "effect/unstable/rpc";
 import * as Socket from "effect/unstable/socket/Socket";
-import { vi } from "vite-plus/test";
+import { vi } from "vitest";
+import { readFile } from "node:fs/promises";
 
 const TEST_EPOCH = DateTime.makeUnsafe("1970-01-01T00:00:00.000Z");
-const decodeTransferThreadSnapshot = Schema.decodeUnknownEffect(
-  Schema.fromJsonString(OrchestrationThreadDetailSnapshot),
-);
-
-const collectQueueUntil = Effect.fn("TransferBudget.collectQueueUntil")(function* <A>(
-  queue: Queue.Queue<A>,
-  predicate: (value: A) => boolean,
-  waitDescription: string,
-) {
-  return yield* Effect.gen(function* () {
-    const values: A[] = [];
-    while (true) {
-      const value = yield* Queue.take(queue);
-      values.push(value);
-      if (predicate(value)) return values;
-    }
-  }).pipe(
-    Effect.timeoutOrElse({
-      duration: "10 seconds",
-      orElse: () => Effect.die(new Error(`Timed out waiting for ${waitDescription}`)),
-    }),
-  );
-});
 
 import * as BackgroundPolicy from "./background/BackgroundPolicy.ts";
 import * as ServerConfig from "./config.ts";
 import { makeRoutesLayer } from "./server.ts";
-import { isThreadDetailEvent, resolveAvailableEditorsForConfig } from "./ws.ts";
-import * as CheckpointDiffQuery from "./checkpointing/CheckpointDiffQuery.ts";
-import * as GitManager from "./git/GitManager.ts";
-import * as Keybindings from "./keybindings.ts";
-import * as ExternalLauncher from "./process/externalLauncher.ts";
-import * as OrchestrationEngine from "./orchestration/Services/OrchestrationEngine.ts";
+import { resolveAttachmentRelativePath } from "./attachmentPaths.ts";
+import {
+  CheckpointDiffQuery,
+  type CheckpointDiffQueryShape,
+} from "./checkpointing/Services/CheckpointDiffQuery.ts";
+import { GitCore, type GitCoreShape } from "./git/Services/GitCore.ts";
+import { GitManager, type GitManagerShape } from "./git/Services/GitManager.ts";
+import { GitStatusBroadcasterLive } from "./git/Layers/GitStatusBroadcaster.ts";
+import {
+  GitStatusBroadcaster,
+  type GitStatusBroadcasterShape,
+} from "./git/Services/GitStatusBroadcaster.ts";
+import { Keybindings, type KeybindingsShape } from "./keybindings.ts";
+import { Open, type OpenShape } from "./open.ts";
+import {
+  OrchestrationEngineService,
+  type OrchestrationEngineShape,
+} from "./orchestration/Services/OrchestrationEngine.ts";
+import {
+  OrchestratorV2,
+  layerUnavailable as OrchestratorV2Unavailable,
+} from "./orchestration-v2/Orchestrator.ts";
+import { CodexOrchestratorReplayHarness } from "./orchestration-v2/Adapters/CodexAdapterV2.testkit.ts";
+import { layer as idAllocatorV2Layer } from "./orchestration-v2/IdAllocator.ts";
+import { provideDeterministicTestRuntime } from "./orchestration-v2/testkit/DeterministicRuntime.ts";
+import { ORCHESTRATOR_REPLAY_FIXTURES } from "./orchestration-v2/testkit/fixtures/index.ts";
+import { materializeFixtureInput } from "./orchestration-v2/testkit/fixtures/shared.ts";
+import { makeOrchestratorV2ProviderReplayLayer } from "./orchestration-v2/testkit/ProviderReplayHarness.ts";
+import { decodeProviderReplayNdjson } from "./orchestration-v2/testkit/ReplayTranscriptNdjson.ts";
 import { OrchestrationListenerCallbackError } from "./orchestration/Errors.ts";
 import * as ProjectionSnapshotQuery from "./orchestration/Services/ProjectionSnapshotQuery.ts";
 import { SqlitePersistenceMemory } from "./persistence/Layers/Sqlite.ts";
@@ -151,32 +148,6 @@ import * as ResourceAttribution from "./resourceTelemetry/ResourceAttribution.ts
 import * as ResourceTelemetry from "./resourceTelemetry/ResourceTelemetry.ts";
 import * as UsageService from "./usage/UsageService.ts";
 import * as Data from "effect/Data";
-
-import { makeOrchestrationIntegrationHarness } from "../integration/OrchestrationEngineHarness.integration.ts";
-import {
-  countingWsRpcProtocolLayer,
-  makeCountingWsRpcClient,
-  makeWebSocketTransferRecorder,
-  measureHttpGet,
-  transferDelta,
-} from "../integration/NetworkTransferMeasurement.integration.ts";
-import {
-  expectedMeasuredAssistantText,
-  queueMeasuredTransferTurn,
-  seedTransferBudgetHistory,
-  TRANSFER_HISTORY_TURN_COUNT,
-  TRANSFER_MEASURED_TURN_CREATED_AT,
-  TRANSFER_MEASURED_TURN_INDEX,
-  TRANSFER_THREAD_ID,
-  transferModelSelection,
-  waitForTurnQuiesced,
-} from "../integration/TransferBudgetScenario.integration.ts";
-import {
-  formatTransferBudgetReport,
-  formatTransferBudgetResult,
-  type TransferBudgetRun,
-  transferBudgetViolations,
-} from "../integration/TransferBudgetReport.integration.ts";
 
 const defaultProjectId = ProjectId.make("project-default");
 const defaultThreadId = ThreadId.make("thread-default");
@@ -383,42 +354,24 @@ const makeBrowserOtlpPayload = (spanName: string) =>
 const buildAppUnderTest = (options?: {
   config?: Partial<ServerConfig.ServerConfig["Service"]>;
   layers?: {
-    keybindings?: Partial<Keybindings.Keybindings["Service"]>;
-    providerRegistry?: Partial<ProviderRegistry.ProviderRegistry["Service"]>;
-    serverSettings?: Partial<ServerSettings.ServerSettingsService["Service"]>;
-    externalLauncher?: Partial<ExternalLauncher.ExternalLauncher["Service"]>;
-    vcsDriver?: Partial<VcsDriver.VcsDriver["Service"]>;
-    vcsDriverRegistry?: Partial<VcsDriverRegistry.VcsDriverRegistry["Service"]>;
-    gitVcsDriver?: Partial<GitVcsDriver.GitVcsDriver["Service"]>;
-    gitManager?: Partial<GitManager.GitManager["Service"]>;
-    sourceControlRepositoryService?: Partial<
-      SourceControlRepositoryService.SourceControlRepositoryService["Service"]
-    >;
-    reviewService?: Partial<ReviewService.ReviewService["Service"]>;
-    vcsStatusBroadcaster?: Partial<VcsStatusBroadcaster.VcsStatusBroadcaster["Service"]>;
-    projectSetupScriptRunner?: Partial<
-      ProjectSetupScriptRunner.ProjectSetupScriptRunner["Service"]
-    >;
-    terminalManager?: Partial<TerminalManager.TerminalManager["Service"]>;
-    orchestrationEngine?: Partial<OrchestrationEngine.OrchestrationEngineService["Service"]>;
-    projectionSnapshotQuery?: Partial<ProjectionSnapshotQuery.ProjectionSnapshotQuery["Service"]>;
-    checkpointDiffQuery?: Partial<CheckpointDiffQuery.CheckpointDiffQuery["Service"]>;
-    browserTraceCollector?: Partial<BrowserTraceCollector.BrowserTraceCollector["Service"]>;
-    serverLifecycleEvents?: Partial<ServerLifecycleEvents.ServerLifecycleEvents["Service"]>;
-    serverRuntimeStartup?: Partial<ServerRuntimeStartup.ServerRuntimeStartup["Service"]>;
-    serverEnvironment?: Partial<ServerEnvironment.ServerEnvironment["Service"]>;
-    repositoryIdentityResolver?: Partial<
-      RepositoryIdentityResolver.RepositoryIdentityResolver["Service"]
-    >;
-    cloudManagedEndpointRuntime?: Partial<
-      CloudManagedEndpointRuntime.CloudManagedEndpointRuntime["Service"]
-    >;
-    relayClient?: Partial<RelayClient.RelayClient["Service"]>;
-    cloudCliTokenManager?: Partial<CloudCliTokenManager.CloudCliTokenManager["Service"]>;
-    nativeTelemetryClient?: Partial<NativeTelemetryClient.NativeTelemetryClient["Service"]>;
-    desktopTelemetryReceiver?: Partial<
-      DesktopTelemetryReceiver.DesktopTelemetryReceiver["Service"]
-    >;
+    keybindings?: Partial<KeybindingsShape>;
+    providerRegistry?: Partial<ProviderRegistryShape>;
+    serverSettings?: Partial<ServerSettingsShape>;
+    open?: Partial<OpenShape>;
+    gitCore?: Partial<GitCoreShape>;
+    gitManager?: Partial<GitManagerShape>;
+    gitStatusBroadcaster?: Partial<GitStatusBroadcasterShape>;
+    projectSetupScriptRunner?: Partial<ProjectSetupScriptRunnerShape>;
+    terminalManager?: Partial<TerminalManagerShape>;
+    orchestrationEngine?: Partial<OrchestrationEngineShape>;
+    projectionSnapshotQuery?: Partial<ProjectionSnapshotQueryShape>;
+    checkpointDiffQuery?: Partial<CheckpointDiffQueryShape>;
+    browserTraceCollector?: Partial<BrowserTraceCollectorShape>;
+    serverLifecycleEvents?: Partial<ServerLifecycleEventsShape>;
+    serverRuntimeStartup?: Partial<ServerRuntimeStartupShape>;
+    serverEnvironment?: Partial<ServerEnvironmentShape>;
+    repositoryIdentityResolver?: Partial<RepositoryIdentityResolverShape>;
+    orchestratorV2?: Layer.Layer<OrchestratorV2, never, never>;
   };
 }) =>
   Effect.gen(function* () {
@@ -604,12 +557,9 @@ const buildAppUnderTest = (options?: {
         ),
       ),
     );
-    const serviceLauncherClientLayer = ServiceLauncherClient.layer.pipe(
-      Layer.provide(Layer.succeed(HostProcessEnvironment, {})),
-    );
 
     const servedRoutesLayer = HttpRouter.serve(
-      makeRoutesLayer.pipe(Layer.provide(serviceLauncherClientLayer)),
+      makeRoutesLayer.pipe(Layer.provide(ServiceLauncherClient.layer)),
       {
         disableListenLog: true,
         disableLogger: true,
@@ -803,6 +753,7 @@ const buildAppUnderTest = (options?: {
           ...options?.layers?.projectionSnapshotQuery,
         }),
       ),
+      Layer.provide(options?.layers?.orchestratorV2 ?? OrchestratorV2Unavailable),
       Layer.provide(
         Layer.mock(CheckpointDiffQuery.CheckpointDiffQuery)({
           getTurnDiff: () =>
@@ -993,10 +944,53 @@ const makeWsRpcClient = RpcClient.make(WsRpcGroup);
 type WsRpcClient =
   typeof makeWsRpcClient extends Effect.Effect<infer Client, any, any> ? Client : never;
 
+class WsRpcTestTimeoutError extends Schema.TaggedErrorClass<WsRpcTestTimeoutError>()(
+  "WsRpcTestTimeoutError",
+  {
+    label: Schema.String,
+    cause: Schema.optional(Schema.Defect),
+  },
+) {
+  override get message(): string {
+    return `Timed out waiting for ${this.label}.`;
+  }
+}
+
 const withWsRpcClient = <A, E, R>(
   wsUrl: string,
   f: (client: WsRpcClient) => Effect.Effect<A, E, R>,
 ) => makeWsRpcClient.pipe(Effect.flatMap(f), Effect.provide(wsRpcProtocolLayer(wsUrl)));
+
+const ORCHESTRATION_V2_REPLAY_HARNESSES = [CodexOrchestratorReplayHarness] as const;
+
+function orchestrationV2ReplayHarnessFor(provider: ProviderKind) {
+  const harness = ORCHESTRATION_V2_REPLAY_HARNESSES.find(
+    (candidate) => candidate.provider === provider,
+  );
+  if (!harness) {
+    throw new Error(`No orchestration V2 replay harness registered for ${provider}.`);
+  }
+  return harness;
+}
+
+const readProviderReplayTranscript = (file: URL) =>
+  Effect.promise(() => readFile(file, "utf8")).pipe(Effect.flatMap(decodeProviderReplayNdjson));
+
+const takeWsItem = <A>(queue: Queue.Queue<A>, label: string) =>
+  Queue.take(queue).pipe(
+    Effect.raceFirst(
+      Effect.tryPromise({
+        try: () =>
+          new Promise<never>((_resolve, reject) => {
+            setTimeout(() => reject(new WsRpcTestTimeoutError({ label })), 5_000);
+          }),
+        catch: (cause) =>
+          Schema.is(WsRpcTestTimeoutError)(cause)
+            ? cause
+            : new WsRpcTestTimeoutError({ label, cause }),
+      }),
+    ),
+  );
 
 const appendSessionCookieToWsUrl = (url: string, sessionCookieHeader: string) => {
   const isAbsoluteUrl = /^[a-zA-Z][a-zA-Z\d+.-]*:/.test(url);
@@ -1377,28 +1371,6 @@ const getWsServerUrl = (
       yield* getAuthenticatedSessionCookieHeader(options?.credential),
     );
   });
-
-// Mirrors NodeHttpServer.layerTest, which does not expose server options,
-// with the production `websocket: { perMessageDeflate: true }` setting.
-const NodeHttpServerTestWithWsDeflate = HttpServer.layerTestClient.pipe(
-  Layer.provide(
-    Layer.fresh(FetchHttpClient.layer).pipe(
-      Layer.provide(Layer.succeed(FetchHttpClient.RequestInit)({ keepalive: false })),
-    ),
-  ),
-  Layer.provideMerge(
-    Layer.unwrap(
-      Effect.map(
-        Effect.promise(() => import("node:http")),
-        (NodeHttp) =>
-          NodeHttpServer.layer(NodeHttp.createServer, {
-            port: 0,
-            websocket: { perMessageDeflate: true },
-          }),
-      ),
-    ),
-  ),
-);
 
 it.layer(NodeServices.layer)("server router seam", (it) => {
   it.effect("parks HTTP ingress until command readiness", () =>
@@ -3298,6 +3270,28 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
 
       assert.equal(response.status, 401);
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  // Mirrors NodeHttpServer.layerTest, which does not expose server options,
+  // with the production `websocket: { perMessageDeflate: true }` setting.
+  const NodeHttpServerTestWithWsDeflate = HttpServer.layerTestClient.pipe(
+    Layer.provide(
+      Layer.fresh(FetchHttpClient.layer).pipe(
+        Layer.provide(Layer.succeed(FetchHttpClient.RequestInit)({ keepalive: false })),
+      ),
+    ),
+    Layer.provideMerge(
+      Layer.unwrap(
+        Effect.map(
+          Effect.promise(() => import("node:http")),
+          (NodeHttp) =>
+            NodeHttpServer.layer(NodeHttp.createServer, {
+              port: 0,
+              websocket: { perMessageDeflate: true },
+            }),
+        ),
+      ),
+    ),
   );
 
   it.effect("negotiates permessage-deflate with clients that offer it", () =>
@@ -5951,7 +5945,126 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
-  it.effect("routes websocket rpc orchestration shell snapshot errors", () =>
+  it.effect("streams orchestration V2 replay output over websocket rpc", () =>
+    Effect.gen(function* () {
+      const fixture = ORCHESTRATOR_REPLAY_FIXTURES.find((candidate) => candidate.name === "simple");
+      if (!fixture) {
+        throw new Error("Missing simple orchestration V2 replay fixture.");
+      }
+      const provider = fixture.providers.find((candidate) => candidate.provider === "codex");
+      if (!provider) {
+        throw new Error("Missing Codex provider variant for simple orchestration V2 fixture.");
+      }
+
+      const harness = orchestrationV2ReplayHarnessFor(provider.provider);
+      const rawTranscript = yield* readProviderReplayTranscript(provider.transcriptFile);
+      const transcript = yield* harness.decodeTranscript(rawTranscript);
+      const materialized = yield* materializeFixtureInput({
+        scenario: fixture.name,
+        fixtureInput: fixture.buildInput(),
+        modelSelection: provider.modelSelection,
+      }).pipe(Effect.provide(idAllocatorV2Layer), provideDeterministicTestRuntime);
+      const scenario = {
+        name: `${fixture.name}/${provider.provider}/ws`,
+        transcript,
+        commands: materialized.commands,
+        steps: materialized.steps,
+        projectionThreadIds: materialized.projectionThreadIds,
+      };
+      const [createThreadCommand, dispatchMessageCommand] = materialized.commands;
+      if (createThreadCommand?.type !== "thread.create") {
+        throw new Error("Expected first simple fixture command to create a thread.");
+      }
+      if (dispatchMessageCommand?.type !== "message.dispatch") {
+        throw new Error("Expected second simple fixture command to dispatch a message.");
+      }
+
+      yield* buildAppUnderTest({
+        layers: {
+          orchestratorV2: makeOrchestratorV2ProviderReplayLayer(scenario, harness).pipe(
+            Layer.orDie,
+          ),
+        },
+      });
+
+      const wsUrl = yield* getWsServerUrl("/ws");
+      const received = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          Effect.gen(function* () {
+            const createResult =
+              yield* client[ORCHESTRATION_V2_WS_METHODS.dispatchCommand](createThreadCommand);
+            const duplicateCreateResult =
+              yield* client[ORCHESTRATION_V2_WS_METHODS.dispatchCommand](createThreadCommand);
+            assert.equal(duplicateCreateResult.sequence, createResult.sequence);
+
+            const streamItems = yield* Queue.unbounded<OrchestrationV2ThreadStreamItem>();
+            const streamFiber = yield* client[ORCHESTRATION_V2_WS_METHODS.subscribeThread]({
+              threadId: createThreadCommand.threadId,
+            }).pipe(
+              Stream.runForEach((item) => Queue.offer(streamItems, item)),
+              Effect.forkDetach,
+            );
+
+            const snapshot = yield* takeWsItem(streamItems, "orchestration V2 snapshot");
+            assert.equal(snapshot.kind, "snapshot");
+            if (snapshot.kind === "snapshot") {
+              assert.equal(snapshot.projection.thread.id, createThreadCommand.threadId);
+              assert.equal(snapshot.snapshotSequence, createResult.sequence);
+              assert.deepEqual(
+                snapshot.projection.turnItems.map((item) => item.type),
+                [],
+              );
+            }
+
+            yield* client[ORCHESTRATION_V2_WS_METHODS.dispatchCommand](dispatchMessageCommand);
+
+            const items: Array<OrchestrationV2ThreadStreamItem> = [];
+            const turnItemTypes = new Set<string>();
+            for (let index = 0; index < 20; index += 1) {
+              const item = yield* takeWsItem(streamItems, `orchestration V2 event ${index + 1}`);
+              items.push(item);
+              if (item.kind === "event") {
+                assert.isAbove(item.sequence, createResult.sequence);
+              }
+              if (item.kind === "event" && item.event.type === "turn-item.updated") {
+                turnItemTypes.add(item.event.payload.type);
+              }
+              if (turnItemTypes.has("user_message") && turnItemTypes.has("assistant_message")) {
+                break;
+              }
+            }
+
+            const projection = yield* client[ORCHESTRATION_V2_WS_METHODS.getThreadProjection]({
+              threadId: createThreadCommand.threadId,
+            });
+            yield* Fiber.interrupt(streamFiber);
+
+            return { items, projection };
+          }),
+        ),
+      );
+
+      const streamedTurnItems = received.items.flatMap((item) =>
+        item.kind === "event" && item.event.type === "turn-item.updated"
+          ? [item.event.payload]
+          : [],
+      );
+      assert.deepEqual(
+        streamedTurnItems.map((item) => item.type),
+        ["user_message", "assistant_message"],
+      );
+      assert.deepEqual(
+        received.projection.turnItems.map((item) => item.type),
+        ["user_message", "assistant_message"],
+      );
+      assert.equal(
+        received.projection.turnItems.find((item) => item.type === "assistant_message")?.text,
+        "fixture simple ok",
+      );
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("enriches replayed project events with repository identity metadata", () =>
     Effect.gen(function* () {
       const projectionError = new PersistenceSqlError({
         operation: "ProjectionSnapshotQuery.getShellSnapshot:test",
@@ -7314,13 +7427,6 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
             pr: null,
           }),
         );
-        const remoteExists = vi.fn(
-          (_: Parameters<GitVcsDriver.GitVcsDriver["Service"]["remoteExists"]>[0]) =>
-            Effect.sync(() => {
-              bootstrapGitOperations.push("remote-exists");
-              return true;
-            }),
-        );
         const fetchRemote = vi.fn(
           (_: Parameters<GitVcsDriver.GitVcsDriver["Service"]["fetchRemote"]>[0]) =>
             Effect.sync(() => {
@@ -7368,7 +7474,6 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         yield* buildAppUnderTest({
           layers: {
             gitVcsDriver: {
-              remoteExists,
               fetchRemote,
               resolveRemoteTrackingCommit,
               createWorktree,
@@ -7459,7 +7564,6 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
           fallbackRemoteName: "origin",
         });
         assert.deepEqual(bootstrapGitOperations, [
-          "remote-exists",
           "fetch",
           "resolve-remote-commit",
           "create-worktree",
@@ -7485,110 +7589,6 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         if (finalCommand?.type === "thread.turn.start") {
           assert.equal(finalCommand.bootstrap, undefined);
         }
-      }).pipe(Effect.provide(NodeHttpServer.layerTest)),
-  );
-
-  it.effect(
-    "falls back to the local base branch when startFromOrigin is set but no origin remote exists",
-    () =>
-      Effect.gen(function* () {
-        const dispatchedCommands: Array<OrchestrationCommand> = [];
-        const remoteExists = vi.fn(
-          (_: Parameters<GitVcsDriver.GitVcsDriver["Service"]["remoteExists"]>[0]) =>
-            Effect.succeed(false),
-        );
-        const fetchRemote = vi.fn(
-          (_: Parameters<GitVcsDriver.GitVcsDriver["Service"]["fetchRemote"]>[0]) => Effect.void,
-        );
-        const resolveRemoteTrackingCommit = vi.fn(
-          (_: Parameters<GitVcsDriver.GitVcsDriver["Service"]["resolveRemoteTrackingCommit"]>[0]) =>
-            Effect.succeed({
-              commitSha: "0123456789abcdef0123456789abcdef01234567",
-              remoteRefName: "origin/main",
-            }),
-        );
-        const createWorktree = vi.fn(
-          (_: Parameters<GitVcsDriver.GitVcsDriver["Service"]["createWorktree"]>[0]) =>
-            Effect.succeed({
-              worktree: {
-                refName: "t3code/bootstrap-refName",
-                path: "/tmp/bootstrap-worktree",
-              },
-            }),
-        );
-
-        yield* buildAppUnderTest({
-          layers: {
-            gitVcsDriver: {
-              remoteExists,
-              fetchRemote,
-              resolveRemoteTrackingCommit,
-              createWorktree,
-            },
-            orchestrationEngine: {
-              dispatch: (command) =>
-                Effect.sync(() => {
-                  dispatchedCommands.push(command);
-                  return { sequence: dispatchedCommands.length };
-                }),
-              readEvents: () => Stream.empty,
-            },
-          },
-        });
-
-        const createdAt = "2026-01-01T00:00:00.000Z";
-        const wsUrl = yield* getWsServerUrl("/ws");
-        yield* Effect.scoped(
-          withWsRpcClient(wsUrl, (client) =>
-            client[ORCHESTRATION_WS_METHODS.dispatchCommand]({
-              type: "thread.turn.start",
-              commandId: CommandId.make("cmd-bootstrap-turn-start-no-origin"),
-              threadId: ThreadId.make("thread-bootstrap-no-origin"),
-              message: {
-                messageId: MessageId.make("msg-bootstrap-no-origin"),
-                role: "user",
-                text: "hello",
-                attachments: [],
-              },
-              modelSelection: defaultModelSelection,
-              runtimeMode: "full-access",
-              interactionMode: "default",
-              bootstrap: {
-                createThread: {
-                  projectId: defaultProjectId,
-                  title: "Bootstrap Thread",
-                  modelSelection: defaultModelSelection,
-                  runtimeMode: "full-access",
-                  interactionMode: "default",
-                  branch: "main",
-                  worktreePath: null,
-                  createdAt,
-                },
-                prepareWorktree: {
-                  projectCwd: "/tmp/project",
-                  baseBranch: "main",
-                  branch: "t3code/bootstrap-refName",
-                  startFromOrigin: true,
-                },
-              },
-              createdAt,
-            }),
-          ),
-        );
-
-        assert.deepEqual(remoteExists.mock.calls[0]?.[0], {
-          cwd: "/tmp/project",
-          remoteName: "origin",
-        });
-        assert.equal(fetchRemote.mock.calls.length, 0);
-        assert.equal(resolveRemoteTrackingCommit.mock.calls.length, 0);
-        assert.deepEqual(createWorktree.mock.calls[0]?.[0], {
-          cwd: "/tmp/project",
-          refName: "main",
-          newRefName: "t3code/bootstrap-refName",
-          baseRefName: "main",
-          path: null,
-        });
       }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
@@ -8019,167 +8019,3 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 });
-
-it.live(
-  "reports thread HTTP and WebSocket transfer budgets",
-  () =>
-    Effect.gen(function* () {
-      const providers = [
-        ProviderDriverKind.make("codex"),
-        ProviderDriverKind.make("claudeAgent"),
-      ] as const;
-
-      const runs = yield* Effect.forEach(
-        providers,
-        (provider) =>
-          Effect.acquireUseRelease(
-            makeOrchestrationIntegrationHarness({ provider }),
-            (harness) =>
-              Effect.gen(function* () {
-                yield* seedTransferBudgetHistory(harness, provider);
-                yield* buildAppUnderTest({
-                  layers: {
-                    orchestrationEngine: harness.engine,
-                    projectionSnapshotQuery: harness.snapshotQuery,
-                  },
-                });
-
-                const baseUrl = yield* getHttpServerUrl();
-                const cookie = yield* getAuthenticatedSessionCookieHeader();
-
-                const recorder = makeWebSocketTransferRecorder();
-                const wsUrl = baseUrl.replace(/^http:/, "ws:") + "/ws";
-                const protocolLayer = countingWsRpcProtocolLayer({
-                  url: wsUrl,
-                  cookie,
-                  recorder,
-                });
-
-                return yield* Effect.scoped(
-                  Effect.gen(function* () {
-                    const client = yield* makeCountingWsRpcClient;
-
-                    const threadSnapshot = yield* measureHttpGet({
-                      url: `${baseUrl}/api/orchestration/threads/${TRANSFER_THREAD_ID}`,
-                      headers: { cookie },
-                    });
-                    assert.equal(threadSnapshot.status, 200);
-                    assert.equal(threadSnapshot.contentEncoding, "gzip");
-                    const decodedThread = yield* decodeTransferThreadSnapshot(
-                      Buffer.from(threadSnapshot.decodedBody).toString("utf8"),
-                    );
-                    assert.equal(
-                      decodedThread.thread.messages.length,
-                      TRANSFER_HISTORY_TURN_COUNT * 2,
-                    );
-
-                    const threadItems = yield* Queue.unbounded<OrchestrationThreadStreamItem>();
-                    yield* client[ORCHESTRATION_WS_METHODS.subscribeThread]({
-                      threadId: TRANSFER_THREAD_ID,
-                      afterSequence: decodedThread.snapshotSequence,
-                      requestCompletionMarker: true,
-                    }).pipe(
-                      Stream.runForEach((item) =>
-                        Queue.offer(threadItems, item).pipe(Effect.asVoid),
-                      ),
-                      Effect.forkScoped,
-                    );
-                    const initialThreadItems = yield* collectQueueUntil(
-                      threadItems,
-                      (item) => item.kind === "synchronized",
-                      `${provider} thread subscription to synchronize`,
-                    );
-                    assert.isFalse(initialThreadItems.some((item) => item.kind === "snapshot"));
-                    assert.include(recorder.negotiatedExtensions(), "permessage-deflate");
-
-                    yield* queueMeasuredTransferTurn(harness, provider);
-                    const turnStartTotals = recorder.totals();
-                    yield* client[ORCHESTRATION_WS_METHODS.dispatchCommand]({
-                      type: "thread.turn.start",
-                      commandId: CommandId.make(`transfer:${provider}:measured-turn`),
-                      threadId: TRANSFER_THREAD_ID,
-                      message: {
-                        messageId: MessageId.make("transfer-user-measured"),
-                        role: "user",
-                        text: "Measure the client-bound transfer for this turn.",
-                        attachments: [],
-                      },
-                      modelSelection: transferModelSelection(provider),
-                      runtimeMode: "approval-required",
-                      interactionMode: "default",
-                      createdAt: TRANSFER_MEASURED_TURN_CREATED_AT,
-                    });
-                    yield* waitForTurnQuiesced(harness, TRANSFER_MEASURED_TURN_INDEX + 1);
-                    const finalThreadSequence = yield* harness.engine
-                      .readEvents(decodedThread.snapshotSequence, 10_000)
-                      .pipe(
-                        Stream.runFold(
-                          () => decodedThread.snapshotSequence,
-                          (sequence, event) =>
-                            event.aggregateId === TRANSFER_THREAD_ID && isThreadDetailEvent(event)
-                              ? Math.max(sequence, event.sequence)
-                              : sequence,
-                        ),
-                      );
-                    assert.isAbove(finalThreadSequence, decodedThread.snapshotSequence);
-
-                    yield* collectQueueUntil(
-                      threadItems,
-                      (item) =>
-                        item.kind === "event" && item.event.sequence === finalThreadSequence,
-                      `${provider} thread stream to reach sequence ${finalThreadSequence}`,
-                    );
-                    const measuredTurnWebSocket = transferDelta(turnStartTotals, recorder.totals());
-
-                    const finalThreadSnapshot = yield* harness.snapshotQuery
-                      .getThreadDetailSnapshot(TRANSFER_THREAD_ID)
-                      .pipe(Effect.map(Option.getOrThrow));
-                    const expectedAssistantText = expectedMeasuredAssistantText(provider);
-                    const measuredAssistant = finalThreadSnapshot.thread.messages.find(
-                      (message) =>
-                        message.role === "assistant" && message.text === expectedAssistantText,
-                    );
-                    assert.isDefined(measuredAssistant);
-                    assert.isTrue(
-                      finalThreadSnapshot.thread.messages.length >= TRANSFER_HISTORY_TURN_COUNT * 2,
-                    );
-                    assert.equal(measuredAssistant?.streaming, false);
-                    assert.equal(finalThreadSnapshot.thread.session?.status, "ready");
-                    assert.equal(
-                      finalThreadSnapshot.thread.checkpoints.length,
-                      TRANSFER_HISTORY_TURN_COUNT + 1,
-                    );
-
-                    return {
-                      provider,
-                      threadSnapshot,
-                      measuredTurnWebSocket,
-                    } satisfies TransferBudgetRun;
-                  }).pipe(Effect.provide(protocolLayer)),
-                );
-              }),
-            (harness) => harness.dispose,
-          ).pipe(Effect.provide(NodeHttpServerTestWithWsDeflate)),
-        { concurrency: 1 },
-      );
-
-      const report = formatTransferBudgetReport(runs);
-      yield* Effect.logInfo(`\n${report}`);
-      const reportPath = yield* Config.string("T3CODE_TRANSFER_BUDGET_REPORT_PATH").pipe(
-        Config.option,
-      );
-      if (Option.isSome(reportPath)) {
-        const fileSystem = yield* FileSystem.FileSystem;
-        yield* fileSystem.writeFileString(reportPath.value, report);
-      }
-      const resultPath = yield* Config.string("T3CODE_TRANSFER_BUDGET_RESULT_PATH").pipe(
-        Config.option,
-      );
-      if (Option.isSome(resultPath)) {
-        const fileSystem = yield* FileSystem.FileSystem;
-        yield* fileSystem.writeFileString(resultPath.value, formatTransferBudgetResult(runs));
-      }
-      assert.deepEqual(transferBudgetViolations(runs), []);
-    }).pipe(Effect.provide(NodeServices.layer)),
-  120_000,
-);
