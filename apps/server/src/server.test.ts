@@ -95,6 +95,9 @@ import {
   OrchestrationEngineService,
   type OrchestrationEngineShape,
 } from "./orchestration/Services/OrchestrationEngine.ts";
+import { layerUnavailable as OrchestratorV2UnavailableLayer } from "./orchestration-v2/Orchestrator.ts";
+import { layer as ThreadManagementServiceLayer } from "./orchestration-v2/ThreadManagementService.ts";
+import { OrchestrationListenerCallbackError } from "./orchestration/Errors.ts";
 import {
   OrchestratorV2,
   layerUnavailable as OrchestratorV2Unavailable,
@@ -149,6 +152,11 @@ import * as ResourceAttribution from "./resourceTelemetry/ResourceAttribution.ts
 import * as ResourceTelemetry from "./resourceTelemetry/ResourceTelemetry.ts";
 import * as UsageService from "./usage/UsageService.ts";
 import * as Data from "effect/Data";
+
+const OrchestrationV2UnavailableTestLayer = Layer.merge(
+  OrchestratorV2UnavailableLayer,
+  ThreadManagementServiceLayer.pipe(Layer.provide(OrchestratorV2UnavailableLayer)),
+);
 
 const defaultProjectId = ProjectId.make("project-default");
 const defaultThreadId = ThreadId.make("thread-default");
@@ -772,6 +780,7 @@ const buildAppUnderTest = (options?: {
           ...options?.layers?.checkpointDiffQuery,
         }),
       ),
+      Layer.provide(OrchestrationV2UnavailableTestLayer),
     );
 
     const appLayer = servedRoutesLayer.pipe(
