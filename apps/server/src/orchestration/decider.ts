@@ -250,8 +250,12 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           title: command.title,
           workspaceRoot: command.workspaceRoot,
           defaultModelSelection: command.defaultModelSelection ?? null,
+<<<<<<< HEAD
           faviconPath: null,
           scripts: [],
+=======
+          scripts: command.scripts ?? [],
+>>>>>>> f38dbfd84c (Integrate orchestration v2 with the application runtime)
           createdAt: command.createdAt,
           updatedAt: command.createdAt,
         },
