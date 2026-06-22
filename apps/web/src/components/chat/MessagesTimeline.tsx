@@ -5,6 +5,7 @@ import {
   type ScopedThreadRef,
   type ServerProviderSkill,
   type RunId,
+  type ThreadId,
 } from "@t3tools/contracts";
 import { parseScopedThreadKey } from "@t3tools/client-runtime/environment";
 import type { AgentPanelModel } from "@t3tools/client-runtime/state/subagentRuntime";
@@ -53,6 +54,7 @@ import {
   ChevronRightIcon,
   CircleAlertIcon,
   EyeIcon,
+  GitForkIcon,
   GlobeIcon,
   HammerIcon,
   MessageCircleIcon,
@@ -106,6 +108,9 @@ import { cn } from "~/lib/utils";
 import { useUiStateStore } from "~/uiStateStore";
 import { type TimestampFormat } from "@t3tools/contracts/settings";
 import { formatChatTimestampTooltip, formatShortTimestamp } from "../../timestampFormat";
+import { V2ItemInspector } from "./V2ItemInspector";
+import { useV2ItemSupport } from "../../state/v2ItemSupport";
+import { isV2LifecycleItem, V2LifecycleRow } from "./V2LifecycleRow";
 
 import {
   buildInlineTerminalContextText,
@@ -139,16 +144,17 @@ interface TimelineRowSharedState {
   activeThreadEnvironmentId: EnvironmentId;
   onRevertUserMessage: (messageId: MessageId) => void;
   onImageExpand: (preview: ExpandedImagePreview) => void;
-<<<<<<< HEAD
-  onOpenTurnDiff: (turnId: TurnId, filePath?: string) => void;
-  onToggleTurnFold: (turnId: TurnId) => void;
-  onToggleWorkGroup: (groupId: string, anchorKey: string) => void;
-  agentPanelModel: AgentPanelModel;
-  onOpenAgents: () => void;
-=======
   onOpenTurnDiff: (runId: RunId, filePath?: string) => void;
+  onOpenThread: (threadId: OrchestrationV2TurnItem["threadId"]) => void;
+  onForkFromRun: (input: {
+    readonly sourceThreadId: ThreadId;
+    readonly runId: RunId;
+  }) => Promise<void>;
+  onRollbackCheckpoint: (input: {
+    readonly checkpointId: string;
+    readonly scopeId: string;
+  }) => void;
   onToggleTurnFold: (runId: RunId) => void;
->>>>>>> 79c36e6204 (Complete orchestration V2 frontend cutover)
 }
 
 interface TimelineRowActivityState {
@@ -219,6 +225,15 @@ interface MessagesTimelineProps {
   turnDiffSummaryByAssistantMessageId: Map<MessageId, TurnDiffSummary>;
   routeThreadKey: string;
   onOpenTurnDiff: (runId: RunId, filePath?: string) => void;
+  onOpenThread: (threadId: OrchestrationV2TurnItem["threadId"]) => void;
+  onForkFromRun: (input: {
+    readonly sourceThreadId: ThreadId;
+    readonly runId: RunId;
+  }) => Promise<void>;
+  onRollbackCheckpoint: (input: {
+    readonly checkpointId: string;
+    readonly scopeId: string;
+  }) => void;
   revertTurnCountByUserMessageId: Map<MessageId, number>;
   onRevertUserMessage: (messageId: MessageId) => void;
   isRevertingCheckpoint: boolean;
@@ -264,6 +279,9 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   turnDiffSummaryByAssistantMessageId,
   routeThreadKey,
   onOpenTurnDiff,
+  onOpenThread,
+  onForkFromRun,
+  onRollbackCheckpoint,
   revertTurnCountByUserMessageId,
   onRevertUserMessage,
   isRevertingCheckpoint,
@@ -284,20 +302,6 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   topFadeEnabled = false,
   loadEarlier = null,
 }: MessagesTimelineProps) {
-<<<<<<< HEAD
-  const [expandedTurnIds, setExpandedTurnIds] = useState<ReadonlySet<TurnId>>(new Set());
-  const [expandedWorkGroupIds, setExpandedWorkGroupIds] = useState<ReadonlySet<string>>(new Set());
-  const [disclosureToggleSettling, setDisclosureToggleSettling] = useState(false);
-  const [minimapStripMap] = useState(() => new Map<string, HTMLSpanElement>());
-  const disclosureAnchorKeyRef = useRef<string | null>(null);
-  const disclosureSettleFrameRef = useRef<number | null>(null);
-  const disclosureSettleSecondFrameRef = useRef<number | null>(null);
-
-  useEffect(() => {
-    return () => {
-      if (disclosureSettleFrameRef.current !== null) {
-        cancelAnimationFrame(disclosureSettleFrameRef.current);
-=======
   const [expandedRunIds, setExpandedRunIds] = useState<ReadonlySet<RunId>>(new Set());
 
   // Toggling a fold inserts/removes rows between the fold row and the final
@@ -315,7 +319,6 @@ export const MessagesTimeline = memo(function MessagesTimeline({
         next.delete(runId);
       } else {
         next.add(runId);
->>>>>>> 79c36e6204 (Complete orchestration V2 frontend cutover)
       }
       if (disclosureSettleSecondFrameRef.current !== null) {
         cancelAnimationFrame(disclosureSettleSecondFrameRef.current);
@@ -532,6 +535,9 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       onRevertUserMessage,
       onImageExpand,
       onOpenTurnDiff,
+      onOpenThread,
+      onForkFromRun,
+      onRollbackCheckpoint,
       onToggleTurnFold,
       onToggleWorkGroup,
       agentPanelModel,
@@ -548,6 +554,9 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       onRevertUserMessage,
       onImageExpand,
       onOpenTurnDiff,
+      onOpenThread,
+      onForkFromRun,
+      onRollbackCheckpoint,
       onToggleTurnFold,
       onToggleWorkGroup,
       agentPanelModel,
@@ -952,12 +961,7 @@ const TimelineRowContent = memo(function TimelineRowContent({ row }: { row: Time
         // they sit closer to the work that follows them.
         (row.kind === "message" && row.message.role === "assistant" && !row.showAssistantMeta) ||
           row.kind === "work" ||
-<<<<<<< HEAD
-          row.kind === "work-toggle" ||
-          row.kind === "turn-plan"
-=======
           row.kind === "event"
->>>>>>> 79c36e6204 (Complete orchestration V2 frontend cutover)
           ? "pb-2"
           : "pb-4",
         row.kind === "message" && row.message.role === "assistant" ? "group/assistant" : null,
@@ -975,11 +979,7 @@ const TimelineRowContent = memo(function TimelineRowContent({ row }: { row: Time
         <AssistantTimelineRow row={row} />
       ) : null}
       {row.kind === "proposed-plan" ? <ProposedPlanTimelineRow row={row} /> : null}
-<<<<<<< HEAD
-      {row.kind === "turn-plan" ? <TurnPlanTimelineRow row={row} /> : null}
-=======
       {row.kind === "event" ? <V2EventTimelineRow row={row} /> : null}
->>>>>>> 79c36e6204 (Complete orchestration V2 frontend cutover)
       {row.kind === "working" ? <WorkingTimelineRow row={row} /> : null}
     </div>
   );
@@ -1067,6 +1067,25 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
           markdownCwd={ctx.markdownCwd}
         />
       </div>
+      {(row.message.inputIntent && row.message.inputIntent !== "turn_start") ||
+      (row.projectedItem &&
+        row.projectedItem.item.status !== "completed" &&
+        row.projectedItem.item.status !== "pending" &&
+        row.projectedItem.item.status !== "waiting") ? (
+        <div className="me-1 flex items-center gap-1.5">
+          {row.message.inputIntent && row.message.inputIntent !== "turn_start" ? (
+            <UserMessageIntentBadge intent={row.message.inputIntent} />
+          ) : null}
+          {row.projectedItem &&
+          row.projectedItem.item.status !== "completed" &&
+          row.projectedItem.item.status !== "pending" &&
+          row.projectedItem.item.status !== "waiting" ? (
+            <span className="rounded-full border border-destructive/25 bg-destructive/8 px-1.5 py-0.5 text-[10px] font-medium text-destructive">
+              {row.projectedItem.item.status}
+            </span>
+          ) : null}
+        </div>
+      ) : null}
       <div className="flex w-full max-w-[80%] items-center justify-end pe-1 text-xs tabular-nums opacity-0 transition-opacity duration-200 focus-within:opacity-100 group-hover:opacity-100">
         <div className="flex shrink-0 items-center gap-2">
           <Tooltip>
@@ -1086,6 +1105,39 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
         </div>
       </div>
     </div>
+  );
+}
+
+function UserMessageIntentBadge({
+  intent,
+}: {
+  readonly intent: NonNullable<TimelineMessage["inputIntent"]>;
+}) {
+  const presentation =
+    intent === "queued_turn"
+      ? { label: "queued", className: "border-amber-500/25 bg-amber-500/8 text-amber-700" }
+      : intent === "promoted_queued_to_steer"
+        ? {
+            label: "queued → steer",
+            className: "border-sky-500/25 bg-sky-500/8 text-sky-700",
+          }
+        : { label: "steer", className: "border-sky-500/25 bg-sky-500/8 text-sky-700" };
+  return (
+    <span
+      className={cn(
+        "me-1 rounded-full border px-1.5 py-0.5 text-[10px] font-medium tracking-wide",
+        presentation.className,
+      )}
+      title={
+        intent === "queued_turn"
+          ? "Queued behind the active turn"
+          : intent === "promoted_queued_to_steer"
+            ? "Originally queued, then promoted to steer the active turn"
+            : "Steered the active turn"
+      }
+    >
+      {presentation.label}
+    </span>
   );
 }
 
@@ -1155,8 +1207,16 @@ function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "mess
           onOpenTurnDiff={ctx.onOpenTurnDiff}
         />
         {row.showAssistantMeta ? (
-          <div className="mt-1.5 flex items-center gap-2 text-xs tabular-nums opacity-0 transition-opacity duration-200 focus-within:opacity-100 group-hover/assistant:opacity-100">
+          <div className="mt-1.5 flex items-center gap-2 text-xs tabular-nums opacity-60 transition-opacity duration-200 focus-within:opacity-100 group-hover/assistant:opacity-100">
+            {row.projectedItem?.item.type === "assistant_message" ? (
+              <AssistantForkButton projectedItem={row.projectedItem} />
+            ) : null}
             <AssistantCopyButton row={row} />
+            {row.projectedItem && row.projectedItem.item.status !== "completed" ? (
+              <span className="rounded-full border border-border/70 px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground">
+                {row.projectedItem.item.status}
+              </span>
+            ) : null}
             {!row.message.streaming && (
               <Tooltip>
                 <TooltipTrigger
@@ -1173,6 +1233,59 @@ function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "mess
         ) : null}
       </div>
     </>
+  );
+}
+
+function AssistantForkButton({
+  projectedItem,
+}: {
+  readonly projectedItem: NonNullable<Extract<TimelineRow, { kind: "message" }>["projectedItem"]>;
+}) {
+  const ctx = use(TimelineRowCtx);
+  const [busy, setBusy] = useState(false);
+  const support = useV2ItemSupport({
+    environmentId: ctx.activeThreadEnvironmentId,
+    sourceThreadId: projectedItem.sourceThreadId,
+    sourceItemId: projectedItem.sourceItemId,
+  });
+  const capabilities = support.providerSession?.capabilities;
+  const canForkNatively =
+    capabilities?.threads.canForkThread === true &&
+    capabilities.threads.canForkFromTurn === true &&
+    capabilities.identity.nativeThreadIds === "strong";
+  const canFork =
+    projectedItem.item.runId !== null &&
+    projectedItem.item.status === "completed" &&
+    (capabilities === undefined ||
+      canForkNatively ||
+      capabilities.context.supportsFullThreadHandoff === true);
+
+  if (!canFork || projectedItem.item.runId === null) return null;
+  const runId = projectedItem.item.runId;
+
+  return (
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <Button
+            type="button"
+            size="xs"
+            variant="ghost"
+            disabled={busy}
+            onClick={() => {
+              setBusy(true);
+              void ctx
+                .onForkFromRun({ sourceThreadId: projectedItem.sourceThreadId, runId })
+                .finally(() => setBusy(false));
+            }}
+            aria-label="Fork from this response"
+          />
+        }
+      >
+        <GitForkIcon className={cn("size-3", busy && "animate-pulse")} />
+      </TooltipTrigger>
+      <TooltipPopup side="top">Fork from this response</TooltipPopup>
+    </Tooltip>
   );
 }
 
@@ -1210,107 +1323,6 @@ function ProposedPlanTimelineRow({
   );
 }
 
-<<<<<<< HEAD
-/**
- * Inline folded plan chip: one row per turn that produced plan/todo steps.
- * Collapsed by default — a segment bar plus the in-progress step label —
- * and expands in place to the full step list. Replaces the old plan sidebar.
- */
-const TurnPlanTimelineRow = memo(function TurnPlanTimelineRow({
-  row,
-}: {
-  row: Extract<TimelineRow, { kind: "turn-plan" }>;
-}) {
-  const [expanded, setExpanded] = useState(false);
-  const { steps } = row.turnPlan.plan;
-  const completedCount = steps.filter((step) => step.status === "completed").length;
-  const allDone = completedCount === steps.length;
-  // Label priority: the in-progress step, else the next pending step (plan
-  // just created), else the last step (plan finished, rendered muted).
-  const label =
-    steps.find((step) => step.status === "inProgress")?.step ??
-    steps.find((step) => step.status === "pending")?.step ??
-    steps.at(-1)?.step ??
-    "Plan";
-  const Chevron = expanded ? ChevronDownIcon : ChevronRightIcon;
-
-  return (
-    <div className="min-w-0 px-1 py-0.5">
-      <button
-        type="button"
-        className="flex w-full min-w-0 cursor-pointer items-center gap-2 rounded-md px-0.5 py-0.5 text-left text-[12px] leading-5 transition-colors duration-150 hover:bg-accent/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/70"
-        aria-expanded={expanded}
-        onClick={() => setExpanded((value) => !value)}
-      >
-        <Chevron className="size-3.5 shrink-0 text-muted-foreground/65" />
-        {steps.length > 1 ? (
-          <span aria-hidden className="flex shrink-0 items-center gap-0.5">
-            {steps.map((step) => (
-              <span
-                key={step.step}
-                className={cn(
-                  "h-[3px] w-2.5 rounded-full",
-                  step.status === "completed"
-                    ? "bg-success"
-                    : step.status === "inProgress"
-                      ? "bg-primary"
-                      : "bg-muted-foreground/25",
-                )}
-              />
-            ))}
-          </span>
-        ) : null}
-        <span
-          className={cn(
-            "min-w-0 truncate",
-            allDone ? "text-muted-foreground/65" : "font-medium text-foreground/85",
-          )}
-        >
-          {label}
-        </span>
-        {steps.length > 1 ? (
-          <span className="shrink-0 text-muted-foreground/50 tabular-nums">
-            {completedCount}/{steps.length}
-          </span>
-        ) : null}
-      </button>
-      {expanded ? (
-        <div className="mt-0.5 space-y-px pl-6">
-          {steps.map((step) => (
-            <div key={step.step} className="flex items-baseline gap-2 text-[12px] leading-5">
-              <span
-                className={cn(
-                  "w-3 shrink-0 text-center font-mono text-[10px]",
-                  step.status === "completed"
-                    ? "text-success"
-                    : step.status === "inProgress"
-                      ? "text-primary"
-                      : "text-muted-foreground/40",
-                )}
-                aria-hidden
-              >
-                {step.status === "completed" ? "✓" : step.status === "inProgress" ? "●" : "○"}
-              </span>
-              <span
-                className={cn(
-                  "min-w-0",
-                  step.status === "completed"
-                    ? "text-muted-foreground/55"
-                    : step.status === "inProgress"
-                      ? "text-foreground/90"
-                      : "text-muted-foreground/70",
-                )}
-              >
-                {step.step}
-              </span>
-            </div>
-          ))}
-        </div>
-      ) : null}
-    </div>
-  );
-});
-=======
 type V2EventTone = "muted" | "warning" | "danger" | "success";
 
 function v2EventPresentation(item: OrchestrationV2TurnItem): {
@@ -1406,6 +1418,16 @@ function v2EventPresentation(item: OrchestrationV2TurnItem): {
 function V2EventTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "event" }> }) {
   const ctx = use(TimelineRowCtx);
   const { item, visibility, sourceThreadId } = row.projectedItem;
+  if (isV2LifecycleItem(item)) {
+    return (
+      <V2LifecycleRow
+        item={item}
+        createdAt={row.createdAt}
+        timestampFormat={ctx.timestampFormat}
+        onOpenThread={ctx.onOpenThread}
+      />
+    );
+  }
   const presentation = v2EventPresentation(item);
   const Icon = presentation.icon;
   return (
@@ -1460,24 +1482,22 @@ function V2EventTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "event"
               From {sourceThreadId}
             </p>
           ) : null}
-          <details
-            className="group/v2-details mt-2 rounded-md border border-border/50 bg-background/45"
-            data-v2-structured-details="true"
-          >
-            <summary className="flex cursor-pointer list-none items-center gap-1.5 px-2 py-1.5 text-[11px] font-medium text-muted-foreground select-none hover:text-foreground [&::-webkit-details-marker]:hidden">
-              <ChevronRightIcon className="size-3 transition-transform group-open/v2-details:rotate-90" />
-              Structured details
-            </summary>
-            <pre className="max-h-80 overflow-auto border-t border-border/50 px-2 py-2 font-mono text-[10px] leading-relaxed whitespace-pre-wrap text-muted-foreground">
-              {JSON.stringify(item, null, 2)}
-            </pre>
-          </details>
+          <div className="mt-2">
+            <V2ItemInspector
+              projectedItem={row.projectedItem}
+              environmentId={ctx.activeThreadEnvironmentId}
+              cwd={ctx.markdownCwd}
+              workspaceRoot={ctx.workspaceRoot}
+              onOpenThread={ctx.onOpenThread}
+              onOpenTurnDiff={ctx.onOpenTurnDiff}
+              onRollbackCheckpoint={ctx.onRollbackCheckpoint}
+            />
+          </div>
         </div>
       </div>
     </section>
   );
 }
->>>>>>> 79c36e6204 (Complete orchestration V2 frontend cutover)
 
 function WorkingTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "working" }> }) {
   const { workingStepLabel } = use(TimelineRowActivityCtx);
@@ -2318,11 +2338,7 @@ function workEntryIconName(workEntry: TimelineWorkEntry): WorkEntryIconName {
   switch (workEntry.itemType) {
     case "dynamic_tool":
       return "wrench";
-<<<<<<< HEAD
-    case "dynamic_tool_call":
-=======
     case "subagent":
->>>>>>> 79c36e6204 (Complete orchestration V2 frontend cutover)
       return "hammer";
     case "collab_agent_tool_call":
       return "bot";
@@ -2465,6 +2481,7 @@ const PlainWorkEntryRow = memo(function PlainWorkEntryRow(props: {
 }) {
   const { workEntry, workspaceRoot } = props;
   const activity = use(TimelineRowActivityCtx);
+  const ctx = use(TimelineRowCtx);
   const [expanded, setExpanded] = useState(false);
   const iconConfig = workToneIcon(workEntry.tone);
   const showWarningIndicator = false;
@@ -2479,7 +2496,7 @@ const PlainWorkEntryRow = memo(function PlainWorkEntryRow(props: {
       : rawPreview;
   const displayText = preview ? `${heading} - ${preview}` : heading;
   const expandedBody = buildToolCallExpandedBody(workEntry, workspaceRoot);
-  const canExpand = expandedBody !== null;
+  const canExpand = expandedBody !== null || workEntry.projectedItem !== undefined;
   const showFailedIndicator = workEntryIndicatesToolFailure(workEntry);
   const showDestructiveRowStyle = showFailedIndicator && !workLogEntryIsToolLike(workEntry);
   const iconWrapperClass = cn(
@@ -2609,15 +2626,27 @@ const PlainWorkEntryRow = memo(function PlainWorkEntryRow(props: {
           </div>
         </div>
       </div>
-      {expanded && canExpand && expandedBody ? (
+      {expanded && canExpand ? (
         <div
           className="mt-1 ms-7 cursor-default border-s border-border/45 ps-3 pt-0.5"
           onClick={stopRowToggle}
           onPointerDown={stopRowToggle}
         >
-          <pre className="max-h-64 cursor-text overflow-auto whitespace-pre-wrap break-words font-mono text-secondary-label text-[11px] leading-relaxed select-text">
-            {expandedBody}
-          </pre>
+          {workEntry.projectedItem ? (
+            <V2ItemInspector
+              projectedItem={workEntry.projectedItem}
+              environmentId={ctx.activeThreadEnvironmentId}
+              cwd={ctx.markdownCwd}
+              workspaceRoot={workspaceRoot}
+              onOpenThread={ctx.onOpenThread}
+              onOpenTurnDiff={ctx.onOpenTurnDiff}
+              onRollbackCheckpoint={ctx.onRollbackCheckpoint}
+            />
+          ) : expandedBody ? (
+            <pre className="max-h-64 cursor-text overflow-auto whitespace-pre-wrap break-words font-mono text-[11px] leading-relaxed text-muted-foreground select-text">
+              {expandedBody}
+            </pre>
+          ) : null}
         </div>
       ) : null}
     </div>
