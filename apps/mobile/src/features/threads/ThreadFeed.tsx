@@ -1,7 +1,7 @@
 import * as Haptics from "expo-haptics";
 import { KeyboardAwareLegendList } from "@legendapp/list/keyboard";
 import { type LegendListRef } from "@legendapp/list/react-native";
-import type { EnvironmentId, MessageId, ThreadId, TurnId } from "@t3tools/contracts";
+import type { EnvironmentId, MessageId, RunId, ThreadId } from "@t3tools/contracts";
 import { CHAT_LIST_ANCHOR_OFFSET, resolveChatListAnchoredEndSpace } from "@t3tools/shared/chatList";
 import { formatElapsed } from "@t3tools/shared/orchestrationTiming";
 import { SymbolView } from "../../components/AppSymbol";
@@ -48,7 +48,6 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import Animated, { FadeIn, FadeInUp, type SharedValue } from "react-native-reanimated";
 import { useThemeColor } from "../../lib/useThemeColor";
 import { useFontFamily } from "../../lib/useFontFamily";
-import { scopedThreadKey } from "../../lib/scopedEntities";
 import { copyTextWithHaptic } from "../../lib/copyTextWithHaptic";
 import { hasWideMarkdownBlock } from "../../lib/wideMarkdownBlocks";
 import {
@@ -87,13 +86,9 @@ import { resolveMarkdownLinkPresentation } from "@t3tools/mobile-markdown-text/l
 import {
   deriveThreadFeedPresentation,
   type ThreadFeedEntry,
-  type ThreadFeedLatestTurn,
+  type ThreadFeedLatestRun,
 } from "../../lib/threadActivity";
 import type { ThreadContentPresentation } from "./threadContentPresentation";
-import {
-  resolveThreadFeedLiveFollow,
-  type ThreadFeedLiveFollowEvent,
-} from "./thread-feed-live-follow";
 import {
   collapsedWorkLogHeight,
   ThreadWorkGroupToggle,
@@ -146,8 +141,7 @@ export interface ThreadFeedProps {
   readonly feed: ReadonlyArray<ThreadFeedEntry>;
   readonly contentPresentation: ThreadContentPresentation;
   readonly agentLabel: string;
-  readonly latestTurn: ThreadFeedLatestTurn | null;
-  readonly activeWorkStartedAt: string | null;
+  readonly latestRun: ThreadFeedLatestRun | null;
   readonly listRef: RefObject<LegendListRef | null>;
   readonly freeze: SharedValue<boolean>;
   readonly anchorMessageId: MessageId | null;
@@ -158,7 +152,6 @@ export interface ThreadFeedProps {
   readonly layoutVariant?: LayoutVariant;
   readonly usesAutomaticContentInsets?: boolean;
   readonly onHeaderMaterialVisibilityChange?: (visible: boolean) => void;
-  readonly onEndFollowEnabledChange?: (enabled: boolean) => void;
   readonly skills?: ReadonlyArray<SelectableMarkdownSkill>;
   /** Non-null when older turns exist beyond the loaded window. */
   readonly loadEarlier?: {
@@ -824,11 +817,11 @@ function renderFeedEntry(
     readonly copiedRowId: string | null;
     readonly expandedWorkRows: Record<string, boolean>;
     readonly terminalAssistantMessageIds: ReadonlySet<string>;
-    readonly unsettledTurnId: TurnId | null;
+    readonly unsettledTurnId: RunId | null;
     readonly onCopyWorkRow: (rowId: string, value: string) => void;
     readonly onToggleWorkGroup: (groupId: string) => void;
     readonly onToggleWorkRow: (rowId: string) => void;
-    readonly onToggleTurnFold: (turnId: TurnId) => void;
+    readonly onToggleTurnFold: (runId: RunId) => void;
     readonly onPressImage: (uri: string, headers?: Record<string, string>) => void;
     readonly onMarkdownLinkPress: (href: string) => void;
     readonly iconSubtleColor: string | import("react-native").ColorValue;
@@ -842,16 +835,12 @@ function renderFeedEntry(
   const entry = info.item;
   const { markdownStyles, iconSubtleColor, userBubbleColor } = props;
 
-  if (entry.type === "working") {
-    return <WorkingTimelineRow startedAt={entry.createdAt} />;
-  }
-
-  if (entry.type === "turn-fold") {
+  if (entry.type === "run-fold") {
     return (
       <Pressable
         accessibilityRole="button"
         accessibilityState={{ expanded: entry.expanded }}
-        onPress={() => props.onToggleTurnFold(entry.turnId)}
+        onPress={() => props.onToggleTurnFold(entry.runId)}
         hitSlop={4}
         className="mb-3 min-h-11 flex-row items-center gap-2 border-b border-neutral-200/80 px-2 dark:border-white/[0.08]"
       >
@@ -896,7 +885,7 @@ function renderFeedEntry(
     const assistantTurnStillInProgress =
       message.role === "assistant" &&
       props.unsettledTurnId !== null &&
-      message.turnId === props.unsettledTurnId;
+      message.runId === props.unsettledTurnId;
     const showAssistantMeta =
       message.role === "assistant" &&
       props.terminalAssistantMessageIds.has(message.id) &&
@@ -1331,10 +1320,10 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
   const copyFeedbackTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const foldSettleFrameRef = useRef<number | null>(null);
   const foldSettleSecondFrameRef = useRef<number | null>(null);
+<<<<<<< HEAD
   const disclosureAnchorKeyRef = useRef<string | null>(null);
   const headerMaterialVisibleRef = useRef(false);
   const previousLatestTurnRef = useRef(props.latestTurn);
-  const userScrollSettleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const { width: windowWidth } = useWindowDimensions();
   const { appearance } = useAppearancePreferences();
   const [viewportWidth, setViewportWidth] = useState(() =>
@@ -1353,28 +1342,23 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
   // momentum; only motion inside a session can break follow, so MVCP
   // compensations and programmatic scrolls never strand a follower.
   const userScrollSessionRef = useRef(false);
-  const setEndFollow = useCallback(
-    (enabled: boolean) => {
-      if (endFollowEnabledRef.current === enabled) {
-        return;
-      }
-      endFollowEnabledRef.current = enabled;
-      setEndFollowEnabled(enabled);
-      props.onEndFollowEnabledChange?.(enabled);
-    },
-    [props.onEndFollowEnabledChange],
-  );
-  const transitionEndFollow = useCallback(
-    (event: ThreadFeedLiveFollowEvent) => {
-      setEndFollow(resolveThreadFeedLiveFollow(endFollowEnabledRef.current, event));
-    },
-    [setEndFollow],
-  );
+  const setEndFollow = useCallback((enabled: boolean) => {
+    if (endFollowEnabledRef.current === enabled) {
+      return;
+    }
+    endFollowEnabledRef.current = enabled;
+    setEndFollowEnabled(enabled);
+  }, []);
+=======
+  const previousLatestTurnRef = useRef(props.latestRun);
+  const { width: viewportWidth } = useWindowDimensions();
+  const [foldToggleSettling, setFoldToggleSettling] = useState(false);
+>>>>>>> 79c36e6204 (Complete orchestration V2 frontend cutover)
   const [interactionState, setInteractionState] = useState<{
     readonly copiedRowId: string | null;
     readonly expandedWorkGroups: Record<string, boolean>;
     readonly expandedWorkRows: Record<string, boolean>;
-    readonly expandedTurnIds: ReadonlySet<TurnId>;
+    readonly expandedTurnIds: ReadonlySet<RunId>;
   }>({
     copiedRowId: null,
     expandedWorkGroups: {},
@@ -1464,15 +1448,9 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
       viewportWidth,
     ],
   );
-  const reportHeaderMaterialVisibility = useCallback(
-    (visible: boolean) => {
-      if (headerMaterialVisibleRef.current === visible) {
-        return;
-      }
-      headerMaterialVisibleRef.current = visible;
-      props.onHeaderMaterialVisibilityChange?.(visible);
-    },
-    [props.onHeaderMaterialVisibilityChange],
+  const presentedFeed = useMemo(
+    () => deriveThreadFeedPresentation(props.feed, props.latestRun, expandedTurnIds),
+    [expandedTurnIds, props.feed, props.latestRun],
   );
   const handleScroll = useCallback(
     (event: NativeSyntheticEvent<NativeScrollEvent>) => {
@@ -1481,72 +1459,40 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
       // UIKit's adjustedContentInset, so topContentInset is 0 here). Add the
       // header height back or the material toggles a full header too late.
       reportHeaderMaterialVisibility(event.nativeEvent.contentOffset.y + anchorTopInset > 6);
-      // LegendList recomputes its inset-aware end distance before invoking
-      // this handler, so getState() is current. Only the actual end re-arms
-      // follow: its broader maintain-scroll threshold is large enough for a
-      // streaming chunk to pull a user back before their upward drag escapes.
-      // A live user-scroll session still wins even if the first scroll event
-      // remains inside LegendList's at-end tolerance.
+      // Latch bookkeeping. LegendList recomputes its inset-aware end distance
+      // before invoking this handler, so getState() is current. Returning to
+      // the end re-arms follow no matter who scrolled (the user, or our own
+      // scroll-to-end); moving away breaks it only during a user-initiated
+      // scroll session, so MVCP compensations and programmatic repositioning
+      // can never strand a follower.
       const listState = props.listRef.current?.getState();
       if (listState) {
-        transitionEndFollow({
-          type: "scroll",
-          isAtEnd: listState.isAtEnd,
-          userScrollSessionActive: userScrollSessionRef.current,
-        });
+        if (listState.isWithinMaintainScrollAtEndThreshold) {
+          setEndFollow(true);
+        } else if (userScrollSessionRef.current) {
+          setEndFollow(false);
+        }
       }
     },
-    [reportHeaderMaterialVisibility, anchorTopInset, props.listRef, transitionEndFollow],
+    [reportHeaderMaterialVisibility, anchorTopInset, props.listRef, setEndFollow],
   );
-  const clearUserScrollSettle = useCallback(() => {
-    if (userScrollSettleTimerRef.current !== null) {
-      clearTimeout(userScrollSettleTimerRef.current);
-      userScrollSettleTimerRef.current = null;
+  const handleScrollBeginDrag = useCallback(() => {
+    userScrollSessionRef.current = true;
+  }, []);
+  // The session must survive past finger-lift so momentum that carries the
+  // user away from the end still breaks follow; a drag released with no
+  // momentum ends its session at the release itself, otherwise at momentum
+  // end. Leaving a session open would let a later animated maintain-scroll
+  // read as user motion and break follow spuriously.
+  const handleScrollEndDrag = useCallback((event: NativeSyntheticEvent<NativeScrollEvent>) => {
+    const velocity = event.nativeEvent.velocity?.y ?? 0;
+    if (Math.abs(velocity) < 0.05) {
+      userScrollSessionRef.current = false;
     }
   }, []);
-  const handleScrollBeginDrag = useCallback(() => {
-    clearUserScrollSettle();
-    userScrollSessionRef.current = true;
-    // Pause before the first scroll event. Otherwise a stream update can run
-    // maintainScrollAtEnd between touch-down and the drag leaving its threshold.
-    transitionEndFollow({ type: "user-scroll-begin" });
-  }, [clearUserScrollSettle, transitionEndFollow]);
-  const finishUserScroll = useCallback(
-    (releaseIsAtEnd?: boolean) => {
-      clearUserScrollSettle();
-      const userScrollSessionActive = userScrollSessionRef.current;
-      userScrollSessionRef.current = false;
-      transitionEndFollow({
-        type: "user-scroll-end",
-        // With no momentum, preserve the finger-release position. Streaming
-        // growth during the native momentum-detection window must not turn a
-        // release at the live edge into an opt-out from follow.
-        isAtEnd: releaseIsAtEnd ?? props.listRef.current?.getState().isAtEnd ?? false,
-        userScrollSessionActive,
-      });
-    },
-    [clearUserScrollSettle, props.listRef, transitionEndFollow],
-  );
-  // Finger-lift velocity is not a reliable momentum signal: a gentle fling
-  // can report zero and still decelerate. Give native momentum a short window
-  // to announce itself; if it does, onMomentumScrollBegin cancels this fallback
-  // and the session survives until the settled momentum-end position. This
-  // mirrors the native-event handoff used by the home thread list's scroll gate.
-  const handleScrollEndDrag = useCallback(() => {
-    clearUserScrollSettle();
-    const releaseIsAtEnd = props.listRef.current?.getState().isAtEnd ?? false;
-    userScrollSettleTimerRef.current = setTimeout(() => finishUserScroll(releaseIsAtEnd), 160);
-  }, [clearUserScrollSettle, finishUserScroll, props.listRef]);
-  const handleMomentumScrollBegin = useCallback(() => {
-    if (userScrollSessionRef.current) {
-      clearUserScrollSettle();
-    }
-  }, [clearUserScrollSettle]);
   const handleMomentumScrollEnd = useCallback(() => {
-    finishUserScroll();
-  }, [finishUserScroll]);
-
-  useEffect(() => clearUserScrollSettle, [clearUserScrollSettle]);
+    userScrollSessionRef.current = false;
+  }, []);
 
   const handleViewportLayout = useCallback((event: LayoutChangeEvent) => {
     const nextWidth = Math.round(event.nativeEvent.layout.width);
@@ -1555,30 +1501,23 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
     setViewportHeight((current) => (Math.abs(current - nextHeight) > 1 ? nextHeight : current));
   }, []);
 
-  // Thread identity is env-scoped: two environments can hold the same
-  // ThreadId, and keying resets (or the list mount) on the bare id would
-  // carry stale scroll/follow state across an environment switch.
-  const feedThreadKey = scopedThreadKey(props.environmentId, props.threadId);
-
   useEffect(() => {
     reportHeaderMaterialVisibility(false);
-  }, [feedThreadKey, reportHeaderMaterialVisibility]);
+  }, [props.threadId, reportHeaderMaterialVisibility]);
 
   // A thread switch opens pinned to the end; a send explicitly returns to the
   // live edge (ThreadDetailScreen scrolls the new message into place). Both
   // re-arm follow regardless of where the user had scrolled before.
   useEffect(() => {
-    clearUserScrollSettle();
     userScrollSessionRef.current = false;
-    transitionEndFollow({ type: "reset" });
-  }, [clearUserScrollSettle, feedThreadKey, transitionEndFollow]);
+    setEndFollow(true);
+  }, [props.threadId, setEndFollow]);
   useEffect(() => {
     if (props.anchorMessageId !== null) {
-      clearUserScrollSettle();
       userScrollSessionRef.current = false;
-      transitionEndFollow({ type: "reset" });
+      setEndFollow(true);
     }
-  }, [clearUserScrollSettle, props.anchorMessageId, transitionEndFollow]);
+  }, [props.anchorMessageId, setEndFollow]);
 
   const expandedWorkGroupIds = useMemo(() => {
     const ids = new Set<string>();
@@ -1614,7 +1553,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
   // initial scroll-to-end computes with a zero end inset and rests one
   // composer-height short of the end. Layout effect: it must land before the
   // list's first positioning tick or the one-shot initial scroll misses it.
-  const listMountKey = `${feedThreadKey}:${props.feed.length === 0 ? "empty" : "filled"}`;
+  const listMountKey = `${props.threadId}:${props.feed.length === 0 ? "empty" : "filled"}`;
   useLayoutEffect(() => {
     const bottom = props.contentInsetEndAdjustment.value;
     if (bottom > 0) {
@@ -1633,29 +1572,29 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
     [presentedFeed, props.anchorMessageId, anchorTopInset],
   );
   const terminalAssistantMessageIds = useMemo(() => {
-    const terminalIdsByTurn = new Map<TurnId, string>();
+    const terminalIdsByTurn = new Map<RunId, string>();
     for (const entry of props.feed) {
-      if (entry.type === "message" && entry.message.role === "assistant" && entry.message.turnId) {
-        terminalIdsByTurn.set(entry.message.turnId, entry.message.id);
+      if (entry.type === "message" && entry.message.role === "assistant" && entry.message.runId) {
+        terminalIdsByTurn.set(entry.message.runId, entry.message.id);
       }
     }
     return new Set(terminalIdsByTurn.values());
   }, [props.feed]);
   const unsettledTurnId =
-    props.latestTurn &&
-    (props.latestTurn.completedAt === null || props.latestTurn.state === "running")
-      ? props.latestTurn.turnId
+    props.latestRun &&
+    (props.latestRun.completedAt === null || props.latestRun.status === "running")
+      ? props.latestRun.runId
       : null;
 
   useEffect(() => {
     const previous = previousLatestTurnRef.current;
-    previousLatestTurnRef.current = props.latestTurn;
-    if (!props.latestTurn || !previous) {
+    previousLatestTurnRef.current = props.latestRun;
+    if (!props.latestRun || !previous) {
       return;
     }
-    if (props.latestTurn.turnId === previous.turnId) {
-      if (previous.state === "running" && props.latestTurn.state === "interrupted") {
-        const interruptedTurnId = props.latestTurn.turnId;
+    if (props.latestRun.runId === previous.runId) {
+      if (previous.status === "running" && props.latestRun.status === "interrupted") {
+        const interruptedTurnId = props.latestRun.runId;
         setInteractionState((current) => ({
           ...current,
           expandedTurnIds: new Set(current.expandedTurnIds).add(interruptedTurnId),
@@ -1664,14 +1603,14 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
       return;
     }
     setInteractionState((current) => {
-      if (!current.expandedTurnIds.has(previous.turnId)) {
+      if (!current.expandedTurnIds.has(previous.runId)) {
         return current;
       }
       const next = new Set(current.expandedTurnIds);
-      next.delete(previous.turnId);
+      next.delete(previous.runId);
       return { ...current, expandedTurnIds: next };
     });
-  }, [props.latestTurn]);
+  }, [props.latestRun]);
 
   useEffect(() => {
     return () => {
@@ -1765,17 +1704,28 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
     [suspendEndScrollMaintenanceForDisclosure],
   );
 
-  const onToggleTurnFold = useCallback(
-    (turnId: TurnId) => {
-      suspendEndScrollMaintenanceForDisclosure(`turn-fold:${turnId}`);
-      setInteractionState((current) => {
-        const next = new Set(current.expandedTurnIds);
-        if (next.has(turnId)) {
-          next.delete(turnId);
-        } else {
-          next.add(turnId);
-        }
-        return { ...current, expandedTurnIds: next };
+  const onToggleTurnFold = useCallback((runId: RunId) => {
+    setFoldToggleSettling(true);
+    if (foldSettleFrameRef.current !== null) {
+      cancelAnimationFrame(foldSettleFrameRef.current);
+    }
+    if (foldSettleSecondFrameRef.current !== null) {
+      cancelAnimationFrame(foldSettleSecondFrameRef.current);
+    }
+    setInteractionState((current) => {
+      const next = new Set(current.expandedTurnIds);
+      if (next.has(runId)) {
+        next.delete(runId);
+      } else {
+        next.add(runId);
+      }
+      return { ...current, expandedTurnIds: next };
+    });
+    foldSettleFrameRef.current = requestAnimationFrame(() => {
+      foldSettleSecondFrameRef.current = requestAnimationFrame(() => {
+        setFoldToggleSettling(false);
+        foldSettleFrameRef.current = null;
+        foldSettleSecondFrameRef.current = null;
       });
     },
     [suspendEndScrollMaintenanceForDisclosure],
@@ -1981,7 +1931,6 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
             onScroll={handleScroll}
             onScrollBeginDrag={handleScrollBeginDrag}
             onScrollEndDrag={handleScrollEndDrag}
-            onMomentumScrollBegin={handleMomentumScrollBegin}
             onMomentumScrollEnd={handleMomentumScrollEnd}
             scrollEventThrottle={16}
             ListHeaderComponent={

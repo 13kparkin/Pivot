@@ -1,10 +1,8 @@
 import {
-  ORCHESTRATION_WS_METHODS,
+  ORCHESTRATION_V2_WS_METHODS,
   type EnvironmentId as EnvironmentIdType,
-  type OrchestrationThread,
-  type OrchestrationThreadDetailPage,
-  type OrchestrationThreadDetailSnapshot,
-  type OrchestrationThreadStreamItem,
+  type OrchestrationV2ThreadProjection,
+  type OrchestrationV2ThreadStreamItem,
   type ThreadId as ThreadIdType,
 } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
@@ -26,17 +24,27 @@ import { EnvironmentCacheStore } from "../platform/persistence.ts";
 import { subscribeDynamic } from "../rpc/client.ts";
 import { ThreadSnapshotLoader, type ThreadSnapshotWindow } from "./threadSnapshotHttp.ts";
 import { parseThreadKey, threadKey } from "./entities.ts";
-import { applyThreadDetailEvent } from "./threadReducer.ts";
+import { applyOrchestrationV2ProjectionEvent } from "./orchestrationV2Projection.ts";
 import { THREAD_STATE_IDLE_TTL_MS } from "./threadRetention.ts";
 import { followStreamInEnvironment } from "./runtime.ts";
-import {
-  EMPTY_ENVIRONMENT_THREAD_STATE,
-  type EnvironmentThreadPageState,
-  type EnvironmentThreadState,
-  type EnvironmentThreadStatus,
-} from "./threadState.ts";
 
-function statusWithoutLiveData(data: Option.Option<OrchestrationThread>): EnvironmentThreadStatus {
+export type EnvironmentThreadStatus = "empty" | "cached" | "synchronizing" | "live" | "deleted";
+
+export interface EnvironmentThreadState {
+  readonly data: Option.Option<OrchestrationV2ThreadProjection>;
+  readonly status: EnvironmentThreadStatus;
+  readonly error: Option.Option<string>;
+}
+
+export const EMPTY_ENVIRONMENT_THREAD_STATE: EnvironmentThreadState = {
+  data: Option.none(),
+  status: "empty",
+  error: Option.none(),
+};
+
+function statusWithoutLiveData(
+  data: Option.Option<OrchestrationV2ThreadProjection>,
+): EnvironmentThreadStatus {
   return Option.isSome(data) ? "cached" : "empty";
 }
 
@@ -147,7 +155,7 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
           threadId,
           error: error.message,
         }),
-        Effect.as(Option.none<OrchestrationThreadDetailSnapshot>()),
+        Effect.as(Option.none<OrchestrationV2ThreadProjection>()),
       ),
     ),
   );
@@ -160,35 +168,11 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
     // works while rendering from cache; a cached full snapshot has no page.
     page: Option.flatMap(cached, (snapshot) => pageStateFromSnapshot(snapshot.page)),
   });
-  // Seed the resume cursor from the cached snapshot so a warm cache can catch up
-  // via `afterSequence` instead of re-downloading the full thread body.
-  const lastSequence = yield* SubscriptionRef.make(
-    Option.match(cached, { onNone: () => 0, onSome: (snapshot) => snapshot.snapshotSequence }),
-  );
-  const awaitingCompletion = yield* Ref.make(false);
-  // Bumped whenever loaded history may have been rewritten out from under an
-  // in-flight older-page fetch (snapshot replacement, revert, deletion). A
-  // page response captured under an older epoch is discarded, not merged.
-  const historyEpoch = yield* Ref.make(0);
-  // Serializes stream-item application against older-page staleness checks +
-  // merges. Without it, a revert or snapshot processed between loadOlderTurns'
-  // epoch check and its merge could still slip resurrected history in.
-  const applyLock = yield* Semaphore.make(1);
-  // Whether the connected server accepts windowed reads; set per subscription
-  // from the session config. Gates loadOlderTurns so a reconnect to a
-  // pre-pagination server never sends unsupported window parameters.
-  const paginationSupported = yield* Ref.make(false);
-  // An older page whose thread watermark is ahead of the live state, parked
-  // until the subscription catches up (see mergeOlderPage's caller). At most
-  // one can exist because loadOlderTurns no-ops while loadingOlder is true.
-  const pendingOlderPage = yield* Ref.make<{
-    readonly snapshot: OrchestrationThreadDetailSnapshot;
-    readonly epoch: number;
-  } | null>(null);
-  const persistence = yield* Queue.sliding<OrchestrationThreadDetailSnapshot>(1);
+  const lastSequence = yield* SubscriptionRef.make(0);
+  const persistence = yield* Queue.sliding<OrchestrationV2ThreadProjection>(1);
 
   const persist = Effect.fn("EnvironmentThreadState.persist")(function* (
-    snapshot: OrchestrationThreadDetailSnapshot,
+    thread: OrchestrationV2ThreadProjection,
   ) {
     yield* cache.saveThread(environmentId, snapshot).pipe(
       Effect.catch((error) =>
@@ -253,10 +237,7 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
     );
 
   const setThread = Effect.fn("EnvironmentThreadState.setThread")(function* (
-    thread: OrchestrationThread,
-    // "keep" preserves the current page state (live events touch only loaded
-    // recent turns); a snapshot or merged page passes its own page state.
-    page: Option.Option<EnvironmentThreadPageState> | "keep",
+    thread: OrchestrationV2ThreadProjection,
   ) {
     const waiting = yield* Ref.get(awaitingCompletion);
     yield* SubscriptionRef.update(state, (current) => ({
@@ -313,9 +294,8 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
     );
   });
 
-  // Body of applyItem, running under applyLock.
-  const applyItemLocked = Effect.fn("EnvironmentThreadState.applyItemLocked")(function* (
-    item: OrchestrationThreadStreamItem,
+  const applyItem = Effect.fn("EnvironmentThreadState.applyItem")(function* (
+    item: OrchestrationV2ThreadStreamItem,
   ) {
     if (item.kind === "synchronized") {
       yield* Ref.set(awaitingCompletion, false);
@@ -328,21 +308,16 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
     }
 
     if (item.kind === "snapshot") {
-      // A fresh snapshot replaces all loaded history, including older
-      // pages: a turn reverted while disconnected would otherwise survive
-      // in the preserved history with no event left to remove it. The
-      // epoch bump discards any older-page fetch racing this snapshot.
-      yield* Ref.update(historyEpoch, (epoch) => epoch + 1);
-      yield* SubscriptionRef.set(lastSequence, item.snapshot.snapshotSequence);
-      yield* setThread(item.snapshot.thread, pageStateFromSnapshot(item.snapshot.page));
+      yield* SubscriptionRef.set(lastSequence, item.snapshotSequence);
+      yield* setThread(item.projection);
       return;
     }
 
     const sequence = yield* SubscriptionRef.get(lastSequence);
-    if (item.event.sequence <= sequence) {
+    if (item.sequence <= sequence) {
       return;
     }
-    yield* SubscriptionRef.set(lastSequence, item.event.sequence);
+    yield* SubscriptionRef.set(lastSequence, item.sequence);
 
     const current = yield* SubscriptionRef.get(state);
     if (Option.isNone(current.data)) {
@@ -351,20 +326,13 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
       }
       return;
     }
-    if (item.event.type === "thread.reverted") {
-      // A revert rewrites loaded history (whole turns disappear), so an
-      // older-page fetch in flight may straddle the removed range; the epoch
-      // bump discards it. The stored page cursor stays valid: cursors are an
-      // (anchor, turnId) keyset derived from event content, which survives
-      // the revert projector's row rewrite, so no refresh is needed — the
-      // revert reducer's turn filtering fully handles loaded history.
-      yield* Ref.update(historyEpoch, (epoch) => epoch + 1);
-    }
-    const result = applyThreadDetailEvent(current.data.value, item.event);
-    if (result.kind === "updated") {
-      yield* setThread(result.thread, "keep");
-    } else if (result.kind === "deleted") {
+    if (item.event.type === "thread.deleted") {
       yield* setDeleted();
+      return;
+    }
+    const next = applyOrchestrationV2ProjectionEvent(current.data.value, item.event);
+    if (next !== null) {
+      yield* setThread(next);
     }
     // The event may have advanced the live state past a parked page's
     // watermark; merge it as soon as that happens.
@@ -552,97 +520,14 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
   });
 
   yield* setSynchronizing;
-  yield* Effect.forkScoped(
-    subscribeDynamic(
-      ORCHESTRATION_WS_METHODS.subscribeThread,
-      Effect.fn("EnvironmentThreadState.makeSubscribeInput")(function* (session) {
-        const config = yield* session.initialConfig.pipe(
-          Effect.orElseSucceed(
-            () =>
-              ({}) as {
-                threadResumeCompletionMarker?: boolean;
-                threadSnapshotPagination?: boolean;
-              },
-          ),
-        );
-        const supportsCompletionMarker = config.threadResumeCompletionMarker === true;
-        // Windowed loads are gated on the server capability: pre-pagination
-        // servers reject unknown query params, and a windowed WS fallback to
-        // such a server would silently hide history.
-        const supportsPagination = config.threadSnapshotPagination === true;
-        yield* Ref.set(paginationSupported, supportsPagination);
-        yield* Ref.set(awaitingCompletion, supportsCompletionMarker);
-        yield* setSynchronizing;
-
-        let current = yield* SubscriptionRef.get(state);
-        // A windowed cache resuming against a server without pagination is a
-        // trap: afterSequence resume keeps only the window, and the missing
-        // older turns can never be loaded (the server has no cursor reads).
-        // Drop the window marker and treat the data as needing a full reload.
-        if (!supportsPagination && Option.isSome(current.page)) {
-          yield* Ref.update(historyEpoch, (epoch) => epoch + 1);
-          yield* SubscriptionRef.update(state, (value) => ({
-            ...value,
-            data: Option.none(),
-            status: value.status === "deleted" ? value.status : ("empty" as const),
-            page: Option.none(),
-          }));
-          yield* SubscriptionRef.set(lastSequence, 0);
-          current = yield* SubscriptionRef.get(state);
-        }
-        if (Option.isNone(current.data) && current.status !== "deleted") {
-          const prepared = yield* SubscriptionRef.get(supervisor.prepared).pipe(
-            Effect.flatMap(
-              Option.match({
-                onSome: Effect.succeed,
-                onNone: () =>
-                  SubscriptionRef.changes(supervisor.prepared).pipe(
-                    Stream.filter(Option.isSome),
-                    Stream.map((value) => value.value),
-                    Stream.runHead,
-                    Effect.map(Option.getOrThrow),
-                  ),
-              }),
-            ),
-          );
-          const httpSnapshot = yield* snapshotLoader.load(
-            prepared,
-            threadId,
-            supportsPagination ? { turnLimit: INITIAL_THREAD_USER_TURN_LIMIT } : undefined,
-          );
-          if (Option.isSome(httpSnapshot)) {
-            yield* applyItem({ kind: "snapshot", snapshot: httpSnapshot.value });
-            current = yield* SubscriptionRef.get(state);
-          }
-        }
-
-        const sequence = yield* SubscriptionRef.get(lastSequence);
-        const canResume = Option.isSome(current.data);
-        if (!supportsCompletionMarker && canResume) {
-          yield* SubscriptionRef.update(state, (value) => ({
-            ...value,
-            status: value.status === "deleted" ? value.status : ("live" as const),
-            error: Option.none(),
-          }));
-        }
-
-        return {
-          threadId,
-          ...(canResume ? { afterSequence: sequence } : {}),
-          ...(supportsCompletionMarker ? { requestCompletionMarker: true as const } : {}),
-          // The WS fallback snapshot (sent when afterSequence is missing or
-          // the gap is too large) should be windowed the same as the HTTP
-          // path; without this a resume failure re-downloads the full thread.
-          ...(supportsPagination ? { turnLimit: INITIAL_THREAD_USER_TURN_LIMIT } : {}),
-        };
-      }),
-      {
-        onExpectedFailure: setStreamError,
-        retryExpectedFailureAfter: "250 millis",
-        resubscribe: foregroundResubscriptions,
-      },
-    ).pipe(Stream.runForEach(applyItem)),
-  );
+  yield* subscribe(
+    ORCHESTRATION_V2_WS_METHODS.subscribeThread,
+    { threadId },
+    {
+      onExpectedFailure: setStreamError,
+      retryExpectedFailureAfter: "250 millis",
+    },
+  ).pipe(Stream.runForEach(applyItem), Effect.forkScoped);
 
   // Expose loadOlderTurns to UI actions through the request registry.
   // Requests funnel through a sliding queue drained serially, so mashing
@@ -730,6 +615,5 @@ export * from "./threadSnapshotHttp.ts";
 export * from "./composerPathSearch.ts";
 export * from "./threadCommands.ts";
 export * from "./threadDetail.ts";
-export * from "./threadReducer.ts";
 export * from "./threadShell.ts";
 export * from "./threadState.ts";

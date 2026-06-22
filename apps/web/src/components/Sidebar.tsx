@@ -751,6 +751,43 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
         })
       : null,
   );
+<<<<<<< HEAD
+=======
+  const isHighlighted = isActive || isSelected;
+  const handleOpenDiscoveredPort = useCallback(
+    (event: React.MouseEvent<HTMLButtonElement>) => {
+      const port = discoveredPorts[0];
+      if (!port) return;
+      event.preventDefault();
+      event.stopPropagation();
+      navigateToThread(threadRef);
+      void (async () => {
+        const result = await openDiscoveredPort({ threadRef, port, openPreview });
+        if (result._tag === "Success" || isAtomCommandInterrupted(result)) {
+          return;
+        }
+        const error = squashAtomCommandFailure(result);
+        toastManager.add(
+          stackedThreadToast({
+            type: "error",
+            title: "Unable to open preview",
+            description:
+              error instanceof Error ? error.message : "The preview could not be opened.",
+          }),
+        );
+      })();
+    },
+    [discoveredPorts, navigateToThread, openPreview, threadRef],
+  );
+  const isThreadRunning =
+    thread.runtime?.status === "running" && thread.runtime.activeRunId != null;
+  const threadStatus = resolveThreadStatusPill({
+    thread: {
+      ...thread,
+      lastVisitedAt,
+    },
+  });
+>>>>>>> 8f521e516e (Complete orchestration V2 frontend cutover)
   const pr = resolveThreadPr({
     threadBranch: thread.branch,
     gitStatus: gitStatus.data,
@@ -2368,6 +2405,7 @@ export default function Sidebar() {
     [navigateToThread, router],
   );
 
+<<<<<<< HEAD
   const attemptSettle = useCallback(
     (threadRef: ScopedThreadRef, opts: { coSettlingKeys?: ReadonlySet<string> } = {}) => {
       void (async () => {
@@ -2398,6 +2436,17 @@ export default function Sidebar() {
           }
         } finally {
           settlingThreadKeysRef.current.delete(threadKey);
+=======
+      const clicked = await api.contextMenu.show(
+        buildMultiSelectThreadContextMenuItems({ count, hasRunningThread }),
+        position,
+      );
+
+      if (clicked === "mark-unread") {
+        for (const threadKey of threadKeys) {
+          const thread = sidebarThreadByKeyRef.current.get(threadKey);
+          markThreadUnread(threadKey, thread?.latestRun?.completedAt);
+>>>>>>> 8f521e516e (Complete orchestration V2 frontend cutover)
         }
       })();
     },
@@ -2917,6 +2966,7 @@ export default function Sidebar() {
   );
 
   const handleThreadContextMenu = useCallback(
+<<<<<<< HEAD
     (threadRef: ScopedThreadRef, position: { x: number; y: number }) => {
       void (async () => {
         const api = readLocalApi();
@@ -2925,6 +2975,75 @@ export default function Sidebar() {
         const selectionState = useThreadSelectionStore.getState();
         if (selectionState.hasSelection() && selectionState.selectedThreadKeys.has(threadKey)) {
           await handleMultiSelectContextMenu(position);
+=======
+    async (threadRef: ScopedThreadRef, position: { x: number; y: number }) => {
+      const api = readLocalApi();
+      if (!api) return;
+      const threadKey = scopedThreadKey(threadRef);
+      const thread = sidebarThreadByKeyRef.current.get(threadKey) ?? null;
+      if (!thread) return;
+      const threadProject = memberProjectByScopedKey.get(
+        scopedProjectKey(scopeProjectRef(thread.environmentId, thread.projectId)),
+      );
+      const threadWorkspacePath =
+        thread.worktreePath ?? threadProject?.workspaceRoot ?? project.workspaceRoot ?? null;
+      const clicked = await api.contextMenu.show(
+        [
+          ...(thread.branch
+            ? [{ id: "new-thread-on-branch", label: `New thread on ${thread.branch}` }]
+            : []),
+          { id: "rename", label: "Rename thread" },
+          { id: "mark-unread", label: "Mark unread" },
+          { id: "copy-path", label: "Copy Path" },
+          { id: "copy-thread-id", label: "Copy Thread ID" },
+          { id: "delete", label: "Delete", destructive: true, icon: "trash" },
+        ],
+        position,
+      );
+
+      if (clicked === "new-thread-on-branch") {
+        // Explicit branch carry-over: reuse the thread's worktree when it
+        // has one, otherwise its branch on the local checkout.
+        const result = await settlePromise(() =>
+          handleNewThread(scopeProjectRef(thread.environmentId, thread.projectId), {
+            branch: thread.branch,
+            worktreePath: thread.worktreePath,
+            envMode: thread.worktreePath ? "worktree" : "local",
+            startFromOrigin: false,
+          }),
+        );
+        if (result._tag === "Failure") {
+          const error = squashAtomCommandFailure(result);
+          toastManager.add(
+            stackedThreadToast({
+              type: "error",
+              title: "Could not create thread",
+              description: error instanceof Error ? error.message : "An error occurred.",
+            }),
+          );
+        }
+        return;
+      }
+
+      if (clicked === "rename") {
+        startThreadRename(threadKey, thread.title);
+        return;
+      }
+
+      if (clicked === "mark-unread") {
+        markThreadUnread(threadKey, thread.latestRun?.completedAt);
+        return;
+      }
+      if (clicked === "copy-path") {
+        if (!threadWorkspacePath) {
+          toastManager.add(
+            stackedThreadToast({
+              type: "error",
+              title: "Path unavailable",
+              description: "This thread does not have a workspace path to copy.",
+            }),
+          );
+>>>>>>> 8f521e516e (Complete orchestration V2 frontend cutover)
           return;
         }
         const thread = threadByKeyRef.current.get(threadKey);

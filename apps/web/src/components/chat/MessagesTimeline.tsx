@@ -1,9 +1,10 @@
 import {
   type EnvironmentId,
   type MessageId,
+  type OrchestrationV2TurnItem,
   type ScopedThreadRef,
   type ServerProviderSkill,
-  type TurnId,
+  type RunId,
 } from "@t3tools/contracts";
 import { parseScopedThreadKey } from "@t3tools/client-runtime/environment";
 import type { AgentPanelModel } from "@t3tools/client-runtime/state/subagentRuntime";
@@ -85,8 +86,7 @@ import {
   resolveTimelineMinimapTopPercent,
   type StableMessagesTimelineRowsState,
   type MessagesTimelineRow,
-  TIMELINE_MINIMAP_MIN_ITEMS,
-  type TimelineLatestTurn,
+  type TimelineLatestRun,
 } from "./MessagesTimeline.logic";
 import { TerminalContextInlineChip } from "./TerminalContextInlineChip";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
@@ -139,11 +139,16 @@ interface TimelineRowSharedState {
   activeThreadEnvironmentId: EnvironmentId;
   onRevertUserMessage: (messageId: MessageId) => void;
   onImageExpand: (preview: ExpandedImagePreview) => void;
+<<<<<<< HEAD
   onOpenTurnDiff: (turnId: TurnId, filePath?: string) => void;
   onToggleTurnFold: (turnId: TurnId) => void;
   onToggleWorkGroup: (groupId: string, anchorKey: string) => void;
   agentPanelModel: AgentPanelModel;
   onOpenAgents: () => void;
+=======
+  onOpenTurnDiff: (runId: RunId, filePath?: string) => void;
+  onToggleTurnFold: (runId: RunId) => void;
+>>>>>>> 79c36e6204 (Complete orchestration V2 frontend cutover)
 }
 
 interface TimelineRowActivityState {
@@ -210,11 +215,10 @@ interface MessagesTimelineProps {
   activeTurnStartedAt: string | null;
   listRef: React.RefObject<LegendListRef | null>;
   timelineEntries: ReturnType<typeof deriveTimelineEntries>;
-  latestTurn: TimelineLatestTurn | null;
-  runningTurnId: TurnId | null;
+  latestRun: TimelineLatestRun | null;
   turnDiffSummaryByAssistantMessageId: Map<MessageId, TurnDiffSummary>;
   routeThreadKey: string;
-  onOpenTurnDiff: (turnId: TurnId, filePath?: string) => void;
+  onOpenTurnDiff: (runId: RunId, filePath?: string) => void;
   revertTurnCountByUserMessageId: Map<MessageId, number>;
   onRevertUserMessage: (messageId: MessageId) => void;
   isRevertingCheckpoint: boolean;
@@ -256,8 +260,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   onOpenAgents = NOOP_OPEN_AGENTS,
   listRef,
   timelineEntries,
-  latestTurn,
-  runningTurnId,
+  latestRun,
   turnDiffSummaryByAssistantMessageId,
   routeThreadKey,
   onOpenTurnDiff,
@@ -281,6 +284,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   topFadeEnabled = false,
   loadEarlier = null,
 }: MessagesTimelineProps) {
+<<<<<<< HEAD
   const [expandedTurnIds, setExpandedTurnIds] = useState<ReadonlySet<TurnId>>(new Set());
   const [expandedWorkGroupIds, setExpandedWorkGroupIds] = useState<ReadonlySet<string>>(new Set());
   const [disclosureToggleSettling, setDisclosureToggleSettling] = useState(false);
@@ -293,6 +297,25 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     return () => {
       if (disclosureSettleFrameRef.current !== null) {
         cancelAnimationFrame(disclosureSettleFrameRef.current);
+=======
+  const [expandedRunIds, setExpandedRunIds] = useState<ReadonlySet<RunId>>(new Set());
+
+  // Toggling a fold inserts/removes rows between the fold row and the final
+  // message — everything above the trigger is unchanged, so the trigger stays
+  // put as long as the list doesn't re-anchor. maintainScrollAtEnd would do
+  // exactly that (pin the bottom content when row data changes while scrolled
+  // to the end), yanking the trigger out of view. Suppress it for the frames
+  // in which the toggle's data change and item measurements settle.
+  const [foldToggleSettling, setFoldToggleSettling] = useState(false);
+  const onToggleTurnFold = useCallback((runId: RunId) => {
+    setFoldToggleSettling(true);
+    setExpandedRunIds((existing) => {
+      const next = new Set(existing);
+      if (next.has(runId)) {
+        next.delete(runId);
+      } else {
+        next.add(runId);
+>>>>>>> 79c36e6204 (Complete orchestration V2 frontend cutover)
       }
       if (disclosureSettleSecondFrameRef.current !== null) {
         cancelAnimationFrame(disclosureSettleSecondFrameRef.current);
@@ -366,41 +389,39 @@ export const MessagesTimeline = memo(function MessagesTimeline({
 
   // An in-session interrupt leaves its turn expanded so the user keeps their
   // place; the next turn (or a reload, since this is local state) folds it.
-  const previousLatestTurnRef = useRef(latestTurn);
+  const previousLatestRunRef = useRef(latestRun);
   useEffect(() => {
-    const previous = previousLatestTurnRef.current;
-    previousLatestTurnRef.current = latestTurn;
-    if (!latestTurn || previous?.turnId === undefined) {
+    const previous = previousLatestRunRef.current;
+    previousLatestRunRef.current = latestRun;
+    if (!latestRun || previous?.runId === undefined) {
       return;
     }
-    if (latestTurn.turnId === previous.turnId) {
-      if (previous.state === "running" && latestTurn.state === "interrupted") {
-        setExpandedTurnIds((existing) => {
+    if (latestRun.runId === previous.runId) {
+      if (previous.status === "running" && latestRun.status === "interrupted") {
+        setExpandedRunIds((existing) => {
           const next = new Set(existing);
-          next.add(latestTurn.turnId);
+          next.add(latestRun.runId);
           return next;
         });
       }
       return;
     }
-    setExpandedTurnIds((existing) => {
-      if (!existing.has(previous.turnId)) {
+    setExpandedRunIds((existing) => {
+      if (!existing.has(previous.runId)) {
         return existing;
       }
       const next = new Set(existing);
-      next.delete(previous.turnId);
+      next.delete(previous.runId);
       return next;
     });
-  }, [latestTurn]);
+  }, [latestRun]);
 
   const rawRows = useMemo(
     () =>
       deriveMessagesTimelineRows({
         timelineEntries,
-        latestTurn,
-        runningTurnId,
-        expandedTurnIds,
-        expandedWorkGroupIds,
+        latestRun,
+        expandedRunIds,
         isWorking,
         activeTurnStartedAt,
         turnDiffSummaryByAssistantMessageId,
@@ -408,10 +429,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       }),
     [
       timelineEntries,
-      latestTurn,
-      runningTurnId,
-      expandedTurnIds,
-      expandedWorkGroupIds,
+      latestRun,
+      expandedRunIds,
       isWorking,
       activeTurnStartedAt,
       turnDiffSummaryByAssistantMessageId,
@@ -933,8 +952,12 @@ const TimelineRowContent = memo(function TimelineRowContent({ row }: { row: Time
         // they sit closer to the work that follows them.
         (row.kind === "message" && row.message.role === "assistant" && !row.showAssistantMeta) ||
           row.kind === "work" ||
+<<<<<<< HEAD
           row.kind === "work-toggle" ||
           row.kind === "turn-plan"
+=======
+          row.kind === "event"
+>>>>>>> 79c36e6204 (Complete orchestration V2 frontend cutover)
           ? "pb-2"
           : "pb-4",
         row.kind === "message" && row.message.role === "assistant" ? "group/assistant" : null,
@@ -952,7 +975,11 @@ const TimelineRowContent = memo(function TimelineRowContent({ row }: { row: Time
         <AssistantTimelineRow row={row} />
       ) : null}
       {row.kind === "proposed-plan" ? <ProposedPlanTimelineRow row={row} /> : null}
+<<<<<<< HEAD
       {row.kind === "turn-plan" ? <TurnPlanTimelineRow row={row} /> : null}
+=======
+      {row.kind === "event" ? <V2EventTimelineRow row={row} /> : null}
+>>>>>>> 79c36e6204 (Complete orchestration V2 frontend cutover)
       {row.kind === "working" ? <WorkingTimelineRow row={row} /> : null}
     </div>
   );
@@ -1097,7 +1124,7 @@ function TurnFoldTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "turn-
         type="button"
         aria-expanded={row.expanded}
         data-scroll-anchor-ignore
-        onClick={() => ctx.onToggleTurnFold(row.turnId)}
+        onClick={() => ctx.onToggleTurnFold(row.runId)}
         className="flex cursor-pointer select-none items-center gap-1 rounded-md px-1 text-xs text-muted-foreground tabular-nums transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/70"
       >
         <span>{row.label}</span>
@@ -1183,6 +1210,7 @@ function ProposedPlanTimelineRow({
   );
 }
 
+<<<<<<< HEAD
 /**
  * Inline folded plan chip: one row per turn that produced plan/todo steps.
  * Collapsed by default — a segment bar plus the in-progress step label —
@@ -1282,6 +1310,174 @@ const TurnPlanTimelineRow = memo(function TurnPlanTimelineRow({
     </div>
   );
 });
+=======
+type V2EventTone = "muted" | "warning" | "danger" | "success";
+
+function v2EventPresentation(item: OrchestrationV2TurnItem): {
+  readonly label: string;
+  readonly detail: string | null;
+  readonly tone: V2EventTone;
+  readonly icon: typeof CircleAlertIcon;
+} {
+  switch (item.type) {
+    case "run_interrupt_request":
+      return {
+        label: "Interrupt requested",
+        detail: item.message,
+        tone: "warning",
+        icon: CircleAlertIcon,
+      };
+    case "run_interrupt_result":
+      return {
+        label: "Run interrupted",
+        detail: item.message,
+        tone: "danger",
+        icon: XIcon,
+      };
+    case "handoff":
+      return {
+        label: "Context handoff",
+        detail:
+          item.summary ??
+          `${item.fromProviderInstanceIds.join(", ")} → ${item.toProviderInstanceId}`,
+        tone: item.status === "failed" ? "danger" : "muted",
+        icon: ZapIcon,
+      };
+    case "fork":
+      return {
+        label: "Conversation fork",
+        detail: `Continues in ${item.targetThreadId}`,
+        tone: "muted",
+        icon: HammerIcon,
+      };
+    case "compaction": {
+      const tokenSummary =
+        item.beforeTokenCount === undefined && item.afterTokenCount === undefined
+          ? null
+          : `${item.beforeTokenCount ?? "?"} → ${item.afterTokenCount ?? "?"} tokens`;
+      return {
+        label: "Context compacted",
+        detail: item.summary ?? tokenSummary,
+        tone: item.status === "failed" ? "danger" : "muted",
+        icon: MinusIcon,
+      };
+    }
+    case "subagent":
+      return {
+        label: item.title ?? "Subagent",
+        detail: item.result ?? item.prompt,
+        tone:
+          item.status === "failed" ? "danger" : item.status === "completed" ? "success" : "muted",
+        icon: HammerIcon,
+      };
+    case "approval_request":
+      return {
+        label: "Approval requested",
+        detail: item.prompt ?? item.requestKind,
+        tone: item.status === "failed" ? "danger" : "warning",
+        icon: MessageCircleIcon,
+      };
+    case "user_input_request":
+      return {
+        label: "Input requested",
+        detail: item.questions.map((question) => question.question).join("\n"),
+        tone: item.status === "failed" ? "danger" : "warning",
+        icon: MessageCircleIcon,
+      };
+    case "todo_list": {
+      const steps = item.steps.map((step) => `${step.status}: ${step.text}`).join("\n");
+      return {
+        label: "Plan updated",
+        detail: [item.explanation, steps].filter(Boolean).join("\n\n") || null,
+        tone: item.status === "failed" ? "danger" : "success",
+        icon: CheckIcon,
+      };
+    }
+    default:
+      return {
+        label: item.title?.trim() || item.type.replaceAll("_", " "),
+        detail: null,
+        tone: item.status === "failed" ? "danger" : "muted",
+        icon: WrenchIcon,
+      };
+  }
+}
+
+function V2EventTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "event" }> }) {
+  const ctx = use(TimelineRowCtx);
+  const { item, visibility, sourceThreadId } = row.projectedItem;
+  const presentation = v2EventPresentation(item);
+  const Icon = presentation.icon;
+  return (
+    <section
+      className={cn(
+        "rounded-lg border px-3 py-2",
+        presentation.tone === "warning" && "border-amber-500/25 bg-amber-500/5",
+        presentation.tone === "danger" && "border-destructive/25 bg-destructive/5",
+        presentation.tone === "success" && "border-emerald-500/20 bg-emerald-500/5",
+        presentation.tone === "muted" && "border-border/60 bg-card/30",
+      )}
+      data-v2-item-type={item.type}
+      data-v2-item-visibility={visibility}
+    >
+      <div className="flex items-start gap-2.5">
+        <Icon
+          className={cn(
+            "mt-0.5 size-3.5 shrink-0",
+            presentation.tone === "warning" && "text-amber-600 dark:text-amber-400",
+            presentation.tone === "danger" && "text-destructive",
+            presentation.tone === "success" && "text-emerald-600 dark:text-emerald-400",
+            presentation.tone === "muted" && "text-muted-foreground",
+          )}
+        />
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+            <span className="text-xs font-medium text-foreground/90">{presentation.label}</span>
+            {item.status !== "completed" ? (
+              <span className="rounded-full border border-border/70 px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground">
+                {item.status}
+              </span>
+            ) : null}
+            {visibility !== "local" ? (
+              <span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
+                {visibility === "inherited" ? "Inherited" : "Synthetic"}
+              </span>
+            ) : null}
+          </div>
+          {presentation.detail ? (
+            <div className="mt-1 text-xs leading-relaxed text-muted-foreground">
+              <ChatMarkdown
+                text={presentation.detail}
+                cwd={ctx.markdownCwd}
+                threadRef={ctx.threadRef ?? undefined}
+                skills={ctx.skills}
+                lineBreaks
+              />
+            </div>
+          ) : null}
+          {visibility === "inherited" ? (
+            <p className="mt-1 font-mono text-[10px] text-muted-foreground/65">
+              From {sourceThreadId}
+            </p>
+          ) : null}
+          <details
+            className="group/v2-details mt-2 rounded-md border border-border/50 bg-background/45"
+            data-v2-structured-details="true"
+          >
+            <summary className="flex cursor-pointer list-none items-center gap-1.5 px-2 py-1.5 text-[11px] font-medium text-muted-foreground select-none hover:text-foreground [&::-webkit-details-marker]:hidden">
+              <ChevronRightIcon className="size-3 transition-transform group-open/v2-details:rotate-90" />
+              Structured details
+            </summary>
+            <pre className="max-h-80 overflow-auto border-t border-border/50 px-2 py-2 font-mono text-[10px] leading-relaxed whitespace-pre-wrap text-muted-foreground">
+              {JSON.stringify(item, null, 2)}
+            </pre>
+          </details>
+        </div>
+      </div>
+    </section>
+  );
+}
+>>>>>>> 79c36e6204 (Complete orchestration V2 frontend cutover)
 
 function WorkingTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "working" }> }) {
   const { workingStepLabel } = use(TimelineRowActivityCtx);
@@ -1434,7 +1630,7 @@ const AssistantChangedFilesSection = memo(function AssistantChangedFilesSection(
   turnSummary: TurnDiffSummary | undefined;
   routeThreadKey: string;
   resolvedTheme: "light" | "dark";
-  onOpenTurnDiff: (turnId: TurnId, filePath?: string) => void;
+  onOpenTurnDiff: (runId: RunId, filePath?: string) => void;
 }) {
   if (!turnSummary) return null;
   const checkpointFiles = turnSummary.files;
@@ -1464,12 +1660,10 @@ function AssistantChangedFilesSectionInner({
   checkpointFiles: TurnDiffSummary["files"];
   routeThreadKey: string;
   resolvedTheme: "light" | "dark";
-  onOpenTurnDiff: (turnId: TurnId, filePath?: string) => void;
+  onOpenTurnDiff: (runId: RunId, filePath?: string) => void;
 }) {
-  const activity = use(TimelineRowActivityCtx);
-  const isLatestTurn = activity.latestTurnId === turnSummary.turnId;
-  const persistedExpanded = useUiStateStore(
-    (store) => store.threadChangedFilesExpandedById[routeThreadKey]?.[turnSummary.turnId],
+  const allDirectoriesExpanded = useUiStateStore(
+    (store) => store.threadChangedFilesExpandedById[routeThreadKey]?.[turnSummary.runId] ?? true,
   );
   const setExpanded = useUiStateStore((store) => store.setThreadChangedFilesExpanded);
   const [autoExpanded] = useState(() =>
@@ -1479,19 +1673,46 @@ function AssistantChangedFilesSectionInner({
   const expanded = persistedExpanded ?? (isLatestTurn && autoExpanded);
 
   return (
-    <ChangedFilesCard
-      turnId={turnSummary.turnId}
-      files={checkpointFiles}
-      expanded={expanded}
-      showCompactPreview={isLatestTurn}
-      allDirectoriesExpanded={allDirectoriesExpanded}
-      resolvedTheme={resolvedTheme}
-      onExpandedChange={(nextExpanded) =>
-        setExpanded(routeThreadKey, turnSummary.turnId, nextExpanded)
-      }
-      onToggleAllDirectories={() => setAllDirectoriesExpanded((current) => !current)}
-      onOpenTurnDiff={onOpenTurnDiff}
-    />
+    <div className="mt-2 rounded-lg border border-border/80 bg-card/45 p-2.5">
+      <div className="sticky top-2 z-10 mb-1.5 flex items-center justify-between gap-2 bg-[color-mix(in_srgb,var(--card)_45%,var(--background))] before:absolute before:inset-x-0 before:-top-2 before:h-2 before:bg-[color-mix(in_srgb,var(--card)_45%,var(--background))] before:content-['']">
+        <p className="text-[10px] uppercase tracking-[0.12em] text-muted-foreground/65">
+          <span>Changed files ({changedFileCountLabel})</span>
+          {hasNonZeroStat(summaryStat) && (
+            <>
+              <span className="mx-1">•</span>
+              <DiffStatLabel additions={summaryStat.additions} deletions={summaryStat.deletions} />
+            </>
+          )}
+        </p>
+        <div className="flex items-center gap-1.5">
+          <Button
+            type="button"
+            size="xs"
+            variant="outline"
+            data-scroll-anchor-ignore
+            onClick={() => setExpanded(routeThreadKey, turnSummary.runId, !allDirectoriesExpanded)}
+          >
+            {allDirectoriesExpanded ? "Collapse all" : "Expand all"}
+          </Button>
+          <Button
+            type="button"
+            size="xs"
+            variant="outline"
+            onClick={() => onOpenTurnDiff(turnSummary.runId, checkpointFiles[0]?.path)}
+          >
+            View diff
+          </Button>
+        </div>
+      </div>
+      <ChangedFilesTree
+        key={`changed-files-tree:${turnSummary.runId}`}
+        runId={turnSummary.runId}
+        files={checkpointFiles}
+        allDirectoriesExpanded={allDirectoriesExpanded}
+        resolvedTheme={resolvedTheme}
+        onOpenTurnDiff={onOpenTurnDiff}
+      />
+    </div>
   );
 }
 
@@ -2040,8 +2261,8 @@ function buildToolCallExpandedBody(
   workspaceRoot: string | undefined,
 ): string | null {
   const blocks: string[] = [];
-  if (workEntry.itemType === "mcp_tool_call" && workEntry.toolData !== undefined) {
-    blocks.push(`MCP call\n${JSON.stringify(workEntry.toolData, null, 2)}`);
+  if (workEntry.itemType === "dynamic_tool" && workEntry.toolData !== undefined) {
+    blocks.push(`Tool call\n${JSON.stringify(workEntry.toolData, null, 2)}`);
   }
   const raw = workEntryRawCommand(workEntry);
   if (raw?.trim()) {
@@ -2060,14 +2281,25 @@ function buildToolCallExpandedBody(
         .join("\n"),
     );
   }
+  if (workEntry.structuredPayload !== undefined) {
+    const structured = JSON.stringify(workEntry.structuredPayload, null, 2);
+    if (structured && !blocks.includes(structured)) {
+      blocks.push(structured);
+    }
+  }
+  if (workEntry.projectedItem?.visibility !== undefined) {
+    const { visibility, sourceThreadId } = workEntry.projectedItem;
+    if (visibility !== "local") {
+      blocks.push(
+        `${visibility === "inherited" ? "Inherited" : "Synthetic"} from ${sourceThreadId}`,
+      );
+    }
+  }
   return blocks.length > 0 ? blocks.join("\n\n") : null;
 }
 
 function workEntryIconName(workEntry: TimelineWorkEntry): WorkEntryIconName {
-  if (
-    workEntry.sourceActivityKind === "user-input.requested" ||
-    workEntry.sourceActivityKind === "user-input.resolved"
-  ) {
+  if (workEntry.itemType === "user_input_request") {
     return "message-circle";
   }
   if (workEntry.requestKind === "command") return "terminal";
@@ -2081,12 +2313,16 @@ function workEntryIconName(workEntry: TimelineWorkEntry): WorkEntryIconName {
     return "square-pen";
   }
   if (workEntry.itemType === "web_search") return "globe";
-  if (workEntry.itemType === "image_view") return "eye";
+  if (workEntry.itemType === "file_search") return "eye";
 
   switch (workEntry.itemType) {
-    case "mcp_tool_call":
+    case "dynamic_tool":
       return "wrench";
+<<<<<<< HEAD
     case "dynamic_tool_call":
+=======
+    case "subagent":
+>>>>>>> 79c36e6204 (Complete orchestration V2 frontend cutover)
       return "hammer";
     case "collab_agent_tool_call":
       return "bot";
@@ -2231,7 +2467,7 @@ const PlainWorkEntryRow = memo(function PlainWorkEntryRow(props: {
   const activity = use(TimelineRowActivityCtx);
   const [expanded, setExpanded] = useState(false);
   const iconConfig = workToneIcon(workEntry.tone);
-  const showWarningIndicator = workEntry.sourceActivityKind === "runtime.warning";
+  const showWarningIndicator = false;
   const entryIconName = showWarningIndicator ? "x" : workEntryIconName(workEntry);
   const heading = toolWorkEntryHeading(workEntry);
   const rawPreview = workEntryPreview(workEntry, workspaceRoot);
@@ -2245,9 +2481,7 @@ const PlainWorkEntryRow = memo(function PlainWorkEntryRow(props: {
   const expandedBody = buildToolCallExpandedBody(workEntry, workspaceRoot);
   const canExpand = expandedBody !== null;
   const showFailedIndicator = workEntryIndicatesToolFailure(workEntry);
-  const showDestructiveRowStyle =
-    showFailedIndicator &&
-    (workEntry.sourceActivityKind === "runtime.error" || !workLogEntryIsToolLike(workEntry));
+  const showDestructiveRowStyle = showFailedIndicator && !workLogEntryIsToolLike(workEntry);
   const iconWrapperClass = cn(
     "flex size-5 shrink-0 items-center justify-center",
     showWarningIndicator
@@ -2290,6 +2524,8 @@ const PlainWorkEntryRow = memo(function PlainWorkEntryRow(props: {
         canExpand &&
           "cursor-pointer hover:bg-accent/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/70",
       )}
+      data-v2-item-type={workEntry.projectedItem?.item.type}
+      data-v2-item-visibility={workEntry.projectedItem?.visibility}
       {...rowToggleProps}
     >
       <div className="flex select-none items-center gap-1.5 transition-[opacity,translate] duration-200">
@@ -2303,6 +2539,12 @@ const PlainWorkEntryRow = memo(function PlainWorkEntryRow(props: {
           <div className="min-w-0 flex-1 overflow-hidden">
             <p className="flex min-w-0 w-full items-baseline gap-1.5 text-[12px] leading-5">
               <span className={cn("min-w-0 shrink truncate", headingClass)}>{heading}</span>
+              {workEntry.projectedItem?.visibility !== undefined &&
+              workEntry.projectedItem.visibility !== "local" ? (
+                <span className="shrink-0 rounded-full bg-muted px-1.5 py-0.5 text-[9px] leading-none text-muted-foreground">
+                  {workEntry.projectedItem.visibility === "inherited" ? "Inherited" : "Synthetic"}
+                </span>
+              ) : null}
               {preview && (
                 <span className="min-w-0 flex-1 truncate text-secondary-label">{preview}</span>
               )}
