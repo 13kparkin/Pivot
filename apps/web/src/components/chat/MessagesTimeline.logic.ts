@@ -1,8 +1,7 @@
 import * as Equal from "effect/Equal";
 import {
   formatDuration,
-  workEntryIndicatesToolNeutralStatus,
-  workLogEntryIsToolLike,
+  timelineEntryIsPersistentResourceCard,
   type TimelineEntry,
   type TurnPlanEntry,
   type WorkLogEntry,
@@ -330,7 +329,8 @@ function deriveSupersededAttemptFolds(
   for (const entry of timelineEntries) {
     if (
       entry.attempt?.status !== "superseded" ||
-      (entry.kind === "message" && entry.message.role === "user")
+      (entry.kind === "message" && entry.message.role === "user") ||
+      timelineEntryIsPersistentResourceCard(entry)
     ) {
       continue;
     }
