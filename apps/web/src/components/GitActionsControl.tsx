@@ -25,6 +25,7 @@ import {
   CloudDownloadIcon,
   CloudUploadIcon,
   ExternalLinkIcon,
+  FileDiffIcon,
   GitBranchPlusIcon,
   GitCommitIcon,
   InfoIcon,
@@ -89,6 +90,14 @@ import { randomUUID } from "~/lib/utils";
 import { resolvePathLinkTarget } from "~/terminal-links";
 import { type DraftId, useComposerDraftStore } from "~/composerDraftStore";
 import { readLocalApi } from "~/localApi";
+import {
+  THREAD_DETAILS_PANEL_ICON_CLASS,
+  THREAD_DETAILS_PANEL_ROW_CLASS,
+  THREAD_DETAILS_PANEL_SPLIT_GROUP_CLASS,
+  THREAD_DETAILS_PANEL_SPLIT_PRIMARY_CLASS,
+  THREAD_DETAILS_PANEL_SPLIT_SECONDARY_CLASS,
+  THREAD_DETAILS_PANEL_SPLIT_SEPARATOR_CLASS,
+} from "./chat/threadDetailsPanelStyles";
 import { getSourceControlPresentation } from "~/sourceControlPresentation";
 import { openPullRequestLink } from "~/lib/openPullRequestLink";
 
@@ -96,11 +105,16 @@ interface GitActionsControlProps {
   gitCwd: string | null;
   activeThreadRef: ScopedThreadRef | null;
   draftId?: DraftId;
+<<<<<<< HEAD
   /**
    * Opens the thread's own change request beside it. Absent when the thread has no project to
    * place it against, in which case it still opens in the browser.
    */
   onOpenPullRequest?: ((number: number) => void) | undefined;
+=======
+  displayMode?: "toolbar" | "panel";
+  onOpenChanges?: () => void;
+>>>>>>> abd5cc5ff8 (Map thread panel into title bar and sidebar)
 }
 
 interface PendingDefaultBranchAction {
@@ -351,11 +365,13 @@ function GitActionItemIcon({
 function GitQuickActionIcon({
   quickAction,
   SourceControlIcon,
+  className = "size-3.5",
 }: {
   quickAction: GitQuickAction;
   SourceControlIcon: ReturnType<typeof getSourceControlPresentation>["Icon"];
+  className?: string;
 }) {
-  const iconClassName = "size-3.5";
+  const iconClassName = className;
   if (quickAction.kind === "open_pr") return <SourceControlIcon className={iconClassName} />;
   if (quickAction.kind === "open_publish") return <CloudUploadIcon className={iconClassName} />;
   if (quickAction.kind === "run_pull") return <CloudDownloadIcon className={iconClassName} />;
@@ -978,8 +994,15 @@ export default function GitActionsControl({
   gitCwd,
   activeThreadRef,
   draftId,
+<<<<<<< HEAD
   onOpenPullRequest,
+=======
+  displayMode = "toolbar",
+  onOpenChanges,
+>>>>>>> abd5cc5ff8 (Map thread panel into title bar and sidebar)
 }: GitActionsControlProps) {
+  const isPanel = displayMode === "panel";
+  const ActionGroup = isPanel ? "div" : Group;
   const updateThreadMetadata = useAtomCommand(
     threadEnvironment.updateMetadata,
     "thread branch metadata update",
@@ -1675,6 +1698,7 @@ export default function GitActionsControl({
         <Button
           variant="outline"
           size="xs"
+          className={isPanel ? THREAD_DETAILS_PANEL_ROW_CLASS : undefined}
           disabled={initAction.isPending}
           onClick={() => {
             void (async () => {
@@ -1700,7 +1724,11 @@ export default function GitActionsControl({
           </span>
         </Button>
       ) : (
-        <Group aria-label="Git actions" className="shrink-0">
+        <ActionGroup
+          role="group"
+          aria-label="Git actions"
+          className={cn("shrink-0", isPanel && THREAD_DETAILS_PANEL_SPLIT_GROUP_CLASS)}
+        >
           {quickActionDisabledReason ? (
             <Popover>
               <PopoverTrigger
@@ -1708,7 +1736,10 @@ export default function GitActionsControl({
                 render={
                   <Button
                     aria-disabled="true"
-                    className="cursor-not-allowed rounded-e-none border-e-0 ps-[8.5px] opacity-64 before:rounded-e-none"
+                    className={cn(
+                      "cursor-not-allowed rounded-e-none border-e-0 opacity-64 before:rounded-e-none",
+                      isPanel && THREAD_DETAILS_PANEL_SPLIT_PRIMARY_CLASS,
+                    )}
                     size="xs"
                     variant="outline"
                   />
@@ -1717,8 +1748,14 @@ export default function GitActionsControl({
                 <GitQuickActionIcon
                   quickAction={quickAction}
                   SourceControlIcon={SourceControlIcon}
+                  {...(isPanel ? { className: THREAD_DETAILS_PANEL_ICON_CLASS } : {})}
                 />
-                <span className="sr-only @3xl/header-actions:not-sr-only @3xl/header-actions:ml-0.5">
+                <span
+                  className={cn(
+                    "sr-only @3xl/header-actions:not-sr-only @3xl/header-actions:ml-0.5",
+                    isPanel && "not-sr-only ml-0.5 truncate",
+                  )}
+                >
                   {quickAction.label}
                 </span>
               </PopoverTrigger>
@@ -1730,17 +1767,30 @@ export default function GitActionsControl({
             <Button
               variant="outline"
               size="xs"
-              className="ps-[8.5px]"
+              className={isPanel ? THREAD_DETAILS_PANEL_SPLIT_PRIMARY_CLASS : undefined}
               disabled={isGitActionRunning || quickAction.disabled}
               onClick={runQuickAction}
             >
-              <GitQuickActionIcon quickAction={quickAction} SourceControlIcon={SourceControlIcon} />
-              <span className="sr-only @3xl/header-actions:not-sr-only @3xl/header-actions:ml-0.5">
+              <GitQuickActionIcon
+                quickAction={quickAction}
+                SourceControlIcon={SourceControlIcon}
+                {...(isPanel ? { className: THREAD_DETAILS_PANEL_ICON_CLASS } : {})}
+              />
+              <span
+                className={cn(
+                  "sr-only @3xl/header-actions:not-sr-only @3xl/header-actions:ml-0.5",
+                  isPanel && "not-sr-only ml-0.5 truncate",
+                )}
+              >
                 {quickAction.label}
               </span>
             </Button>
           )}
-          <GroupSeparator className="hidden @3xl/header-actions:block" />
+          {isPanel ? (
+            <span aria-hidden="true" className={THREAD_DETAILS_PANEL_SPLIT_SEPARATOR_CLASS} />
+          ) : (
+            <GroupSeparator className="hidden @3xl/header-actions:block" />
+          )}
           <Menu
             onOpenChange={(open) => {
               if (open) {
@@ -1749,7 +1799,14 @@ export default function GitActionsControl({
             }}
           >
             <MenuTrigger
-              render={<Button aria-label="Git action options" size="icon-xs" variant="outline" />}
+              render={
+                <Button
+                  aria-label="Git action options"
+                  size={isPanel ? "sm" : "icon-xs"}
+                  variant="outline"
+                  className={isPanel ? THREAD_DETAILS_PANEL_SPLIT_SECONDARY_CLASS : undefined}
+                />
+              }
               disabled={isGitActionRunning}
             >
               <ChevronDownIcon aria-hidden="true" className="size-4" />
@@ -1829,8 +1886,30 @@ export default function GitActionsControl({
               )}
             </MenuPopup>
           </Menu>
-        </Group>
+        </ActionGroup>
       )}
+
+      {isPanel && isRepo ? (
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          className={THREAD_DETAILS_PANEL_ROW_CLASS}
+          disabled={!onOpenChanges}
+          onClick={onOpenChanges}
+        >
+          <FileDiffIcon className={THREAD_DETAILS_PANEL_ICON_CLASS} aria-hidden />
+          <span className="flex-1 text-left">Changes</span>
+          <span className="flex items-center gap-1 font-mono text-[11px] tabular-nums">
+            <span className="text-success">
+              +{gitStatusForActions?.workingTree.insertions ?? 0}
+            </span>
+            <span className="text-destructive">
+              -{gitStatusForActions?.workingTree.deletions ?? 0}
+            </span>
+          </span>
+        </Button>
+      ) : null}
 
       <Dialog
         open={isCommitDialogOpen}
