@@ -57,7 +57,7 @@ import {
   EyeIcon,
   GitForkIcon,
   GlobeIcon,
-  HammerIcon,
+  type LucideIcon,
   MessageCircleIcon,
   MousePointerClickIcon,
   PaintbrushIcon,
@@ -1337,11 +1337,15 @@ function ProposedPlanTimelineRow({
 
 type V2EventTone = "muted" | "warning" | "danger" | "success";
 
+function subagentDisplayTitle(title: string): string {
+  return title.replace(/^Subagent:\s*/i, "");
+}
+
 function v2EventPresentation(item: OrchestrationV2TurnItem): {
   readonly label: string;
   readonly detail: string | null;
   readonly tone: V2EventTone;
-  readonly icon: typeof CircleAlertIcon;
+  readonly icon: LucideIcon;
 } {
   switch (item.type) {
     case "error":
@@ -1379,7 +1383,7 @@ function v2EventPresentation(item: OrchestrationV2TurnItem): {
         label: "Conversation fork",
         detail: `Continues in ${item.targetThreadId}`,
         tone: "muted",
-        icon: HammerIcon,
+        icon: GitForkIcon,
       };
     case "compaction": {
       const tokenSummary =
@@ -1395,11 +1399,11 @@ function v2EventPresentation(item: OrchestrationV2TurnItem): {
     }
     case "subagent":
       return {
-        label: item.title ?? "Subagent",
+        label: subagentDisplayTitle(item.title ?? "Subagent"),
         detail: item.result ?? item.progress ?? item.prompt,
         tone:
           item.status === "failed" ? "danger" : item.status === "completed" ? "success" : "muted",
-        icon: HammerIcon,
+        icon: BotIcon,
       };
     case "approval_request":
       return {
@@ -2205,7 +2209,6 @@ type WorkEntryIconName =
   | "circle-alert"
   | "eye"
   | "globe"
-  | "hammer"
   | "message-circle"
   | "square-pen"
   | "terminal"
@@ -2225,8 +2228,6 @@ function WorkEntryIconSvg({ name, className }: { name: WorkEntryIconName; classN
       return <EyeIcon className={className} aria-hidden />;
     case "globe":
       return <GlobeIcon className={className} aria-hidden />;
-    case "hammer":
-      return <HammerIcon className={className} aria-hidden />;
     case "message-circle":
       return <MessageCircleIcon className={className} aria-hidden />;
     case "square-pen":
@@ -2358,14 +2359,7 @@ function workEntryIconName(workEntry: TimelineWorkEntry): WorkEntryIconName {
     case "dynamic_tool":
       return "wrench";
     case "subagent":
-      return "hammer";
-    case "collab_agent_tool_call":
       return "bot";
-  }
-
-  // Subagent lifecycle rows (grouped by taskId) get agent identity chrome.
-  if (workEntry.taskId) {
-    return "bot";
   }
 
   return workToneIcon(workEntry.tone).iconName;
