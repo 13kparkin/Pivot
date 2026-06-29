@@ -375,6 +375,19 @@ function deriveUnsettledRunId(latestRun: TimelineLatestRun | null): RunId | null
   return isSettled ? null : latestRun.runId;
 }
 
+function timelineEntryFoldRunId(entry: TimelineEntry): RunId | null {
+  if (entry.kind === "message" && entry.message.role === "assistant") {
+    return entry.message.runId ?? null;
+  }
+  if (entry.kind === "work") {
+    return entry.entry.runId ?? null;
+  }
+  if (entry.kind === "event" && timelineEntryIsPersistentResourceCard(entry)) {
+    return entry.projectedItem.item.runId;
+  }
+  return null;
+}
+
 /**
  * Settled turns fold their commentary and tool activity behind a
  * "Worked for ..." row anchored at the turn's first foldable entry; the
@@ -418,12 +431,7 @@ function deriveTurnFolds(input: {
       pendingUserBoundary = entry.message.createdAt;
       continue;
     }
-    const runId =
-      entry.kind === "message" && entry.message.role === "assistant"
-        ? (entry.message.runId ?? null)
-        : entry.kind === "work"
-          ? (entry.entry.runId ?? null)
-          : null;
+    const runId = timelineEntryFoldRunId(entry);
     if (!runId) {
       continue;
     }
@@ -462,8 +470,8 @@ function deriveTurnFolds(input: {
     }
     const hiddenEntryIds = new Set<string>();
     for (const entry of group.entries) {
-      if (entry.id === group.terminalEntry?.id) {
-        continue;
+      if (entry.id !== group.terminalEntry?.id && !timelineEntryIsPersistentResourceCard(entry)) {
+        hiddenEntryIds.add(entry.id);
       }
       // Agent-spawn CTA rows never fold: workflows outlive their launching
       // turn (dynamic spawns, background execution), and folding the CTA
@@ -683,21 +691,12 @@ export function deriveMessagesTimelineRows(input: {
       continue;
     }
 
-<<<<<<< HEAD
-    if (timelineEntry.kind === "turn-plan") {
-      nextRows.push({
-        kind: "turn-plan",
-        id: timelineEntry.id,
-        createdAt: timelineEntry.createdAt,
-        turnPlan: timelineEntry.turnPlan,
-=======
     if (timelineEntry.kind === "event") {
       nextRows.push({
         kind: "event",
         id: timelineEntry.id,
         createdAt: timelineEntry.createdAt,
         projectedItem: timelineEntry.projectedItem,
->>>>>>> 79c36e6204 (Complete orchestration V2 frontend cutover)
       });
       continue;
     }
@@ -793,17 +792,8 @@ function isRowUnchanged(a: MessagesTimelineRow, b: MessagesTimelineRow): boolean
     case "proposed-plan":
       return a.proposedPlan === (b as typeof a).proposedPlan;
 
-<<<<<<< HEAD
-    case "turn-plan": {
-      const bp = b as typeof a;
-      // Plans rewrite in place: compare the snapshot's identity fields so an
-      // unchanged plan keeps its row reference (virtualization stability).
-      return a.createdAt === bp.createdAt && a.turnPlan.plan === bp.turnPlan.plan;
-    }
-=======
     case "event":
       return a.projectedItem === (b as typeof a).projectedItem;
->>>>>>> 79c36e6204 (Complete orchestration V2 frontend cutover)
 
     case "work":
       return Equal.equals(a.groupedEntries, (b as typeof a).groupedEntries);
