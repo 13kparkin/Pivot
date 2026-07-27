@@ -150,7 +150,11 @@ export function ThreadRelationshipsPanel(props: {
     () =>
       orderWebThreadLineageRows({
         graph,
-        rows: immediateThreadRelationships(graph, props.threadId),
+        // Subagent edges point at hidden internal threads; rendering them
+        // would offer navigation to conversations the client never receives.
+        rows: immediateThreadRelationships(graph, props.threadId).filter(
+          (relationship) => relationship.edge.kind !== "subagent",
+        ),
         currentThreadId: props.threadId,
         mergeTargetThreadId,
       }),

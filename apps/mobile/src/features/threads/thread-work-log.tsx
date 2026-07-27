@@ -128,9 +128,6 @@ function ThreadActivityThreadLink(props: {
   if (item.type === "thread_created") {
     targetThreadId = item.targetThreadId;
     label = "Open created thread";
-  } else if (item.type === "subagent") {
-    targetThreadId = support.subagent?.childThreadId ?? item.childThreadId;
-    label = "Open subagent thread";
   } else if (item.type === "fork") {
     targetThreadId =
       item.targetThreadId === row.sourceThreadId && item.source.type === "run"
