@@ -20,9 +20,11 @@ import {
   providerMessageWithContextHandoffs,
 } from "./ContextHandoffService.ts";
 import { IdAllocatorV2 } from "./IdAllocator.ts";
+import type { ProviderAdapterV2ExistingSubagent } from "./ProviderAdapter.ts";
 import { ProjectionStoreV2 } from "./ProjectionStore.ts";
 import { ProviderSessionManagerV2 } from "./ProviderSessionManager.ts";
 import {
+  canReactivateSubagent,
   canRouteRelatedSubagent,
   RunExecutionServiceV2,
   selectInheritedBackgroundTurnItems,
@@ -423,6 +425,47 @@ export const layer: Layer.Layer<
       const routableSubagents = projection.subagents.filter((subagent) =>
         canRouteRelatedSubagent(subagent.status),
       );
+      // Broader than the child-thread list above: an interrupted agent is still
+      // resumable, so it stays re-activatable even though its thread must not
+      // be adopted up front.
+      const reactivatableSubagents = projection.subagents.filter((subagent) =>
+        canReactivateSubagent(subagent.status),
+      );
+      // Adapters keep their subagent registry in memory, so it is empty after a
+      // session reap or a server restart. Hand back the reusable identities
+      // from the projection so a returning agent thread is recognised instead
+      // of being spawned again as a duplicate.
+      const existingSubagents = yield* Effect.forEach(
+        reactivatableSubagents,
+        (subagent, index): Effect.Effect<ReadonlyArray<ProviderAdapterV2ExistingSubagent>> =>
+          Effect.gen(function* () {
+            const childThreadId = subagent.childThreadId;
+            if (childThreadId === null) return [];
+            const turnItem = projection.turnItems.find(
+              (item) => item.type === "subagent" && item.subagentId === subagent.id,
+            );
+            if (turnItem === undefined) return [];
+            const childProjection = yield* projectionStore
+              .getThreadProjection(childThreadId)
+              .pipe(Effect.catch(() => Effect.succeed(null)));
+            if (childProjection === null) return [];
+            const childProviderThread = childProjection.providerThreads.find(
+              (candidate) => candidate.id === subagent.providerThreadId,
+            );
+            if (childProviderThread === undefined) return [];
+            return [
+              {
+                subagent,
+                childThread: childProjection.thread,
+                childProviderThread,
+                turnItemId: turnItem.id,
+                turnItemOrdinal: turnItem.ordinal,
+                ordinal: index + 1,
+              },
+            ];
+          }),
+        { concurrency: "unbounded" },
+      ).pipe(Effect.map((entries) => entries.flat()));
       yield* runExecution.startRootRun({
         commandId: CommandId.make(`command:effect:provider-turn.start:${run.id}`),
         appThread: projection.thread,
@@ -445,6 +488,8 @@ export const layer: Layer.Layer<
         relatedProviderThreadIds: routableSubagents.flatMap((subagent) =>
           subagent.providerThreadId === null ? [] : [subagent.providerThreadId],
         ),
+        relatedSubagentIds: reactivatableSubagents.map((subagent) => subagent.id),
+        existingSubagents,
         providerTurnOrdinal:
           Math.max(
             0,

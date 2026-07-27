@@ -406,6 +406,14 @@ export const ORCHESTRATOR_REPLAY_FIXTURES: ReadonlyArray<OrchestratorReplayFixtu
       },
     ],
   },
+  // subagent_reuse_after_idle is scaffolded and recorded but not registered:
+  // replaying it leaves the second run running forever, so the scenario never
+  // reaches thread idle. Not caused by the reuse routing — the hang reproduces
+  // with those changes reverted, and persists now that the rebind demonstrably
+  // fires (subagent_continue proves that). Root cause still unknown; the
+  // recorded transcript uses the current Codex item shape (subAgentActivity
+  // started/interacted, collab `wait` with empty receiverThreadIds), whereas
+  // the passing subagent_continue transcript uses resumeAgent/sendInput.
   {
     name: "subagent_v2",
     buildInput: subagentV2Input,

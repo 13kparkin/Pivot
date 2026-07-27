@@ -13,6 +13,7 @@ import {
   type OrchestrationV2Run,
   type OrchestrationV2RunAttempt,
   type OrchestrationV2Subagent,
+  type OrchestrationV2SubagentActivation,
   type OrchestrationV2TurnItem,
   ProviderDriverKind,
   ProviderInstanceId,
@@ -21,6 +22,7 @@ import {
   ProviderTurnId,
   RunAttemptId,
   RunId,
+  SubagentActivationId,
   ThreadId,
   TurnItemId,
 } from "@t3tools/contracts";
@@ -40,6 +42,7 @@ import { IdAllocatorV2, layer as idAllocatorLayer } from "./IdAllocator.ts";
 import type { ProviderAdapterV2Event, ProviderAdapterV2SessionRuntime } from "./ProviderAdapter.ts";
 import { ProviderEventIngestorV2 } from "./ProviderEventIngestor.ts";
 import {
+  canReactivateSubagent,
   canRouteRelatedSubagent,
   cascadeTerminalizeRunOwnedSubagents,
   finalProviderThreadStatus,
@@ -152,6 +155,83 @@ it.effect("routes shared-runtime events only to their owning root run", () =>
     assert.isFalse(routeProviderEvent(messageEvent, second, secondAfterTurn)[0]);
     assert.isTrue(routeProviderEvent(terminalEvent, first, firstAfterTurn)[0]);
     assert.isFalse(routeProviderEvent(terminalEvent, second, secondAfterTurn)[0]);
+  }),
+);
+
+it.effect("routes a reused subagent's rows to the run that re-activated it", () =>
+  Effect.gen(function* () {
+    const now = yield* DateTime.now;
+    const threadId = ThreadId.make("thread:reuse");
+    const spawnRunId = RunId.make("run:reuse:1");
+    const subagentId = NodeId.make("node:reuse:subagent");
+    const childThreadId = ThreadId.make("thread:reuse:child");
+    // The turn that re-activates an existing subagent, two runs later.
+    const laterRun: ProviderEventRouteIdentity = {
+      threadId,
+      runId: RunId.make("run:reuse:2"),
+      attemptId: RunAttemptId.make("attempt:reuse:2"),
+      providerThreadId: ProviderThreadId.make("provider-thread:reuse"),
+    };
+
+    // A reusable subagent keeps the run id it was spawned under, and its row is
+    // keyed on the parent thread — so neither the run test nor the child-thread
+    // test can match. Only the identity seeded from the projection can.
+    const subagentEvent: ProviderAdapterV2Event = {
+      type: "subagent.updated",
+      driver,
+      subagent: {
+        ...makeRunOwnedSubagentFixture({
+          ids: {
+            threadId,
+            runId: spawnRunId,
+            rootNodeId: NodeId.make("node:reuse:root"),
+            subagentNodeId: subagentId,
+          } as BackgroundScenarioIds,
+          providerInstanceId: ProviderInstanceId.make("codex"),
+          childThreadId,
+          driver,
+          status: "running",
+        }),
+        activationCount: 2,
+        updatedAt: now,
+      },
+    };
+    const activationEvent: ProviderAdapterV2Event = {
+      type: "subagent_activation.updated",
+      driver,
+      activation: {
+        id: SubagentActivationId.make(`${subagentId}:activation:2`),
+        threadId,
+        subagentId,
+        runId: spawnRunId,
+        providerTurnId: null,
+        ordinal: 2,
+        status: "running",
+        usage: null,
+        startedAt: now,
+        completedAt: null,
+        updatedAt: now,
+      },
+    };
+
+    const withoutSeed = makeProviderEventRoutingState({
+      identity: laterRun,
+      providerTurnId: null,
+    });
+    assert.isFalse(routeProviderEvent(subagentEvent, laterRun, withoutSeed)[0]);
+    assert.isFalse(routeProviderEvent(activationEvent, laterRun, withoutSeed)[0]);
+
+    const seeded = makeProviderEventRoutingState({
+      identity: laterRun,
+      providerTurnId: null,
+      relatedSubagentIds: [subagentId],
+    });
+    const [subagentAccepted, afterSubagent] = routeProviderEvent(subagentEvent, laterRun, seeded);
+    assert.isTrue(subagentAccepted);
+    assert.isTrue(routeProviderEvent(activationEvent, laterRun, afterSubagent)[0]);
+    // Accepting the row also adopts its child thread, so the agent's own
+    // messages and turn items route into this run for the rest of it.
+    assert.isTrue(afterSubagent.ownedThreadIds.has(childThreadId));
   }),
 );
 
@@ -387,6 +467,13 @@ it("does not carry interrupted child ownership into later attempts", () => {
   assert.isTrue(canRouteRelatedSubagent("completed"));
   assert.isTrue(canRouteRelatedSubagent("running"));
 
+  // Re-activation is deliberately broader: the user stopped an interrupted
+  // agent, they did not lose it, and its provider thread is still resumable.
+  assert.isTrue(canReactivateSubagent("interrupted"));
+  assert.isTrue(canReactivateSubagent("idle"));
+  assert.isFalse(canReactivateSubagent("failed"));
+  assert.isFalse(canReactivateSubagent("cancelled"));
+
   const threadId = ThreadId.make("thread:related-child:next-attempt");
   const childThreadId = ThreadId.make("thread:related-child:interrupted");
   const identity: ProviderEventRouteIdentity = {
@@ -425,6 +512,82 @@ it("does not carry interrupted child ownership into later attempts", () => {
 
   assert.isFalse(routeProviderEvent(lateChildNode, identity, state)[0]);
 });
+
+it.effect("re-activates an interrupted subagent without adopting its stale child traffic", () =>
+  Effect.gen(function* () {
+    const now = yield* DateTime.now;
+    const threadId = ThreadId.make("thread:interrupted-reuse");
+    const subagentId = NodeId.make("node:interrupted-reuse:subagent");
+    const childThreadId = ThreadId.make("thread:interrupted-reuse:child");
+    const laterRun: ProviderEventRouteIdentity = {
+      threadId,
+      runId: RunId.make("run:interrupted-reuse:2"),
+      attemptId: RunAttemptId.make("attempt:interrupted-reuse:2"),
+      providerThreadId: ProviderThreadId.make("provider-thread:interrupted-reuse"),
+    };
+
+    // What ProviderTurnStartService builds for a previously interrupted agent:
+    // its identity is re-activatable, but its child thread is NOT pre-owned.
+    const state = makeProviderEventRoutingState({
+      identity: laterRun,
+      providerTurnId: null,
+      relatedThreadIds: [],
+      relatedSubagentIds: [subagentId],
+    });
+
+    // A late event from the interrupted child thread must still be refused —
+    // this is the invariant the post-interrupt recovery fix depends on.
+    const lateChildNode: ProviderAdapterV2Event = {
+      type: "node.updated",
+      driver,
+      node: {
+        id: NodeId.make("node:interrupted-reuse:late"),
+        threadId: childThreadId,
+        runId: null,
+        parentNodeId: null,
+        rootNodeId: NodeId.make("node:interrupted-reuse:late"),
+        kind: "root_turn",
+        status: "completed",
+        countsForRun: false,
+        providerThreadId: null,
+        providerTurnId: null,
+        nativeItemRef: null,
+        runtimeRequestId: null,
+        checkpointScopeId: null,
+        startedAt: null,
+        completedAt: null,
+      },
+    };
+    assert.isFalse(routeProviderEvent(lateChildNode, laterRun, state)[0]);
+
+    // A genuine re-activation of that identity is admitted, and only then is
+    // the child thread adopted — ownership is earned, not granted up front.
+    const reactivation: ProviderAdapterV2Event = {
+      type: "subagent.updated",
+      driver,
+      subagent: {
+        ...makeRunOwnedSubagentFixture({
+          ids: {
+            threadId,
+            runId: RunId.make("run:interrupted-reuse:1"),
+            rootNodeId: NodeId.make("node:interrupted-reuse:root"),
+            subagentNodeId: subagentId,
+          } as BackgroundScenarioIds,
+          providerInstanceId: ProviderInstanceId.make("codex"),
+          childThreadId,
+          driver,
+          status: "running",
+        }),
+        activationCount: 4,
+        updatedAt: now,
+      },
+    };
+    const [accepted, afterReactivation] = routeProviderEvent(reactivation, laterRun, state);
+    assert.isTrue(accepted);
+    assert.isTrue(afterReactivation.ownedThreadIds.has(childThreadId));
+    assert.isTrue(routeProviderEvent(lateChildNode, laterRun, afterReactivation)[0]);
+  }),
+);
 
 it.effect("rechecks run ownership immediately before calling the provider", () =>
   Effect.gen(function* () {
@@ -2378,6 +2541,12 @@ it.effect("cascade helper is provider-neutral for Claude and Codex-shaped child 
       const threadId = ThreadId.make(`thread:cascade-helper:${driverKind}`);
       const childThreadId = ThreadId.make(`thread:cascade-helper:${driverKind}:child`);
       const subagentId = NodeId.make(`node:cascade-helper:${driverKind}:subagent`);
+      const activationId = SubagentActivationId.make(
+        `node:cascade-helper:${driverKind}:subagent:activation:2`,
+      );
+      const previousActivationId = SubagentActivationId.make(
+        `node:cascade-helper:${driverKind}:subagent:activation:1`,
+      );
       const childNodeId = NodeId.make(`node:cascade-helper:${driverKind}:child-root`);
       const providerInstanceId = ProviderInstanceId.make(String(driverKind));
       const terminalStatus = driverKind === "claudeAgent" ? "failed" : "cancelled";
@@ -2402,18 +2571,37 @@ it.effect("cascade helper is provider-neutral for Claude and Codex-shaped child 
         model: null,
         kind: "subagent",
         role: { name: "general-purpose", source: "app_default" },
-        usage: null,
-        currentActivationId: null,
-        activationCount: 1,
-        workflow: null,
-        workflowMembership: null,
-        recentActivity: [],
         status: "running",
         progress: "partial progress",
         result: "partial result",
+        usage: null,
+        currentActivationId: activationId,
+        activationCount: 2,
+        workflow: null,
+        workflowMembership: null,
+        recentActivity: [],
         startedAt: now,
         completedAt: null,
         updatedAt: now,
+      };
+      const activation: OrchestrationV2SubagentActivation = {
+        id: activationId,
+        threadId,
+        subagentId,
+        runId,
+        providerTurnId: null,
+        ordinal: 2,
+        status: "running",
+        usage: { totalTokens: 120, toolUses: 2 },
+        startedAt: now,
+        completedAt: null,
+        updatedAt: now,
+      };
+      const previousActivation: OrchestrationV2SubagentActivation = {
+        ...activation,
+        id: previousActivationId,
+        ordinal: 1,
+        usage: { totalTokens: 60, toolUses: 1 },
       };
       const turnItem = {
         id: TurnItemId.make(`turn-item:cascade-helper:${driverKind}`),
@@ -2523,6 +2711,10 @@ it.effect("cascade helper is provider-neutral for Claude and Codex-shaped child 
         } as OrchestrationV2Run,
         open: {
           subagents: new Map([[subagentId, subagent]]),
+          activations: new Map([
+            [previousActivation.id, previousActivation],
+            [activation.id, activation],
+          ]),
           turnItems: new Map([[subagentId, turnItem]]),
           childTurnItems: new Map(),
           nodes: new Map([[subagentId, node]]),
@@ -2533,7 +2725,7 @@ it.effect("cascade helper is provider-neutral for Claude and Codex-shaped child 
         allocateEventId,
       });
 
-      assert.equal(events.length, 3, `${driverKind}: subagent + node + turn item`);
+      assert.equal(events.length, 5, `${driverKind}: subagent + activations + node + turn item`);
       const terminalSubagent = events.find((event) => event.type === "subagent.updated");
       assert.isDefined(terminalSubagent);
       if (terminalSubagent?.type !== "subagent.updated") {
@@ -2545,6 +2737,25 @@ it.effect("cascade helper is provider-neutral for Claude and Codex-shaped child 
       assert.equal(terminalSubagent.payload.progress, "partial progress");
       assert.equal(terminalSubagent.payload.result, "partial result");
       assert.equal(terminalSubagent.payload.driver, driverKind);
+      assert.isNull(terminalSubagent.payload.currentActivationId);
+
+      const terminalActivations = events.filter(
+        (
+          event,
+        ): event is Extract<OrchestrationV2DomainEvent, { type: "subagent-activation.updated" }> =>
+          event.type === "subagent-activation.updated",
+      );
+      assert.deepEqual(
+        terminalActivations.map((event) => ({
+          id: event.payload.id,
+          status: event.payload.status,
+          totalTokens: event.payload.usage?.totalTokens,
+        })),
+        [
+          { id: previousActivationId, status: terminalStatus, totalTokens: 60 },
+          { id: activationId, status: terminalStatus, totalTokens: 120 },
+        ],
+      );
 
       const terminalItem = events.find(
         (event) => event.type === "turn-item.updated" && event.payload.type === "subagent",
@@ -2570,6 +2781,7 @@ it.effect("cascade helper is provider-neutral for Claude and Codex-shaped child 
         } as OrchestrationV2Run,
         open: {
           subagents: new Map(),
+          activations: new Map(),
           turnItems: new Map(),
           childTurnItems: new Map([[childTurnItem.id, childTurnItem]]),
           nodes: new Map([[childNodeId, openChildNode]]),
@@ -2978,14 +3190,14 @@ function makeRunOwnedSubagentFixture(input: {
     model: null,
     kind: "subagent",
     role: { name: "general-purpose", source: "app_default" },
+    status: input.status,
+    result: null,
     usage: null,
     currentActivationId: null,
     activationCount: 1,
     workflow: null,
     workflowMembership: null,
     recentActivity: [],
-    status: input.status,
-    result: null,
     startedAt: now,
     completedAt: null,
     updatedAt: now,

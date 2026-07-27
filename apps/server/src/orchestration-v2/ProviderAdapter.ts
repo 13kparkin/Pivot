@@ -392,6 +392,21 @@ export interface ProviderAdapterV2EnsureThreadInput {
   readonly existingProviderThread?: OrchestrationV2ProviderThread;
 }
 
+/**
+ * A reusable subagent that already exists in the projection, supplied so an
+ * adapter whose in-memory registry was lost (session reap, server restart) can
+ * still recognise the agent thread and re-activate the same identity instead of
+ * spawning a duplicate.
+ */
+export interface ProviderAdapterV2ExistingSubagent {
+  readonly subagent: OrchestrationV2Subagent;
+  readonly childThread: OrchestrationV2AppThread;
+  readonly childProviderThread: OrchestrationV2ProviderThread;
+  readonly turnItemId: TurnItemId;
+  readonly turnItemOrdinal: number;
+  readonly ordinal: number;
+}
+
 export interface ProviderAdapterV2TurnInput {
   readonly appThread: OrchestrationV2AppThread;
   readonly threadId: ThreadId;
@@ -404,6 +419,7 @@ export interface ProviderAdapterV2TurnInput {
   readonly message: ProviderAdapterV2TurnMessage;
   readonly modelSelection: ModelSelection;
   readonly runtimePolicy: ProviderAdapterV2RuntimePolicy;
+  readonly existingSubagents?: ReadonlyArray<ProviderAdapterV2ExistingSubagent>;
 }
 
 export interface ProviderAdapterV2SteerInput {
