@@ -2,9 +2,11 @@ import { describe, expect, it } from "vite-plus/test";
 import { ProviderDriverKind, ProviderInstanceId, type SkillInventory } from "@t3tools/contracts";
 
 import {
+  displayedSkillCount,
   filterSkillInventory,
   formatSkillPath,
   groupSkillsByHarness,
+  setKeyCollapsed,
   skillContentForDisplay,
 } from "./SkillsSettings.logic";
 
@@ -62,6 +64,19 @@ describe("formatSkillPath", () => {
 });
 
 describe("skill explorer helpers", () => {
+  it("hides a previously loaded skill count after disconnecting", () => {
+    expect(displayedSkillCount(inventory, true)).toBe(2);
+    expect(displayedSkillCount(inventory, false)).toBeNull();
+    expect(displayedSkillCount(null, true)).toBeNull();
+  });
+
+  it("applies the requested harness collapsed state without toggling blindly", () => {
+    const collapsed = setKeyCollapsed(new Set<string>(), "codex", true);
+    expect([...collapsed]).toEqual(["codex"]);
+    expect([...setKeyCollapsed(collapsed, "codex", true)]).toEqual(["codex"]);
+    expect([...setKeyCollapsed(collapsed, "codex", false)]).toEqual([]);
+  });
+
   it("groups installations by harness instance and derives their shared root", () => {
     const groups = groupSkillsByHarness(inventory.installations);
     expect(

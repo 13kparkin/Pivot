@@ -19,9 +19,11 @@ import { toastManager } from "../ui/toast";
 import { SettingsPageContainer, SettingsSection } from "./settingsLayout";
 import { searchableSetting } from "./settingsSearch";
 import {
+  displayedSkillCount,
   filterSkillInventory,
   formatSkillPath,
   groupSkillsByHarness,
+  setKeyCollapsed,
   skillContentForDisplay,
   skillKey,
 } from "./SkillsSettings.logic";
@@ -40,12 +42,6 @@ function connectionDotClassName(phase: string): string {
   if (phase === "connecting" || phase === "reconnecting") return "bg-warning";
   if (phase === "error") return "bg-destructive";
   return "bg-muted-foreground/40";
-}
-
-function toggleKey(keys: ReadonlySet<string>, key: string): ReadonlySet<string> {
-  const next = new Set(keys);
-  if (!next.delete(key)) next.add(key);
-  return next;
 }
 
 /** Chevron that points right when collapsed and down when open. */
@@ -159,7 +155,8 @@ function EnvironmentSkillInventory({
     () => (state.status === "loaded" ? filterSkillInventory(state.inventory, query) : null),
     [query, state],
   );
-  const skillCount = visibleInventory?.installations.length;
+  const isConnected = Option.isSome(prepared);
+  const skillCount = displayedSkillCount(visibleInventory, isConnected);
   const phase = environment.connection.phase;
   const isSearching = query.trim().length > 0;
   const open = !collapsed;
@@ -198,7 +195,7 @@ function EnvironmentSkillInventory({
               : null
           }
         />
-        {skillCount !== undefined ? (
+        {skillCount !== null ? (
           <span className="shrink-0 font-mono text-[11px] tabular-nums text-muted-foreground/70">
             {skillCount} {skillCount === 1 ? "skill" : "skills"}
           </span>
@@ -253,7 +250,9 @@ function SkillHarnessGroups({
       rootPath={group.rootPath}
       skills={group.skills}
       open={!collapsedHarnesses.has(group.key)}
-      onToggle={() => setCollapsedHarnesses((keys) => toggleKey(keys, group.key))}
+      onOpenChange={(nextOpen) =>
+        setCollapsedHarnesses((keys) => setKeyCollapsed(keys, group.key, !nextOpen))
+      }
     />
   ));
 }
@@ -264,14 +263,14 @@ function SkillHarnessGroup({
   rootPath,
   skills,
   open,
-  onToggle,
+  onOpenChange,
 }: {
   harnessDisplayName: string;
   harness: SkillInventoryInstallation["harness"];
   rootPath: string | null;
   skills: ReadonlyArray<SkillInventoryInstallation>;
   open: boolean;
-  onToggle: () => void;
+  onOpenChange: (open: boolean) => void;
 }) {
   const panelId = useId();
   const HarnessIcon = PROVIDER_ICON_BY_PROVIDER[harness] ?? null;
@@ -282,7 +281,7 @@ function SkillHarnessGroup({
         type="button"
         aria-expanded={open}
         aria-controls={open ? panelId : undefined}
-        onClick={onToggle}
+        onClick={() => onOpenChange(!open)}
         className="flex w-full min-w-0 cursor-pointer items-center gap-2 rounded-lg py-1.5 pl-7 pr-3 text-left transition-colors hover:bg-muted/25 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset sm:pl-8 sm:pr-4"
       >
         <DisclosureChevron open={open} className="size-3" />
@@ -300,7 +299,7 @@ function SkillHarnessGroup({
         ) : null}
       </button>
 
-      <Collapsible open={open} onOpenChange={onToggle}>
+      <Collapsible open={open} onOpenChange={onOpenChange}>
         <CollapsibleContent id={panelId}>
           {skills.map((skill) => (
             <SkillRow key={skillKey(skill)} skill={skill} />

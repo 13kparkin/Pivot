@@ -31,6 +31,25 @@ export function filterSkillInventory(inventory: SkillInventory, query: string): 
   };
 }
 
+export function displayedSkillCount(
+  inventory: SkillInventory | null,
+  isConnected: boolean,
+): number | null {
+  if (!isConnected || !inventory) return null;
+  return inventory.installations.length;
+}
+
+export function setKeyCollapsed(
+  keys: ReadonlySet<string>,
+  key: string,
+  collapsed: boolean,
+): ReadonlySet<string> {
+  const next = new Set(keys);
+  if (collapsed) next.add(key);
+  else next.delete(key);
+  return next;
+}
+
 export interface SkillHarnessGroup {
   readonly key: string;
   readonly harness: ProviderDriverKind;
