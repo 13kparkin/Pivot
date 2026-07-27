@@ -20,6 +20,7 @@ import {
 } from "./http.ts";
 import { fixPath } from "./os-jank.ts";
 import { websocketRpcRouteLayer } from "./ws.ts";
+import { skillsHttpApiLayer } from "./skills/http.ts";
 import * as ExternalLauncher from "./process/externalLauncher.ts";
 import { layerConfig as SqlitePersistenceLayerLive } from "./persistence/Layers/Sqlite.ts";
 import * as ServerLifecycleEvents from "./serverLifecycleEvents.ts";
@@ -431,6 +432,7 @@ export const makeRoutesLayer = Layer.mergeAll(
       Layer.provide(authHttpApiLayer),
       Layer.provide(connectHttpApiLayer),
       Layer.provide(orchestrationHttpApiLayer),
+      Layer.provide(skillsHttpApiLayer),
       Layer.provide(serverEnvironmentHttpApiLayer),
       Layer.provide(environmentAuthenticatedAuthLayer),
     ),
