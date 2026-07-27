@@ -1,4 +1,9 @@
-import { CodexSettings, defaultInstanceIdForDriver, ProviderDriverKind } from "@t3tools/contracts";
+import {
+  CodexSettings,
+  defaultInstanceIdForDriver,
+  orchestrationV2SubagentStatusAsTurnItemStatus,
+  ProviderDriverKind,
+} from "@t3tools/contracts";
 import { HostProcessEnvironment } from "@t3tools/shared/hostProcess";
 import { getModelSelectionStringOptionValue } from "@t3tools/shared/model";
 import { resolveSpawnCommand } from "@t3tools/shared/shell";
@@ -100,6 +105,7 @@ import {
   makeSubagentConversationArtifacts,
   subagentThreadTitle,
 } from "../SubagentProjection.ts";
+import { defaultSubagentRole } from "../SubagentObservability.ts";
 
 const CODEX_PROVIDER = ProviderDriverKind.make("codex");
 export const CODEX_DRIVER_KIND = CODEX_PROVIDER;
@@ -1774,7 +1780,7 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
                 nativeItemRef: task.nativeTaskRef,
                 parentItemId: null,
                 ordinal: input.subagent.turnItemOrdinal,
-                status: task.status,
+                status: orchestrationV2SubagentStatusAsTurnItemStatus[task.status],
                 title: task.title,
                 startedAt: task.startedAt,
                 completedAt: task.completedAt,
@@ -2021,8 +2027,16 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
               prompt: input.prompt,
               title: input.title,
               model: input.model,
+              kind: "subagent",
+              role: defaultSubagentRole(),
               status: "running",
               result: null,
+              usage: null,
+              currentActivationId: null,
+              activationCount: 1,
+              workflow: null,
+              workflowMembership: null,
+              recentActivity: [],
               startedAt: now,
               completedAt: null,
               updatedAt: now,

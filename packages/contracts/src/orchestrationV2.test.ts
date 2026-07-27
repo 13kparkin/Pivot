@@ -26,11 +26,16 @@ import {
   OrchestrationV2DomainEvent,
   OrchestrationV2ProviderThread,
   OrchestrationV2ProviderThreadJson,
+  OrchestrationV2DomainEventJson,
   OrchestrationV2ShellSnapshot,
   OrchestrationV2Subagent,
+  OrchestrationV2SubagentActivation,
   OrchestrationV2ThreadProjection,
   OrchestrationV2ThreadShell,
   OrchestrationV2TurnItem,
+  OrchestrationV2TurnItemJson,
+  OrchestrationV2TurnItemStatus,
+  orchestrationV2SubagentStatusAsTurnItemStatus,
 } from "./orchestrationV2.ts";
 
 const now = DateTime.makeUnsafe("2026-04-20T00:00:00.000Z");
@@ -428,12 +433,88 @@ describe("orchestration V2 contracts", () => {
       prompt: "Inspect package.json",
       title: "Package audit",
       model: "gpt-5.4",
-      status: "completed",
+      kind: "subagent",
+      role: { name: "reviewer", source: "provider" },
+      status: "idle",
       progress: "Inspecting package metadata",
       result: "Package is private.",
+      usage: {
+        totalTokens: 1200,
+        inputTokens: 900,
+        outputTokens: 300,
+        toolUses: 2,
+      },
+      currentActivationId: null,
+      activationCount: 2,
+      workflow: null,
+      workflowMembership: null,
+      recentActivity: [{ at: now, summary: "Inspected package metadata" }],
       startedAt: now,
       completedAt: now,
       updatedAt: now,
+    });
+    const activation = Schema.decodeUnknownSync(OrchestrationV2SubagentActivation)({
+      id: "node-subagent-1:activation:2",
+      threadId: "thread-1",
+      subagentId: subagent.id,
+      runId: "run-1",
+      providerTurnId: "provider-turn-1",
+      ordinal: 2,
+      status: "completed",
+      usage: { totalTokens: 400 },
+      startedAt: now,
+      completedAt: now,
+      updatedAt: now,
+    });
+    const {
+      kind: _kind,
+      role: _role,
+      usage: _usage,
+      currentActivationId: _currentActivationId,
+      activationCount: _activationCount,
+      workflow: _workflow,
+      workflowMembership: _workflowMembership,
+      recentActivity: _recentActivity,
+      ...legacySubagent
+    } = subagent;
+    const decodedLegacySubagent = Schema.decodeUnknownSync(OrchestrationV2Subagent)(legacySubagent);
+    const decodedLegacyEvent = Schema.decodeUnknownSync(OrchestrationV2DomainEventJson)({
+      id: "event-legacy-subagent",
+      type: "subagent.updated",
+      threadId: "thread-1",
+      runId: "run-1",
+      nodeId: "node-subagent-1",
+      driver: "codex",
+      providerInstanceId: "codex",
+      occurredAt: DateTime.formatIso(now),
+      payload: {
+        ...legacySubagent,
+        startedAt: DateTime.formatIso(now),
+        completedAt: DateTime.formatIso(now),
+        updatedAt: DateTime.formatIso(now),
+      },
+    });
+    const decodedActivityEvent = Schema.decodeUnknownSync(OrchestrationV2DomainEventJson)({
+      id: "event-subagent-activity",
+      type: "subagent.updated",
+      threadId: "thread-1",
+      runId: "run-1",
+      nodeId: "node-subagent-1",
+      driver: "codex",
+      providerInstanceId: "codex",
+      occurredAt: DateTime.formatIso(now),
+      payload: {
+        ...subagent,
+        recentActivity: [
+          {
+            at: DateTime.formatIso(now),
+            summary: "Inspected package metadata",
+          },
+        ],
+        startedAt: DateTime.formatIso(now),
+        completedAt: DateTime.formatIso(now),
+        updatedAt: DateTime.formatIso(now),
+      },
     });
     const turnItem = decodeOrchestrationV2TurnItem({
       id: "turn-item-subagent-1",
@@ -464,6 +545,24 @@ describe("orchestration V2 contracts", () => {
     expect(subagent.origin).toBe("provider_native");
     expect(subagent.progress).toBe("Inspecting package metadata");
     expect(subagent.childThreadId).toBeNull();
+    expect(subagent.role).toEqual({ name: "reviewer", source: "provider" });
+    expect(subagent.status).toBe("idle");
+    expect(activation.ordinal).toBe(2);
+    expect(decodedLegacySubagent.role).toEqual({
+      name: "general-purpose",
+      source: "app_default",
+    });
+    expect(decodedLegacySubagent.activationCount).toBe(1);
+    if (decodedLegacyEvent.type !== "subagent.updated") {
+      throw new Error("expected legacy subagent event");
+    }
+    expect(decodedLegacyEvent.payload.recentActivity).toEqual([]);
+    if (decodedActivityEvent.type !== "subagent.updated") {
+      throw new Error("expected subagent activity event");
+    }
+    expect(DateTime.formatIso(decodedActivityEvent.payload.recentActivity[0]!.at)).toBe(
+      DateTime.formatIso(now),
+    );
     expect(turnItem.type).toBe("subagent");
     if (turnItem.type !== "subagent") throw new Error("expected subagent item");
     expect(turnItem.progress).toBe("Inspecting package metadata");
@@ -532,6 +631,7 @@ describe("orchestration V2 contracts", () => {
       attempts: [],
       nodes: [],
       subagents: [],
+      subagentActivations: [],
       providerSessions: [],
       providerThreads: [],
       providerTurns: [],
@@ -670,6 +770,61 @@ describe("orchestration V2 contracts", () => {
     }
     expect(handoff.toProviderInstanceId).toBe("claudeAgent");
     expect(fork.type).toBe("fork");
+  });
+
+  it("projects every subagent status onto a decodable turn item status", () => {
+    // Regression guard for a bricked-server class of bug: a producer copied a
+    // raw subagent status onto a timeline row, emitting a "turn-item.updated"
+    // event that the domain schema could not decode. Nothing failed until the
+    // next startup, where the projection rebuild died on the stored event and
+    // the server could no longer boot at all.
+    const subagentStatuses = OrchestrationV2Subagent.fields.status.literals;
+    const turnItemStatuses = new Set<string>(OrchestrationV2TurnItemStatus.literals);
+
+    for (const status of subagentStatuses) {
+      const projected = orchestrationV2SubagentStatusAsTurnItemStatus[status];
+      expect(
+        turnItemStatuses.has(projected),
+        `subagent status "${status}" projects to "${projected}", which a turn item cannot hold`,
+      ).toBe(true);
+    }
+
+    // "idle" is the reusable-identity resting state and the one with no direct
+    // timeline equivalent; it must collapse onto the finished activation.
+    expect(subagentStatuses).toContain("idle");
+    expect(turnItemStatuses.has("idle")).toBe(false);
+    expect(orchestrationV2SubagentStatusAsTurnItemStatus.idle).toBe("completed");
+
+    // Prove it end to end: the projected status decodes as a real event, and
+    // the raw one is rejected — exactly the event that could not be read back.
+    const base = {
+      id: "turn-item:subagent-status-projection",
+      threadId: "thread-1",
+      runId: null,
+      nodeId: null,
+      providerThreadId: null,
+      providerTurnId: null,
+      nativeItemRef: null,
+      parentItemId: null,
+      ordinal: 1,
+      title: null,
+      startedAt: null,
+      completedAt: null,
+      updatedAt: "2026-07-27T00:00:00.000Z",
+      type: "subagent",
+      subagentId: "node-1",
+      origin: "provider_native",
+      driver: "codex",
+      providerInstanceId: "codex",
+      childThreadId: null,
+      prompt: "",
+      result: null,
+    };
+    const decode = Schema.decodeUnknownSync(OrchestrationV2TurnItemJson);
+    expect(() =>
+      decode({ ...base, status: orchestrationV2SubagentStatusAsTurnItemStatus.idle }),
+    ).not.toThrow();
+    expect(() => decode({ ...base, status: "idle" })).toThrow();
   });
 
   it("exports the V2 branded ids through the public contracts entrypoint", () => {

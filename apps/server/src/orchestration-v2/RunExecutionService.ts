@@ -411,6 +411,8 @@ export function routeProviderEvent(
     }
     case "subagent.updated":
       return [ownsRun(event.subagent.runId) || ownsChildThread(event.subagent.threadId), state];
+    case "subagent_activation.updated":
+      return [ownsRun(event.activation.runId) || ownsChildThread(event.activation.threadId), state];
     case "message.updated":
       return [ownsRun(event.message.runId) || ownsChildThread(event.message.threadId), state];
     case "turn_item.updated": {
