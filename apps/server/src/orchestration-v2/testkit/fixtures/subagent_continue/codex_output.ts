@@ -34,8 +34,10 @@ export function assertSubagentContinueOutput(
   assert.lengthOf(projection.subagents, 1);
 
   const subagent = projection.subagents[0]!;
-  assert.equal(subagent.status, "completed");
-  assert.equal(subagent.result, "initial subagent response");
+  // A reusable identity rests at idle between activations rather than
+  // finishing outright, and carries the latest activation's result.
+  assert.equal(subagent.status, "idle");
+  assert.equal(subagent.result, "continued subagent response");
   assert.isNotNull(subagent.childThreadId);
   if (subagent.childThreadId === null) {
     throw new Error("Continued subagent is missing its child thread");

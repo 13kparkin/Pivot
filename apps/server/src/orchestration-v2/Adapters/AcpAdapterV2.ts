@@ -16,6 +16,7 @@ import {
   type OrchestrationV2ProviderTurn,
   type OrchestrationV2RuntimeRequest,
   type OrchestrationV2Subagent,
+  type OrchestrationV2SubagentActivation,
   type OrchestrationV2TurnItem,
   type OrchestrationV2UserInputQuestion,
   type ProviderApprovalDecision,
@@ -70,6 +71,7 @@ import {
   makeSubagentConversationArtifacts,
   subagentThreadTitle,
 } from "../SubagentProjection.ts";
+import { defaultSubagentRole, subagentActivationId } from "../SubagentObservability.ts";
 import {
   ProviderAdapterEnsureThreadError,
   ProviderAdapterForkThreadError,
@@ -2134,6 +2136,12 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
           const turnItemOrdinal =
             existing?.turnItemOrdinal ?? (yield* resolveItemOrdinal(context, nativeTaskId));
           const taskStatus = update.status;
+          const activationId = subagentActivationId(nodeId, 1);
+          const settled =
+            taskStatus === "completed" ||
+            taskStatus === "failed" ||
+            taskStatus === "cancelled" ||
+            taskStatus === "interrupted";
           const task: OrchestrationV2Subagent = {
             ...(existing?.task ?? {
               id: nodeId,
@@ -2150,20 +2158,23 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
               prompt: update.prompt,
               title: update.title,
               model: update.model,
-              kind: "subagent",
-              role: { name: "general-purpose", source: "app_default" },
+              kind: "subagent" as const,
+              role: defaultSubagentRole(),
+              result: null,
               usage: null,
-              currentActivationId: null,
+              currentActivationId: activationId,
               activationCount: 1,
               workflow: null,
               workflowMembership: null,
               recentActivity: [],
-              result: null,
               startedAt: now,
             }),
             status: taskStatus,
             result: existing?.assistantText || update.result,
-            completedAt: acpSubagentStatusIsTerminal(taskStatus) ? now : null,
+            currentActivationId: settled ? null : activationId,
+            // Keep the first completion time: a duplicate terminal frame is
+            // not a second completion.
+            completedAt: settled ? (existing?.task.completedAt ?? now) : null,
             updatedAt: now,
           };
           const subagent: ActiveAcpSubagent = existing ?? {
@@ -2282,7 +2293,7 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
             ...subagent.task,
             status: taskStatus,
             result,
-            completedAt: acpSubagentStatusIsTerminal(taskStatus) ? now : null,
+            completedAt: settled ? (subagent.task.completedAt ?? now) : null,
             updatedAt: now,
           };
           const providerThreadId = subagent.task.providerThreadId;
@@ -2329,6 +2340,23 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
             },
           });
           yield* emitProviderEvent({ type: "subagent.updated", driver, subagent: subagent.task });
+          yield* emitProviderEvent({
+            type: "subagent_activation.updated",
+            driver,
+            activation: {
+              id: activationId,
+              threadId: subagent.task.threadId,
+              subagentId: subagent.task.id,
+              runId: subagent.task.runId,
+              providerTurnId: subagent.providerTurnId,
+              ordinal: 1,
+              status: taskStatus,
+              usage: null,
+              startedAt: subagent.task.startedAt,
+              completedAt: settled ? now : null,
+              updatedAt: now,
+            } satisfies OrchestrationV2SubagentActivation,
+          });
           yield* emitProviderEvent({
             type: "turn_item.updated",
             driver,
