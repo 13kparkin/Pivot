@@ -22,29 +22,9 @@ export default Effect.gen(function* () {
   yield* sql`CREATE INDEX orchestration_v2_projection_subagent_activations_thread_idx ON orchestration_v2_projection_subagent_activations(thread_id, subagent_id, ordinal)`;
   yield* sql`CREATE INDEX orchestration_v2_projection_subagent_activations_run_idx ON orchestration_v2_projection_subagent_activations(run_id, status)`;
 
-  yield* sql`
-    UPDATE orchestration_v2_projection_subagents
-    SET payload_json = json_set(
-      payload_json,
-      '$.kind', COALESCE(json_extract(payload_json, '$.kind'), 'subagent'),
-      '$.role', COALESCE(
-        json_extract(payload_json, '$.role'),
-        json_object('name', 'general-purpose', 'source', 'app_default')
-      ),
-      '$.usage', json_extract(payload_json, '$.usage'),
-      '$.currentActivationId', json_extract(payload_json, '$.currentActivationId'),
-      '$.activationCount', COALESCE(json_extract(payload_json, '$.activationCount'), 1),
-      '$.workflow', json_extract(payload_json, '$.workflow'),
-      '$.workflowMembership', json_extract(payload_json, '$.workflowMembership'),
-      '$.recentActivity', COALESCE(json_extract(payload_json, '$.recentActivity'), json_array())
-    )
-    WHERE json_type(payload_json, '$.kind') IS NULL
-       OR json_type(payload_json, '$.role') IS NULL
-       OR json_type(payload_json, '$.usage') IS NULL
-       OR json_type(payload_json, '$.currentActivationId') IS NULL
-       OR json_type(payload_json, '$.activationCount') IS NULL
-       OR json_type(payload_json, '$.workflow') IS NULL
-       OR json_type(payload_json, '$.workflowMembership') IS NULL
-       OR json_type(payload_json, '$.recentActivity') IS NULL
-  `;
+  // No backfill of orchestration_v2_projection_subagents. Every observability
+  // field this schema adds carries a decoding default equal to what a backfill
+  // would write, so pre-upgrade rows already read back correctly; and the
+  // projection schema version bump makes startup verification fail, which
+  // deletes and replays those rows from the event log regardless.
 });

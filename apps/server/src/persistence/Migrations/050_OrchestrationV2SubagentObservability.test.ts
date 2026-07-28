@@ -9,10 +9,12 @@ import * as NodeSqliteClient from "../NodeSqliteClient.ts";
 const layer = it.layer(Layer.mergeAll(NodeSqliteClient.layerMemory()));
 
 layer("050_OrchestrationV2SubagentObservability", (it) => {
-  it.effect("backfills old subagents and installs activation persistence", () =>
+  it.effect("installs activation persistence and leaves existing subagents alone", () =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
       yield* runMigrations({ toMigrationInclusive: 49 });
+
+      const legacyPayload = '{"id":"node:legacy-subagent","status":"completed"}';
       yield* sql`
         INSERT INTO orchestration_v2_projection_subagents (
           subagent_id,
@@ -41,174 +43,11 @@ layer("050_OrchestrationV2SubagentObservability", (it) => {
           '2026-07-26T00:00:00.000Z',
           '2026-07-26T00:01:00.000Z',
           '2026-07-26T00:01:00.000Z',
-          '{"id":"node:legacy-subagent","status":"completed"}'
-        )
-      `;
-      yield* sql`
-        INSERT INTO orchestration_v2_projection_subagents (
-          subagent_id,
-          thread_id,
-          run_id,
-          parent_node_id,
-          provider,
-          provider_thread_id,
-          child_thread_id,
-          origin,
-          status,
-          started_at,
-          completed_at,
-          updated_at,
-          payload_json
-        ) VALUES (
-          'node:current-subagent',
-          'thread:current-subagent',
-          'run:current-subagent',
-          'node:current-root',
-          'claudeAgent',
-          NULL,
-          NULL,
-          'provider_native',
-          'running',
-          '2026-07-26T00:00:00.000Z',
-          NULL,
-          '2026-07-26T00:01:00.000Z',
-          '{"id":"node:current-subagent","status":"running","kind":"workflow_agent","role":{"name":"researcher","source":"provider"},"usage":{"totalTokens":12},"currentActivationId":"activation:current","activationCount":2,"workflow":null,"workflowMembership":null,"recentActivity":[{"at":"2026-07-26T00:00:30.000Z","summary":"kept"}]}'
-        )
-      `;
-
-      // Half-migrated: `role` and `recentActivity` already exist as structured
-      // JSON, while `kind`, `usage`, and `activationCount` are still missing.
-      yield* sql`
-        INSERT INTO orchestration_v2_projection_subagents (
-          subagent_id,
-          thread_id,
-          run_id,
-          parent_node_id,
-          provider,
-          provider_thread_id,
-          child_thread_id,
-          origin,
-          status,
-          started_at,
-          completed_at,
-          updated_at,
-          payload_json
-        ) VALUES (
-          'node:mixed-subagent',
-          'thread:mixed-subagent',
-          'run:mixed-subagent',
-          'node:mixed-root',
-          'codex',
-          NULL,
-          NULL,
-          'provider_native',
-          'running',
-          '2026-07-26T00:00:00.000Z',
-          NULL,
-          '2026-07-26T00:01:00.000Z',
-          '{"id":"node:mixed-subagent","status":"running","role":{"name":"reviewer","source":"provider"},"recentActivity":[{"at":"2026-07-26T00:00:30.000Z","summary":"kept"}]}'
+          ${legacyPayload}
         )
       `;
 
       yield* runMigrations({ toMigrationInclusive: 50 });
-
-      const rows = yield* sql<{
-        readonly kind: string;
-        readonly role_name: string;
-        readonly role_source: string;
-        readonly activation_count: number;
-        readonly usage_type: string;
-        readonly activity_count: number;
-      }>`
-        SELECT
-          json_extract(payload_json, '$.kind') AS kind,
-          json_extract(payload_json, '$.role.name') AS role_name,
-          json_extract(payload_json, '$.role.source') AS role_source,
-          json_extract(payload_json, '$.activationCount') AS activation_count,
-          json_type(payload_json, '$.usage') AS usage_type,
-          json_array_length(json_extract(payload_json, '$.recentActivity')) AS activity_count
-        FROM orchestration_v2_projection_subagents
-        WHERE subagent_id = 'node:legacy-subagent'
-      `;
-      assert.deepStrictEqual(rows, [
-        {
-          kind: "subagent",
-          role_name: "general-purpose",
-          role_source: "app_default",
-          activation_count: 1,
-          usage_type: "null",
-          activity_count: 0,
-        },
-      ]);
-
-      const currentRows = yield* sql<{
-        readonly kind: string;
-        readonly role_name: string;
-        readonly role_source: string;
-        readonly total_tokens: number;
-        readonly current_activation_id: string;
-        readonly activation_count: number;
-        readonly activity_summary: string;
-      }>`
-        SELECT
-          json_extract(payload_json, '$.kind') AS kind,
-          json_extract(payload_json, '$.role.name') AS role_name,
-          json_extract(payload_json, '$.role.source') AS role_source,
-          json_extract(payload_json, '$.usage.totalTokens') AS total_tokens,
-          json_extract(payload_json, '$.currentActivationId') AS current_activation_id,
-          json_extract(payload_json, '$.activationCount') AS activation_count,
-          json_extract(payload_json, '$.recentActivity[0].summary') AS activity_summary
-        FROM orchestration_v2_projection_subagents
-        WHERE subagent_id = 'node:current-subagent'
-      `;
-      assert.deepStrictEqual(currentRows, [
-        {
-          kind: "workflow_agent",
-          role_name: "researcher",
-          role_source: "provider",
-          total_tokens: 12,
-          current_activation_id: "activation:current",
-          activation_count: 2,
-          activity_summary: "kept",
-        },
-      ]);
-
-      // A partially-migrated row is the only one that both matches the WHERE
-      // clause and round-trips already-present JSON through COALESCE. If the
-      // JSON subtype were lost there, structured values would be rewritten as
-      // quoted strings and the payload would stop decoding — the same
-      // unreadable-event failure this migration exists to avoid.
-      const mixedRows = yield* sql<{
-        readonly role_type: string;
-        readonly role_name: string;
-        readonly activity_type: string;
-        readonly activity_summary: string;
-        readonly usage_type: string;
-        readonly kind: string;
-        readonly activation_count: number;
-      }>`
-        SELECT
-          json_type(payload_json, '$.role') AS role_type,
-          json_extract(payload_json, '$.role.name') AS role_name,
-          json_type(payload_json, '$.recentActivity') AS activity_type,
-          json_extract(payload_json, '$.recentActivity[0].summary') AS activity_summary,
-          json_type(payload_json, '$.usage') AS usage_type,
-          json_extract(payload_json, '$.kind') AS kind,
-          json_extract(payload_json, '$.activationCount') AS activation_count
-        FROM orchestration_v2_projection_subagents
-        WHERE subagent_id = 'node:mixed-subagent'
-      `;
-      assert.deepStrictEqual(mixedRows, [
-        {
-          role_type: "object",
-          role_name: "reviewer",
-          activity_type: "array",
-          activity_summary: "kept",
-          usage_type: "null",
-          kind: "subagent",
-          activation_count: 1,
-        },
-      ]);
 
       const activationTable = yield* sql<{ readonly name: string }>`
         SELECT name
@@ -217,6 +56,33 @@ layer("050_OrchestrationV2SubagentObservability", (it) => {
           AND name = 'orchestration_v2_projection_subagent_activations'
       `;
       assert.lengthOf(activationTable, 1);
+
+      const indexes = yield* sql<{ readonly name: string }>`
+        SELECT name
+        FROM sqlite_master
+        WHERE type = 'index'
+          AND tbl_name = 'orchestration_v2_projection_subagent_activations'
+          AND sql IS NOT NULL
+        ORDER BY name ASC
+      `;
+      assert.deepStrictEqual(
+        indexes.map((row) => row.name),
+        [
+          "orchestration_v2_projection_subagent_activations_run_idx",
+          "orchestration_v2_projection_subagent_activations_thread_idx",
+        ],
+      );
+
+      // Deliberately no backfill: the observability fields all carry decoding
+      // defaults, and the projection schema version bump replays these rows
+      // from the event log anyway. Rewriting them here would be dead work, so
+      // the row must come through byte-identical.
+      const rows = yield* sql<{ readonly payload_json: string }>`
+        SELECT payload_json
+        FROM orchestration_v2_projection_subagents
+        WHERE subagent_id = 'node:legacy-subagent'
+      `;
+      assert.deepStrictEqual(rows, [{ payload_json: legacyPayload }]);
     }),
   );
 });

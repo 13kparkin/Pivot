@@ -30,6 +30,7 @@ import {
   OrchestrationV2ShellSnapshot,
   OrchestrationV2Subagent,
   OrchestrationV2SubagentActivation,
+  OrchestrationV2SubagentJson,
   OrchestrationV2ThreadProjection,
   OrchestrationV2ThreadShell,
   OrchestrationV2TurnItem,
@@ -566,6 +567,48 @@ describe("orchestration V2 contracts", () => {
     expect(turnItem.type).toBe("subagent");
     if (turnItem.type !== "subagent") throw new Error("expected subagent item");
     expect(turnItem.progress).toBe("Inspecting package metadata");
+  });
+
+  it("defaults every observability field a pre-upgrade row omits", () => {
+    // Rows written before this schema carry none of the observability fields.
+    // Each default below is what the projection reads back for such a row, so
+    // no migration has to rewrite them in place: a stored row missing all
+    // eight decodes to exactly this.
+    const legacyPayloadJson = JSON.stringify({
+      id: "node-subagent-legacy",
+      threadId: "thread-1",
+      runId: "run-1",
+      parentNodeId: "node-root-1",
+      origin: "provider_native",
+      createdBy: "agent",
+      driver: "codex",
+      providerInstanceId: "codex",
+      providerThreadId: null,
+      childThreadId: null,
+      nativeTaskRef: null,
+      prompt: "Audit the parser.",
+      title: "Parser audit",
+      model: null,
+      status: "completed",
+      result: null,
+      startedAt: DateTime.formatIso(now),
+      completedAt: DateTime.formatIso(now),
+      updatedAt: DateTime.formatIso(now),
+    });
+
+    // The projection reads stored rows through exactly this schema.
+    const decoded = Schema.decodeUnknownSync(Schema.fromJsonString(OrchestrationV2SubagentJson))(
+      legacyPayloadJson,
+    );
+
+    expect(decoded.kind).toBe("subagent");
+    expect(decoded.role).toEqual({ name: "general-purpose", source: "app_default" });
+    expect(decoded.usage).toBeNull();
+    expect(decoded.currentActivationId).toBeNull();
+    expect(decoded.activationCount).toBe(1);
+    expect(decoded.workflow).toBeNull();
+    expect(decoded.workflowMembership).toBeNull();
+    expect(decoded.recentActivity).toEqual([]);
   });
 
   it("decodes app-owned subagent parent-wake policies", () => {
