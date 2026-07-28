@@ -17,6 +17,7 @@ import {
   RunAttemptId,
   RunId,
   ThreadId,
+  TurnItemId,
 } from "@t3tools/contracts";
 import { assert, describe, it } from "@effect/vitest";
 import { HostProcessEnvironment, HostProcessPlatform } from "@t3tools/shared/hostProcess";
@@ -41,6 +42,7 @@ import {
   ProviderAdapterOpenSessionError,
   ProviderAdapterV2RuntimePolicy,
   type ProviderAdapterV2Event,
+  type ProviderAdapterV2ExistingSubagent,
   type ProviderAdapterV2TurnInput,
 } from "../ProviderAdapter.ts";
 import type { ProviderContinuationRequest } from "../ProviderContinuationRequests.ts";
@@ -3656,6 +3658,297 @@ describe("CodexAdapterV2 post-settle continuation", () => {
         assert.isFalse(yield* harness.hasPendingBackgroundWork);
         assert.lengthOf(harness.terminalEvents(), 1);
         assert.lengthOf(harness.continuationRequests, 0);
+      }).pipe(Effect.provide(Layer.merge(idAllocatorLayer, NodeServices.layer))),
+    ),
+  );
+
+  const RESTART_SCENARIO = "codex-restart-rehydrate";
+  const RESTART_NATIVE_THREAD = "native-codex-restart-thread";
+  const RESTART_NATIVE_TURN = "native-codex-restart-root-turn";
+  const RESTART_CHILD_THREAD = "native-codex-restart-child-thread";
+  const RESTART_CHILD_TURN = "native-codex-restart-child-turn-2";
+  const RESTART_TOOL_CALL = "call-codex-restart-spawn";
+  const RESTART_PROMPT = "Nudge the agent from before the restart.";
+  const RESTART_SUBAGENT_ID = NodeId.make("node-codex-restart-subagent");
+
+  const restartChildFrame = (input: {
+    readonly label: string;
+    readonly method: string;
+    readonly params: Record<string, unknown>;
+  }): CodexReplay.CodexAppServerReplayEntry => ({
+    type: "emit_inbound",
+    label: input.label,
+    frame: { method: input.method, params: input.params },
+  });
+
+  const restartTranscript = makeCodexReplayTranscript({
+    scenario: RESTART_SCENARIO,
+    entries: [
+      ...codexReplayPreamble({
+        nativeThreadId: RESTART_NATIVE_THREAD,
+        nativeTurnId: RESTART_NATIVE_TURN,
+        prompt: RESTART_PROMPT,
+      }),
+      // No spawn frame: this process never saw the agent start. It only sees
+      // the pre-existing native thread come back to life.
+      restartChildFrame({
+        label: "turn/started/child",
+        method: "turn/started",
+        params: {
+          threadId: RESTART_CHILD_THREAD,
+          turn: makeCodexReplayTurn({ id: RESTART_CHILD_TURN, status: "inProgress" }),
+        },
+      }),
+      restartChildFrame({
+        label: "item/completed/child-answer",
+        method: "item/completed",
+        params: {
+          item: {
+            type: "agentMessage",
+            id: "child-restart-answer",
+            text: "CODEX_REHYDRATED_DONE",
+            phase: "final_answer",
+            memoryCitation: null,
+          },
+          threadId: RESTART_CHILD_THREAD,
+          turnId: RESTART_CHILD_TURN,
+          completedAtMs: 1782622482000,
+        },
+      }),
+      restartChildFrame({
+        label: "turn/completed/child",
+        method: "turn/completed",
+        params: {
+          threadId: RESTART_CHILD_THREAD,
+          turn: makeCodexReplayTurn({ id: RESTART_CHILD_TURN, status: "completed" }),
+        },
+      }),
+      restartChildFrame({
+        label: "thread/tokenUsage/updated/child",
+        method: "thread/tokenUsage/updated",
+        params: {
+          threadId: RESTART_CHILD_THREAD,
+          turnId: RESTART_CHILD_TURN,
+          tokenUsage: {
+            total: {
+              totalTokens: 250,
+              inputTokens: 200,
+              cachedInputTokens: 0,
+              outputTokens: 50,
+              reasoningOutputTokens: 0,
+            },
+            // Codex reports `total` per child thread, not per activation, so
+            // this snapshot already contains the 100 recorded before the
+            // restart; `last` is what this activation added.
+            last: {
+              totalTokens: 150,
+              inputTokens: 120,
+              cachedInputTokens: 0,
+              outputTokens: 30,
+              reasoningOutputTokens: 0,
+            },
+          },
+        },
+      }),
+      restartChildFrame({
+        label: "item/completed/root-answer",
+        method: "item/completed",
+        params: {
+          item: {
+            type: "agentMessage",
+            id: "root-answer-restart",
+            text: "NUDGED",
+            phase: "final_answer",
+            memoryCitation: null,
+          },
+          threadId: RESTART_NATIVE_THREAD,
+          turnId: RESTART_NATIVE_TURN,
+          completedAtMs: 1782622483000,
+        },
+      }),
+      restartChildFrame({
+        label: "turn/completed/root",
+        method: "turn/completed",
+        params: {
+          threadId: RESTART_NATIVE_THREAD,
+          turn: makeCodexReplayTurn({ id: RESTART_NATIVE_TURN, status: "completed" }),
+        },
+      }),
+    ],
+  });
+
+  /**
+   * The subagent as the projection holds it after a restart: settled at idle,
+   * still bound to its child thread and native item, one activation recorded.
+   */
+  const makeRestartExistingSubagent = (input: {
+    readonly parentThreadId: ThreadId;
+    readonly parentProviderThread: OrchestrationV2ProviderThread;
+    readonly now: DateTime.Utc;
+  }): ProviderAdapterV2ExistingSubagent => {
+    const childThreadId = ThreadId.make("thread-codex-restart-child");
+    const childProviderThread: OrchestrationV2ProviderThread = {
+      id: ProviderThreadId.make("provider-thread-codex-restart-child"),
+      driver: CODEX_DRIVER_KIND,
+      providerInstanceId: CODEX_DEFAULT_INSTANCE_ID,
+      providerSessionId: input.parentProviderThread.providerSessionId,
+      appThreadId: childThreadId,
+      ownerNodeId: null,
+      nativeThreadRef: {
+        driver: CODEX_DRIVER_KIND,
+        nativeId: RESTART_CHILD_THREAD,
+        strength: "strong",
+      },
+      nativeConversationHeadRef: null,
+      status: "idle",
+      firstRunOrdinal: null,
+      lastRunOrdinal: null,
+      handoffIds: [],
+      forkedFrom: null,
+      createdAt: input.now,
+      updatedAt: input.now,
+    };
+    return {
+      subagent: {
+        id: RESTART_SUBAGENT_ID,
+        threadId: input.parentThreadId,
+        runId: RunId.make("run-before-restart"),
+        parentNodeId: NodeId.make("node-before-restart-root"),
+        origin: "provider_native",
+        createdBy: "agent",
+        driver: CODEX_DRIVER_KIND,
+        providerInstanceId: CODEX_DEFAULT_INSTANCE_ID,
+        providerThreadId: childProviderThread.id,
+        childThreadId,
+        nativeTaskRef: {
+          driver: CODEX_DRIVER_KIND,
+          nativeId: `${RESTART_TOOL_CALL}:${RESTART_CHILD_THREAD}`,
+          strength: "strong",
+        },
+        prompt: "Audit the parser.",
+        title: "Parser audit",
+        model: "gpt-5.4",
+        kind: "subagent",
+        role: { name: "general-purpose", source: "app_default" },
+        status: "idle",
+        result: "CODEX_BEFORE_RESTART_DONE",
+        usage: { totalTokens: 100 },
+        currentActivationId: null,
+        activationCount: 1,
+        workflow: null,
+        workflowMembership: null,
+        recentActivity: [],
+        startedAt: input.now,
+        completedAt: input.now,
+        updatedAt: input.now,
+      },
+      childThread: {
+        ...makeCodexTestAppThread({
+          threadId: childThreadId,
+          providerThread: childProviderThread,
+          now: input.now,
+        }),
+        lineage: {
+          parentThreadId: input.parentThreadId,
+          relationshipToParent: "subagent" as const,
+          rootThreadId: input.parentThreadId,
+        },
+      },
+      childProviderThread,
+      turnItemId: TurnItemId.make("turn-item-codex-restart-subagent"),
+      turnItemOrdinal: 2,
+      ordinal: 1,
+    };
+  };
+
+  it.effect("reuses a projection-known subagent after the registry is lost", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        // A fresh adapter is exactly the post-restart state: the process-local
+        // registry is empty, so the only way to recognise the returning native
+        // thread is the projection handing it back through existingSubagents.
+        const harness = yield* makeCodexReplayHarness(restartTranscript);
+        const now = yield* DateTime.now;
+        const existing = makeRestartExistingSubagent({
+          parentThreadId: harness.threadId,
+          parentProviderThread: harness.providerThread,
+          now,
+        });
+
+        yield* harness.runtime.startTurn({
+          ...makeCodexTestTurnInput({
+            threadId: harness.threadId,
+            providerThread: harness.providerThread,
+            now,
+            attemptId: RunAttemptId.make("attempt-codex-restart"),
+            text: RESTART_PROMPT,
+          }),
+          existingSubagents: [existing],
+        });
+
+        yield* awaitUntil(
+          () =>
+            harness
+              .subagentUpdates()
+              .some((event) => event.subagent.result === "CODEX_REHYDRATED_DONE"),
+          "rehydrated subagent result",
+        );
+
+        const updates = harness.subagentUpdates();
+        // One identity, and it is the one from before the restart.
+        assert.deepStrictEqual(
+          [...new Set(updates.map((event) => event.subagent.id))],
+          [RESTART_SUBAGENT_ID],
+          "the returning agent must not be spawned as a second identity",
+        );
+        const latest = updates.at(-1)?.subagent;
+        assert.equal(latest?.result, "CODEX_REHYDRATED_DONE");
+        assert.equal(latest?.childThreadId, existing.childThread.id);
+        // Continues the prior activation rather than restarting the count.
+        assert.equal(latest?.activationCount, 2);
+        // Usage carries across the restart instead of resetting: the seeded
+        // 100 is not lost, and the thread-cumulative 250 is not double-counted
+        // on top of it.
+        assert.equal(latest?.usage?.totalTokens, 250);
+        // The new activation takes the next ordinal, not a colliding ordinal 1.
+        const activations = harness.subagentActivationUpdates();
+        assert.deepStrictEqual(
+          [...new Set(activations.map((event) => event.activation.ordinal))],
+          [2],
+        );
+        assert.deepStrictEqual(
+          [...new Set(activations.map((event) => event.activation.subagentId))],
+          [RESTART_SUBAGENT_ID],
+        );
+      }).pipe(Effect.provide(Layer.merge(idAllocatorLayer, NodeServices.layer))),
+    ),
+  );
+
+  it.effect("does not adopt an unknown native thread when nothing is rehydrated", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        // Negative control for the test above: the identical transcript with no
+        // existingSubagents. Without the seed the returning thread is not the
+        // prior agent, so the assertion above is proving the seed, not the
+        // transcript.
+        const harness = yield* makeCodexReplayHarness(restartTranscript);
+        const now = yield* DateTime.now;
+
+        yield* harness.runtime.startTurn(
+          makeCodexTestTurnInput({
+            threadId: harness.threadId,
+            providerThread: harness.providerThread,
+            now,
+            attemptId: RunAttemptId.make("attempt-codex-restart-unseeded"),
+            text: RESTART_PROMPT,
+          }),
+        );
+        yield* awaitUntil(() => harness.terminalEvents().length === 1, "root turn terminal");
+
+        assert.notInclude(
+          harness.subagentUpdates().map((event) => String(event.subagent.id)),
+          String(RESTART_SUBAGENT_ID),
+        );
       }).pipe(Effect.provide(Layer.merge(idAllocatorLayer, NodeServices.layer))),
     ),
   );
