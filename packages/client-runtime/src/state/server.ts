@@ -428,7 +428,7 @@ export function serverConfigStateChanges(environmentId: EnvironmentId) {
 export function projectServerWelcome(
   current: Option.Option<ServerLifecycleWelcomePayload>,
   event: {
-    readonly type: "welcome" | "ready";
+    readonly type: "welcome" | "ready" | "legacyThreadMigration";
     readonly payload: unknown;
   },
 ): readonly [
@@ -716,6 +716,18 @@ export function createServerEnvironmentAtoms<R, E>(
       transform: (stream) =>
         stream.pipe(
           Stream.mapAccum(Option.none<ServerLifecycleWelcomePayload>, projectServerWelcome),
+        ),
+    }),
+    legacyThreadMigration: createEnvironmentRpcSubscriptionAtomFamily(runtime, {
+      label: "environment-data:server:legacy-thread-migration",
+      tag: WS_METHODS.subscribeServerLifecycle,
+      transform: (stream) =>
+        stream.pipe(
+          Stream.filterMap((event) =>
+            event.type === "legacyThreadMigration"
+              ? Result.succeed(event.payload)
+              : Result.failVoid,
+          ),
         ),
     }),
     refreshProviders: createEnvironmentRpcCommand(runtime, {
