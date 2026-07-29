@@ -165,13 +165,11 @@ export const layer: Layer.Layer<
               (item) => item.type === "subagent" && item.subagentId === subagent.id,
             );
             if (turnItem === undefined) return [];
-            const childProjection = yield* projectionStore
-              .getThreadProjection(childThreadId)
-              .pipe(
-                Effect.catchIf(Schema.is(ProjectionStoreThreadNotFoundError), () =>
-                  Effect.succeed(null),
-                ),
-              );
+            const childProjection = yield* projectionStore.getThreadProjection(childThreadId).pipe(
+              Effect.catchTags({
+                ProjectionStoreThreadNotFoundError: () => Effect.succeed(null),
+              }),
+            );
             if (childProjection === null) return [];
             const childProviderThread = childProjection.providerThreads.find(
               (candidate) => candidate.id === subagent.providerThreadId,
