@@ -176,7 +176,7 @@ export function ThreadRelationshipsPanel(props: {
   );
   const { visibleRows, hiddenCount } = resolveThreadLineageWindow(relationshipRows, visibleCount);
 
-  if (relationshipRows.length === 0) {
+  if (relationshipRows.length === 0 && !canDetach) {
     return null;
   }
 
