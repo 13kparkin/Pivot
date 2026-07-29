@@ -41,6 +41,8 @@ import { subagentInput } from "./subagent/input.ts";
 import { assertCursorSubagentOutput } from "./subagent/cursor_output.ts";
 import { assertSubagentContinueOutput } from "./subagent_continue/codex_output.ts";
 import { subagentContinueInput } from "./subagent_continue/input.ts";
+import { assertSubagentReuseAfterIdleOutput } from "./subagent_reuse_after_idle/codex_output.ts";
+import { subagentReuseAfterIdleInput } from "./subagent_reuse_after_idle/input.ts";
 import { assertSubagentV2Output } from "./subagent_v2/codex_output.ts";
 import { subagentV2Input } from "./subagent_v2/input.ts";
 import { assertSubagentV2NestedOutput } from "./subagent_v2_nested/codex_output.ts";
@@ -406,14 +408,21 @@ export const ORCHESTRATOR_REPLAY_FIXTURES: ReadonlyArray<OrchestratorReplayFixtu
       },
     ],
   },
-  // subagent_reuse_after_idle is scaffolded and recorded but not registered:
-  // replaying it leaves the second run running forever, so the scenario never
-  // reaches thread idle. Not caused by the reuse routing — the hang reproduces
-  // with those changes reverted, and persists now that the rebind demonstrably
-  // fires (subagent_continue proves that). Root cause still unknown; the
-  // recorded transcript uses the current Codex item shape (subAgentActivity
-  // started/interacted, collab `wait` with empty receiverThreadIds), whereas
-  // the passing subagent_continue transcript uses resumeAgent/sendInput.
+  {
+    name: "subagent_reuse_after_idle",
+    buildInput: subagentReuseAfterIdleInput,
+    providers: [
+      {
+        driver: ProviderDriverKind.make("codex"),
+        transcriptFile: new URL(
+          "./subagent_reuse_after_idle/codex_transcript.ndjson",
+          import.meta.url,
+        ),
+        modelSelection: CODEX_MODEL_SELECTION,
+        assertOutput: assertSubagentReuseAfterIdleOutput,
+      },
+    ],
+  },
   {
     name: "subagent_v2",
     buildInput: subagentV2Input,
