@@ -46,6 +46,7 @@ import {
   canRouteRelatedSubagent,
   cascadeTerminalizeRunOwnedSubagents,
   finalProviderThreadStatus,
+  isRunOwnedSubagentTurnItem,
   layer as runExecutionServiceLayer,
   makeProviderEventRoutingState,
   type ProviderEventRouteIdentity,
@@ -213,6 +214,34 @@ it.effect("routes a reused subagent's rows to the run that re-activated it", () 
         updatedAt: now,
       },
     };
+    const turnItemEvent = {
+      type: "turn_item.updated",
+      driver,
+      turnItem: {
+        id: TurnItemId.make("turn-item:reuse:subagent"),
+        threadId,
+        runId: spawnRunId,
+        nodeId: subagentId,
+        providerThreadId: null,
+        providerTurnId: null,
+        nativeItemRef: null,
+        parentItemId: null,
+        ordinal: 2,
+        status: "running",
+        title: "reused agent",
+        startedAt: now,
+        completedAt: null,
+        updatedAt: now,
+        type: "subagent",
+        subagentId,
+        origin: "provider_native",
+        driver,
+        providerInstanceId: ProviderInstanceId.make("codex"),
+        childThreadId,
+        prompt: "continue",
+        result: null,
+      },
+    } satisfies ProviderAdapterV2Event;
 
     const withoutSeed = makeProviderEventRoutingState({
       identity: laterRun,
@@ -220,6 +249,7 @@ it.effect("routes a reused subagent's rows to the run that re-activated it", () 
     });
     assert.isFalse(routeProviderEvent(subagentEvent, laterRun, withoutSeed)[0]);
     assert.isFalse(routeProviderEvent(activationEvent, laterRun, withoutSeed)[0]);
+    assert.isFalse(routeProviderEvent(turnItemEvent, laterRun, withoutSeed)[0]);
 
     const seeded = makeProviderEventRoutingState({
       identity: laterRun,
@@ -229,6 +259,14 @@ it.effect("routes a reused subagent's rows to the run that re-activated it", () 
     const [subagentAccepted, afterSubagent] = routeProviderEvent(subagentEvent, laterRun, seeded);
     assert.isTrue(subagentAccepted);
     assert.isTrue(routeProviderEvent(activationEvent, laterRun, afterSubagent)[0]);
+    assert.isTrue(routeProviderEvent(turnItemEvent, laterRun, afterSubagent)[0]);
+    assert.isTrue(
+      isRunOwnedSubagentTurnItem({
+        turnItem: turnItemEvent.turnItem,
+        runId: laterRun.runId,
+        ownedSubagentIds: afterSubagent.ownedSubagentIds,
+      }),
+    );
     // Accepting the row also adopts its child thread, so the agent's own
     // messages and turn items route into this run for the rest of it.
     assert.isTrue(afterSubagent.ownedThreadIds.has(childThreadId));
@@ -2823,6 +2861,73 @@ it.effect("cascade helper is provider-neutral for Claude and Codex-shaped child 
         assert.isFalse(cascadedChildTurnItem.payload.streaming);
       }
     }
+  }),
+);
+
+it.effect("terminalizes an identity-owned reused subagent turn item from its spawning run", () =>
+  Effect.gen(function* () {
+    const now = yield* DateTime.now;
+    const runId = RunId.make("run:reused-turn-item:current");
+    const spawnRunId = RunId.make("run:reused-turn-item:spawn");
+    const threadId = ThreadId.make("thread:reused-turn-item");
+    const subagentId = NodeId.make("node:reused-turn-item:subagent");
+    const turnItem = {
+      id: TurnItemId.make("turn-item:reused-turn-item:subagent"),
+      threadId,
+      runId: spawnRunId,
+      nodeId: subagentId,
+      providerThreadId: null,
+      providerTurnId: null,
+      nativeItemRef: null,
+      parentItemId: null,
+      ordinal: 1,
+      status: "running" as const,
+      title: "reused agent",
+      startedAt: now,
+      completedAt: null,
+      updatedAt: now,
+      type: "subagent" as const,
+      subagentId,
+      origin: "provider_native" as const,
+      driver,
+      providerInstanceId: ProviderInstanceId.make("codex"),
+      childThreadId: ThreadId.make("thread:reused-turn-item:child"),
+      prompt: "continue",
+      progress: "working",
+      result: null,
+    } satisfies Extract<OrchestrationV2TurnItem, { type: "subagent" }>;
+
+    const events = yield* cascadeTerminalizeRunOwnedSubagents({
+      run: {
+        id: runId,
+        threadId,
+        ordinal: 2,
+        providerInstanceId: ProviderInstanceId.make("codex"),
+      } as OrchestrationV2Run,
+      open: {
+        subagents: new Map(),
+        activations: new Map(),
+        turnItems: new Map([[subagentId, turnItem]]),
+        childTurnItems: new Map(),
+        nodes: new Map(),
+        linkedChildThreadIds: new Set(),
+      },
+      status: "interrupted",
+      completedAt: now,
+      allocateEventId: () => Effect.succeed(EventId.make("event:reused-turn-item:cascade")),
+    });
+
+    assert.lengthOf(events, 1);
+    const event = events[0];
+    assert.isDefined(event);
+    if (event.type !== "turn-item.updated" || event.payload.type !== "subagent") {
+      assert.fail("expected reused subagent turn-item.updated event");
+      return;
+    }
+    assert.equal(event.runId, runId);
+    assert.equal(event.payload.runId, spawnRunId);
+    assert.equal(event.payload.status, "interrupted");
+    assert.equal(event.payload.id, turnItem.id);
   }),
 );
 

@@ -208,6 +208,17 @@ export function canReactivateSubagent(status: OrchestrationV2Subagent["status"])
   return status !== "failed" && status !== "cancelled";
 }
 
+export function isRunOwnedSubagentTurnItem(input: {
+  readonly turnItem: OrchestrationV2TurnItem;
+  readonly runId: OrchestrationV2Run["id"];
+  readonly ownedSubagentIds: ReadonlySet<NodeId>;
+}): boolean {
+  return (
+    input.turnItem.runId === input.runId ||
+    (input.turnItem.type === "subagent" && input.ownedSubagentIds.has(input.turnItem.subagentId))
+  );
+}
+
 function emptyOpenRunOwnedSubagentProjection(): OpenRunOwnedSubagentProjection {
   return {
     subagents: new Map(),
@@ -297,11 +308,7 @@ export function cascadeTerminalizeRunOwnedSubagents(input: {
         });
       }
       const turnItem = input.open.turnItems.get(key);
-      if (
-        turnItem !== undefined &&
-        turnItem.runId === input.run.id &&
-        !isTerminalTurnItemStatus(turnItem.status)
-      ) {
+      if (turnItem !== undefined && !isTerminalTurnItemStatus(turnItem.status)) {
         events.push({
           id: yield* input.allocateEventId(),
           type: "turn-item.updated",
@@ -1131,7 +1138,11 @@ export const layer: Layer.Layer<
                 });
               }
               if (event.type === "turn_item.updated") {
-                const belongsToRootRun = event.turnItem.runId === input.run.id;
+                const belongsToRootRun = isRunOwnedSubagentTurnItem({
+                  turnItem: event.turnItem,
+                  runId: input.run.id,
+                  ownedSubagentIds: routing.ownedSubagentIds,
+                });
                 const belongsToOwnedChildThread =
                   event.turnItem.threadId !== input.run.threadId &&
                   routing.ownedThreadIds.has(event.turnItem.threadId);
