@@ -1616,7 +1616,11 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
               for (const entry of existing) {
                 const key = String(entry.childProviderThread.id);
                 if (updated.has(key)) continue;
-                updated.set(key, Math.max(1, entry.subagent.activationCount));
+                // The map stores the last issued ordinal. A leftover with no
+                // recorded activations must stay unseeded so its first turn
+                // takes ordinal 1 and maps onto childRootNodeId.
+                if (entry.subagent.activationCount <= 0) continue;
+                updated.set(key, entry.subagent.activationCount);
               }
               return updated;
             });
