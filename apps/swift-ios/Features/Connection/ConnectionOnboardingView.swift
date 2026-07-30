@@ -16,6 +16,8 @@ public struct ConnectionOnboardingView: View {
     @State private var showsPermissionAction = false
     @State private var showingScanner = false
     @State private var entryHeading = "Connect manually"
+    @State private var connectionTask: Task<Void, Never>?
+    @State private var connectionAttemptID: UUID?
     @FocusState private var focusedField: ConnectionField?
 
     public init(
@@ -65,6 +67,16 @@ public struct ConnectionOnboardingView: View {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Close", action: onCancel)
                 }
+            } else if stage == .checking {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") {
+                        connectionTask?.cancel()
+                        connectionTask = nil
+                        connectionAttemptID = nil
+                        model.errorMessage = nil
+                        stage = .details
+                    }
+                }
             }
         }
         .fullScreenCover(isPresented: $showingScanner) {
@@ -94,6 +106,12 @@ public struct ConnectionOnboardingView: View {
                 showsPermissionAction = false
                 errorMessage = nil
             }
+        }
+        .interactiveDismissDisabled(stage == .connecting)
+        .onDisappear {
+            connectionTask?.cancel()
+            connectionTask = nil
+            connectionAttemptID = nil
         }
     }
 
@@ -509,13 +527,17 @@ public struct ConnectionOnboardingView: View {
 
     @MainActor
     private func connect(_ action: ConnectionAction) {
+        connectionTask?.cancel()
+        let attemptID = UUID()
+        connectionAttemptID = attemptID
         endpoint = action.endpoint
         errorMessage = nil
         showsPermissionAction = false
         stage = .checking
 
-        Task {
+        connectionTask = Task {
             let readiness = await readinessChecker.check(endpoint: action.endpoint)
+            guard !Task.isCancelled, connectionAttemptID == attemptID else { return }
             switch readiness {
             case .ready:
                 stage = .connecting
@@ -539,14 +561,19 @@ public struct ConnectionOnboardingView: View {
                 await model.activateEnvironment(id)
                 didConnect = model.snapshot.connection.state == .connected
             }
+            guard !Task.isCancelled, connectionAttemptID == attemptID else { return }
 
             if didConnect {
+                connectionAttemptID = nil
+                connectionTask = nil
                 stage = .success
                 onConnected()
             } else {
                 let rawError = model.errorMessage
                 model.errorMessage = nil
                 errorMessage = ConnectionErrorCopy.message(for: rawError)
+                connectionAttemptID = nil
+                connectionTask = nil
                 stage = .details
             }
         }

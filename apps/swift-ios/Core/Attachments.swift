@@ -100,3 +100,8 @@ public struct AssetCreateURLResult: Codable, Equatable, Sendable {
     /// Unix epoch milliseconds from the server contract.
     public let expiresAt: Double
 }
+
+public struct ResolvedAssetURL: Equatable, Sendable {
+    public let url: URL
+    public let expiresAt: Date
+}

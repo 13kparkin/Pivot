@@ -124,7 +124,7 @@ public struct ThreadDetailView: View {
         }
         .task(id: thread.id) {
             isLoading = true
-            _ = await model.detail(for: thread.id)
+            _ = await model.detail(for: thread.id, force: true)
             selection = currentSelection
             isLoading = false
         }
@@ -233,9 +233,12 @@ public struct ThreadDetailView: View {
                 .padding(.top, 14)
                 .padding(.bottom, 10)
             }
-            .defaultScrollAnchor(.bottom)
             .scrollDismissesKeyboard(.interactively)
-            .onChange(of: detail.messages.count) {
+            .task(id: thread.id) {
+                await Task.yield()
+                proxy.scrollTo("timeline-bottom", anchor: .bottom)
+            }
+            .onChange(of: detail.messages.last?.id) {
                 withAnimation(.easeOut(duration: 0.18)) {
                     proxy.scrollTo("timeline-bottom", anchor: .bottom)
                 }
@@ -279,8 +282,17 @@ public struct ThreadDetailView: View {
                 )
             )
             if !sent {
-                draft = message
-                attachments = pendingAttachments
+                let currentDraft = draft
+                let restoredMessage = message.trimmingCharacters(in: .whitespacesAndNewlines)
+                if currentDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    draft = message
+                } else if !restoredMessage.isEmpty {
+                    draft = "\(message)\n\(currentDraft)"
+                }
+                let pendingIDs = Set(pendingAttachments.map(\.id))
+                attachments = pendingAttachments + attachments.filter {
+                    !pendingIDs.contains($0.id)
+                }
                 sendFailed = true
             }
             isSending = false
@@ -414,7 +426,8 @@ struct FeatureMessageView: View {
                 .background(Color.white.opacity(0.11), in: RoundedRectangle(cornerRadius: 15))
             }
             .accessibilityLabel("You")
-            .accessibilityValue(message.text)
+            .accessibilityValue(accessibilityValue)
+            .accessibilityIdentifier("message-\(message.id)")
         case .assistant:
             VStack(alignment: .leading, spacing: 7) {
                 HStack(spacing: 6) {
@@ -431,6 +444,7 @@ struct FeatureMessageView: View {
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
+            .accessibilityIdentifier("message-\(message.id)")
         case .tool:
             DisclosureGroup {
                 Text(message.text)
@@ -444,17 +458,30 @@ struct FeatureMessageView: View {
             }
             .padding(11)
             .background(Color.white.opacity(0.055), in: RoundedRectangle(cornerRadius: 10))
+            .accessibilityIdentifier("message-\(message.id)")
         case .system:
             Text(message.text)
                 .font(.footnote)
                 .foregroundStyle(.secondary)
                 .frame(maxWidth: .infinity, alignment: .center)
+                .accessibilityIdentifier("message-\(message.id)")
         }
+    }
+
+    private var accessibilityValue: String {
+        let attachmentSummary = message.attachments.isEmpty
+            ? ""
+            : "\(message.attachments.count) image attachment"
+                + (message.attachments.count == 1 ? "" : "s")
+        return [message.text, attachmentSummary]
+            .filter { !$0.isEmpty }
+            .joined(separator: ", ")
     }
 }
 
 private struct FeatureMessageAttachmentsView: View {
     let attachments: [FeatureMessageAttachment]
+    @State private var previewedAttachment: FeatureMessageAttachment?
 
     var body: some View {
         if !attachments.isEmpty {
@@ -466,19 +493,62 @@ private struct FeatureMessageAttachmentsView: View {
                 spacing: 7
             ) {
                 ForEach(attachments) { attachment in
-                    HStack(spacing: 9) {
-                        Image(systemName: attachment.mimeType.hasPrefix("image/") ? "photo" : "doc")
+                    VStack(alignment: .leading, spacing: 6) {
+                        if attachment.mimeType.hasPrefix("image/") {
+                            Group {
+                                if let url = attachment.url {
+                                    AsyncImage(url: url) { phase in
+                                        switch phase {
+                                        case let .success(image):
+                                            image
+                                                .resizable()
+                                                .scaledToFit()
+                                        case .failure:
+                                            attachmentPlaceholder(
+                                                systemImage: "exclamationmark.triangle"
+                                            )
+                                        case .empty:
+                                            attachmentPlaceholder(systemImage: "photo")
+                                        @unknown default:
+                                            attachmentPlaceholder(systemImage: "photo")
+                                        }
+                                    }
+                                } else {
+                                    attachmentPlaceholder(systemImage: "photo")
+                                }
+                            }
+                            .frame(height: 160)
+                            .frame(maxWidth: .infinity)
+                            .background(T3Colors.surfaceRaised)
+                            .clipShape(RoundedRectangle(cornerRadius: 8))
+                        }
+
+                        HStack(spacing: 9) {
+                            Image(
+                                systemName: attachment.mimeType.hasPrefix("image/")
+                                    ? "photo"
+                                    : "doc"
+                            )
                             .font(.system(size: 16, weight: .medium))
                             .foregroundStyle(T3Colors.textSecondary)
                             .frame(width: 30, height: 30)
-                            .background(T3Colors.surfaceRaised, in: RoundedRectangle(cornerRadius: 6))
-                        VStack(alignment: .leading, spacing: 1) {
-                            Text(attachment.name)
-                                .font(.caption.weight(.medium))
-                                .lineLimit(1)
-                            Text(ByteCountFormatter.string(fromByteCount: Int64(attachment.sizeBytes), countStyle: .file))
+                            .background(
+                                T3Colors.surfaceRaised,
+                                in: RoundedRectangle(cornerRadius: 6)
+                            )
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text(attachment.name)
+                                    .font(.caption.weight(.medium))
+                                    .lineLimit(1)
+                                Text(
+                                    ByteCountFormatter.string(
+                                        fromByteCount: Int64(attachment.sizeBytes),
+                                        countStyle: .file
+                                    )
+                                )
                                 .font(.caption2.monospacedDigit())
                                 .foregroundStyle(T3Colors.textSecondary)
+                            }
                         }
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -488,9 +558,99 @@ private struct FeatureMessageAttachmentsView: View {
                             .stroke(T3Colors.border, lineWidth: 1)
                     }
                     .accessibilityElement(children: .combine)
+                    .accessibilityLabel(
+                        attachment.mimeType.hasPrefix("image/")
+                            ? "Image attachment"
+                            : "File attachment"
+                    )
+                    .accessibilityValue(attachmentAccessibilityValue(attachment))
+                    .accessibilityIdentifier("attachment-\(attachment.id)")
+                    .accessibilityAddTraits(
+                        attachment.mimeType.hasPrefix("image/") && attachment.url != nil
+                            ? .isButton
+                            : []
+                    )
+                    .accessibilityHint(
+                        attachment.mimeType.hasPrefix("image/") && attachment.url != nil
+                            ? "Opens full-screen preview"
+                            : ""
+                    )
+                    .accessibilityAction {
+                        if attachment.mimeType.hasPrefix("image/"), attachment.url != nil {
+                            previewedAttachment = attachment
+                        }
+                    }
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        if attachment.mimeType.hasPrefix("image/"), attachment.url != nil {
+                            previewedAttachment = attachment
+                        }
+                    }
                 }
             }
+            .fullScreenCover(item: $previewedAttachment) { attachment in
+                FeatureAttachmentPreview(attachment: attachment)
+            }
         }
+    }
+
+    private func attachmentPlaceholder(systemImage: String) -> some View {
+        Image(systemName: systemImage)
+            .font(.system(size: 22, weight: .medium))
+            .foregroundStyle(T3Colors.textSecondary)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private func attachmentAccessibilityValue(
+        _ attachment: FeatureMessageAttachment
+    ) -> String {
+        let size = ByteCountFormatter.string(
+            fromByteCount: Int64(attachment.sizeBytes),
+            countStyle: .file
+        )
+        return "\(attachment.name), \(size)"
+    }
+}
+
+private struct FeatureAttachmentPreview: View {
+    @SwiftUI.Environment(\.dismiss) private var dismiss
+    let attachment: FeatureMessageAttachment
+
+    var body: some View {
+        NavigationStack {
+            ZStack {
+                Color.black.ignoresSafeArea()
+                if let url = attachment.url {
+                    AsyncImage(url: url) { phase in
+                        switch phase {
+                        case let .success(image):
+                            image
+                                .resizable()
+                                .scaledToFit()
+                        case .failure:
+                            ContentUnavailableView(
+                                "Image unavailable",
+                                systemImage: "exclamationmark.triangle"
+                            )
+                        case .empty:
+                            ProgressView()
+                        @unknown default:
+                            ProgressView()
+                        }
+                    }
+                    .padding(12)
+                }
+            }
+            .navigationTitle(attachment.name)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { dismiss() }
+                }
+            }
+            .t3NavigationChrome()
+        }
+        .preferredColorScheme(.dark)
     }
 }
 
@@ -510,7 +670,7 @@ struct StreamingStatusView: View {
                 .font(.footnote.weight(.semibold))
         }
         .padding(.vertical, 6)
-        .accessibilityElement(children: .combine)
+        .accessibilityElement(children: .contain)
     }
 }
 

@@ -11,7 +11,7 @@ public struct FeatureRootView: View {
         Group {
             if model.isLoading {
                 FeatureLoadingView()
-            } else if model.snapshot.connection.state == .connected {
+            } else if model.snapshot.connection.state != .disconnected {
                 WorkspaceView(
                     model: model,
                     submitNewTask: { request in

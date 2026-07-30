@@ -90,12 +90,15 @@ private actor URLSessionWebSocketConnection: WebSocketConnection {
 }
 
 public enum RPCError: LocalizedError, Sendable {
+    case connectionUnavailable
     case disconnected
     case remote(String)
     case protocolViolation(String)
 
     public var errorDescription: String? {
         switch self {
+        case .connectionUnavailable:
+            "The live command connection is unavailable."
         case .disconnected: "The environment disconnected."
         case let .remote(message): message
         case let .protocolViolation(message): message
@@ -164,6 +167,7 @@ public actor WebSocketRPCClient {
 
     private let connector: any WebSocketConnecting
     private let endpointProvider: EndpointProvider
+    private let connectionWaitTimeout: Duration
     private var connection: (any WebSocketConnection)?
     private var loopTask: Task<Void, Never>?
     private var keepaliveTask: Task<Void, Never>?
@@ -175,9 +179,11 @@ public actor WebSocketRPCClient {
 
     public init(
         connector: any WebSocketConnecting = URLSessionWebSocketConnector(),
+        connectionWaitTimeout: Duration = .seconds(4),
         endpointProvider: @escaping EndpointProvider
     ) {
         self.connector = connector
+        self.connectionWaitTimeout = connectionWaitTimeout
         self.endpointProvider = endpointProvider
     }
 
@@ -190,6 +196,10 @@ public actor WebSocketRPCClient {
         desired = true
         guard loopTask == nil else { return }
         loopTask = Task { await self.connectionLoop() }
+    }
+
+    public func isConnected() -> Bool {
+        connection != nil
     }
 
     public func stop() async {
@@ -281,6 +291,15 @@ public actor WebSocketRPCClient {
             if connection != nil {
                 Task { await self.sendUnary(id) }
             }
+            let timeout = connectionWaitTimeout
+            Task { [weak self] in
+                do {
+                    try await Task.sleep(for: timeout)
+                } catch {
+                    return
+                }
+                await self?.failUnaryIfUnsent(id)
+            }
         }
     }
 
@@ -356,8 +375,7 @@ public actor WebSocketRPCClient {
             try await sendControl("Ack", requestID: requestID)
         case "Exit":
             guard let requestID = response.requestId, let exit = response.exit else { return }
-            if var request = unary.removeValue(forKey: requestID) {
-                request.sent = false
+            if let request = unary.removeValue(forKey: requestID) {
                 if exit._tag == "Success" {
                     request.resume(.success(exit.value ?? .null))
                 } else {
@@ -380,13 +398,18 @@ public actor WebSocketRPCClient {
 
     private func sendUnary(_ id: Int) async {
         guard let connection, var request = unary[id], !request.sent else { return }
+        // Actor methods are reentrant at the send below. Record that this
+        // command crossed the socket boundary first so a concurrent
+        // disconnect fails it instead of replaying an ambiguous mutation.
+        request.sent = true
+        unary[id] = request
         do {
             try await connection.send(JSONEncoder.t3.encode(request.envelope))
-            request.sent = true
-            unary[id] = request
         } catch {
-            request.resume(.failure(error))
-            unary.removeValue(forKey: id)
+            // A response, disconnect, or stop may have completed the request
+            // while send was suspended. Only its current owner may resume it.
+            guard let failed = unary.removeValue(forKey: id) else { return }
+            failed.resume(.failure(error))
         }
     }
 
@@ -439,6 +462,12 @@ public actor WebSocketRPCClient {
             unary.removeValue(forKey: id)
             request.resume(.failure(error))
         }
+    }
+
+    private func failUnaryIfUnsent(_ id: Int) {
+        guard let request = unary[id], !request.sent else { return }
+        unary.removeValue(forKey: id)
+        request.resume(.failure(RPCError.connectionUnavailable))
     }
 
     private func remoteError(_ exit: RPCResponseEnvelope.Exit) -> RPCError {

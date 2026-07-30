@@ -23,6 +23,17 @@ public struct DevicesView: View {
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
+            } else if let errorMessage, sessions.isEmpty {
+                ContentUnavailableView {
+                    Label("Couldn’t load devices", systemImage: "exclamationmark.circle")
+                } description: {
+                    Text(errorMessage)
+                } actions: {
+                    Button("Try again") {
+                        Task { await reload() }
+                    }
+                    .buttonStyle(.borderedProminent)
+                }
             } else if sessions.isEmpty {
                 ContentUnavailableView {
                     Label("No devices found", systemImage: "laptopcomputer.and.iphone")

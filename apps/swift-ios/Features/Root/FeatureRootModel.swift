@@ -20,7 +20,9 @@ public final class FeatureRootModel {
         do {
             snapshot = try await client.initialSnapshot()
         } catch {
-            errorMessage = error.localizedDescription
+            if !Self.isBenignCancellation(error) {
+                errorMessage = error.localizedDescription
+            }
         }
         isLoading = false
 
@@ -33,13 +35,16 @@ public final class FeatureRootModel {
         do {
             snapshot = try await client.initialSnapshot()
         } catch {
-            errorMessage = error.localizedDescription
+            if !Self.isBenignCancellation(error) {
+                errorMessage = error.localizedDescription
+            }
         }
     }
 
     public func pair(endpoint: String, token: String?) async -> Bool {
         await perform {
             try await client.pair(endpoint: endpoint, token: token)
+            details.removeAll()
             snapshot = try await client.initialSnapshot()
         }
     }
@@ -78,6 +83,7 @@ public final class FeatureRootModel {
         title: String?,
         selection: FeatureSelection?
     ) async -> FeatureThread? {
+        let environment = currentEnvironmentIdentity
         var created: FeatureThread?
         let succeeded = await perform {
             let thread = try await client.createThread(
@@ -85,6 +91,9 @@ public final class FeatureRootModel {
                 title: title,
                 selection: selection
             )
+            guard currentEnvironmentIdentity == environment else {
+                throw CancellationError()
+            }
             upsert(thread)
             created = thread
         }
@@ -95,8 +104,9 @@ public final class FeatureRootModel {
         let prompt = request.trimmedPrompt
         guard !prompt.isEmpty || !request.attachments.isEmpty else { return nil }
 
+        let environment = currentEnvironmentIdentity
         var created: FeatureThread?
-        let succeeded = await perform {
+        let succeeded = await perform(reportError: false) {
             let thread = try await client.createThreadAndSend(
                 projectID: request.projectID,
                 prompt: prompt,
@@ -105,6 +115,9 @@ public final class FeatureRootModel {
                 interactionMode: request.interactionMode,
                 attachments: request.attachments.map(\.upload)
             )
+            guard currentEnvironmentIdentity == environment else {
+                throw CancellationError()
+            }
             upsert(thread)
             created = thread
         }
@@ -112,8 +125,10 @@ public final class FeatureRootModel {
     }
 
     public func renameThread(_ id: String, title: String) async {
+        let environment = currentEnvironmentIdentity
         await perform {
             try await client.renameThread(id: id, title: title)
+            guard currentEnvironmentIdentity == environment else { return }
             guard let index = snapshot.threads.firstIndex(where: { $0.id == id }) else { return }
             snapshot.threads[index].title = title
             details[id]?.thread.title = title
@@ -121,8 +136,10 @@ public final class FeatureRootModel {
     }
 
     public func setArchived(_ id: String, archived: Bool) async {
+        let environment = currentEnvironmentIdentity
         await perform {
             try await client.setThreadArchived(id: id, archived: archived)
+            guard currentEnvironmentIdentity == environment else { return }
             guard let index = snapshot.threads.firstIndex(where: { $0.id == id }) else { return }
             snapshot.threads[index].isArchived = archived
             details[id]?.thread.isArchived = archived
@@ -130,26 +147,39 @@ public final class FeatureRootModel {
     }
 
     public func setSettled(_ id: String, settled: Bool) async {
+        let environment = currentEnvironmentIdentity
         await perform {
             try await client.setThreadSettled(id: id, settled: settled)
+            guard currentEnvironmentIdentity == environment else { return }
             guard let index = snapshot.threads.firstIndex(where: { $0.id == id }) else { return }
             snapshot.threads[index].isSettled = settled
+            snapshot.threads[index].keepsActive = !settled
+            snapshot.threads[index].settledAt = settled ? .now : nil
             details[id]?.thread.isSettled = settled
+            details[id]?.thread.keepsActive = !settled
+            details[id]?.thread.settledAt = settled ? .now : nil
         }
     }
 
     public func setSnoozed(_ id: String, until: Date?) async {
+        let environment = currentEnvironmentIdentity
         await perform {
             try await client.setThreadSnoozed(id: id, until: until)
+            guard currentEnvironmentIdentity == environment else { return }
             guard let index = snapshot.threads.firstIndex(where: { $0.id == id }) else { return }
+            let snoozedAt = until.map { _ in Date.now }
             snapshot.threads[index].snoozedUntil = until
+            snapshot.threads[index].snoozedAt = snoozedAt
             details[id]?.thread.snoozedUntil = until
+            details[id]?.thread.snoozedAt = snoozedAt
         }
     }
 
     public func setRuntimeMode(_ id: String, mode: FeatureRuntimeMode) async {
+        let environment = currentEnvironmentIdentity
         await perform {
             try await client.setRuntimeMode(id: id, mode: mode)
+            guard currentEnvironmentIdentity == environment else { return }
             guard let index = snapshot.threads.firstIndex(where: { $0.id == id }) else { return }
             snapshot.threads[index].runtimeMode = mode
             details[id]?.thread.runtimeMode = mode
@@ -157,8 +187,10 @@ public final class FeatureRootModel {
     }
 
     public func setInteractionMode(_ id: String, mode: FeatureInteractionMode) async {
+        let environment = currentEnvironmentIdentity
         await perform {
             try await client.setInteractionMode(id: id, mode: mode)
+            guard currentEnvironmentIdentity == environment else { return }
             guard let index = snapshot.threads.firstIndex(where: { $0.id == id }) else { return }
             snapshot.threads[index].interactionMode = mode
             details[id]?.thread.interactionMode = mode
@@ -166,8 +198,10 @@ public final class FeatureRootModel {
     }
 
     public func deleteThread(_ id: String) async {
+        let environment = currentEnvironmentIdentity
         await perform {
             try await client.deleteThread(id: id)
+            guard currentEnvironmentIdentity == environment else { return }
             snapshot.threads.removeAll { $0.id == id }
             details[id] = nil
         }
@@ -177,14 +211,20 @@ public final class FeatureRootModel {
         if !force, let cached = details[id] {
             return cached
         }
+        let environment = currentEnvironmentIdentity
         do {
             let detail = try await client.loadThread(id: id)
+            guard currentEnvironmentIdentity == environment else {
+                return details[id]
+            }
             details[id] = detail
             upsert(detail.thread)
             return detail
         } catch {
-            errorMessage = error.localizedDescription
-            return nil
+            if !Self.isBenignCancellation(error) {
+                errorMessage = error.localizedDescription
+            }
+            return details[id]
         }
     }
 
@@ -202,6 +242,7 @@ public final class FeatureRootModel {
         let trimmed = submission.text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty || !submission.attachments.isEmpty else { return false }
 
+        let environment = currentEnvironmentIdentity
         let optimisticID = "local-\(UUID().uuidString)"
         let optimistic = FeatureMessage(
             id: optimisticID,
@@ -219,7 +260,7 @@ public final class FeatureRootModel {
         )
         details[submission.threadID]?.messages.append(optimistic)
 
-        let sent = await perform {
+        let sent = await perform(reportError: false) {
             try await client.sendMessage(
                 threadID: submission.threadID,
                 text: trimmed,
@@ -228,6 +269,7 @@ public final class FeatureRootModel {
             )
         }
         if !sent {
+            guard currentEnvironmentIdentity == environment else { return false }
             details[submission.threadID]?.messages.removeAll { $0.id == optimisticID }
         }
         return sent
@@ -240,8 +282,10 @@ public final class FeatureRootModel {
     }
 
     public func resolveApproval(_ id: String, decision: FeatureApprovalDecision) async {
+        let environment = currentEnvironmentIdentity
         await perform {
             try await client.resolveApproval(id: id, decision: decision)
+            guard currentEnvironmentIdentity == environment else { return }
             for key in details.keys {
                 details[key]?.approvals.removeAll { $0.id == id }
             }
@@ -249,8 +293,10 @@ public final class FeatureRootModel {
     }
 
     public func resolveUserInput(_ id: String, answers: [String: String]) async {
+        let environment = currentEnvironmentIdentity
         await perform {
             try await client.resolveUserInput(id: id, answers: answers)
+            guard currentEnvironmentIdentity == environment else { return }
             for key in details.keys {
                 details[key]?.userInputs.removeAll { $0.id == id }
             }
@@ -265,14 +311,17 @@ public final class FeatureRootModel {
     }
 
     @discardableResult
-    private func perform(_ operation: () async throws -> Void) async -> Bool {
+    private func perform(
+        reportError: Bool = true,
+        _ operation: () async throws -> Void
+    ) async -> Bool {
         isPerformingAction = true
         defer { isPerformingAction = false }
         do {
             try await operation()
             return true
         } catch {
-            if !Self.isBenignCancellation(error) {
+            if reportError, !Self.isBenignCancellation(error) {
                 errorMessage = error.localizedDescription
             }
             return false
@@ -285,6 +334,17 @@ public final class FeatureRootModel {
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .lowercased()
         return message == "cancelled" || message == "canceled"
+    }
+
+    private var currentEnvironmentIdentity: String {
+        let active = snapshot.environments.first(where: \.isActive)
+        return [
+            active?.id,
+            active?.endpoint,
+            snapshot.connection.endpoint,
+        ]
+        .compactMap { $0 }
+        .joined(separator: "|")
     }
 
     private func apply(_ event: FeatureEvent) {

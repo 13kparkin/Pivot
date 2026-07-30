@@ -17,20 +17,6 @@ public struct TokenExchangeResult: Decodable, Sendable {
 }
 
 public actor PairingService {
-    public static let standardScopes = [
-        "orchestration:read",
-        "orchestration:operate",
-        "terminal:operate",
-        "review:write",
-        // Startup pairing credentials carry administrative access. Requesting
-        // these scopes preserves that access for native multi-device
-        // management; ordinary pairing links remain bounded by the scopes the
-        // server granted them.
-        "access:read",
-        "access:write",
-        "relay:read",
-    ]
-
     private let transport: any HTTPTransport
     private let environmentStore: EnvironmentStore
     private let credentialStore: any CredentialStore
@@ -124,7 +110,6 @@ public actor PairingService {
                 name: "requested_token_type",
                 value: "urn:ietf:params:oauth:token-type:access_token"
             ),
-            URLQueryItem(name: "scope", value: Self.standardScopes.joined(separator: " ")),
             URLQueryItem(name: "client_device_type", value: "mobile"),
             URLQueryItem(name: "client_os", value: "iOS"),
         ]

@@ -64,6 +64,33 @@ final class CoreContractTests: XCTestCase {
         XCTAssertEqual(command["runtimeMode"]?.stringValue, "full-access")
     }
 
+    func testFirstSendCommandCarriesCanonicalBootstrapMetadata() throws {
+        let model = ModelSelection(instanceId: "codex", model: "gpt-5.4")
+        let command = try OrchestrationCommands.createThreadAndSend(
+            threadID: "thread-first-send",
+            projectID: "project-1",
+            title: "Build the native app",
+            text: "Build the native app",
+            model: model,
+            runtimeMode: .fullAccess,
+            commandID: "command-first-send",
+            messageID: "message-first-send",
+            createdAt: "2026-07-30T12:00:00.000Z"
+        )
+
+        XCTAssertEqual(command["type"]?.stringValue, "thread.turn.start")
+        XCTAssertEqual(command["titleSeed"]?.stringValue, "Build the native app")
+        XCTAssertEqual(command["modelSelection"]?["model"]?.stringValue, "gpt-5.4")
+        XCTAssertEqual(
+            command["bootstrap"]?["createThread"]?["projectId"]?.stringValue,
+            "project-1"
+        )
+        XCTAssertEqual(
+            command["bootstrap"]?["createThread"]?["modelSelection"]?["instanceId"]?.stringValue,
+            "codex"
+        )
+    }
+
     func testEnvironmentStorePersistsSelectionAndClearsRemovedActiveEnvironment() async throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("t3-swift-core-\(UUID().uuidString)", isDirectory: true)
@@ -93,5 +120,43 @@ final class CoreContractTests: XCTestCase {
         let fallback = try await store.activeEnvironmentID()
         XCTAssertEqual(remaining.map(\.id), [first.id])
         XCTAssertEqual(fallback, first.id)
+    }
+
+    func testRuntimeReplacesCachedClientWhenSavedEndpointChanges() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("t3-swift-runtime-\(UUID().uuidString)", isDirectory: true)
+        let file = directory.appendingPathComponent("environments.json")
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let store = EnvironmentStore(fileURL: file)
+        let first = Environment(
+            id: "same-server",
+            label: "Studio",
+            httpBaseURL: URL(string: "http://192.168.1.10:3773")!,
+            webSocketBaseURL: URL(string: "ws://192.168.1.10:3773")!
+        )
+        let moved = Environment(
+            id: "same-server",
+            label: "Studio",
+            httpBaseURL: URL(string: "http://192.168.1.20:4773")!,
+            webSocketBaseURL: URL(string: "ws://192.168.1.20:4773")!
+        )
+        try await store.save([first])
+        try await store.setActiveEnvironment(id: first.id)
+        let runtime = EnvironmentRuntime(
+            environmentStore: store,
+            credentialStore: InMemoryCredentialStore()
+        )
+
+        let firstClientValue = try await runtime.activeClient()
+        let firstClient = try XCTUnwrap(firstClientValue)
+        try await store.upsert(moved)
+        let movedClientValue = try await runtime.activeClient()
+        let movedClient = try XCTUnwrap(movedClientValue)
+        let movedEnvironment = await movedClient.environment
+
+        XCTAssertFalse(firstClient === movedClient)
+        XCTAssertEqual(movedEnvironment.httpBaseURL, moved.httpBaseURL)
+        XCTAssertEqual(movedEnvironment.webSocketBaseURL, moved.webSocketBaseURL)
     }
 }

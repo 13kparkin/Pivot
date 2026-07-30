@@ -9,12 +9,16 @@ public actor T3Client {
         environment: Environment,
         credentialStore: any CredentialStore,
         httpTransport: any HTTPTransport = URLSessionHTTPTransport(),
-        webSocketConnector: any WebSocketConnecting = URLSessionWebSocketConnector()
+        webSocketConnector: any WebSocketConnecting = URLSessionWebSocketConnector(),
+        rpcConnectionWaitTimeout: Duration = .seconds(4)
     ) {
         self.environment = environment
         let api = EnvironmentAPI(transport: httpTransport, credentials: credentialStore)
         self.api = api
-        self.rpc = WebSocketRPCClient(connector: webSocketConnector) {
+        self.rpc = WebSocketRPCClient(
+            connector: webSocketConnector,
+            connectionWaitTimeout: rpcConnectionWaitTimeout
+        ) {
             let ticket = try await api.webSocketTicket(for: environment)
             var components = URLComponents(
                 url: environment.webSocketBaseURL,
@@ -40,12 +44,23 @@ public actor T3Client {
         await rpc.stop()
     }
 
+    public func liveConnectionActive() async -> Bool {
+        await rpc.isConnected()
+    }
+
     public func shellSnapshot() async throws -> OrchestrationShellSnapshot {
         try await api.shellSnapshot(for: environment)
     }
 
     public func readModel() async throws -> OrchestrationReadModel {
         try await api.readModel(for: environment)
+    }
+
+    public func archivedShellSnapshot() async throws -> OrchestrationShellSnapshot {
+        try await rpc.request(
+            RPCMethod.getArchivedShellSnapshot.rawValue,
+            as: OrchestrationShellSnapshot.self
+        )
     }
 
     public func threadSnapshot(id: String) async throws -> OrchestrationThreadDetailSnapshot {
@@ -145,7 +160,16 @@ public actor T3Client {
 
     @discardableResult
     public func dispatch(_ command: JSONValue) async throws -> DispatchResult {
-        try await api.dispatch(command, environment: environment)
+        guard await rpc.isConnected() else {
+            return try await api.dispatch(command, environment: environment)
+        }
+        do {
+            return try await dispatchOverWebSocket(command)
+        } catch RPCError.connectionUnavailable {
+            // The request provably never crossed the socket, so HTTP is a safe
+            // fallback without risking duplicate side effects.
+            return try await api.dispatch(command, environment: environment)
+        }
     }
 
     @discardableResult
@@ -155,7 +179,10 @@ public actor T3Client {
         runtimeMode: RuntimeMode,
         interactionMode: InteractionMode = .default,
         model: ModelSelection? = nil,
-        attachments: [UploadChatImageAttachment] = []
+        attachments: [UploadChatImageAttachment] = [],
+        commandID: String = UUID().uuidString,
+        messageID: String = UUID().uuidString,
+        createdAt: String = OrchestrationCommands.now()
     ) async throws -> DispatchResult {
         try await dispatch(
             try OrchestrationCommands.sendTurn(
@@ -164,7 +191,10 @@ public actor T3Client {
                 runtimeMode: runtimeMode,
                 interactionMode: interactionMode,
                 model: model,
-                attachments: attachments
+                attachments: attachments,
+                commandID: commandID,
+                messageID: messageID,
+                createdAt: createdAt
             )
         )
     }
@@ -194,8 +224,8 @@ public actor T3Client {
         )
     }
 
-    /// Atomically creates a thread and starts its first turn. This is the
-    /// server-supported path for message-first thread creation.
+    /// Creates a thread and starts its first turn through the server-supported
+    /// message-first bootstrap path.
     @discardableResult
     public func createThreadAndSend(
         threadID: String = UUID().uuidString,
@@ -207,9 +237,12 @@ public actor T3Client {
         interactionMode: InteractionMode = .default,
         branch: String? = nil,
         worktreePath: String? = nil,
-        attachments: [UploadChatImageAttachment] = []
+        attachments: [UploadChatImageAttachment] = [],
+        commandID: String = UUID().uuidString,
+        messageID: String = UUID().uuidString,
+        createdAt: String = OrchestrationCommands.now()
     ) async throws -> DispatchResult {
-        try await dispatch(
+        try await dispatchOverWebSocket(
             try OrchestrationCommands.createThreadAndSend(
                 threadID: threadID,
                 projectID: projectID,
@@ -220,8 +253,19 @@ public actor T3Client {
                 interactionMode: interactionMode,
                 branch: branch,
                 worktreePath: worktreePath,
-                attachments: attachments
+                attachments: attachments,
+                commandID: commandID,
+                messageID: messageID,
+                createdAt: createdAt
             )
+        )
+    }
+
+    private func dispatchOverWebSocket(_ command: JSONValue) async throws -> DispatchResult {
+        try await rpc.request(
+            RPCMethod.dispatchCommand.rawValue,
+            payload: command,
+            as: DispatchResult.self
         )
     }
 
@@ -408,6 +452,10 @@ public actor T3Client {
     }
 
     public func resolvedAssetURL(resource: AssetResource) async throws -> URL {
+        try await resolvedAsset(resource: resource).url
+    }
+
+    public func resolvedAsset(resource: AssetResource) async throws -> ResolvedAssetURL {
         let result = try await createAssetURL(resource: resource)
         guard let url = URL(
             string: result.relativeUrl,
@@ -415,7 +463,10 @@ public actor T3Client {
         )?.absoluteURL else {
             throw RPCError.protocolViolation("The server returned an invalid asset URL.")
         }
-        return url
+        return ResolvedAssetURL(
+            url: url,
+            expiresAt: Date(timeIntervalSince1970: result.expiresAt / 1_000)
+        )
     }
 
     // MARK: VCS and source control
@@ -881,12 +932,12 @@ public actor EnvironmentRuntime {
             throw RPCError.remote("Environment \(id) is not saved.")
         }
         try await environmentStore.setActiveEnvironment(id: id)
-        return client(for: environment)
+        return await client(for: environment)
     }
 
     public func activeClient() async throws -> T3Client? {
         guard let environment = try await activeEnvironment() else { return nil }
-        return client(for: environment)
+        return await client(for: environment)
     }
 
     @discardableResult
@@ -898,7 +949,7 @@ public actor EnvironmentRuntime {
         )
         let environment = try await service.pair(url: url, label: clientLabel)
         try await environmentStore.setActiveEnvironment(id: environment.id)
-        return client(for: environment)
+        return await client(for: environment)
     }
 
     @discardableResult
@@ -914,7 +965,7 @@ public actor EnvironmentRuntime {
         )
         let environment = try await service.pair(host: host, code: code, label: clientLabel)
         try await environmentStore.setActiveEnvironment(id: environment.id)
-        return client(for: environment)
+        return await client(for: environment)
     }
 
     public func remove(id: String) async throws {
@@ -925,8 +976,14 @@ public actor EnvironmentRuntime {
         try await environmentStore.remove(id: id)
     }
 
-    private func client(for environment: Environment) -> T3Client {
-        if let existing = clients[environment.id] { return existing }
+    private func client(for environment: Environment) async -> T3Client {
+        if let existing = clients[environment.id] {
+            if existing.environment == environment {
+                return existing
+            }
+            clients.removeValue(forKey: environment.id)
+            await existing.disconnect()
+        }
         let client = T3Client(
             environment: environment,
             credentialStore: credentialStore,
@@ -942,6 +999,7 @@ public enum RPCMethod: String, Sendable {
     case serverProbe = "server.probe"
     case serverGetConfig = "server.getConfig"
     case dispatchCommand = "orchestration.dispatchCommand"
+    case getArchivedShellSnapshot = "orchestration.getArchivedShellSnapshot"
     case subscribeShell = "orchestration.subscribeShell"
     case subscribeThread = "orchestration.subscribeThread"
     case projectsListEntries = "projects.listEntries"
@@ -1097,6 +1155,8 @@ public enum OrchestrationCommands {
                 "text": .string(text),
                 "attachments": .array(attachments.map(\.jsonValue)),
             ]),
+            "modelSelection": try .encode(model),
+            "titleSeed": .string(title),
             "runtimeMode": .string(runtimeMode.rawValue),
             "interactionMode": .string(interactionMode.rawValue),
             "bootstrap": .object(["createThread": .object(create)]),

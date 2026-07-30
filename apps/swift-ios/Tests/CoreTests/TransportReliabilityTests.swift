@@ -69,6 +69,133 @@ final class TransportReliabilityTests: XCTestCase {
         )
     }
 
+    func testBootstrapUsesCanonicalWebSocketRPCDispatch() async throws {
+        let environment = Environment(
+            id: "environment-1",
+            label: "Studio",
+            httpBaseURL: URL(string: "https://studio.example")!,
+            webSocketBaseURL: URL(string: "wss://studio.example")!
+        )
+        let credentials = InMemoryCredentialStore(
+            credentials: [
+                environment.id: EnvironmentCredential(accessToken: "access-token"),
+            ]
+        )
+        let transport = RecordingHTTPTransport { request in
+            let body = """
+            {
+              "ticket": "websocket-ticket",
+              "expiresAt": "2026-07-30T12:05:00.000Z"
+            }
+            """
+            return (Data(body.utf8), transportResponse(request))
+        }
+        let connection = RecordingWebSocketConnection()
+        let client = T3Client(
+            environment: environment,
+            credentialStore: credentials,
+            httpTransport: transport,
+            webSocketConnector: StaticWebSocketConnector(connection: connection)
+        )
+
+        let result = try await client.createThreadAndSend(
+            threadID: "thread-first-send",
+            projectID: "project-1",
+            title: "Native first send",
+            text: "Start from this message",
+            model: ModelSelection(instanceId: "codex", model: "gpt-5.4"),
+            runtimeMode: .fullAccess,
+            commandID: "stable-command",
+            messageID: "stable-message",
+            createdAt: "2026-07-30T12:00:00.000Z"
+        )
+        await client.disconnect()
+
+        XCTAssertEqual(result.sequence, 42)
+        let requests = await connection.requests()
+        XCTAssertEqual(requests.count, 1)
+        XCTAssertEqual(requests.first?["tag"]?.stringValue, "orchestration.dispatchCommand")
+        XCTAssertEqual(
+            requests.first?["payload"]?["bootstrap"]?["createThread"]?["projectId"]?.stringValue,
+            "project-1"
+        )
+        XCTAssertEqual(requests.first?["payload"]?["commandId"]?.stringValue, "stable-command")
+        XCTAssertEqual(
+            requests.first?["payload"]?["message"]?["messageId"]?.stringValue,
+            "stable-message"
+        )
+
+        let httpRequests = await transport.requests
+        XCTAssertEqual(httpRequests.map(\.url?.path), ["/api/auth/websocket-ticket"])
+    }
+
+    func testUnsentCommandsFallBackToHTTPButBootstrapDoesNot() async throws {
+        let environment = Environment(
+            id: "environment-1",
+            label: "Studio",
+            httpBaseURL: URL(string: "https://studio.example")!,
+            webSocketBaseURL: URL(string: "wss://studio.example")!
+        )
+        let credentials = InMemoryCredentialStore(
+            credentials: [
+                environment.id: EnvironmentCredential(accessToken: "access-token"),
+            ]
+        )
+        let transport = RecordingHTTPTransport { request in
+            let body = if request.url?.path == "/api/auth/websocket-ticket" {
+                """
+                {
+                  "ticket": "websocket-ticket",
+                  "expiresAt": "2026-07-30T12:05:00.000Z"
+                }
+                """
+            } else {
+                """
+                {"sequence": 9}
+                """
+            }
+            return (Data(body.utf8), transportResponse(request))
+        }
+        let client = T3Client(
+            environment: environment,
+            credentialStore: credentials,
+            httpTransport: transport,
+            webSocketConnector: FailingWebSocketConnector(),
+            rpcConnectionWaitTimeout: .milliseconds(30)
+        )
+
+        let rename = try await client.rename(threadID: "thread-1", title: "Renamed")
+        XCTAssertEqual(rename.sequence, 9)
+
+        do {
+            _ = try await client.createThreadAndSend(
+                threadID: "thread-first-send",
+                projectID: "project-1",
+                title: "Native first send",
+                text: "Start from this message",
+                model: ModelSelection(instanceId: "codex", model: "gpt-5.4"),
+                runtimeMode: .fullAccess
+            )
+            XCTFail("Bootstrap must not use the HTTP endpoint that cannot expand it.")
+        } catch let error as RPCError {
+            guard case .connectionUnavailable = error else {
+                return XCTFail("Unexpected RPC error: \(error)")
+            }
+        }
+        await client.disconnect()
+
+        let requests = await transport.requests
+        let dispatchRequests = requests.filter {
+            $0.url?.path == "/api/orchestration/dispatch"
+        }
+        XCTAssertEqual(dispatchRequests.count, 1)
+        let command = try JSONDecoder.t3.decode(
+            JSONValue.self,
+            from: try XCTUnwrap(dispatchRequests.first?.httpBody)
+        )
+        XCTAssertEqual(command["type"]?.stringValue, "thread.meta.update")
+    }
+
     /// Set `T3_SWIFT_WS_DEFLATE_ECHO_URL` to a WebSocket endpoint that rejects
     /// non-deflate handshakes and echoes binary frames. This is intentionally
     /// opt-in because XCTest does not own a Node process. A successful round
@@ -189,5 +316,67 @@ private actor RecordingHTTPTransport: HTTPTransport {
     func data(for request: URLRequest) throws -> (Data, HTTPURLResponse) {
         requests.append(request)
         return try handler(request)
+    }
+}
+
+private struct StaticWebSocketConnector: WebSocketConnecting {
+    let connection: RecordingWebSocketConnection
+
+    func connect(to _: URL) async throws -> any WebSocketConnection {
+        connection
+    }
+}
+
+private struct FailingWebSocketConnector: WebSocketConnecting {
+    func connect(to _: URL) async throws -> any WebSocketConnection {
+        throw URLError(.cannotConnectToHost)
+    }
+}
+
+private actor RecordingWebSocketConnection: WebSocketConnection {
+    private var recordedRequests: [JSONValue] = []
+    private var queuedResponses: [Data] = []
+    private var receiver: CheckedContinuation<Data, Error>?
+
+    func send(_ data: Data) throws {
+        let request = try JSONDecoder.t3.decode(JSONValue.self, from: data)
+        recordedRequests.append(request)
+        guard case let .number(rawID) = request["id"] else { return }
+        let response = JSONValue.object([
+            "_tag": .string("Exit"),
+            "requestId": .number(rawID),
+            "exit": .object([
+                "_tag": .string("Success"),
+                "value": .object(["sequence": .number(42)]),
+            ]),
+        ])
+        enqueue(try JSONEncoder.t3.encode(response))
+    }
+
+    func receive() async throws -> Data {
+        if !queuedResponses.isEmpty {
+            return queuedResponses.removeFirst()
+        }
+        return try await withCheckedThrowingContinuation { continuation in
+            receiver = continuation
+        }
+    }
+
+    func close() {
+        receiver?.resume(throwing: CancellationError())
+        receiver = nil
+    }
+
+    func requests() -> [JSONValue] {
+        recordedRequests
+    }
+
+    private func enqueue(_ data: Data) {
+        if let receiver {
+            self.receiver = nil
+            receiver.resume(returning: data)
+        } else {
+            queuedResponses.append(data)
+        }
     }
 }

@@ -16,7 +16,13 @@ struct FeatureRootModelTests {
                 endpoint: "https://studio.example"
             )
         )
+        let oldThread = FeatureThread(id: "same-id", projectID: "old-project", title: "Old")
+        client.threadDetail = FeatureThreadDetail(
+            thread: oldThread,
+            messages: [FeatureMessage(id: "old-message", role: .assistant, text: "Old")]
+        )
         let model = FeatureRootModel(client: client)
+        _ = await model.detail(for: oldThread.id)
 
         let result = await model.pair(endpoint: "https://studio.example", token: "pair-token")
 
@@ -24,6 +30,7 @@ struct FeatureRootModelTests {
         #expect(client.pairEndpoint == "https://studio.example")
         #expect(client.pairToken == "pair-token")
         #expect(model.snapshot.connection.state == .connected)
+        #expect(model.details.isEmpty)
     }
 
     @Test
@@ -120,6 +127,53 @@ struct FeatureRootModelTests {
         await model.deleteThread(thread.id)
         #expect(model.snapshot.threads.isEmpty)
     }
+
+    @Test
+    func testCancelledDetailRefreshKeepsCachedContentWithoutAlert() async {
+        let client = FeatureClientStub()
+        let thread = FeatureThread(id: "thread-1", projectID: "project-1", title: "Thread")
+        let detail = FeatureThreadDetail(
+            thread: thread,
+            messages: [
+                FeatureMessage(id: "message-1", role: .assistant, text: "Still here"),
+            ]
+        )
+        client.threadDetail = detail
+        let model = FeatureRootModel(client: client)
+        _ = await model.detail(for: thread.id)
+        client.loadThreadError = CancellationError()
+
+        let refreshed = await model.detail(for: thread.id, force: true)
+
+        #expect(refreshed == detail)
+        #expect(model.errorMessage == nil)
+    }
+
+    @Test
+    func testResnoozeRefreshesTheOptimisticSnoozeTimestamp() async {
+        let client = FeatureClientStub()
+        var thread = FeatureThread(
+            id: "thread-1",
+            projectID: "project-1",
+            title: "Thread",
+            state: .failed
+        )
+        let oldSnooze = Date.now.addingTimeInterval(-600)
+        thread.snoozedAt = oldSnooze
+        thread.attentionAt = Date.now.addingTimeInterval(-300)
+        client.createdThread = thread
+        let model = FeatureRootModel(client: client)
+        _ = await model.createThread(projectID: thread.projectID, title: nil, selection: nil)
+
+        await model.setSnoozed(
+            thread.id,
+            until: Date.now.addingTimeInterval(3_600)
+        )
+
+        let updated = model.snapshot.threads[0]
+        #expect(updated.snoozedAt != oldSnooze)
+        #expect(updated.snoozedAt! > updated.attentionAt!)
+    }
 }
 
 @MainActor
@@ -135,6 +189,7 @@ private final class FeatureClientStub: FeatureClient {
     var startedAttachments: [FeatureUploadAttachment] = []
     var createThreadCallCount = 0
     var sendMessageCallCount = 0
+    var loadThreadError: (any Error)?
 
     func initialSnapshot() async throws -> FeatureSnapshot {
         if pairEndpoint != nil, let snapshotAfterPair {
@@ -175,6 +230,9 @@ private final class FeatureClientStub: FeatureClient {
     func deleteThread(id: String) async throws {}
 
     func loadThread(id: String) async throws -> FeatureThreadDetail {
+        if let loadThreadError {
+            throw loadThreadError
+        }
         if let threadDetail {
             return threadDetail
         }

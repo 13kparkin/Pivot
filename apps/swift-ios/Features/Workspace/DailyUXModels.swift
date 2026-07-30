@@ -3,17 +3,20 @@ import Foundation
 public struct FeatureDraftAttachment: Identifiable, Sendable, Equatable {
     public let id: UUID
     public var data: Data
+    public var thumbnailData: Data?
     public var filename: String
     public var mimeType: String
 
     public init(
         id: UUID = UUID(),
         data: Data,
+        thumbnailData: Data? = nil,
         filename: String,
         mimeType: String
     ) {
         self.id = id
         self.data = data
+        self.thumbnailData = thumbnailData
         self.filename = filename
         self.mimeType = mimeType
     }
@@ -73,6 +76,7 @@ public struct FeatureMessageSubmission: Sendable, Equatable {
 
 struct DailyUXSidebarIndex {
     let active: [FeatureThread]
+    let snoozed: [FeatureThread]
     let settled: [FeatureThread]
     let searchResults: [FeatureThread]
 
@@ -85,11 +89,11 @@ struct DailyUXSidebarIndex {
         let projectByID = Dictionary(uniqueKeysWithValues: snapshot.projects.map { ($0.id, $0) })
         let visible = snapshot.threads.filter { thread in
             guard !thread.isArchived else { return false }
-            guard thread.snoozedUntil.map({ $0 > now }) != true else { return false }
             return projectID == nil || thread.projectID == projectID
         }
+        let available = visible.filter { !$0.isEffectivelySnoozed(at: now) }
 
-        active = visible
+        active = available
             .filter { !$0.isEffectivelySettled(at: now) }
             .sorted { lhs, rhs in
                 if lhs.createdAt != rhs.createdAt {
@@ -98,11 +102,22 @@ struct DailyUXSidebarIndex {
                 return lhs.id < rhs.id
             }
 
-        settled = visible
+        snoozed = visible
+            .filter { $0.isEffectivelySnoozed(at: now) }
+            .sorted { lhs, rhs in
+                let lhsUntil = lhs.snoozedUntil ?? .distantFuture
+                let rhsUntil = rhs.snoozedUntil ?? .distantFuture
+                if lhsUntil != rhsUntil {
+                    return lhsUntil < rhsUntil
+                }
+                return lhs.id < rhs.id
+            }
+
+        settled = available
             .filter { $0.isEffectivelySettled(at: now) }
             .sorted { lhs, rhs in
-                if lhs.updatedAt != rhs.updatedAt {
-                    return lhs.updatedAt > rhs.updatedAt
+                if lhs.settledSortDate != rhs.settledSortDate {
+                    return lhs.settledSortDate > rhs.settledSortDate
                 }
                 return lhs.id < rhs.id
             }
@@ -113,7 +128,7 @@ struct DailyUXSidebarIndex {
             return
         }
 
-        searchResults = (active + settled).filter { thread in
+        searchResults = (active + snoozed + settled).filter { thread in
             let project = projectByID[thread.projectID]
             return [
                 thread.title,
@@ -132,15 +147,44 @@ extension FeatureThread {
 
     func isEffectivelySettled(at now: Date) -> Bool {
         switch state {
-        case .queued, .working, .waitingForApproval, .waitingForInput, .failed:
+        case .queued, .working, .waitingForApproval, .waitingForInput:
             return false
-        case .idle, .completed:
+        case .idle, .failed, .completed:
             break
         }
         if isSettled {
             return true
         }
-        return now.timeIntervalSince(updatedAt) >= 3 * 24 * 60 * 60
+        if keepsActive {
+            return false
+        }
+        guard let lastActivityAt else {
+            return false
+        }
+        return now.timeIntervalSince(lastActivityAt) >= 3 * 24 * 60 * 60
+    }
+
+    func isEffectivelySnoozed(at now: Date) -> Bool {
+        guard let snoozedUntil, snoozedUntil > now else { return false }
+        if state == .waitingForApproval || state == .waitingForInput {
+            return false
+        }
+        if state == .failed,
+           let snoozedAt,
+           let attentionAt,
+           attentionAt > snoozedAt {
+            return false
+        }
+        if let snoozedAt,
+           let latestTurnCompletedAt,
+           latestTurnCompletedAt > snoozedAt {
+            return false
+        }
+        return true
+    }
+
+    var settledSortDate: Date {
+        settledAt ?? lastActivityAt ?? updatedAt
     }
 }
 
@@ -199,6 +243,16 @@ struct DailyUXModelCatalog {
 }
 
 enum DailyUXModelOptions {
+    static func initialSelection(
+        projectDefault: FeatureSelection?,
+        appDefault: FeatureSelection?,
+        providers: [FeatureProvider]
+    ) -> FeatureSelection? {
+        validated(projectDefault, in: providers)
+            ?? validated(appDefault, in: providers)
+            ?? preferredSelection(in: providers)
+    }
+
     static func validated(
         _ selection: FeatureSelection?,
         in providers: [FeatureProvider]

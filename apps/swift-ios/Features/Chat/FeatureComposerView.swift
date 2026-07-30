@@ -47,6 +47,9 @@ struct FeatureComposerView: View {
                 .padding(.trailing, 7)
                 .padding(.bottom, 7)
                 .accessibilityLabel(isWorking && textIsEmpty ? "Stop agent" : "Send")
+                .accessibilityIdentifier(
+                    isWorking && textIsEmpty ? "thread-stop" : "message-send"
+                )
             }
             .background(T3Colors.input, in: RoundedRectangle(cornerRadius: 18))
             .overlay {

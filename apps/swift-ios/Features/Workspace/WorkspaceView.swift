@@ -15,6 +15,7 @@ public struct WorkspaceView: View {
     @State private var showingArchived = false
     @State private var renamingThread: FeatureThread?
     @State private var renameTitle = ""
+    @State private var sidebarClock = Date.now
 
     public init(
         model: FeatureRootModel,
@@ -119,6 +120,17 @@ public struct WorkspaceView: View {
                 self.selectedThreadID = nil
             }
         }
+        .task(id: sidebarBoundarySignature) {
+            while !Task.isCancelled {
+                sidebarClock = .now
+                let delay = nextSidebarRefreshDelay(from: sidebarClock)
+                do {
+                    try await Task.sleep(for: .seconds(delay))
+                } catch {
+                    return
+                }
+            }
+        }
     }
 
     private var sidebar: some View {
@@ -129,6 +141,7 @@ public struct WorkspaceView: View {
             if searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 projectFilter
                 activeSection
+                snoozedSection
                 settledSection
                 archiveAction
             } else {
@@ -296,11 +309,25 @@ public struct WorkspaceView: View {
         } label: {
             ProjectFilterRow(
                 project: model.snapshot.projects.first { $0.id == selectedProjectID },
-                totalCount: sidebarIndex.active.count + sidebarIndex.settled.count
+                totalCount: sidebarIndex.active.count
+                    + sidebarIndex.snoozed.count
+                    + sidebarIndex.settled.count
             )
         }
         .buttonStyle(.plain)
         .listRowSeparator(.hidden)
+    }
+
+    @ViewBuilder
+    private var snoozedSection: some View {
+        if !sidebarIndex.snoozed.isEmpty {
+            Section("Snoozed") {
+                ForEach(sidebarIndex.snoozed) { thread in
+                    threadLink(thread, showsProject: selectedProjectID == nil)
+                        .opacity(0.76)
+                }
+            }
+        }
     }
 
     @ViewBuilder
@@ -349,11 +376,23 @@ public struct WorkspaceView: View {
         Button {
             showingArchived = true
         } label: {
-            Label("Archived", systemImage: "archivebox")
-                .font(.subheadline)
-                .foregroundStyle(T3Colors.textSecondary)
+            HStack {
+                Label("Archived", systemImage: "archivebox")
+                    .font(.subheadline)
+                    .foregroundStyle(T3Colors.textSecondary)
+                Spacer()
+            }
+            .contentShape(Rectangle())
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("Archived")
+            .accessibilityAddTraits(.isButton)
+            .accessibilityAction {
+                showingArchived = true
+            }
         }
         .buttonStyle(.plain)
+        .accessibilityLabel("Archived")
+        .accessibilityIdentifier("archived-threads-button")
     }
 
     @ViewBuilder
@@ -403,13 +442,13 @@ public struct WorkspaceView: View {
             } label: {
                 Label("Archive", systemImage: "archivebox")
             }
-            if thread.isSettled {
+            if thread.isEffectivelySettled(at: .now) {
                 Button {
                     Task { await model.setSettled(thread.id, settled: false) }
                 } label: {
                     Label("Reopen", systemImage: "arrow.counterclockwise")
                 }
-            } else if !thread.isEffectivelySettled(at: .now) {
+            } else {
                 Button {
                     Task { await model.setSettled(thread.id, settled: true) }
                 } label: {
@@ -417,20 +456,25 @@ public struct WorkspaceView: View {
                 }
             }
             Button {
+                let isSnoozed = thread.isEffectivelySnoozed(at: sidebarClock)
                 Task {
                     await model.setSnoozed(
                         thread.id,
-                        until: thread.snoozedUntil == nil
-                            ? Date().addingTimeInterval(60 * 60)
-                            : nil
+                        until: isSnoozed ? nil : Date().addingTimeInterval(60 * 60)
                     )
                 }
             } label: {
+                let isSnoozed = thread.isEffectivelySnoozed(at: sidebarClock)
                 Label(
-                    thread.snoozedUntil == nil ? "Snooze 1 hour" : "Unsnooze",
-                    systemImage: thread.snoozedUntil == nil ? "clock" : "bell"
+                    isSnoozed ? "Unsnooze" : "Snooze 1 hour",
+                    systemImage: isSnoozed ? "bell" : "clock"
                 )
             }
+            .disabled(
+                thread.state == .queued
+                    || thread.state == .waitingForApproval
+                    || thread.state == .waitingForInput
+            )
             Button(role: .destructive) {
                 Task { await model.deleteThread(thread.id) }
             } label: {
@@ -443,8 +487,32 @@ public struct WorkspaceView: View {
         DailyUXSidebarIndex(
             snapshot: model.snapshot,
             query: searchText,
-            projectID: selectedProjectID
+            projectID: selectedProjectID,
+            now: sidebarClock
         )
+    }
+
+    private var sidebarBoundarySignature: String {
+        model.snapshot.threads.map {
+            [
+                $0.id,
+                $0.state.rawValue,
+                $0.lastActivityAt?.timeIntervalSince1970.description ?? "",
+                $0.snoozedUntil?.timeIntervalSince1970.description ?? "",
+                $0.snoozedAt?.timeIntervalSince1970.description ?? "",
+                $0.attentionAt?.timeIntervalSince1970.description ?? "",
+            ].joined(separator: ":")
+        }
+        .joined(separator: "|")
+    }
+
+    private func nextSidebarRefreshDelay(from now: Date) -> TimeInterval {
+        let nextSnoozeBoundary = model.snapshot.threads
+            .compactMap(\.snoozedUntil)
+            .filter { $0 > now }
+            .min()
+            .map { $0.timeIntervalSince(now) }
+        return max(0.25, min(60, nextSnoozeBoundary ?? 60))
     }
 
     private var connectionColor: Color {

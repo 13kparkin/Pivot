@@ -173,4 +173,27 @@ struct DailyUXModelPickerTests {
             FeatureModelOptionSelection(id: "fast", value: .boolean(true)),
         ])
     }
+
+    @Test
+    func projectDefaultWinsBeforeAppAndCatalogDefaults() {
+        let providers = [
+            FeatureProvider(
+                id: "codex",
+                name: "Codex",
+                models: [
+                    .init(id: "project", name: "Project"),
+                    .init(id: "app", name: "App"),
+                    .init(id: "catalog", name: "Catalog", isDefault: true),
+                ]
+            ),
+        ]
+
+        let selection = DailyUXModelOptions.initialSelection(
+            projectDefault: .init(providerID: "codex", modelID: "project"),
+            appDefault: .init(providerID: "codex", modelID: "app"),
+            providers: providers
+        )
+
+        #expect(selection?.modelID == "project")
+    }
 }

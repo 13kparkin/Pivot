@@ -74,7 +74,23 @@ struct DailyUXSidebarTests {
     }
 
     @Test
-    func snoozedAndArchivedThreadsStayOutOfBothBlocks() {
+    func explicitActiveOverridePreventsAutoSettlement() {
+        var reopened = thread(
+            id: "reopened",
+            created: -400_000,
+            updated: -300_000,
+            state: .idle
+        )
+        reopened.keepsActive = true
+
+        let index = makeIndex([reopened])
+
+        #expect(index.active.map(\.id) == ["reopened"])
+        #expect(index.settled.isEmpty)
+    }
+
+    @Test
+    func snoozedThreadsHaveAReachableReverseState() {
         var snoozed = thread(id: "snoozed", created: -20, updated: -10)
         snoozed.snoozedUntil = now.addingTimeInterval(3_600)
         var archived = thread(id: "archived", created: -30, updated: -20)
@@ -84,7 +100,54 @@ struct DailyUXSidebarTests {
         let index = makeIndex([snoozed, archived, visible])
 
         #expect(index.active.map(\.id) == ["visible"])
+        #expect(index.snoozed.map(\.id) == ["snoozed"])
         #expect(index.settled.isEmpty)
+    }
+
+    @Test
+    func snoozeExpiresAtTheClockBoundary() {
+        var thread = thread(id: "timed", created: -20, updated: -10)
+        thread.snoozedUntil = now.addingTimeInterval(30)
+
+        #expect(makeIndex([thread]).snoozed.map(\.id) == ["timed"])
+        let expired = DailyUXSidebarIndex(
+            snapshot: FeatureSnapshot(threads: [thread]),
+            query: "",
+            now: now.addingTimeInterval(31)
+        )
+        #expect(expired.active.map(\.id) == ["timed"])
+    }
+
+    @Test
+    func onlyFailuresRaisedAfterSnoozingWakeTheThread() {
+        var acknowledged = thread(
+            id: "acknowledged",
+            created: -30,
+            updated: -10,
+            state: .failed
+        )
+        acknowledged.snoozedUntil = now.addingTimeInterval(3_600)
+        acknowledged.snoozedAt = now.addingTimeInterval(-10)
+        acknowledged.attentionAt = now.addingTimeInterval(-20)
+
+        var fresh = acknowledged
+        fresh = FeatureThread(
+            id: "fresh",
+            projectID: fresh.projectID,
+            title: fresh.title,
+            createdAt: fresh.createdAt,
+            updatedAt: fresh.updatedAt,
+            state: .failed,
+            lastActivityAt: fresh.lastActivityAt,
+            snoozedUntil: fresh.snoozedUntil,
+            snoozedAt: fresh.snoozedAt,
+            attentionAt: now.addingTimeInterval(-5)
+        )
+
+        let index = makeIndex([acknowledged, fresh])
+
+        #expect(index.snoozed.map(\.id) == ["acknowledged"])
+        #expect(index.active.map(\.id) == ["fresh"])
     }
 
     @Test
@@ -128,7 +191,8 @@ struct DailyUXSidebarTests {
             createdAt: now.addingTimeInterval(created),
             updatedAt: now.addingTimeInterval(updated),
             state: state,
-            isSettled: isSettled
+            isSettled: isSettled,
+            lastActivityAt: now.addingTimeInterval(updated)
         )
     }
 }

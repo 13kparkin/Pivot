@@ -1,3 +1,4 @@
+import ImageIO
 import PhotosUI
 import SwiftUI
 import UniformTypeIdentifiers
@@ -37,6 +38,7 @@ struct FeatureImageAttachmentPicker: View {
         .disabled(!isEnabled || isLoading || attachments.count >= maximumCount)
         .opacity(isEnabled ? 1 : 0.3)
         .accessibilityLabel(isLoading ? "Adding images" : "Add images")
+        .accessibilityIdentifier("image-attachment-picker")
         .accessibilityHint(isEnabled ? "" : "The selected model does not accept images")
         .onChange(of: selection) {
             loadSelection()
@@ -67,12 +69,13 @@ struct FeatureImageAttachmentPicker: View {
                     guard let data = try await item.loadTransferable(type: Data.self) else {
                         continue
                     }
-                    let type = item.supportedContentTypes.first ?? .jpeg
-                    let attachment = try FeatureImageProcessor.attachment(
-                        from: data,
-                        sourceType: type,
-                        ordinal: attachments.count + 1
-                    )
+                    let ordinal = attachments.count + 1
+                    let attachment = try await Task.detached(priority: .userInitiated) {
+                        try FeatureImageProcessor.attachment(
+                            from: data,
+                            ordinal: ordinal
+                        )
+                    }.value
                     attachments.append(attachment)
                 } catch {
                     errorMessage = error.localizedDescription
@@ -107,11 +110,12 @@ struct FeatureAttachmentStrip: View {
 private struct FeatureAttachmentThumbnail: View {
     let attachment: FeatureDraftAttachment
     let onRemove: () -> Void
+    @State private var image: UIImage?
 
     var body: some View {
         ZStack(alignment: .topTrailing) {
             Group {
-                if let image = UIImage(data: attachment.data) {
+                if let image {
                     Image(uiImage: image)
                         .resizable()
                         .scaledToFill()
@@ -130,12 +134,23 @@ private struct FeatureAttachmentThumbnail: View {
                     .foregroundStyle(.white)
                     .frame(width: 22, height: 22)
                     .background(.black.opacity(0.78), in: Circle())
+                    .frame(
+                        width: T3Metrics.minimumTapTarget,
+                        height: T3Metrics.minimumTapTarget
+                    )
+                    .contentShape(Rectangle())
             }
-            .offset(x: 5, y: -5)
+            .offset(x: 11, y: -11)
             .accessibilityLabel("Remove \(attachment.filename)")
         }
-        .padding(.top, 5)
-        .padding(.trailing, 5)
+        .padding(.top, 11)
+        .padding(.trailing, 11)
+        .task(id: attachment.id) {
+            let data = attachment.thumbnailData ?? attachment.data
+            image = await Task.detached(priority: .utility) {
+                UIImage(data: data)
+            }.value
+        }
     }
 }
 
@@ -145,15 +160,25 @@ enum FeatureImageProcessor {
 
     static func attachment(
         from sourceData: Data,
-        sourceType _: UTType,
         ordinal: Int
     ) throws -> FeatureDraftAttachment {
-        guard let sourceImage = UIImage(data: sourceData) else {
+        guard let source = CGImageSourceCreateWithData(sourceData as CFData, nil),
+              let image = CGImageSourceCreateThumbnailAtIndex(
+                  source,
+                  0,
+                  [
+                      kCGImageSourceCreateThumbnailFromImageAlways: true,
+                      kCGImageSourceCreateThumbnailWithTransform: true,
+                      kCGImageSourceThumbnailMaxPixelSize: maximumDimension,
+                      kCGImageSourceShouldCacheImmediately: true,
+                  ] as CFDictionary
+              ) else {
             throw FeatureImageAttachmentError.invalidImage
         }
 
-        let image = resized(sourceImage)
-        guard let data = image.jpegData(compressionQuality: 0.82) else {
+        let preparedImage = UIImage(cgImage: image)
+        guard let data = preparedImage.jpegData(compressionQuality: 0.82),
+              let thumbnailData = thumbnail(from: preparedImage) else {
             throw FeatureImageAttachmentError.encodingFailed
         }
         guard data.count <= maximumEncodedBytes else {
@@ -162,20 +187,25 @@ enum FeatureImageProcessor {
 
         return FeatureDraftAttachment(
             data: data,
+            thumbnailData: thumbnailData,
             filename: "Image \(ordinal).jpg",
             mimeType: "image/jpeg"
         )
     }
 
-    private static func resized(_ image: UIImage) -> UIImage {
+    private static func thumbnail(from image: UIImage) -> Data? {
         let longestSide = max(image.size.width, image.size.height)
-        guard longestSide > maximumDimension else { return image }
-        let scale = maximumDimension / longestSide
-        let size = CGSize(width: image.size.width * scale, height: image.size.height * scale)
-        let renderer = UIGraphicsImageRenderer(size: size)
+        let scale = min(1, 160 / longestSide)
+        let size = CGSize(
+            width: max(1, image.size.width * scale),
+            height: max(1, image.size.height * scale)
+        )
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        let renderer = UIGraphicsImageRenderer(size: size, format: format)
         return renderer.image { _ in
             image.draw(in: CGRect(origin: .zero, size: size))
-        }
+        }.jpegData(compressionQuality: 0.72)
     }
 }
 

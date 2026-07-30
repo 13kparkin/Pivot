@@ -46,13 +46,22 @@ public struct FeatureProject: Identifiable, Sendable, Equatable, Hashable, Codab
     public var name: String
     public var path: String
     public var threadCount: Int
+    public var defaultSelection: FeatureSelection?
 
-    public init(id: String, environmentID: String, name: String, path: String, threadCount: Int = 0) {
+    public init(
+        id: String,
+        environmentID: String,
+        name: String,
+        path: String,
+        threadCount: Int = 0,
+        defaultSelection: FeatureSelection? = nil
+    ) {
         self.id = id
         self.environmentID = environmentID
         self.name = name
         self.path = path
         self.threadCount = threadCount
+        self.defaultSelection = defaultSelection
     }
 }
 
@@ -91,7 +100,13 @@ public struct FeatureThread: Identifiable, Sendable, Equatable, Hashable, Codabl
     public var modelOptions: [FeatureModelOptionSelection]
     public var isArchived: Bool
     public var isSettled: Bool
+    public var keepsActive: Bool
+    public var settledAt: Date?
+    public var lastActivityAt: Date?
     public var snoozedUntil: Date?
+    public var snoozedAt: Date?
+    public var attentionAt: Date?
+    public var latestTurnCompletedAt: Date?
     public var runtimeMode: FeatureRuntimeMode
     public var interactionMode: FeatureInteractionMode
 
@@ -108,7 +123,13 @@ public struct FeatureThread: Identifiable, Sendable, Equatable, Hashable, Codabl
         modelOptions: [FeatureModelOptionSelection] = [],
         isArchived: Bool = false,
         isSettled: Bool = false,
+        keepsActive: Bool = false,
+        settledAt: Date? = nil,
+        lastActivityAt: Date? = nil,
         snoozedUntil: Date? = nil,
+        snoozedAt: Date? = nil,
+        attentionAt: Date? = nil,
+        latestTurnCompletedAt: Date? = nil,
         runtimeMode: FeatureRuntimeMode = .fullAccess,
         interactionMode: FeatureInteractionMode = .standard
     ) {
@@ -124,7 +145,13 @@ public struct FeatureThread: Identifiable, Sendable, Equatable, Hashable, Codabl
         self.modelOptions = modelOptions
         self.isArchived = isArchived
         self.isSettled = isSettled
+        self.keepsActive = keepsActive
+        self.settledAt = settledAt
+        self.lastActivityAt = lastActivityAt
         self.snoozedUntil = snoozedUntil
+        self.snoozedAt = snoozedAt
+        self.attentionAt = attentionAt
+        self.latestTurnCompletedAt = latestTurnCompletedAt
         self.runtimeMode = runtimeMode
         self.interactionMode = interactionMode
     }

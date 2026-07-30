@@ -98,6 +98,7 @@ public struct NewThreadView: View {
                         .disabled(!canSubmit)
                         .opacity(canSubmit ? 1 : 0.35)
                         .accessibilityLabel(isSubmitting ? "Starting task" : "Start task")
+                        .accessibilityIdentifier("new-task-submit")
                     }
                 }
                 .padding(.horizontal, 12)
@@ -123,13 +124,12 @@ public struct NewThreadView: View {
                     projectID = model.snapshot.projects.first?.id ?? ""
                 }
                 if selection == nil {
-                    selection = DailyUXModelOptions.validated(
-                        model.snapshot.settings.defaultSelection,
-                        in: model.snapshot.providers
-                    )
-                        ?? DailyUXModelOptions.preferredSelection(in: model.snapshot.providers)
+                    selection = initialSelection
                 }
                 promptFocused = true
+            }
+            .onChange(of: projectID) {
+                selection = initialSelection
             }
             .alert("Couldn’t start task", isPresented: $submissionFailed) {
                 Button("OK") {}
@@ -210,6 +210,14 @@ public struct NewThreadView: View {
 
     private var selectedProject: FeatureProject? {
         model.snapshot.projects.first { $0.id == projectID }
+    }
+
+    private var initialSelection: FeatureSelection? {
+        DailyUXModelOptions.initialSelection(
+            projectDefault: selectedProject?.defaultSelection,
+            appDefault: model.snapshot.settings.defaultSelection,
+            providers: model.snapshot.providers
+        )
     }
 
     private var canSubmit: Bool {
