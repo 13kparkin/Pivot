@@ -3035,7 +3035,9 @@ export function makeClaudeAdapterV2(
                 ...existingSubagent.activation,
                 status: input.status,
                 usage: mergeCumulativeSubagentUsage(existingSubagent.activation.usage, input.usage),
-                completedAt: settled ? now : null,
+                // A duplicate terminal frame must not re-stamp the completion
+                // time the first terminal frame recorded.
+                completedAt: settled ? (existingSubagent.activation.completedAt ?? now) : null,
                 updatedAt: now,
               } satisfies OrchestrationV2SubagentActivation);
           task.currentActivationId = settled ? null : activation.id;
@@ -3071,9 +3073,13 @@ export function makeClaudeAdapterV2(
           // re-open must not clobber its result.
           yield* Ref.update(sessionSubagentsByTaskId, (current) => {
             const registered = current.get(input.taskId);
-            if (
+            const registeredSettled =
               registered !== undefined &&
-              registered.task.status !== "running" &&
+              (registered.task.status === "completed" ||
+                registered.task.status === "failed" ||
+                registered.task.status === "cancelled");
+            if (
+              registeredSettled &&
               activeStart &&
               !(isReopen && registered === existingSubagent)
             ) {
@@ -3804,7 +3810,12 @@ export function makeClaudeAdapterV2(
             const now = yield* DateTime.now;
             yield* Ref.update(sessionSubagentsByTaskId, (current) => {
               const registered = current.get(message.task_id);
-              if (registered === undefined || registered.task.status === "running") {
+              if (
+                registered === undefined ||
+                registered.task.status === "running" ||
+                registered.task.status === "pending" ||
+                registered.task.status === "waiting"
+              ) {
                 return current;
               }
               const { progress: _staleProgress, ...priorTask } = registered.task;
@@ -4186,7 +4197,8 @@ export function makeClaudeAdapterV2(
                 const existingWorker =
                   context.subagentsByTaskId.get(workerTaskId) ??
                   (yield* Ref.get(sessionSubagentsByTaskId)).get(workerTaskId);
-                const activeWorker = status === "pending" || status === "running";
+                const activeWorker =
+                  status === "pending" || status === "running" || status === "waiting";
                 const reopen =
                   activeWorker &&
                   existingWorker !== undefined &&
@@ -4236,19 +4248,44 @@ export function makeClaudeAdapterV2(
             });
             if (!wasBackgroundTask && !context.ignoredTaskIds.has(message.task_id)) {
               const usage = claudeSubagentUsage(message.usage);
+              const terminalStatus =
+                message.status === "completed"
+                  ? ("completed" as const)
+                  : message.status === "stopped"
+                    ? ("cancelled" as const)
+                    : ("failed" as const);
               yield* updateClaudeSubagentNode({
                 context,
                 taskId: message.task_id,
                 ...(message.tool_use_id === undefined ? {} : { toolUseId: message.tool_use_id }),
                 result: message.summary,
                 ...(usage === undefined ? {} : { usage }),
-                status:
-                  message.status === "completed"
-                    ? "completed"
-                    : message.status === "stopped"
-                      ? "cancelled"
-                      : "failed",
+                status: terminalStatus,
               });
+              // Workflow members only ever settle through workflow snapshots;
+              // once the coordinator terminalizes, any member left active
+              // would stay "running" forever, so settle it alongside.
+              const workerPrefix = `${message.task_id}:workflow:`;
+              const registeredWorkers = new Map([
+                ...(yield* Ref.get(sessionSubagentsByTaskId)),
+                ...context.subagentsByTaskId,
+              ]);
+              for (const [workerTaskId, worker] of registeredWorkers) {
+                if (!workerTaskId.startsWith(workerPrefix)) continue;
+                const workerStatus = worker.task.status;
+                if (
+                  workerStatus !== "pending" &&
+                  workerStatus !== "running" &&
+                  workerStatus !== "waiting"
+                ) {
+                  continue;
+                }
+                yield* updateClaudeSubagentNode({
+                  context,
+                  taskId: workerTaskId,
+                  status: terminalStatus,
+                });
+              }
             }
             // Replay tombstone only needs to outlive buffering until this
             // drained/live classification runs; drop it so it cannot leak.

@@ -45,7 +45,7 @@ export function assertClaudeWorkflowOutput(
     ]),
     [
       ["Researcher", "completed", 0, "claude-sonnet-4-6", 400],
-      ["Implementer", "running", 1, "claude-opus-4-1", 500],
+      ["Implementer", "completed", 1, "claude-opus-4-1", 500],
     ],
   );
   // Membership must point at the coordinator that actually reached the
