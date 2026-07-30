@@ -10,15 +10,46 @@ public protocol WebSocketConnecting: Sendable {
     func connect(to url: URL) async throws -> any WebSocketConnection
 }
 
+public enum WebSocketHandshakeRequest {
+    public static let perMessageDeflateOffer = "permessage-deflate; client_max_window_bits"
+
+    /// URLSessionWebSocketTask accepts a URLRequest for its opening handshake.
+    /// It does not expose the 101 response headers or negotiated extensions,
+    /// so callers can know that compression was offered, not prove that a
+    /// particular connection accepted it.
+    public static func make(
+        url: URL,
+        offersPerMessageDeflate: Bool = true
+    ) -> URLRequest {
+        var request = URLRequest(url: url)
+        if offersPerMessageDeflate {
+            request.setValue(
+                perMessageDeflateOffer,
+                forHTTPHeaderField: "Sec-WebSocket-Extensions"
+            )
+        }
+        return request
+    }
+}
+
 public struct URLSessionWebSocketConnector: WebSocketConnecting {
     private let session: URLSession
+    private let offersPerMessageDeflate: Bool
 
-    public init(session: URLSession = .shared) {
+    public init(
+        session: URLSession = .shared,
+        offersPerMessageDeflate: Bool = true
+    ) {
         self.session = session
+        self.offersPerMessageDeflate = offersPerMessageDeflate
     }
 
     public func connect(to url: URL) async throws -> any WebSocketConnection {
-        let connection = URLSessionWebSocketConnection(session: session, url: url)
+        let request = WebSocketHandshakeRequest.make(
+            url: url,
+            offersPerMessageDeflate: offersPerMessageDeflate
+        )
+        let connection = URLSessionWebSocketConnection(session: session, request: request)
         await connection.open()
         return connection
     }
@@ -27,8 +58,8 @@ public struct URLSessionWebSocketConnector: WebSocketConnecting {
 private actor URLSessionWebSocketConnection: WebSocketConnection {
     private let task: URLSessionWebSocketTask
 
-    init(session: URLSession, url: URL) {
-        task = session.webSocketTask(with: url)
+    init(session: URLSession, request: URLRequest) {
+        task = session.webSocketTask(with: request)
     }
 
     func open() {

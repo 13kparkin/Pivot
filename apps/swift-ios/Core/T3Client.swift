@@ -52,6 +52,40 @@ public actor T3Client {
         try await api.threadSnapshot(id: id, environment: environment)
     }
 
+    public func serverConfig() async throws -> ServerConfigSnapshot {
+        try await rpc.request(
+            RPCMethod.serverGetConfig.rawValue,
+            as: ServerConfigSnapshot.self
+        )
+    }
+
+    public func serverConfigEvents() async
+        -> AsyncThrowingStream<ServerConfigStreamEvent, Error>
+    {
+        await rpc.subscribe(
+            RPCMethod.subscribeServerConfig.rawValue,
+            as: ServerConfigStreamEvent.self
+        )
+    }
+
+    public func clientSessions() async throws -> [AuthClientSession] {
+        try await api.clientSessions(for: environment)
+    }
+
+    public func authSession() async throws -> AuthSessionState {
+        try await api.session(for: environment)
+    }
+
+    @discardableResult
+    public func revokeClientSession(id: String) async throws -> Bool {
+        try await api.revokeClientSession(id: id, environment: environment).revoked
+    }
+
+    @discardableResult
+    public func revokeOtherClientSessions() async throws -> Int {
+        try await api.revokeOtherClientSessions(for: environment).revokedCount
+    }
+
     /// HTTP live-sync fallback. Each iteration is an independent request, so a
     /// transient network loss naturally reconnects without replaying commands.
     public func pollShell(
@@ -119,14 +153,18 @@ public actor T3Client {
         threadID: String,
         text: String,
         runtimeMode: RuntimeMode,
-        interactionMode: InteractionMode = .default
+        interactionMode: InteractionMode = .default,
+        model: ModelSelection? = nil,
+        attachments: [UploadChatImageAttachment] = []
     ) async throws -> DispatchResult {
         try await dispatch(
-            OrchestrationCommands.sendTurn(
+            try OrchestrationCommands.sendTurn(
                 threadID: threadID,
                 text: text,
                 runtimeMode: runtimeMode,
-                interactionMode: interactionMode
+                interactionMode: interactionMode,
+                model: model,
+                attachments: attachments
             )
         )
     }
@@ -152,6 +190,37 @@ public actor T3Client {
                 interactionMode: interactionMode,
                 branch: branch,
                 worktreePath: worktreePath
+            )
+        )
+    }
+
+    /// Atomically creates a thread and starts its first turn. This is the
+    /// server-supported path for message-first thread creation.
+    @discardableResult
+    public func createThreadAndSend(
+        threadID: String = UUID().uuidString,
+        projectID: String,
+        title: String,
+        text: String,
+        model: ModelSelection,
+        runtimeMode: RuntimeMode,
+        interactionMode: InteractionMode = .default,
+        branch: String? = nil,
+        worktreePath: String? = nil,
+        attachments: [UploadChatImageAttachment] = []
+    ) async throws -> DispatchResult {
+        try await dispatch(
+            try OrchestrationCommands.createThreadAndSend(
+                threadID: threadID,
+                projectID: projectID,
+                title: title,
+                text: text,
+                model: model,
+                runtimeMode: runtimeMode,
+                interactionMode: interactionMode,
+                branch: branch,
+                worktreePath: worktreePath,
+                attachments: attachments
             )
         )
     }
@@ -326,6 +395,27 @@ public actor T3Client {
             payload: .object(payload),
             as: FilesystemBrowseResult.self
         )
+    }
+
+    /// Issues a short-lived authenticated URL for a persisted attachment,
+    /// workspace preview, or project favicon.
+    public func createAssetURL(resource: AssetResource) async throws -> AssetCreateURLResult {
+        try await rpc.request(
+            RPCMethod.assetsCreateURL.rawValue,
+            payload: .object(["resource": resource.jsonValue]),
+            as: AssetCreateURLResult.self
+        )
+    }
+
+    public func resolvedAssetURL(resource: AssetResource) async throws -> URL {
+        let result = try await createAssetURL(resource: resource)
+        guard let url = URL(
+            string: result.relativeUrl,
+            relativeTo: environment.httpBaseURL
+        )?.absoluteURL else {
+            throw RPCError.protocolViolation("The server returned an invalid asset URL.")
+        }
+        return url
     }
 
     // MARK: VCS and source control
@@ -859,6 +949,8 @@ public enum RPCMethod: String, Sendable {
     case projectsReadFile = "projects.readFile"
     case projectsWriteFile = "projects.writeFile"
     case filesystemBrowse = "filesystem.browse"
+    case assetsCreateURL = "assets.createUrl"
+    case subscribeServerConfig
     case subscribeVCSStatus = "subscribeVcsStatus"
     case vcsPull = "vcs.pull"
     case vcsRefreshStatus = "vcs.refreshStatus"
@@ -943,11 +1035,13 @@ public enum OrchestrationCommands {
         text: String,
         runtimeMode: RuntimeMode,
         interactionMode: InteractionMode = .default,
+        model: ModelSelection? = nil,
+        attachments: [UploadChatImageAttachment] = [],
         commandID: String = UUID().uuidString,
         messageID: String = UUID().uuidString,
         createdAt: String = now()
-    ) -> JSONValue {
-        .object([
+    ) throws -> JSONValue {
+        var command: [String: JSONValue] = [
             "type": .string("thread.turn.start"),
             "commandId": .string(commandID),
             "threadId": .string(threadID),
@@ -955,12 +1049,16 @@ public enum OrchestrationCommands {
                 "messageId": .string(messageID),
                 "role": .string("user"),
                 "text": .string(text),
-                "attachments": .array([]),
+                "attachments": .array(attachments.map(\.jsonValue)),
             ]),
             "runtimeMode": .string(runtimeMode.rawValue),
             "interactionMode": .string(interactionMode.rawValue),
             "createdAt": .string(createdAt),
-        ])
+        ]
+        if let model {
+            command["modelSelection"] = try .encode(model)
+        }
+        return .object(command)
     }
 
     public static func createThreadAndSend(
@@ -973,6 +1071,7 @@ public enum OrchestrationCommands {
         interactionMode: InteractionMode = .default,
         branch: String? = nil,
         worktreePath: String? = nil,
+        attachments: [UploadChatImageAttachment] = [],
         commandID: String = UUID().uuidString,
         messageID: String = UUID().uuidString,
         createdAt: String = now()
@@ -996,7 +1095,7 @@ public enum OrchestrationCommands {
                 "messageId": .string(messageID),
                 "role": .string("user"),
                 "text": .string(text),
-                "attachments": .array([]),
+                "attachments": .array(attachments.map(\.jsonValue)),
             ]),
             "runtimeMode": .string(runtimeMode.rawValue),
             "interactionMode": .string(interactionMode.rawValue),

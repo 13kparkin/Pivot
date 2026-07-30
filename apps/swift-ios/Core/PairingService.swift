@@ -22,6 +22,12 @@ public actor PairingService {
         "orchestration:operate",
         "terminal:operate",
         "review:write",
+        // Startup pairing credentials carry administrative access. Requesting
+        // these scopes preserves that access for native multi-device
+        // management; ordinary pairing links remain bounded by the scopes the
+        // server granted them.
+        "access:read",
+        "access:write",
         "relay:read",
     ]
 
@@ -134,7 +140,7 @@ public actor PairingService {
             "application/x-www-form-urlencoded",
             forHTTPHeaderField: "Content-Type"
         )
-        let (data, response) = try await transport.data(for: request)
+        let (data, response) = try await transport.data(for: HTTPRequestPolicy.prepare(request))
         guard (200..<300).contains(response.statusCode) else {
             let body = try? JSONDecoder.t3.decode(JSONValue.self, from: data)
             throw HTTPError.status(
