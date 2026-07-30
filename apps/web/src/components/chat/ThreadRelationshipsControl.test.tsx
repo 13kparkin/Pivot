@@ -15,6 +15,7 @@ vi.mock("@t3tools/client-runtime/state/thread-relationships", () => ({
 }));
 vi.mock("@t3tools/client-runtime/state/thread-workflows", () => ({
   canDetachThreadProviderSession: () => testState.canDetach,
+  resolveLatestMergeBackRun: () => null,
 }));
 vi.mock("@tanstack/react-router", () => ({ useNavigate: () => vi.fn() }));
 vi.mock("../../lib/archivedThreadsState", () => ({
