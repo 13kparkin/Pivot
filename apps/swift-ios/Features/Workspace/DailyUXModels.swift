@@ -80,13 +80,22 @@ struct DailyUXSidebarIndex {
     let settled: [FeatureThread]
     let searchResults: [FeatureThread]
 
+    var needsInput: [FeatureThread] {
+        active.filter {
+            $0.state == .waitingForApproval || $0.state == .waitingForInput
+        }
+    }
+
+    var failed: [FeatureThread] {
+        active.filter { $0.state == .failed }
+    }
+
     init(
         snapshot: FeatureSnapshot,
         query: String,
         projectID: String? = nil,
         now: Date = .now
     ) {
-        let projectByID = Dictionary(uniqueKeysWithValues: snapshot.projects.map { ($0.id, $0) })
         let visible = snapshot.threads.filter { thread in
             guard !thread.isArchived else { return false }
             return projectID == nil || thread.projectID == projectID
@@ -122,13 +131,22 @@ struct DailyUXSidebarIndex {
                 return lhs.id < rhs.id
             }
 
-        let normalizedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !normalizedQuery.isEmpty else {
-            searchResults = []
-            return
-        }
+        searchResults = Self.matchingThreads(
+            active + snoozed + settled,
+            snapshot: snapshot,
+            query: query
+        )
+    }
 
-        searchResults = (active + snoozed + settled).filter { thread in
+    static func matchingThreads(
+        _ candidates: [FeatureThread],
+        snapshot: FeatureSnapshot,
+        query: String
+    ) -> [FeatureThread] {
+        let normalizedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalizedQuery.isEmpty else { return [] }
+        let projectByID = Dictionary(uniqueKeysWithValues: snapshot.projects.map { ($0.id, $0) })
+        return candidates.filter { thread in
             let project = projectByID[thread.projectID]
             return [
                 thread.title,
@@ -137,6 +155,48 @@ struct DailyUXSidebarIndex {
                 project?.path ?? "",
             ].contains { $0.localizedCaseInsensitiveContains(normalizedQuery) }
         }
+    }
+}
+
+enum SidebarRelativeAge {
+    static func compact(since date: Date, now: Date) -> String {
+        let seconds = max(0, Int(now.timeIntervalSince(date)))
+        switch seconds {
+        case ..<60:
+            return "now"
+        case ..<3_600:
+            return "\(seconds / 60)m"
+        case ..<86_400:
+            return "\(seconds / 3_600)h"
+        case ..<604_800:
+            return "\(seconds / 86_400)d"
+        case ..<31_536_000:
+            return "\(seconds / 604_800)w"
+        default:
+            return "\(seconds / 31_536_000)y"
+        }
+    }
+
+    static func accessibility(since date: Date, now: Date) -> String {
+        let seconds = max(0, Int(now.timeIntervalSince(date)))
+        switch seconds {
+        case ..<60:
+            return "Updated just now"
+        case ..<3_600:
+            return "Updated \(unit(seconds / 60, singular: "minute")) ago"
+        case ..<86_400:
+            return "Updated \(unit(seconds / 3_600, singular: "hour")) ago"
+        case ..<604_800:
+            return "Updated \(unit(seconds / 86_400, singular: "day")) ago"
+        case ..<31_536_000:
+            return "Updated \(unit(seconds / 604_800, singular: "week")) ago"
+        default:
+            return "Updated \(unit(seconds / 31_536_000, singular: "year")) ago"
+        }
+    }
+
+    private static func unit(_ value: Int, singular: String) -> String {
+        "\(value) \(singular)\(value == 1 ? "" : "s")"
     }
 }
 

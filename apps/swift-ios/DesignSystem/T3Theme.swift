@@ -7,12 +7,15 @@ enum T3Colors {
     static let input = Color(white: 0.075)
     static let border = Color.white.opacity(0.09)
     static let separator = Color.white.opacity(0.07)
+    static let ledgerSurface = Color(white: 0.055)
+    static let ledgerSelected = Color(white: 0.051)
 
     static let textPrimary = Color.white
     static let textSecondary = Color.white.opacity(0.62)
-    static let textTertiary = Color.white.opacity(0.4)
+    static let textTertiary = Color.white.opacity(0.5)
 
     static let accent = Color(red: 0.04, green: 0.52, blue: 1)
+    static let statusRunning = Color(red: 0.13, green: 0.83, blue: 0.93)
     static let success = Color(red: 0.19, green: 0.82, blue: 0.35)
     static let warning = Color(red: 1, green: 0.62, blue: 0.04)
     static let danger = Color(red: 1, green: 0.27, blue: 0.23)

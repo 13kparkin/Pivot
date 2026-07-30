@@ -167,6 +167,87 @@ struct DailyUXSidebarTests {
         #expect(searched.searchResults.map(\.id) == ["server"])
     }
 
+    @Test
+    func attentionScopesRemainFocusedSubsetsOfActive() {
+        let approval = thread(
+            id: "approval",
+            title: "Approve schema",
+            created: -10,
+            updated: -5,
+            state: .waitingForApproval
+        )
+        let input = thread(
+            id: "input",
+            title: "Answer migration question",
+            created: -20,
+            updated: -5,
+            state: .waitingForInput
+        )
+        let failed = thread(
+            id: "failed",
+            title: "Failed build",
+            created: -30,
+            updated: -5,
+            state: .failed
+        )
+        let working = thread(
+            id: "working",
+            title: "Build application",
+            created: -40,
+            updated: -5,
+            state: .working
+        )
+
+        let snapshot = FeatureSnapshot(threads: [approval, input, failed, working])
+        let index = DailyUXSidebarIndex(snapshot: snapshot, query: "", now: now)
+
+        #expect(index.active.map(\.id) == ["approval", "input", "failed", "working"])
+        #expect(index.needsInput.map(\.id) == ["approval", "input"])
+        #expect(index.failed.map(\.id) == ["failed"])
+        #expect(
+            DailyUXSidebarIndex.matchingThreads(
+                index.failed,
+                snapshot: snapshot,
+                query: "build"
+            ).map(\.id) == ["failed"]
+        )
+        #expect(
+            DailyUXSidebarIndex.matchingThreads(
+                index.needsInput,
+                snapshot: snapshot,
+                query: "build"
+            ).isEmpty
+        )
+    }
+
+    @Test
+    func compactRelativeAgeClampsFutureDatesAndUsesStableUnits() {
+        #expect(
+            SidebarRelativeAge.compact(
+                since: now.addingTimeInterval(5),
+                now: now
+            ) == "now"
+        )
+        #expect(
+            SidebarRelativeAge.compact(
+                since: now.addingTimeInterval(-125),
+                now: now
+            ) == "2m"
+        )
+        #expect(
+            SidebarRelativeAge.compact(
+                since: now.addingTimeInterval(-7_300),
+                now: now
+            ) == "2h"
+        )
+        #expect(
+            SidebarRelativeAge.accessibility(
+                since: now.addingTimeInterval(-3_600),
+                now: now
+            ) == "Updated 1 hour ago"
+        )
+    }
+
     private func makeIndex(_ threads: [FeatureThread]) -> DailyUXSidebarIndex {
         DailyUXSidebarIndex(
             snapshot: FeatureSnapshot(threads: threads),
