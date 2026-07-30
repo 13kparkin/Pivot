@@ -1,0 +1,407 @@
+import Foundation
+
+public enum EnvironmentKind: String, Codable, Sendable {
+    case bearer
+    case local
+}
+
+public struct Environment: Codable, Identifiable, Equatable, Sendable {
+    public let id: String
+    public var label: String
+    public var httpBaseURL: URL
+    public var webSocketBaseURL: URL
+    public var kind: EnvironmentKind
+    public var descriptor: EnvironmentDescriptor?
+
+    public init(
+        id: String,
+        label: String,
+        httpBaseURL: URL,
+        webSocketBaseURL: URL,
+        kind: EnvironmentKind = .bearer,
+        descriptor: EnvironmentDescriptor? = nil
+    ) {
+        self.id = id
+        self.label = label
+        self.httpBaseURL = httpBaseURL
+        self.webSocketBaseURL = webSocketBaseURL
+        self.kind = kind
+        self.descriptor = descriptor
+    }
+}
+
+public struct EnvironmentDescriptor: Codable, Equatable, Sendable {
+    public struct Platform: Codable, Equatable, Sendable {
+        public let os: String
+        public let arch: String
+    }
+
+    public struct Capabilities: Codable, Equatable, Sendable {
+        public let repositoryIdentity: Bool
+        public let connectionProbe: Bool?
+        public let threadSettlement: Bool?
+        public let threadSnooze: Bool?
+        public let threadTitleRegeneration: Bool?
+        public let serverSelfUpdate: String?
+        public let serverSelfUpdateProgress: Bool?
+
+        private enum CodingKeys: String, CodingKey {
+            case repositoryIdentity
+            case connectionProbe
+            case threadSettlement
+            case threadSnooze
+            case threadTitleRegeneration
+            case serverSelfUpdate
+            case serverSelfUpdateProgress
+        }
+
+        public init(from decoder: any Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            repositoryIdentity =
+                try container.decodeIfPresent(Bool.self, forKey: .repositoryIdentity) ?? false
+            connectionProbe = try container.decodeIfPresent(Bool.self, forKey: .connectionProbe)
+            threadSettlement = try container.decodeIfPresent(Bool.self, forKey: .threadSettlement)
+            threadSnooze = try container.decodeIfPresent(Bool.self, forKey: .threadSnooze)
+            threadTitleRegeneration = try container.decodeIfPresent(
+                Bool.self,
+                forKey: .threadTitleRegeneration
+            )
+            serverSelfUpdate = try container.decodeIfPresent(String.self, forKey: .serverSelfUpdate)
+            serverSelfUpdateProgress = try container.decodeIfPresent(
+                Bool.self,
+                forKey: .serverSelfUpdateProgress
+            )
+        }
+    }
+
+    public let environmentId: String
+    public let label: String
+    public let platform: Platform
+    public let serverVersion: String
+    public let capabilities: Capabilities
+}
+
+public struct EnvironmentCredential: Codable, Equatable, Sendable {
+    public let accessToken: String
+    public let expiresAt: Date?
+    public let scopes: [String]
+
+    public init(accessToken: String, expiresAt: Date? = nil, scopes: [String] = []) {
+        self.accessToken = accessToken
+        self.expiresAt = expiresAt
+        self.scopes = scopes
+    }
+}
+
+public struct ModelSelection: Codable, Equatable, Sendable {
+    public struct OptionSelection: Codable, Equatable, Sendable {
+        public let id: String
+        public let value: JSONValue
+
+        public init(id: String, value: JSONValue) {
+            self.id = id
+            self.value = value
+        }
+    }
+
+    public let instanceId: String
+    public let model: String
+    public let options: [OptionSelection]?
+
+    public init(instanceId: String, model: String, options: [OptionSelection]? = nil) {
+        self.instanceId = instanceId
+        self.model = model
+        self.options = options
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case instanceId, provider, model, options
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        instanceId = try container.decodeIfPresent(String.self, forKey: .instanceId)
+            ?? container.decode(String.self, forKey: .provider)
+        model = try container.decode(String.self, forKey: .model)
+        if let canonical = try? container.decode([OptionSelection].self, forKey: .options) {
+            options = canonical
+        } else if let legacy = try? container.decode(
+            [String: JSONValue].self,
+            forKey: .options
+        ) {
+            options = legacy.keys.sorted().map { OptionSelection(id: $0, value: legacy[$0]!) }
+        } else {
+            options = nil
+        }
+    }
+
+    public func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(instanceId, forKey: .instanceId)
+        try container.encode(model, forKey: .model)
+        try container.encodeIfPresent(options, forKey: .options)
+    }
+}
+
+public struct RepositoryIdentity: Codable, Equatable, Sendable {
+    public struct Locator: Codable, Equatable, Sendable {
+        public let source: String
+        public let remoteName: String
+        public let remoteUrl: String
+    }
+
+    public let canonicalKey: String
+    public let locator: Locator
+    public let rootPath: String?
+    public let displayName: String?
+    public let provider: String?
+    public let owner: String?
+    public let name: String?
+}
+
+public struct ProjectScript: Codable, Identifiable, Equatable, Sendable {
+    public let id: String
+    public let name: String
+    public let command: String
+    public let icon: String
+    public let runOnWorktreeCreate: Bool
+    public let previewUrl: String?
+    public let autoOpenPreview: Bool?
+}
+
+public struct OrchestrationProject: Codable, Identifiable, Equatable, Sendable {
+    public let id: String
+    public let title: String
+    public let workspaceRoot: String
+    public let repositoryIdentity: RepositoryIdentity?
+    public let defaultModelSelection: ModelSelection?
+    public let scripts: [ProjectScript]
+    public let createdAt: String
+    public let updatedAt: String
+    public let deletedAt: String?
+}
+
+public enum RuntimeMode: String, Codable, CaseIterable, Sendable {
+    case approvalRequired = "approval-required"
+    case autoAcceptEdits = "auto-accept-edits"
+    case auto
+    case fullAccess = "full-access"
+}
+
+public enum InteractionMode: String, Codable, CaseIterable, Sendable {
+    case `default`
+    case plan
+}
+
+public struct OrchestrationLatestTurn: Codable, Equatable, Sendable {
+    public let turnId: String
+    public let state: String
+    public let requestedAt: String
+    public let startedAt: String?
+    public let completedAt: String?
+    public let assistantMessageId: String?
+}
+
+public struct OrchestrationSession: Codable, Equatable, Sendable {
+    public let threadId: String
+    public let status: String
+    public let providerName: String?
+    public let providerInstanceId: String?
+    public let runtimeMode: RuntimeMode
+    public let activeTurnId: String?
+    public let lastError: String?
+    public let updatedAt: String
+}
+
+public struct OrchestrationThreadShell: Codable, Identifiable, Equatable, Sendable {
+    public let id: String
+    public let projectId: String
+    public let title: String
+    public let modelSelection: ModelSelection
+    public let runtimeMode: RuntimeMode
+    public let interactionMode: InteractionMode
+    public let branch: String?
+    public let worktreePath: String?
+    public let latestTurn: OrchestrationLatestTurn?
+    public let createdAt: String
+    public let updatedAt: String
+    public let archivedAt: String?
+    public let settledOverride: String?
+    public let settledAt: String?
+    public let snoozedUntil: String?
+    public let snoozedAt: String?
+    public let session: OrchestrationSession?
+    public let latestUserMessageAt: String?
+    public let hasPendingApprovals: Bool
+    public let hasPendingUserInput: Bool
+    public let hasActionableProposedPlan: Bool
+}
+
+public struct OrchestrationMessage: Codable, Identifiable, Equatable, Sendable {
+    public let id: String
+    public let role: String
+    public let text: String
+    public let attachments: [ChatAttachment]?
+    public let turnId: String?
+    public let streaming: Bool
+    public let createdAt: String
+    public let updatedAt: String
+}
+
+public struct ChatAttachment: Codable, Identifiable, Equatable, Sendable {
+    public let type: String
+    public let id: String
+    public let name: String
+    public let mimeType: String
+    public let sizeBytes: Int
+}
+
+public struct OrchestrationActivity: Codable, Identifiable, Equatable, Sendable {
+    public let id: String
+    public let tone: String
+    public let kind: String
+    public let summary: String
+    public let payload: JSONValue
+    public let turnId: String?
+    public let sequence: Int?
+    public let createdAt: String
+}
+
+public struct CheckpointFile: Codable, Equatable, Sendable {
+    public let path: String
+    public let kind: String
+    public let additions: Int
+    public let deletions: Int
+}
+
+public struct CheckpointSummary: Codable, Equatable, Sendable {
+    public let turnId: String
+    public let checkpointTurnCount: Int
+    public let checkpointRef: String
+    public let status: String
+    public let files: [CheckpointFile]
+    public let assistantMessageId: String?
+    public let completedAt: String
+}
+
+public struct OrchestrationThread: Codable, Identifiable, Equatable, Sendable {
+    public let id: String
+    public let projectId: String
+    public let title: String
+    public let modelSelection: ModelSelection
+    public let runtimeMode: RuntimeMode
+    public let interactionMode: InteractionMode
+    public let branch: String?
+    public let worktreePath: String?
+    public let latestTurn: OrchestrationLatestTurn?
+    public let createdAt: String
+    public let updatedAt: String
+    public let archivedAt: String?
+    public let settledOverride: String?
+    public let settledAt: String?
+    public let snoozedUntil: String?
+    public let snoozedAt: String?
+    public let deletedAt: String?
+    public let messages: [OrchestrationMessage]
+    public let activities: [OrchestrationActivity]
+    public let checkpoints: [CheckpointSummary]
+    public let session: OrchestrationSession?
+}
+
+public struct OrchestrationShellSnapshot: Codable, Equatable, Sendable {
+    public let snapshotSequence: Int
+    public let projects: [OrchestrationProject]
+    public let threads: [OrchestrationThreadShell]
+    public let updatedAt: String
+}
+
+public struct OrchestrationReadModel: Codable, Equatable, Sendable {
+    public let snapshotSequence: Int
+    public let projects: [OrchestrationProject]
+    public let threads: [OrchestrationThread]
+    public let updatedAt: String
+}
+
+public struct OrchestrationThreadDetailSnapshot: Codable, Equatable, Sendable {
+    public let snapshotSequence: Int
+    public let thread: OrchestrationThread
+}
+
+public enum ShellStreamItem: Decodable, Sendable {
+    case synchronized
+    case snapshot(OrchestrationShellSnapshot)
+    case projectUpserted(sequence: Int, project: OrchestrationProject)
+    case projectRemoved(sequence: Int, projectID: String)
+    case threadUpserted(sequence: Int, thread: OrchestrationThreadShell)
+    case threadRemoved(sequence: Int, threadID: String)
+
+    private enum CodingKeys: String, CodingKey {
+        case kind, sequence, snapshot, project, projectId, thread, threadId
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let kind = try container.decode(String.self, forKey: .kind)
+        switch kind {
+        case "synchronized":
+            self = .synchronized
+        case "snapshot":
+            self = .snapshot(try container.decode(OrchestrationShellSnapshot.self, forKey: .snapshot))
+        case "project-upserted":
+            self = .projectUpserted(
+                sequence: try container.decode(Int.self, forKey: .sequence),
+                project: try container.decode(OrchestrationProject.self, forKey: .project)
+            )
+        case "project-removed":
+            self = .projectRemoved(
+                sequence: try container.decode(Int.self, forKey: .sequence),
+                projectID: try container.decode(String.self, forKey: .projectId)
+            )
+        case "thread-upserted":
+            self = .threadUpserted(
+                sequence: try container.decode(Int.self, forKey: .sequence),
+                thread: try container.decode(OrchestrationThreadShell.self, forKey: .thread)
+            )
+        case "thread-removed":
+            self = .threadRemoved(
+                sequence: try container.decode(Int.self, forKey: .sequence),
+                threadID: try container.decode(String.self, forKey: .threadId)
+            )
+        default:
+            throw DecodingError.dataCorruptedError(
+                forKey: .kind,
+                in: container,
+                debugDescription: "Unknown shell stream item \(kind)"
+            )
+        }
+    }
+}
+
+public enum ThreadStreamItem: Decodable, Sendable {
+    case synchronized
+    case snapshot(OrchestrationThreadDetailSnapshot)
+    case event(JSONValue)
+
+    private enum CodingKeys: String, CodingKey { case kind, snapshot, event }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let kind = try container.decode(String.self, forKey: .kind)
+        switch kind {
+        case "synchronized":
+            self = .synchronized
+        case "snapshot":
+            self = .snapshot(
+                try container.decode(OrchestrationThreadDetailSnapshot.self, forKey: .snapshot)
+            )
+        case "event":
+            self = .event(try container.decode(JSONValue.self, forKey: .event))
+        default:
+            throw DecodingError.dataCorruptedError(
+                forKey: .kind,
+                in: container,
+                debugDescription: "Unknown thread stream item \(kind)"
+            )
+        }
+    }
+}
