@@ -3,7 +3,9 @@ import SwiftUI
 struct FeatureComposerView: View {
     @Binding var text: String
     @Binding var selection: FeatureSelection?
+    @Binding var attachments: [FeatureDraftAttachment]
     let providers: [FeatureProvider]
+    let threadSelection: FeatureSelection?
     let isSending: Bool
     let isWorking: Bool
     let focused: FocusState<Bool>.Binding
@@ -11,8 +13,20 @@ struct FeatureComposerView: View {
     let onStop: () -> Void
 
     var body: some View {
-        VStack(spacing: 8) {
+        VStack(spacing: 7) {
+            FeatureAttachmentStrip(attachments: $attachments)
+
             HStack(alignment: .bottom, spacing: 9) {
+                FeatureImageAttachmentPicker(
+                    attachments: $attachments,
+                    isEnabled: DailyUXModelOptions.supportsImages(
+                        selection: selection,
+                        providers: providers
+                    )
+                )
+                    .padding(.leading, 2)
+                    .padding(.bottom, 1)
+
                 TextField("Message agent", text: $text, axis: .vertical)
                     .lineLimit(1...7)
                     .focused(focused)
@@ -20,8 +34,7 @@ struct FeatureComposerView: View {
                     .onSubmit {
                         if canSend { onSend() }
                     }
-                    .padding(.leading, 12)
-                    .padding(.vertical, 10)
+                    .padding(.vertical, 11)
 
                 Button(action: isWorking && textIsEmpty ? onStop : onSend) {
                     Image(systemName: isWorking && textIsEmpty ? "stop.fill" : "arrow.up")
@@ -35,18 +48,29 @@ struct FeatureComposerView: View {
                 .padding(.bottom, 7)
                 .accessibilityLabel(isWorking && textIsEmpty ? "Stop agent" : "Send")
             }
-            .background(Color.white.opacity(0.09), in: RoundedRectangle(cornerRadius: 16))
+            .background(T3Colors.input, in: RoundedRectangle(cornerRadius: 18))
             .overlay {
-                RoundedRectangle(cornerRadius: 16)
-                    .stroke(Color.white.opacity(0.14), lineWidth: 1)
+                RoundedRectangle(cornerRadius: 18)
+                    .stroke(T3Colors.border, lineWidth: 1)
             }
 
             HStack {
-                CompactModelMenu(providers: providers, selection: $selection)
+                ProviderModelPicker(
+                    providers: providers,
+                    selection: $selection,
+                    style: .compact,
+                    threadSelection: threadSelection
+                )
                 Spacer()
-                Text("Return to send")
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
+                if !attachments.isEmpty, !imagesAllowed {
+                    Text("Choose an image model")
+                        .font(.caption2)
+                        .foregroundStyle(T3Colors.warning)
+                } else if !attachments.isEmpty {
+                    Text("\(attachments.count) image\(attachments.count == 1 ? "" : "s")")
+                        .font(.caption2.monospacedDigit())
+                        .foregroundStyle(T3Colors.textTertiary)
+                }
             }
             .padding(.horizontal, 3)
         }
@@ -64,51 +88,12 @@ struct FeatureComposerView: View {
     }
 
     private var canSend: Bool {
-        !textIsEmpty && !isSending
-    }
-}
-
-private struct CompactModelMenu: View {
-    let providers: [FeatureProvider]
-    @Binding var selection: FeatureSelection?
-
-    var body: some View {
-        Menu {
-            ForEach(providers.filter(\.isAvailable)) { provider in
-                Section(provider.name) {
-                    ForEach(provider.models) { model in
-                        Button {
-                            selection = .init(providerID: provider.id, modelID: model.id)
-                        } label: {
-                            if selection?.providerID == provider.id, selection?.modelID == model.id {
-                                Label(model.name, systemImage: "checkmark")
-                            } else {
-                                Text(model.name)
-                            }
-                        }
-                    }
-                }
-            }
-        } label: {
-            HStack(spacing: 5) {
-                Image(systemName: "cpu")
-                Text(label)
-                Image(systemName: "chevron.down")
-                    .font(.system(size: 8, weight: .bold))
-            }
-            .font(.caption.weight(.medium))
-            .foregroundStyle(.secondary)
-            .contentShape(Rectangle())
-        }
-        .accessibilityLabel("Choose model")
+        (!textIsEmpty || !attachments.isEmpty)
+            && (attachments.isEmpty || imagesAllowed)
+            && !isSending
     }
 
-    private var label: String {
-        guard let selection,
-              let provider = providers.first(where: { $0.id == selection.providerID }),
-              let model = provider.models.first(where: { $0.id == selection.modelID }) else {
-            return "Automatic"
-        }
-        return model.name
+    private var imagesAllowed: Bool {
+        DailyUXModelOptions.supportsImages(selection: selection, providers: providers)
     }
 }

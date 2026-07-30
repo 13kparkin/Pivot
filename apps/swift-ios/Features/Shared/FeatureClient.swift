@@ -14,6 +14,14 @@ public protocol FeatureClient: AnyObject {
 
     func addProject(path: String) async throws
     func createThread(projectID: String, title: String?, selection: FeatureSelection?) async throws -> FeatureThread
+    func createThreadAndSend(
+        projectID: String,
+        prompt: String,
+        selection: FeatureSelection?,
+        runtimeMode: FeatureRuntimeMode,
+        interactionMode: FeatureInteractionMode,
+        attachments: [FeatureUploadAttachment]
+    ) async throws -> FeatureThread
     func renameThread(id: String, title: String) async throws
     func setThreadArchived(id: String, archived: Bool) async throws
     func setThreadSettled(id: String, settled: Bool) async throws
@@ -24,6 +32,12 @@ public protocol FeatureClient: AnyObject {
 
     func loadThread(id: String) async throws -> FeatureThreadDetail
     func sendMessage(threadID: String, text: String, selection: FeatureSelection?) async throws
+    func sendMessage(
+        threadID: String,
+        text: String,
+        selection: FeatureSelection?,
+        attachments: [FeatureUploadAttachment]
+    ) async throws
     func cancelTurn(threadID: String) async throws
     func resolveApproval(id: String, decision: FeatureApprovalDecision) async throws
     func resolveUserInput(id: String, answers: [String: String]) async throws
@@ -63,6 +77,40 @@ public extension FeatureClient {
     func setThreadSnoozed(id: String, until: Date?) async throws {}
     func setRuntimeMode(id: String, mode: FeatureRuntimeMode) async throws {}
     func setInteractionMode(id: String, mode: FeatureInteractionMode) async throws {}
+
+    func createThreadAndSend(
+        projectID: String,
+        prompt: String,
+        selection: FeatureSelection?,
+        runtimeMode: FeatureRuntimeMode,
+        interactionMode: FeatureInteractionMode,
+        attachments: [FeatureUploadAttachment]
+    ) async throws -> FeatureThread {
+        let thread = try await createThread(
+            projectID: projectID,
+            title: prompt,
+            selection: selection
+        )
+        try await sendMessage(
+            threadID: thread.id,
+            text: prompt,
+            selection: selection,
+            attachments: attachments
+        )
+        return thread
+    }
+
+    func sendMessage(
+        threadID: String,
+        text: String,
+        selection: FeatureSelection?,
+        attachments: [FeatureUploadAttachment]
+    ) async throws {
+        guard attachments.isEmpty else {
+            throw FeatureCapabilityUnavailable("Image attachments")
+        }
+        try await sendMessage(threadID: threadID, text: text, selection: selection)
+    }
 
     func listFiles(threadID: String, path: String?) async throws -> [FeatureFileEntry] {
         throw FeatureCapabilityUnavailable("Files")

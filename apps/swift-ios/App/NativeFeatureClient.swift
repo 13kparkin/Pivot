@@ -2,7 +2,7 @@ import Foundation
 
 /// Composes the transport-focused Core layer with the UI-focused Features layer.
 @MainActor
-final class NativeFeatureClient: FeatureClient {
+final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging {
     private let runtime: EnvironmentRuntime
     private let settingsStore: UserDefaults
     private let stream: AsyncStream<FeatureEvent>
@@ -11,6 +11,7 @@ final class NativeFeatureClient: FeatureClient {
     private var activeEnvironment: Environment?
     private var client: T3Client?
     private var latestShell: OrchestrationShellSnapshot?
+    private var latestServerConfig: ServerConfigSnapshot?
     private var archivedThreads: [FeatureThread] = []
     private var latestSnapshot: FeatureSnapshot?
     private var loadedThreadIDs = Set<String>()
@@ -23,6 +24,7 @@ final class NativeFeatureClient: FeatureClient {
         String: [UUID: AsyncStream<FeatureTerminalSnapshot>.Continuation]
     ] = [:]
     private var pollingTask: Task<Void, Never>?
+    private var configurationTask: Task<Void, Never>?
 
     init(
         runtime: EnvironmentRuntime = EnvironmentRuntime(),
@@ -37,6 +39,7 @@ final class NativeFeatureClient: FeatureClient {
 
     deinit {
         pollingTask?.cancel()
+        configurationTask?.cancel()
         continuation.finish()
     }
 
@@ -53,7 +56,9 @@ final class NativeFeatureClient: FeatureClient {
         client = activeClient
         async let shellRequest = activeClient.shellSnapshot()
         async let readModelRequest = activeClient.readModel()
+        async let serverConfigRequest: ServerConfigSnapshot? = try? activeClient.serverConfig()
         let (shell, readModel) = try await (shellRequest, readModelRequest)
+        latestServerConfig = await serverConfigRequest
         latestShell = shell
         archivedThreads = readModel.threads
             .filter { $0.archivedAt != nil }
@@ -88,17 +93,20 @@ final class NativeFeatureClient: FeatureClient {
         loadedThreadIDs.removeAll()
         latestDetails.removeAll()
         archivedThreads.removeAll()
+        latestServerConfig = nil
         startPolling(pairedClient)
     }
 
     func activateEnvironment(id: String) async throws {
         pollingTask?.cancel()
+        configurationTask?.cancel()
         let activated = try await runtime.activate(id: id)
         activeEnvironment = activated.environment
         client = activated
         loadedThreadIDs.removeAll()
         latestDetails.removeAll()
         latestShell = nil
+        latestServerConfig = nil
         archivedThreads.removeAll()
         finishTerminalStreams()
         terminalIDs.removeAll()
@@ -109,10 +117,13 @@ final class NativeFeatureClient: FeatureClient {
     func removeEnvironment(id: String) async throws {
         if activeEnvironment?.id == id {
             pollingTask?.cancel()
+            configurationTask?.cancel()
             pollingTask = nil
+            configurationTask = nil
             client = nil
             activeEnvironment = nil
             latestShell = nil
+            latestServerConfig = nil
             archivedThreads.removeAll()
             loadedThreadIDs.removeAll()
             latestDetails.removeAll()
@@ -125,13 +136,16 @@ final class NativeFeatureClient: FeatureClient {
 
     func disconnect() async {
         pollingTask?.cancel()
+        configurationTask?.cancel()
         pollingTask = nil
+        configurationTask = nil
         if let client {
             await client.disconnect()
         }
         client = nil
         activeEnvironment = nil
         latestShell = nil
+        latestServerConfig = nil
         archivedThreads.removeAll()
         loadedThreadIDs.removeAll()
         latestDetails.removeAll()
@@ -186,6 +200,49 @@ final class NativeFeatureClient: FeatureClient {
             title: threadTitle,
             providerID: model.instanceId,
             modelID: model.model
+        )
+    }
+
+    func createThreadAndSend(
+        projectID: String,
+        prompt: String,
+        selection: FeatureSelection?,
+        runtimeMode: FeatureRuntimeMode,
+        interactionMode: FeatureInteractionMode,
+        attachments: [FeatureUploadAttachment]
+    ) async throws -> FeatureThread {
+        let client = try requireClient()
+        let threadID = UUID().uuidString
+        let model = modelSelection(selection, projectID: projectID)
+        let title = Self.title(from: prompt, hasAttachments: !attachments.isEmpty)
+        let uploads = try makeUploadAttachments(attachments)
+
+        _ = try await client.createThreadAndSend(
+            threadID: threadID,
+            projectID: projectID,
+            title: title,
+            text: prompt,
+            model: model,
+            runtimeMode: coreRuntimeMode(runtimeMode),
+            interactionMode: coreInteractionMode(interactionMode),
+            attachments: uploads
+        )
+
+        let shell = try await client.shellSnapshot()
+        latestShell = shell
+        await emitSnapshot(shell)
+        if let created = shell.threads.first(where: { $0.id == threadID }) {
+            return mapThread(created)
+        }
+        return FeatureThread(
+            id: threadID,
+            projectID: projectID,
+            title: title,
+            providerID: model.instanceId,
+            modelID: model.model,
+            modelOptions: mapOptionSelections(model.options),
+            runtimeMode: runtimeMode,
+            interactionMode: interactionMode
         )
     }
 
@@ -253,31 +310,32 @@ final class NativeFeatureClient: FeatureClient {
         text: String,
         selection: FeatureSelection?
     ) async throws {
+        try await sendMessage(
+            threadID: threadID,
+            text: text,
+            selection: selection,
+            attachments: []
+        )
+    }
+
+    func sendMessage(
+        threadID: String,
+        text: String,
+        selection: FeatureSelection?,
+        attachments: [FeatureUploadAttachment]
+    ) async throws {
         let client = try requireClient()
         guard let shellThread = latestShell?.threads.first(where: { $0.id == threadID }) else {
             throw NativeFeatureClientError.threadNotFound
-        }
-
-        if let selection,
-           selection.providerID != shellThread.modelSelection.instanceId
-            || selection.modelID != shellThread.modelSelection.model {
-            _ = try await client.dispatch(
-                .object([
-                    "type": .string("thread.meta.update"),
-                    "commandId": .string(UUID().uuidString),
-                    "threadId": .string(threadID),
-                    "modelSelection": try .encode(
-                        ModelSelection(instanceId: selection.providerID, model: selection.modelID)
-                    ),
-                ])
-            )
         }
 
         _ = try await client.sendTurn(
             threadID: threadID,
             text: text,
             runtimeMode: shellThread.runtimeMode,
-            interactionMode: shellThread.interactionMode
+            interactionMode: shellThread.interactionMode,
+            model: selection.map(coreModelSelection),
+            attachments: try makeUploadAttachments(attachments)
         )
         try await refreshThread(id: threadID, client: client)
         try await refresh(client: client)
@@ -327,6 +385,40 @@ final class NativeFeatureClient: FeatureClient {
     func saveSettings(_ settings: FeatureSettings) async throws {
         let data = try JSONEncoder().encode(settings)
         settingsStore.set(data, forKey: Self.settingsKey)
+    }
+
+    func loadDeviceSessions() async throws -> [FeatureDeviceSession] {
+        let client = try requireClient()
+        try await requireScope("access:read", client: client)
+        return try await client.clientSessions().map { session in
+            FeatureDeviceSession(
+                sessionID: session.sessionId,
+                label: session.client.label,
+                deviceType: FeatureDeviceType(rawValue: session.client.deviceType) ?? .unknown,
+                operatingSystem: session.client.os,
+                browser: session.client.browser,
+                ipAddress: session.client.ipAddress,
+                issuedAt: parseDate(session.issuedAt),
+                expiresAt: parseDate(session.expiresAt),
+                lastConnectedAt: session.lastConnectedAt.map(parseDate),
+                isConnected: session.connected,
+                isCurrent: session.current
+            )
+        }
+    }
+
+    func revokeDeviceSession(id: String) async throws {
+        let client = try requireClient()
+        try await requireScope("access:write", client: client)
+        guard try await client.revokeClientSession(id: id) else {
+            throw NativeFeatureClientError.deviceSessionNotFound
+        }
+    }
+
+    func revokeOtherDeviceSessions() async throws {
+        let client = try requireClient()
+        try await requireScope("access:write", client: client)
+        _ = try await client.revokeOtherClientSessions()
     }
 
     func listFiles(threadID: String, path: String?) async throws -> [FeatureFileEntry] {
@@ -589,6 +681,7 @@ final class NativeFeatureClient: FeatureClient {
 
     private func startPolling(_ activeClient: T3Client) {
         pollingTask?.cancel()
+        configurationTask?.cancel()
         pollingTask = Task { [weak self] in
             do {
                 await activeClient.connect()
@@ -619,6 +712,29 @@ final class NativeFeatureClient: FeatureClient {
                 } catch {
                     self.continuation.yield(.failure(error.localizedDescription))
                 }
+            }
+        }
+        configurationTask = Task { [weak self] in
+            do {
+                for try await event in await activeClient.serverConfigEvents() {
+                    guard !Task.isCancelled, let self else { break }
+                    switch event {
+                    case let .snapshot(config):
+                        self.latestServerConfig = config
+                    case let .providerStatuses(providers):
+                        self.latestServerConfig = ServerConfigSnapshot(providers: providers)
+                    case .unrelated:
+                        continue
+                    }
+                    if let shell = self.latestShell {
+                        await self.emitSnapshot(shell)
+                    }
+                }
+            } catch is CancellationError {
+                return
+            } catch {
+                // The shell and thread streams remain useful on older servers
+                // that do not expose the provider catalogue subscription.
             }
         }
     }
@@ -721,6 +837,7 @@ final class NativeFeatureClient: FeatureClient {
             id: thread.id,
             projectID: thread.projectId,
             title: thread.title,
+            createdAt: parseDate(thread.createdAt),
             updatedAt: parseDate(thread.updatedAt),
             state: mapThreadState(
                 latestTurn: thread.latestTurn,
@@ -730,6 +847,7 @@ final class NativeFeatureClient: FeatureClient {
             ),
             providerID: thread.modelSelection.instanceId,
             modelID: thread.modelSelection.model,
+            modelOptions: mapOptionSelections(thread.modelSelection.options),
             isArchived: thread.archivedAt != nil,
             isSettled: isSettled(thread.settledOverride, settledAt: thread.settledAt),
             snoozedUntil: thread.snoozedUntil.map(parseDate),
@@ -744,6 +862,7 @@ final class NativeFeatureClient: FeatureClient {
             projectID: thread.projectId,
             title: thread.title,
             preview: thread.messages.last?.text,
+            createdAt: parseDate(thread.createdAt),
             updatedAt: parseDate(thread.updatedAt),
             state: mapThreadState(
                 latestTurn: thread.latestTurn,
@@ -753,6 +872,7 @@ final class NativeFeatureClient: FeatureClient {
             ),
             providerID: thread.modelSelection.instanceId,
             modelID: thread.modelSelection.model,
+            modelOptions: mapOptionSelections(thread.modelSelection.options),
             isArchived: thread.archivedAt != nil,
             isSettled: isSettled(thread.settledOverride, settledAt: thread.settledAt),
             snoozedUntil: thread.snoozedUntil.map(parseDate),
@@ -770,7 +890,15 @@ final class NativeFeatureClient: FeatureClient {
                 role: mapRole(message.role),
                 text: message.text,
                 createdAt: parseDate(message.createdAt),
-                state: message.streaming ? .streaming : .complete
+                state: message.streaming ? .streaming : .complete,
+                attachments: (message.attachments ?? []).map {
+                    FeatureMessageAttachment(
+                        id: $0.id,
+                        name: $0.name,
+                        mimeType: $0.mimeType,
+                        sizeBytes: $0.sizeBytes
+                    )
+                }
             )
         }
         let work = thread.activities.compactMap { activity -> FeatureMessage? in
@@ -804,6 +932,7 @@ final class NativeFeatureClient: FeatureClient {
             projectID: thread.projectId,
             title: thread.title,
             preview: thread.messages.last?.text,
+            createdAt: parseDate(thread.createdAt),
             updatedAt: parseDate(thread.updatedAt),
             state: mapThreadState(
                 latestTurn: thread.latestTurn,
@@ -813,6 +942,7 @@ final class NativeFeatureClient: FeatureClient {
             ),
             providerID: thread.modelSelection.instanceId,
             modelID: thread.modelSelection.model,
+            modelOptions: mapOptionSelections(thread.modelSelection.options),
             isArchived: thread.archivedAt != nil,
             isSettled: isSettled(thread.settledOverride, settledAt: thread.settledAt),
             snoozedUntil: thread.snoozedUntil.map(parseDate),
@@ -990,6 +1120,40 @@ final class NativeFeatureClient: FeatureClient {
     }
 
     private func mapProviders(_ shell: OrchestrationShellSnapshot) -> [FeatureProvider] {
+        if let providers = latestServerConfig?.providers, !providers.isEmpty {
+            return providers.map { provider in
+                FeatureProvider(
+                    id: provider.instanceId,
+                    name: provider.displayName ?? providerDisplayName(provider.driver),
+                    isAvailable: provider.enabled
+                        && provider.installed
+                        && provider.status != "disabled"
+                        && provider.auth.status != "unauthenticated"
+                        && provider.availability != "unavailable",
+                    driver: provider.driver,
+                    requiresNewThreadForModelChange:
+                        provider.requiresNewThreadForModelChange ?? false,
+                    models: provider.models.map { model in
+                        let options = (model.capabilities?.optionDescriptors ?? [])
+                            .map(mapOptionDescriptor)
+                        return FeatureModel(
+                            id: model.slug,
+                            name: model.name,
+                            detail: model.subProvider ?? model.shortName,
+                            supportsReasoning: options.contains { descriptor in
+                                let searchable = "\(descriptor.id) \(descriptor.label)".lowercased()
+                                return searchable.contains("reason")
+                                    || searchable.contains("effort")
+                                    || searchable.contains("thinking")
+                            },
+                            isDefault: model.isDefault ?? false,
+                            options: options
+                        )
+                    }
+                )
+            }
+        }
+
         var modelsByProvider: [String: Set<String>] = [:]
         for selection in shell.projects.compactMap(\.defaultModelSelection)
             + shell.threads.map(\.modelSelection) {
@@ -1002,6 +1166,7 @@ final class NativeFeatureClient: FeatureClient {
             FeatureProvider(
                 id: providerID,
                 name: providerDisplayName(providerID),
+                driver: providerID,
                 models: (modelsByProvider[providerID] ?? []).sorted().map {
                     FeatureModel(id: $0, name: $0)
                 }
@@ -1014,7 +1179,7 @@ final class NativeFeatureClient: FeatureClient {
         projectID: String
     ) -> ModelSelection {
         if let selection {
-            return ModelSelection(instanceId: selection.providerID, model: selection.modelID)
+            return coreModelSelection(selection)
         }
         if let projectDefault = latestShell?.projects
             .first(where: { $0.id == projectID })?
@@ -1026,9 +1191,82 @@ final class NativeFeatureClient: FeatureClient {
 
     private func defaultModelSelection() -> ModelSelection {
         if let selection = loadSettings().defaultSelection {
-            return ModelSelection(instanceId: selection.providerID, model: selection.modelID)
+            return coreModelSelection(selection)
         }
         return ModelSelection(instanceId: "codex", model: "gpt-5.6-sol")
+    }
+
+    private func coreModelSelection(_ selection: FeatureSelection) -> ModelSelection {
+        let options = selection.options.map { option in
+            ModelSelection.OptionSelection(
+                id: option.id,
+                value: coreOptionValue(option.value)
+            )
+        }
+        return ModelSelection(
+            instanceId: selection.providerID,
+            model: selection.modelID,
+            options: options.isEmpty ? nil : options
+        )
+    }
+
+    private func coreOptionValue(_ value: FeatureModelOptionValue) -> JSONValue {
+        switch value {
+        case let .string(rawValue):
+            return .string(rawValue)
+        case let .boolean(rawValue):
+            return .bool(rawValue)
+        }
+    }
+
+    private func mapOptionSelections(
+        _ selections: [ModelSelection.OptionSelection]?
+    ) -> [FeatureModelOptionSelection] {
+        (selections ?? []).compactMap { selection in
+            let value: FeatureModelOptionValue
+            switch selection.value {
+            case let .string(rawValue):
+                value = .string(rawValue)
+            case let .bool(rawValue):
+                value = .boolean(rawValue)
+            default:
+                return nil
+            }
+            return FeatureModelOptionSelection(id: selection.id, value: value)
+        }
+    }
+
+    private func mapOptionDescriptor(
+        _ descriptor: ServerProviderOptionDescriptor
+    ) -> FeatureModelOptionDescriptor {
+        switch descriptor {
+        case let .select(value):
+            let defaultValue = value.currentValue
+                ?? value.options.first(where: { $0.isDefault == true })?.id
+            return FeatureModelOptionDescriptor(
+                id: value.id,
+                label: value.label,
+                detail: value.description,
+                kind: .select,
+                choices: value.options.map {
+                    FeatureModelOptionChoice(
+                        id: $0.id,
+                        label: $0.label,
+                        detail: $0.description,
+                        isDefault: $0.isDefault ?? false
+                    )
+                },
+                defaultValue: defaultValue.map(FeatureModelOptionValue.string)
+            )
+        case let .boolean(value):
+            return FeatureModelOptionDescriptor(
+                id: value.id,
+                label: value.label,
+                detail: value.description,
+                kind: .boolean,
+                defaultValue: value.currentValue.map(FeatureModelOptionValue.boolean)
+            )
+        }
     }
 
     private func providerDisplayName(_ id: String) -> String {
@@ -1040,6 +1278,39 @@ final class NativeFeatureClient: FeatureClient {
         case "opencode": "OpenCode"
         default: id
         }
+    }
+
+    private func makeUploadAttachments(
+        _ attachments: [FeatureUploadAttachment]
+    ) throws -> [UploadChatImageAttachment] {
+        guard attachments.count <= 8 else {
+            throw NativeFeatureClientError.tooManyAttachments
+        }
+        return try attachments.map {
+            try UploadChatImageAttachment(
+                data: $0.data,
+                name: $0.name,
+                mimeType: $0.mimeType
+            )
+        }
+    }
+
+    private func requireScope(_ scope: String, client: T3Client) async throws {
+        let session = try await client.authSession()
+        guard session.scopes?.contains(scope) == true else {
+            throw NativeFeatureClientError.missingScope(scope)
+        }
+    }
+
+    private static func title(from prompt: String, hasAttachments: Bool) -> String {
+        let compact = prompt
+            .split(whereSeparator: \.isWhitespace)
+            .joined(separator: " ")
+        guard !compact.isEmpty else {
+            return hasAttachments ? "Image task" : "New thread"
+        }
+        guard compact.count > 72 else { return compact }
+        return "\(compact.prefix(69).trimmingCharacters(in: .whitespacesAndNewlines))..."
     }
 
     private func loadSettings() -> FeatureSettings {
@@ -1073,6 +1344,9 @@ private enum NativeFeatureClientError: LocalizedError {
     case inputRequestNotFound
     case invalidProjectPath
     case terminalNotOpen
+    case deviceSessionNotFound
+    case missingScope(String)
+    case tooManyAttachments
 
     var errorDescription: String? {
         switch self {
@@ -1083,6 +1357,9 @@ private enum NativeFeatureClientError: LocalizedError {
         case .inputRequestNotFound: "The input request is no longer active."
         case .invalidProjectPath: "Enter a workspace path on the connected environment."
         case .terminalNotOpen: "Open the terminal before sending input."
+        case .deviceSessionNotFound: "That device session is no longer active."
+        case .missingScope: "This connection does not have permission to manage devices."
+        case .tooManyAttachments: "You can attach up to 8 images per message."
         }
     }
 }

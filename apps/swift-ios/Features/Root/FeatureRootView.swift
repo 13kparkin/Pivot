@@ -12,7 +12,15 @@ public struct FeatureRootView: View {
             if model.isLoading {
                 FeatureLoadingView()
             } else if model.snapshot.connection.state == .connected {
-                WorkspaceView(model: model)
+                WorkspaceView(
+                    model: model,
+                    submitNewTask: { request in
+                        await model.startTask(request)
+                    },
+                    submitMessage: { submission in
+                        await model.sendMessage(submission)
+                    }
+                )
             } else {
                 ConnectionOnboardingView(model: model)
             }

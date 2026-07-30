@@ -91,6 +91,26 @@ public final class FeatureRootModel {
         return succeeded ? created : nil
     }
 
+    public func startTask(_ request: NewTaskRequest) async -> FeatureThread? {
+        let prompt = request.trimmedPrompt
+        guard !prompt.isEmpty || !request.attachments.isEmpty else { return nil }
+
+        var created: FeatureThread?
+        let succeeded = await perform {
+            let thread = try await client.createThreadAndSend(
+                projectID: request.projectID,
+                prompt: prompt,
+                selection: request.selection,
+                runtimeMode: request.runtimeMode,
+                interactionMode: request.interactionMode,
+                attachments: request.attachments.map(\.upload)
+            )
+            upsert(thread)
+            created = thread
+        }
+        return succeeded ? created : nil
+    }
+
     public func renameThread(_ id: String, title: String) async {
         await perform {
             try await client.renameThread(id: id, title: title)
@@ -169,19 +189,48 @@ public final class FeatureRootModel {
     }
 
     public func sendMessage(threadID: String, text: String, selection: FeatureSelection?) async -> Bool {
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return false }
-
-        return await perform {
-            let optimistic = FeatureMessage(
-                id: "local-\(UUID().uuidString)",
-                role: .user,
-                text: trimmed,
-                state: .queued
+        await sendMessage(
+            FeatureMessageSubmission(
+                threadID: threadID,
+                text: text,
+                selection: selection
             )
-            details[threadID]?.messages.append(optimistic)
-            try await client.sendMessage(threadID: threadID, text: trimmed, selection: selection)
+        )
+    }
+
+    public func sendMessage(_ submission: FeatureMessageSubmission) async -> Bool {
+        let trimmed = submission.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty || !submission.attachments.isEmpty else { return false }
+
+        let optimisticID = "local-\(UUID().uuidString)"
+        let optimistic = FeatureMessage(
+            id: optimisticID,
+            role: .user,
+            text: trimmed,
+            state: .queued,
+            attachments: submission.attachments.map {
+                FeatureMessageAttachment(
+                    id: $0.id.uuidString,
+                    name: $0.filename,
+                    mimeType: $0.mimeType,
+                    sizeBytes: $0.byteCount
+                )
+            }
+        )
+        details[submission.threadID]?.messages.append(optimistic)
+
+        let sent = await perform {
+            try await client.sendMessage(
+                threadID: submission.threadID,
+                text: trimmed,
+                selection: submission.selection,
+                attachments: submission.attachments.map(\.upload)
+            )
         }
+        if !sent {
+            details[submission.threadID]?.messages.removeAll { $0.id == optimisticID }
+        }
+        return sent
     }
 
     public func cancelTurn(threadID: String) async {
@@ -223,9 +272,19 @@ public final class FeatureRootModel {
             try await operation()
             return true
         } catch {
-            errorMessage = error.localizedDescription
+            if !Self.isBenignCancellation(error) {
+                errorMessage = error.localizedDescription
+            }
             return false
         }
+    }
+
+    private static func isBenignCancellation(_ error: any Error) -> Bool {
+        if error is CancellationError { return true }
+        let message = error.localizedDescription
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        return message == "cancelled" || message == "canceled"
     }
 
     private func apply(_ event: FeatureEvent) {
@@ -256,5 +315,11 @@ public final class FeatureRootModel {
         } else {
             snapshot.threads.append(thread)
         }
+    }
+}
+
+private extension FeatureDraftAttachment {
+    var upload: FeatureUploadAttachment {
+        FeatureUploadAttachment(data: data, name: filename, mimeType: mimeType)
     }
 }

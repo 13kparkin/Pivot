@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 @testable import T3Code
 
@@ -69,6 +70,43 @@ struct FeatureRootModelTests {
     }
 
     @Test
+    func testNewTaskStartsThreadAndFirstTurnAtomically() async {
+        let client = FeatureClientStub()
+        let created = FeatureThread(
+            id: "thread-atomic",
+            projectID: "project-1",
+            title: "Ship the native app",
+            providerID: "codex",
+            modelID: "gpt-5.6-sol"
+        )
+        client.createdThread = created
+        let model = FeatureRootModel(client: client)
+        let attachment = FeatureDraftAttachment(
+            data: Data([0xFF, 0xD8, 0xFF]),
+            filename: "reference.jpg",
+            mimeType: "image/jpeg"
+        )
+
+        let result = await model.startTask(
+            NewTaskRequest(
+                projectID: "project-1",
+                prompt: "  Ship the native app  ",
+                selection: .init(providerID: "codex", modelID: "gpt-5.6-sol"),
+                runtimeMode: .fullAccess,
+                interactionMode: .standard,
+                attachments: [attachment]
+            )
+        )
+
+        #expect(result == created)
+        #expect(client.startedPrompt == "Ship the native app")
+        #expect(client.startedAttachments.map(\.name) == ["reference.jpg"])
+        #expect(client.createThreadCallCount == 0)
+        #expect(client.sendMessageCallCount == 0)
+        #expect(model.snapshot.threads == [created])
+    }
+
+    @Test
     func testArchiveAndDeleteKeepLocalListsConsistent() async {
         let client = FeatureClientStub()
         let thread = FeatureThread(id: "thread-1", projectID: "project-1", title: "Thread")
@@ -93,6 +131,10 @@ private final class FeatureClientStub: FeatureClient {
     var pairEndpoint: String?
     var pairToken: String?
     var sentText: String?
+    var startedPrompt: String?
+    var startedAttachments: [FeatureUploadAttachment] = []
+    var createThreadCallCount = 0
+    var sendMessageCallCount = 0
 
     func initialSnapshot() async throws -> FeatureSnapshot {
         if pairEndpoint != nil, let snapshotAfterPair {
@@ -111,7 +153,21 @@ private final class FeatureClientStub: FeatureClient {
         title: String?,
         selection: FeatureSelection?
     ) async throws -> FeatureThread {
-        createdThread
+        createThreadCallCount += 1
+        return createdThread
+    }
+
+    func createThreadAndSend(
+        projectID: String,
+        prompt: String,
+        selection: FeatureSelection?,
+        runtimeMode: FeatureRuntimeMode,
+        interactionMode: FeatureInteractionMode,
+        attachments: [FeatureUploadAttachment]
+    ) async throws -> FeatureThread {
+        startedPrompt = prompt
+        startedAttachments = attachments
+        return createdThread
     }
 
     func renameThread(id: String, title: String) async throws {}
@@ -126,6 +182,7 @@ private final class FeatureClientStub: FeatureClient {
     }
 
     func sendMessage(threadID: String, text: String, selection: FeatureSelection?) async throws {
+        sendMessageCallCount += 1
         sentText = text
     }
 

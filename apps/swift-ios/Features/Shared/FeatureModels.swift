@@ -83,10 +83,12 @@ public struct FeatureThread: Identifiable, Sendable, Equatable, Hashable, Codabl
     public var projectID: String
     public var title: String
     public var preview: String?
+    public var createdAt: Date
     public var updatedAt: Date
     public var state: FeatureThreadState
     public var providerID: String?
     public var modelID: String?
+    public var modelOptions: [FeatureModelOptionSelection]
     public var isArchived: Bool
     public var isSettled: Bool
     public var snoozedUntil: Date?
@@ -98,10 +100,12 @@ public struct FeatureThread: Identifiable, Sendable, Equatable, Hashable, Codabl
         projectID: String,
         title: String,
         preview: String? = nil,
+        createdAt: Date = .now,
         updatedAt: Date = .now,
         state: FeatureThreadState = .idle,
         providerID: String? = nil,
         modelID: String? = nil,
+        modelOptions: [FeatureModelOptionSelection] = [],
         isArchived: Bool = false,
         isSettled: Bool = false,
         snoozedUntil: Date? = nil,
@@ -112,10 +116,12 @@ public struct FeatureThread: Identifiable, Sendable, Equatable, Hashable, Codabl
         self.projectID = projectID
         self.title = title
         self.preview = preview
+        self.createdAt = createdAt
         self.updatedAt = updatedAt
         self.state = state
         self.providerID = providerID
         self.modelID = modelID
+        self.modelOptions = modelOptions
         self.isArchived = isArchived
         self.isSettled = isSettled
         self.snoozedUntil = snoozedUntil
@@ -138,6 +144,40 @@ public enum FeatureMessageState: String, Sendable, Codable {
     case failed
 }
 
+public struct FeatureMessageAttachment: Identifiable, Sendable, Equatable, Hashable, Codable {
+    public let id: String
+    public var name: String
+    public var mimeType: String
+    public var sizeBytes: Int
+    public var url: URL?
+
+    public init(
+        id: String,
+        name: String,
+        mimeType: String,
+        sizeBytes: Int,
+        url: URL? = nil
+    ) {
+        self.id = id
+        self.name = name
+        self.mimeType = mimeType
+        self.sizeBytes = sizeBytes
+        self.url = url
+    }
+}
+
+public struct FeatureUploadAttachment: Sendable, Equatable {
+    public var data: Data
+    public var name: String
+    public var mimeType: String
+
+    public init(data: Data, name: String, mimeType: String) {
+        self.data = data
+        self.name = name
+        self.mimeType = mimeType
+    }
+}
+
 public struct FeatureMessage: Identifiable, Sendable, Equatable, Hashable, Codable {
     public let id: String
     public var role: FeatureMessageRole
@@ -145,6 +185,7 @@ public struct FeatureMessage: Identifiable, Sendable, Equatable, Hashable, Codab
     public var createdAt: Date
     public var state: FeatureMessageState
     public var toolName: String?
+    public var attachments: [FeatureMessageAttachment]
 
     public init(
         id: String,
@@ -152,7 +193,8 @@ public struct FeatureMessage: Identifiable, Sendable, Equatable, Hashable, Codab
         text: String,
         createdAt: Date = .now,
         state: FeatureMessageState = .complete,
-        toolName: String? = nil
+        toolName: String? = nil,
+        attachments: [FeatureMessageAttachment] = []
     ) {
         self.id = id
         self.role = role
@@ -160,6 +202,7 @@ public struct FeatureMessage: Identifiable, Sendable, Equatable, Hashable, Codab
         self.createdAt = createdAt
         self.state = state
         self.toolName = toolName
+        self.attachments = attachments
     }
 }
 
@@ -256,19 +299,121 @@ public struct FeatureModel: Identifiable, Sendable, Equatable, Hashable, Codable
     public var detail: String?
     public var supportsImages: Bool
     public var supportsReasoning: Bool
+    public var isDefault: Bool
+    public var options: [FeatureModelOptionDescriptor]
 
     public init(
         id: String,
         name: String,
         detail: String? = nil,
         supportsImages: Bool = false,
-        supportsReasoning: Bool = false
+        supportsReasoning: Bool = false,
+        isDefault: Bool = false,
+        options: [FeatureModelOptionDescriptor] = []
     ) {
         self.id = id
         self.name = name
         self.detail = detail
         self.supportsImages = supportsImages
         self.supportsReasoning = supportsReasoning
+        self.isDefault = isDefault
+        self.options = options
+    }
+}
+
+public enum FeatureModelOptionKind: String, Sendable, Equatable, Hashable, Codable {
+    case select
+    case boolean
+}
+
+public struct FeatureModelOptionChoice: Identifiable, Sendable, Equatable, Hashable, Codable {
+    public let id: String
+    public var label: String
+    public var detail: String?
+    public var isDefault: Bool
+
+    public init(
+        id: String,
+        label: String,
+        detail: String? = nil,
+        isDefault: Bool = false
+    ) {
+        self.id = id
+        self.label = label
+        self.detail = detail
+        self.isDefault = isDefault
+    }
+}
+
+public struct FeatureModelOptionDescriptor: Identifiable, Sendable, Equatable, Hashable, Codable {
+    public let id: String
+    public var label: String
+    public var detail: String?
+    public var kind: FeatureModelOptionKind
+    public var choices: [FeatureModelOptionChoice]
+    public var defaultValue: FeatureModelOptionValue?
+
+    public init(
+        id: String,
+        label: String,
+        detail: String? = nil,
+        kind: FeatureModelOptionKind,
+        choices: [FeatureModelOptionChoice] = [],
+        defaultValue: FeatureModelOptionValue? = nil
+    ) {
+        self.id = id
+        self.label = label
+        self.detail = detail
+        self.kind = kind
+        self.choices = choices
+        self.defaultValue = defaultValue
+    }
+}
+
+public enum FeatureModelOptionValue: Sendable, Equatable, Hashable, Codable {
+    case string(String)
+    case boolean(Bool)
+
+    private enum CodingKeys: String, CodingKey {
+        case type
+        case value
+    }
+
+    private enum ValueType: String, Codable {
+        case string
+        case boolean
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        switch try container.decode(ValueType.self, forKey: .type) {
+        case .string:
+            self = try .string(container.decode(String.self, forKey: .value))
+        case .boolean:
+            self = try .boolean(container.decode(Bool.self, forKey: .value))
+        }
+    }
+
+    public func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        switch self {
+        case let .string(value):
+            try container.encode(ValueType.string, forKey: .type)
+            try container.encode(value, forKey: .value)
+        case let .boolean(value):
+            try container.encode(ValueType.boolean, forKey: .type)
+            try container.encode(value, forKey: .value)
+        }
+    }
+}
+
+public struct FeatureModelOptionSelection: Identifiable, Sendable, Equatable, Hashable, Codable {
+    public let id: String
+    public var value: FeatureModelOptionValue
+
+    public init(id: String, value: FeatureModelOptionValue) {
+        self.id = id
+        self.value = value
     }
 }
 
@@ -276,12 +421,23 @@ public struct FeatureProvider: Identifiable, Sendable, Equatable, Hashable, Coda
     public let id: String
     public var name: String
     public var isAvailable: Bool
+    public var driver: String
+    public var requiresNewThreadForModelChange: Bool
     public var models: [FeatureModel]
 
-    public init(id: String, name: String, isAvailable: Bool = true, models: [FeatureModel] = []) {
+    public init(
+        id: String,
+        name: String,
+        isAvailable: Bool = true,
+        driver: String = "",
+        requiresNewThreadForModelChange: Bool = false,
+        models: [FeatureModel] = []
+    ) {
         self.id = id
         self.name = name
         self.isAvailable = isAvailable
+        self.driver = driver
+        self.requiresNewThreadForModelChange = requiresNewThreadForModelChange
         self.models = models
     }
 }
@@ -289,10 +445,16 @@ public struct FeatureProvider: Identifiable, Sendable, Equatable, Hashable, Coda
 public struct FeatureSelection: Sendable, Equatable, Hashable, Codable {
     public var providerID: String
     public var modelID: String
+    public var options: [FeatureModelOptionSelection]
 
-    public init(providerID: String, modelID: String) {
+    public init(
+        providerID: String,
+        modelID: String,
+        options: [FeatureModelOptionSelection] = []
+    ) {
         self.providerID = providerID
         self.modelID = modelID
+        self.options = options
     }
 }
 

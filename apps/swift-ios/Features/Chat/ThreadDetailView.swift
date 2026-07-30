@@ -3,17 +3,25 @@ import SwiftUI
 public struct ThreadDetailView: View {
     @Bindable var model: FeatureRootModel
     let thread: FeatureThread
+    let submitMessage: (FeatureMessageSubmission) async -> Bool
 
     @State private var draft = ""
     @State private var selection: FeatureSelection?
+    @State private var attachments: [FeatureDraftAttachment] = []
     @State private var isSending = false
     @State private var isLoading = true
+    @State private var sendFailed = false
     @State private var toolSurface: FeatureThreadToolSurface?
     @FocusState private var composerFocused: Bool
 
-    public init(model: FeatureRootModel, thread: FeatureThread) {
+    public init(
+        model: FeatureRootModel,
+        thread: FeatureThread,
+        submitMessage: @escaping (FeatureMessageSubmission) async -> Bool
+    ) {
         self.model = model
         self.thread = thread
+        self.submitMessage = submitMessage
     }
 
     public var body: some View {
@@ -143,6 +151,11 @@ public struct ThreadDetailView: View {
             .presentationDetents([.large])
             .presentationDragIndicator(.visible)
         }
+        .alert("Message not sent", isPresented: $sendFailed) {
+            Button("OK") {}
+        } message: {
+            Text("Your draft is still here. Check your connection and try again.")
+        }
     }
 
     private var detail: FeatureThreadDetail? {
@@ -158,7 +171,21 @@ public struct ThreadDetailView: View {
               let modelID = detail?.thread.modelID ?? thread.modelID else {
             return model.snapshot.settings.defaultSelection
         }
-        return FeatureSelection(providerID: providerID, modelID: modelID)
+        if let defaultSelection = model.snapshot.settings.defaultSelection,
+           defaultSelection.providerID == providerID,
+           defaultSelection.modelID == modelID {
+            return defaultSelection
+        }
+        let provider = model.snapshot.providers.first { $0.id == providerID }
+        let featureModel = provider?.models.first { $0.id == modelID }
+        let savedOptions = detail?.thread.modelOptions ?? thread.modelOptions
+        return FeatureSelection(
+            providerID: providerID,
+            modelID: modelID,
+            options: savedOptions.isEmpty
+                ? featureModel.map(DailyUXModelOptions.defaults) ?? []
+                : savedOptions
+        )
     }
 
     private func timeline(_ detail: FeatureThreadDetail) -> some View {
@@ -217,7 +244,9 @@ public struct ThreadDetailView: View {
                 FeatureComposerView(
                     text: $draft,
                     selection: $selection,
+                    attachments: $attachments,
                     providers: model.snapshot.providers,
+                    threadSelection: currentSelection,
                     isSending: isSending,
                     isWorking: detail.thread.state == .working || detail.thread.state == .queued,
                     focused: $composerFocused,
@@ -232,17 +261,27 @@ public struct ThreadDetailView: View {
 
     private func send() {
         let message = draft
-        guard !message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        let pendingAttachments = attachments
+        guard !message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            || !pendingAttachments.isEmpty else {
+            return
+        }
         draft = ""
+        attachments = []
         isSending = true
         Task {
-            let sent = await model.sendMessage(
+            let sent = await submitMessage(
+                FeatureMessageSubmission(
                 threadID: thread.id,
                 text: message,
-                selection: selection
+                selection: selection,
+                attachments: pendingAttachments
+                )
             )
             if !sent {
                 draft = message
+                attachments = pendingAttachments
+                sendFailed = true
             }
             isSending = false
             composerFocused = true
@@ -363,11 +402,16 @@ struct FeatureMessageView: View {
         case .user:
             HStack {
                 Spacer(minLength: 34)
-                Text(.init(message.text))
-                    .textSelection(.enabled)
-                    .padding(.horizontal, 13)
-                    .padding(.vertical, 10)
-                    .background(Color.white.opacity(0.11), in: RoundedRectangle(cornerRadius: 15))
+                VStack(alignment: .leading, spacing: 8) {
+                    FeatureMessageAttachmentsView(attachments: message.attachments)
+                    if !message.text.isEmpty {
+                        Text(.init(message.text))
+                            .textSelection(.enabled)
+                    }
+                }
+                .padding(.horizontal, 13)
+                .padding(.vertical, 10)
+                .background(Color.white.opacity(0.11), in: RoundedRectangle(cornerRadius: 15))
             }
             .accessibilityLabel("You")
             .accessibilityValue(message.text)
@@ -379,9 +423,12 @@ struct FeatureMessageView: View {
                 }
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(.secondary)
-                Text(.init(message.text))
-                    .textSelection(.enabled)
-                    .lineSpacing(3)
+                FeatureMessageAttachmentsView(attachments: message.attachments)
+                if !message.text.isEmpty {
+                    Text(.init(message.text))
+                        .textSelection(.enabled)
+                        .lineSpacing(3)
+                }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         case .tool:
@@ -402,6 +449,47 @@ struct FeatureMessageView: View {
                 .font(.footnote)
                 .foregroundStyle(.secondary)
                 .frame(maxWidth: .infinity, alignment: .center)
+        }
+    }
+}
+
+private struct FeatureMessageAttachmentsView: View {
+    let attachments: [FeatureMessageAttachment]
+
+    var body: some View {
+        if !attachments.isEmpty {
+            LazyVGrid(
+                columns: [
+                    GridItem(.adaptive(minimum: 118, maximum: 190), spacing: 7),
+                ],
+                alignment: .leading,
+                spacing: 7
+            ) {
+                ForEach(attachments) { attachment in
+                    HStack(spacing: 9) {
+                        Image(systemName: attachment.mimeType.hasPrefix("image/") ? "photo" : "doc")
+                            .font(.system(size: 16, weight: .medium))
+                            .foregroundStyle(T3Colors.textSecondary)
+                            .frame(width: 30, height: 30)
+                            .background(T3Colors.surfaceRaised, in: RoundedRectangle(cornerRadius: 6))
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(attachment.name)
+                                .font(.caption.weight(.medium))
+                                .lineLimit(1)
+                            Text(ByteCountFormatter.string(fromByteCount: Int64(attachment.sizeBytes), countStyle: .file))
+                                .font(.caption2.monospacedDigit())
+                                .foregroundStyle(T3Colors.textSecondary)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(7)
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 8)
+                            .stroke(T3Colors.border, lineWidth: 1)
+                    }
+                    .accessibilityElement(children: .combine)
+                }
+            }
         }
     }
 }
