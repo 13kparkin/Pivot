@@ -27,6 +27,7 @@ import {
   readEnvironmentSupportsSettlement,
   readEnvironmentSupportsSnooze,
   readEnvironmentSupportsVisitedTracking,
+  readEnvironmentAllThreadRefs,
   readEnvironmentThreadRefs,
   readProject,
   readThreadShell,
@@ -316,6 +317,12 @@ export function useThreadActions() {
         const shell = readThreadShell(ref);
         return shell === null ? [] : [shell];
       });
+      // Worktree bookkeeping must include hidden subagent threads: deleting a
+      // parent does not cascade to them, so they can still hold the worktree.
+      const allThreads = readEnvironmentAllThreadRefs(threadRef.environmentId).flatMap((ref) => {
+        const shell = readThreadShell(ref);
+        return shell === null ? [] : [shell];
+      });
       const threadProject = readProject({
         environmentId: threadRef.environmentId,
         projectId: thread.projectId,
@@ -331,8 +338,10 @@ export function useThreadActions() {
           : undefined;
       const survivingThreads =
         deletedIds && deletedIds.size > 0
-          ? threads.filter((entry) => entry.id === threadRef.threadId || !deletedIds.has(entry.id))
-          : threads;
+          ? allThreads.filter(
+              (entry) => entry.id === threadRef.threadId || !deletedIds.has(entry.id),
+            )
+          : allThreads;
       const orphanedWorktreePath = getOrphanedWorktreePathForThread(
         survivingThreads,
         threadRef.threadId,

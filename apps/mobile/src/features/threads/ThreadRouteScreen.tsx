@@ -126,6 +126,29 @@ function ThreadUnavailableScreen() {
   );
 }
 
+function SubagentThreadRedirect({
+  environmentId,
+  parentThreadId,
+}: {
+  readonly environmentId: EnvironmentId;
+  readonly parentThreadId: ThreadId | null;
+}) {
+  const navigation = useNavigation();
+  useEffect(() => {
+    if (parentThreadId === null) {
+      navigation.dispatch(StackActions.replace("Home"));
+      return;
+    }
+    navigation.dispatch(
+      StackActions.replace("Thread", {
+        environmentId,
+        threadId: parentThreadId,
+      }),
+    );
+  }, [environmentId, navigation, parentThreadId]);
+  return <OpeningThreadLoadingScreen />;
+}
+
 export function ThreadRouteScreen(props: ThreadRouteScreenProps) {
   const { state: workspaceState } = useWorkspaceState();
   const { connectionState } = useRemoteConnectionStatus();
@@ -156,6 +179,17 @@ export function ThreadRouteScreen(props: ThreadRouteScreenProps) {
   // loading placeholder while messages fetch, and the composer's connection
   // pill reports connecting/reconnecting/syncing status.
   if (selectedThread !== null && selectedThreadKey === routeThreadKey) {
+    // Internal subagent threads are hidden from user-facing lists; a deep
+    // link or stale selection still lands here, so send it to the parent
+    // thread instead of exposing the hidden transcript.
+    if (selectedThread.lineage.relationshipToParent === "subagent") {
+      return (
+        <SubagentThreadRedirect
+          environmentId={selectedThread.environmentId}
+          parentThreadId={selectedThread.lineage.parentThreadId}
+        />
+      );
+    }
     return <ThreadRouteContent {...props} selectedThreadDetailState={selectedThreadDetailState} />;
   }
 
