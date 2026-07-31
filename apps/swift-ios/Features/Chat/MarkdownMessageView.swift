@@ -3,32 +3,97 @@ import UIKit
 
 /// Native chat Markdown with block-aware layout and Foundation inline parsing.
 struct MarkdownMessageView: View {
-    private let source: String
-    private let document: MarkdownDocument
+    private struct RenderRequest: Hashable {
+        let revision: MarkdownContentRevision
+        let isStreaming: Bool
+    }
 
-    init(_ source: String) {
+    private let source: String
+    private let revision: MarkdownContentRevision
+    private let isStreaming: Bool
+    @State private var renderedDocument: MarkdownRenderedDocument?
+    @State private var isSelectingText = false
+
+    init(_ source: String, isStreaming: Bool = false) {
         self.source = source
-        document = MarkdownDocument(parsing: source)
+        self.isStreaming = isStreaming
+        let revision = MarkdownContentRevision(source)
+        self.revision = revision
+        _renderedDocument = State(
+            initialValue: MarkdownRenderCache.shared.cachedDocument(for: revision)
+        )
     }
 
     var body: some View {
-        MarkdownBlocksView(blocks: document.blocks)
-            .textSelection(.enabled)
-            .contextMenu {
-                Button {
-                    UIPasteboard.general.string = source
-                } label: {
-                    Label("Copy message", systemImage: "doc.on.doc")
-                }
+        Group {
+            if let renderedDocument, renderedDocument.revision == revision {
+                MarkdownBlocksView(blocks: renderedDocument.blocks)
+            } else {
+                // Parsing waits briefly so token-by-token streaming cancels stale revisions
+                // instead of scheduling work for content the user will never see.
+                Text(verbatim: source)
+                    .font(T3Typography.threadBody)
+                    .lineSpacing(4)
+                    .fixedSize(horizontal: false, vertical: true)
             }
-            .accessibilityAction(named: "Copy message") {
+        }
+        .modifier(MarkdownTextSelectionModifier(isEnabled: isSelectingText))
+        .contextMenu {
+            Button {
+                isSelectingText.toggle()
+            } label: {
+                Label(
+                    isSelectingText ? "Done selecting" : "Select text",
+                    systemImage: isSelectingText ? "checkmark" : "text.cursor"
+                )
+            }
+            Button {
                 UIPasteboard.general.string = source
+            } label: {
+                Label("Copy message", systemImage: "doc.on.doc")
             }
+        }
+        .accessibilityAction(named: "Copy message") {
+            UIPasteboard.general.string = source
+        }
+        .task(id: RenderRequest(revision: revision, isStreaming: isStreaming)) {
+            if let cached = MarkdownRenderCache.shared.cachedDocument(for: revision) {
+                renderedDocument = cached
+                return
+            }
+
+            do {
+                try await Task.sleep(for: .milliseconds(isStreaming ? 200 : 40))
+            } catch {
+                return
+            }
+            guard !Task.isCancelled else { return }
+
+            guard let rendered = await MarkdownRenderCache.shared.document(for: revision),
+                  !Task.isCancelled,
+                  rendered.revision == revision else {
+                return
+            }
+            renderedDocument = rendered
+        }
+    }
+}
+
+private struct MarkdownTextSelectionModifier: ViewModifier {
+    let isEnabled: Bool
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if isEnabled {
+            content.textSelection(.enabled)
+        } else {
+            content
+        }
     }
 }
 
 private struct MarkdownBlocksView: View {
-    let blocks: [MarkdownBlock]
+    let blocks: [MarkdownRenderedBlock]
     var spacing: CGFloat = 12
 
     var body: some View {
@@ -41,17 +106,17 @@ private struct MarkdownBlocksView: View {
 }
 
 private struct MarkdownBlockView: View {
-    let block: MarkdownBlock
+    let block: MarkdownRenderedBlock
 
     @ViewBuilder
     var body: some View {
         switch block {
-        case let .paragraph(text):
-            MarkdownInlineText(text, font: T3Typography.threadBody)
+        case let .paragraph(inline):
+            MarkdownInlineText(inline)
                 .lineSpacing(4)
 
-        case let .heading(level, text):
-            MarkdownInlineText(text, font: headingFont(level))
+        case let .heading(level, inline):
+            MarkdownInlineText(inline)
                 .padding(.top, level <= 2 ? 3 : 1)
 
         case let .unorderedList(items):
@@ -60,8 +125,8 @@ private struct MarkdownBlockView: View {
         case let .orderedList(start, items):
             MarkdownListView(items: items, start: start)
 
-        case let .blockquote(document):
-            MarkdownBlocksView(blocks: document.blocks, spacing: 9)
+        case let .blockquote(blocks):
+            MarkdownBlocksView(blocks: blocks, spacing: 9)
                 .foregroundStyle(T3Colors.textSecondary)
                 .padding(.leading, 14)
                 .overlay(alignment: .leading) {
@@ -81,19 +146,10 @@ private struct MarkdownBlockView: View {
                 .accessibilityHidden(true)
         }
     }
-
-    private func headingFont(_ level: Int) -> Font {
-        switch level {
-        case 1: T3Typography.threadHeading1
-        case 2: T3Typography.threadHeading2
-        case 3: T3Typography.threadHeading3
-        default: T3Typography.threadHeading4
-        }
-    }
 }
 
 private struct MarkdownListView: View {
-    let items: [MarkdownListItem]
+    let items: [MarkdownRenderedListItem]
     let start: Int?
 
     var body: some View {
@@ -111,7 +167,7 @@ private struct MarkdownListView: View {
     }
 
     @ViewBuilder
-    private func marker(for item: MarkdownListItem, offset: Int) -> some View {
+    private func marker(for item: MarkdownRenderedListItem, offset: Int) -> some View {
         if let task = item.task {
             Image(systemName: task == .complete ? "checkmark.square.fill" : "square")
                 .font(T3Typography.control)
@@ -173,7 +229,6 @@ private struct MarkdownCodeBlockView: View {
                     .font(T3Typography.code)
                     .foregroundStyle(T3Colors.textPrimary.opacity(0.94))
                     .lineSpacing(3)
-                    .textSelection(.enabled)
                     .fixedSize(horizontal: true, vertical: true)
                     .padding(13)
             }
@@ -192,9 +247,9 @@ private struct MarkdownInlineText: View {
     private let attributedText: AttributedString
     private let font: Font
 
-    init(_ source: String, font: Font) {
-        self.font = font
-        attributedText = MarkdownInlineFormatter.format(source, baseFont: font)
+    init(_ rendered: MarkdownRenderedInline) {
+        attributedText = rendered.attributedText
+        font = rendered.style.font
     }
 
     var body: some View {
