@@ -256,8 +256,11 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging {
         return FeatureThread(
             id: threadID,
             projectID: projectID,
+            environmentID: activeEnvironment?.id,
+            environmentName: activeEnvironment?.label,
             title: threadTitle,
             providerID: model.instanceId,
+            providerName: providerDisplayName(model.instanceId),
             modelID: model.model
         )
     }
@@ -352,8 +355,11 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging {
         return FeatureThread(
             id: pending.threadID,
             projectID: projectID,
+            environmentID: activeEnvironment?.id,
+            environmentName: activeEnvironment?.label,
             title: title,
             providerID: model.instanceId,
+            providerName: providerDisplayName(model.instanceId),
             modelID: model.model,
             modelOptions: mapOptionSelections(model.options),
             runtimeMode: runtimeMode,
@@ -1344,7 +1350,11 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging {
         FeatureThread(
             id: thread.id,
             projectID: thread.projectId,
+            environmentID: activeEnvironment?.id,
+            environmentName: activeEnvironment?.label,
             title: thread.title,
+            branch: thread.branch,
+            worktreePath: thread.worktreePath,
             createdAt: parseDate(thread.createdAt),
             updatedAt: parseDate(thread.updatedAt),
             state: mapThreadState(
@@ -1354,6 +1364,10 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging {
                 hasUserInput: thread.hasPendingUserInput
             ),
             providerID: thread.modelSelection.instanceId,
+            providerName: threadProviderName(
+                session: thread.session,
+                modelSelection: thread.modelSelection
+            ),
             modelID: thread.modelSelection.model,
             modelOptions: mapOptionSelections(thread.modelSelection.options),
             isArchived: thread.archivedAt != nil,
@@ -1370,6 +1384,10 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging {
                 latestTurn: thread.latestTurn,
                 session: thread.session
             ),
+            workingStartedAt: workingStartedAt(
+                latestTurn: thread.latestTurn,
+                session: thread.session
+            ),
             latestTurnCompletedAt: thread.latestTurn?.completedAt.map(parseDate),
             runtimeMode: mapRuntimeMode(thread.runtimeMode),
             interactionMode: mapInteractionMode(thread.interactionMode)
@@ -1380,8 +1398,12 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging {
         FeatureThread(
             id: thread.id,
             projectID: thread.projectId,
+            environmentID: activeEnvironment?.id,
+            environmentName: activeEnvironment?.label,
             title: thread.title,
             preview: previewText(thread.messages.last?.text),
+            branch: thread.branch,
+            worktreePath: thread.worktreePath,
             createdAt: parseDate(thread.createdAt),
             updatedAt: parseDate(thread.updatedAt),
             state: mapThreadState(
@@ -1391,6 +1413,10 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging {
                 hasUserInput: false
             ),
             providerID: thread.modelSelection.instanceId,
+            providerName: threadProviderName(
+                session: thread.session,
+                modelSelection: thread.modelSelection
+            ),
             modelID: thread.modelSelection.model,
             modelOptions: mapOptionSelections(thread.modelSelection.options),
             isArchived: thread.archivedAt != nil,
@@ -1404,6 +1430,10 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging {
             snoozedUntil: thread.snoozedUntil.map(parseDate),
             snoozedAt: thread.snoozedAt.map(parseDate),
             attentionAt: failureDate(
+                latestTurn: thread.latestTurn,
+                session: thread.session
+            ),
+            workingStartedAt: workingStartedAt(
                 latestTurn: thread.latestTurn,
                 session: thread.session
             ),
@@ -1452,8 +1482,12 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging {
         let mappedThread = FeatureThread(
             id: thread.id,
             projectID: thread.projectId,
+            environmentID: activeEnvironment?.id,
+            environmentName: activeEnvironment?.label,
             title: thread.title,
             preview: previewText(thread.messages.last?.text),
+            branch: thread.branch,
+            worktreePath: thread.worktreePath,
             createdAt: parseDate(thread.createdAt),
             updatedAt: parseDate(thread.updatedAt),
             state: mapThreadState(
@@ -1463,6 +1497,10 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging {
                 hasUserInput: !userInputs.isEmpty
             ),
             providerID: thread.modelSelection.instanceId,
+            providerName: threadProviderName(
+                session: thread.session,
+                modelSelection: thread.modelSelection
+            ),
             modelID: thread.modelSelection.model,
             modelOptions: mapOptionSelections(thread.modelSelection.options),
             isArchived: thread.archivedAt != nil,
@@ -1476,6 +1514,10 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging {
             snoozedUntil: thread.snoozedUntil.map(parseDate),
             snoozedAt: thread.snoozedAt.map(parseDate),
             attentionAt: failureDate(
+                latestTurn: thread.latestTurn,
+                session: thread.session
+            ),
+            workingStartedAt: workingStartedAt(
                 latestTurn: thread.latestTurn,
                 session: thread.session
             ),
@@ -1863,6 +1905,23 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging {
         }
     }
 
+    private func threadProviderName(
+        session: OrchestrationSession?,
+        modelSelection: ModelSelection
+    ) -> String {
+        if let name = session?.providerName?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !name.isEmpty {
+            return name
+        }
+        let providerID = session?.providerInstanceId ?? modelSelection.instanceId
+        if let provider = latestServerConfig?.providers.first(where: {
+            $0.instanceId == providerID
+        }) {
+            return provider.displayName ?? providerDisplayName(provider.driver)
+        }
+        return providerDisplayName(providerID)
+    }
+
     private func cachedAttachmentURL(
         for id: String,
         environmentID: String? = nil
@@ -2012,6 +2071,28 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging {
         ]
         .compactMap { $0.flatMap(parseValidDate) }
         .max()
+    }
+
+    private func workingStartedAt(
+        latestTurn: OrchestrationLatestTurn?,
+        session: OrchestrationSession?
+    ) -> Date? {
+        guard session?.status == "starting"
+                || session?.status == "running"
+                || latestTurn?.state == "running" else {
+            return nil
+        }
+        let candidates: [String?]
+        if let latestTurn, latestTurn.completedAt == nil {
+            candidates = [
+                latestTurn.startedAt,
+                latestTurn.requestedAt,
+                session?.updatedAt,
+            ]
+        } else {
+            candidates = [session?.updatedAt]
+        }
+        return candidates.lazy.compactMap { $0.flatMap(self.parseValidDate) }.first
     }
 
     private func makeUploadAttachments(

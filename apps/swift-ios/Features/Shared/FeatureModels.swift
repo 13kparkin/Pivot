@@ -90,12 +90,17 @@ public enum FeatureInteractionMode: String, CaseIterable, Sendable, Codable {
 public struct FeatureThread: Identifiable, Sendable, Equatable, Hashable, Codable {
     public let id: String
     public var projectID: String
+    public var environmentID: String?
+    public var environmentName: String?
     public var title: String
     public var preview: String?
+    public var branch: String?
+    public var worktreePath: String?
     public var createdAt: Date
     public var updatedAt: Date
     public var state: FeatureThreadState
     public var providerID: String?
+    public var providerName: String?
     public var modelID: String?
     public var modelOptions: [FeatureModelOptionSelection]
     public var isArchived: Bool
@@ -106,6 +111,7 @@ public struct FeatureThread: Identifiable, Sendable, Equatable, Hashable, Codabl
     public var snoozedUntil: Date?
     public var snoozedAt: Date?
     public var attentionAt: Date?
+    public var workingStartedAt: Date?
     public var latestTurnCompletedAt: Date?
     public var runtimeMode: FeatureRuntimeMode
     public var interactionMode: FeatureInteractionMode
@@ -113,12 +119,17 @@ public struct FeatureThread: Identifiable, Sendable, Equatable, Hashable, Codabl
     public init(
         id: String,
         projectID: String,
+        environmentID: String? = nil,
+        environmentName: String? = nil,
         title: String,
         preview: String? = nil,
+        branch: String? = nil,
+        worktreePath: String? = nil,
         createdAt: Date = .now,
         updatedAt: Date = .now,
         state: FeatureThreadState = .idle,
         providerID: String? = nil,
+        providerName: String? = nil,
         modelID: String? = nil,
         modelOptions: [FeatureModelOptionSelection] = [],
         isArchived: Bool = false,
@@ -129,18 +140,24 @@ public struct FeatureThread: Identifiable, Sendable, Equatable, Hashable, Codabl
         snoozedUntil: Date? = nil,
         snoozedAt: Date? = nil,
         attentionAt: Date? = nil,
+        workingStartedAt: Date? = nil,
         latestTurnCompletedAt: Date? = nil,
         runtimeMode: FeatureRuntimeMode = .fullAccess,
         interactionMode: FeatureInteractionMode = .standard
     ) {
         self.id = id
         self.projectID = projectID
+        self.environmentID = environmentID
+        self.environmentName = environmentName
         self.title = title
         self.preview = preview
+        self.branch = branch
+        self.worktreePath = worktreePath
         self.createdAt = createdAt
         self.updatedAt = updatedAt
         self.state = state
         self.providerID = providerID
+        self.providerName = providerName
         self.modelID = modelID
         self.modelOptions = modelOptions
         self.isArchived = isArchived
@@ -151,6 +168,7 @@ public struct FeatureThread: Identifiable, Sendable, Equatable, Hashable, Codabl
         self.snoozedUntil = snoozedUntil
         self.snoozedAt = snoozedAt
         self.attentionAt = attentionAt
+        self.workingStartedAt = workingStartedAt
         self.latestTurnCompletedAt = latestTurnCompletedAt
         self.runtimeMode = runtimeMode
         self.interactionMode = interactionMode

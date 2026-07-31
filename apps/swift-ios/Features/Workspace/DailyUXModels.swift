@@ -200,7 +200,85 @@ enum SidebarRelativeAge {
     }
 }
 
+enum HomeThreadStatus: String, Sendable, Equatable {
+    case approval
+    case input
+    case working
+    case failed
+    case done
+    case ready
+}
+
+enum HomeWorkingDuration {
+    static func compact(since date: Date, now: Date) -> String {
+        let seconds = max(0, Int(now.timeIntervalSince(date)))
+        guard seconds >= 60 else { return "\(seconds)s" }
+        let minutes = seconds / 60
+        guard minutes >= 60 else { return "\(minutes)m" }
+        return "\(minutes / 60)h \(minutes % 60)m"
+    }
+}
+
 extension FeatureThread {
+    var homeStatus: HomeThreadStatus {
+        switch state {
+        case .queued, .working:
+            .working
+        case .waitingForApproval:
+            .approval
+        case .waitingForInput:
+            .input
+        case .failed:
+            .failed
+        case .completed:
+            .done
+        case .idle:
+            .ready
+        }
+    }
+
+    var homeStatusLabel: String? {
+        switch homeStatus {
+        case .approval: "Approval"
+        case .input: "Input"
+        case .working: "Working"
+        case .failed: "Failed"
+        case .done: "Done"
+        case .ready: nil
+        }
+    }
+
+    func homeWorkingDuration(at now: Date) -> String? {
+        guard homeStatus == .working, let workingStartedAt else { return nil }
+        return HomeWorkingDuration.compact(since: workingStartedAt, now: now)
+    }
+
+    func homeEnvironmentLabel(in snapshot: FeatureSnapshot) -> String? {
+        let projectEnvironmentID = snapshot.projects
+            .first(where: { $0.id == projectID })?
+            .environmentID
+        if let resolvedID = environmentID ?? projectEnvironmentID,
+           let currentName = snapshot.environments.first(where: { $0.id == resolvedID })?.name,
+           !currentName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return currentName
+        }
+        guard let environmentName = environmentName?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+              !environmentName.isEmpty else {
+            return nil
+        }
+        return environmentName
+    }
+
+    func homeProviderLabel(in snapshot: FeatureSnapshot) -> String? {
+        if let providerName = providerName?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !providerName.isEmpty {
+            return providerName
+        }
+        guard let providerID else { return nil }
+        return snapshot.providers.first(where: { $0.id == providerID })?.name ?? providerID
+    }
+
     var needsAttention: Bool {
         state == .waitingForApproval || state == .waitingForInput || state == .failed
     }
