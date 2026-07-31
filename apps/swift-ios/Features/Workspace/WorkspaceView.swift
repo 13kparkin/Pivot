@@ -22,6 +22,7 @@ public struct WorkspaceView: View {
     @State private var renameTitle = ""
     @State private var sidebarBoundaryNow = Date.now
     @State private var preferredCompactColumn = NavigationSplitViewColumn.sidebar
+    @State private var homePresentationCache = HomePresentationCache()
     @FocusState private var isSearchFocused: Bool
 
     public init(
@@ -153,58 +154,48 @@ public struct WorkspaceView: View {
     }
 
     private var threadList: some View {
-        let presentation = HomePresentation(
+        let presentation = homePresentationCache.presentation(
             snapshot: model.snapshot,
+            revision: model.homePresentationRevision,
             query: searchText,
             projectID: selectedProjectID,
             now: sidebarBoundaryNow
         )
 
-        return List(selection: $selectedThreadID) {
-            projectFilter(presentation)
-
-            if searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                activeRows(presentation)
-                shelfRows(
-                    title: "Snoozed",
-                    threads: presentation.snoozed,
-                    rowContexts: presentation.rowContexts,
-                    isExpanded: $isSnoozedExpanded,
-                    accent: T3Colors.accent,
-                    isArchived: false
-                )
-                shelfRows(
-                    title: "Settled",
-                    threads: Array(presentation.settled.prefix(settledLimit)),
-                    rowContexts: presentation.rowContexts,
-                    totalCount: presentation.settled.count,
-                    isExpanded: $isSettledExpanded,
-                    accent: nil,
-                    isArchived: false
-                )
-                if presentation.settled.count > settledLimit, isSettledExpanded {
-                    showMoreSettled(presentation.settled.count - settledLimit)
+        return VStack(spacing: 0) {
+            projectFilter
+            HomeThreadCollectionView(
+                presentation: presentation,
+                query: searchText,
+                selectedThreadID: selectedThreadID,
+                forceRichRows: dynamicTypeSize.isAccessibilitySize,
+                isSnoozedExpanded: isSnoozedExpanded,
+                isSettledExpanded: isSettledExpanded,
+                isArchiveExpanded: isArchiveExpanded,
+                settledLimit: settledLimit,
+                onOpen: openThread,
+                onToggleSnoozed: { isSnoozedExpanded.toggle() },
+                onToggleSettled: { isSettledExpanded.toggle() },
+                onToggleArchive: { isArchiveExpanded.toggle() },
+                onShowMoreSettled: { settledLimit += 25 },
+                onRename: { thread in
+                    renameTitle = thread.title
+                    renamingThread = thread
+                },
+                onArchive: { thread, archived in
+                    Task { await model.setArchived(thread.id, archived: archived) }
+                },
+                onSettle: { thread, settled in
+                    Task { await model.setSettled(thread.id, settled: settled) }
+                },
+                onSnooze: { thread, until in
+                    Task { await model.setSnoozed(thread.id, until: until) }
+                },
+                onDelete: { thread in
+                    Task { await model.deleteThread(thread.id) }
                 }
-                if !presentation.archived.isEmpty {
-                    shelfRows(
-                        title: "Archived",
-                        threads: presentation.archived,
-                        rowContexts: presentation.rowContexts,
-                        isExpanded: $isArchiveExpanded,
-                        accent: nil,
-                        isArchived: true
-                    )
-                }
-            } else {
-                searchRows(presentation)
-            }
+            )
         }
-        .listStyle(.plain)
-        .environment(\.defaultMinListRowHeight, 0)
-        .scrollContentBackground(.hidden)
-        .scrollDismissesKeyboard(.interactively)
-        .contentMargins(.top, 4, for: .scrollContent)
-        .contentMargins(.bottom, 74, for: .scrollContent)
         .background(T3Colors.background)
     }
 
@@ -428,7 +419,7 @@ public struct WorkspaceView: View {
         .accessibilityIdentifier("sidebar-new-task-button")
     }
 
-    private func projectFilter(_ presentation: HomePresentation) -> some View {
+    private var projectFilter: some View {
         HStack(spacing: 0) {
             Menu {
                 Button {
@@ -483,235 +474,7 @@ public struct WorkspaceView: View {
         }
         .padding(.leading, 10)
         .padding(.trailing, 2)
-        .listRowInsets(EdgeInsets())
-        .listRowBackground(Color.clear)
-        .listRowSeparator(.hidden)
         .accessibilityElement(children: .contain)
-    }
-
-    @ViewBuilder
-    private func activeRows(_ presentation: HomePresentation) -> some View {
-        if presentation.active.isEmpty {
-            Text("No active tasks")
-                .font(.footnote)
-                .foregroundStyle(T3Colors.textTertiary)
-                .frame(maxWidth: .infinity, minHeight: 68, alignment: .center)
-                .listRowInsets(EdgeInsets())
-                .listRowBackground(Color.clear)
-                .listRowSeparator(.hidden)
-        } else {
-            ForEach(presentation.active) { thread in
-                threadLink(
-                    thread,
-                    context: presentation.rowContexts[thread.id] ?? .fallback,
-                    style: .rich,
-                    isArchived: false
-                )
-            }
-        }
-    }
-
-    @ViewBuilder
-    private func shelfRows(
-        title: String,
-        threads: [FeatureThread],
-        rowContexts: [String: HomeThreadRowContext],
-        totalCount: Int? = nil,
-        isExpanded: Binding<Bool>,
-        accent: Color?,
-        isArchived: Bool
-    ) -> some View {
-        Button {
-            withAnimation(.easeOut(duration: 0.16)) {
-                isExpanded.wrappedValue.toggle()
-            }
-        } label: {
-            HomeShelfHeader(
-                title: title,
-                count: totalCount ?? threads.count,
-                isExpanded: isExpanded.wrappedValue,
-                accent: accent
-            )
-        }
-        .buttonStyle(.plain)
-        .listRowInsets(EdgeInsets())
-        .listRowBackground(Color.clear)
-        .listRowSeparator(.hidden)
-        .accessibilityLabel("\(title), \(totalCount ?? threads.count) tasks")
-        .accessibilityValue(isExpanded.wrappedValue ? "Expanded" : "Collapsed")
-
-        if isExpanded.wrappedValue {
-            if threads.isEmpty {
-                Text("None")
-                    .font(.caption)
-                    .foregroundStyle(T3Colors.textTertiary)
-                    .padding(.leading, 34)
-                    .frame(minHeight: 34)
-                    .listRowInsets(EdgeInsets())
-                    .listRowBackground(Color.clear)
-                    .listRowSeparator(.hidden)
-            } else {
-                ForEach(threads) { thread in
-                    threadLink(
-                        thread,
-                        context: rowContexts[thread.id] ?? .fallback,
-                        style: .slim,
-                        isArchived: isArchived
-                    )
-                }
-            }
-        }
-    }
-
-    private func showMoreSettled(_ remaining: Int) -> some View {
-        Button {
-            settledLimit += 25
-        } label: {
-            HStack {
-                Text("Show more")
-                Spacer()
-                Text("\(remaining)")
-                    .monospacedDigit()
-                    .foregroundStyle(T3Colors.textTertiary)
-            }
-            .font(.caption.weight(.semibold))
-            .foregroundStyle(T3Colors.textSecondary)
-            .padding(.horizontal, 34)
-            .frame(height: T3Metrics.minimumTapTarget)
-        }
-        .buttonStyle(.plain)
-        .listRowInsets(EdgeInsets())
-        .listRowBackground(Color.clear)
-        .listRowSeparator(.hidden)
-    }
-
-    @ViewBuilder
-    private func searchRows(_ presentation: HomePresentation) -> some View {
-        if presentation.searchResults.isEmpty {
-            ContentUnavailableView.search(text: searchText)
-                .listRowInsets(EdgeInsets())
-                .listRowBackground(Color.clear)
-                .listRowSeparator(.hidden)
-        } else {
-            ForEach(presentation.searchResults) { thread in
-                threadLink(
-                    thread,
-                    context: presentation.rowContexts[thread.id] ?? .fallback,
-                    style: .rich,
-                    isArchived: thread.isArchived
-                )
-            }
-        }
-    }
-
-    private func threadLink(
-        _ thread: FeatureThread,
-        context: HomeThreadRowContext,
-        style: FeatureThreadRow.Style,
-        isArchived: Bool
-    ) -> some View {
-        NavigationLink(value: thread.id) {
-            FeatureThreadRow(
-                thread: thread,
-                context: context,
-                isSelected: selectedThreadID == thread.id,
-                style: dynamicTypeSize.isAccessibilitySize ? .rich : style
-            )
-            .equatable()
-        }
-        .tag(thread.id)
-        .buttonStyle(.plain)
-        .navigationLinkIndicatorVisibility(.hidden)
-        .listRowInsets(EdgeInsets())
-        .listRowBackground(Color.clear)
-        .listRowSeparator(.hidden)
-        .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-            Button(role: .destructive) {
-                Task { await model.deleteThread(thread.id) }
-            } label: {
-                Label("Delete", systemImage: "trash")
-            }
-            if isArchived {
-                Button {
-                    Task { await model.setArchived(thread.id, archived: false) }
-                } label: {
-                    Label("Restore", systemImage: "arrow.uturn.backward")
-                }
-                .tint(.blue)
-            } else {
-                Button {
-                    Task { await model.setArchived(thread.id, archived: true) }
-                } label: {
-                    Label("Archive", systemImage: "archivebox")
-                }
-                .tint(.orange)
-            }
-        }
-        .contextMenu {
-            Button {
-                renameTitle = thread.title
-                renamingThread = thread
-            } label: {
-                Label("Rename", systemImage: "pencil")
-            }
-
-            if isArchived {
-                Button {
-                    Task { await model.setArchived(thread.id, archived: false) }
-                } label: {
-                    Label("Restore", systemImage: "arrow.uturn.backward")
-                }
-            } else {
-                Button {
-                    Task { await model.setArchived(thread.id, archived: true) }
-                } label: {
-                    Label("Archive", systemImage: "archivebox")
-                }
-
-                Button {
-                    Task {
-                        await model.setSettled(
-                            thread.id,
-                            settled: !thread.isEffectivelySettled(at: sidebarBoundaryNow)
-                        )
-                    }
-                } label: {
-                    Label(
-                        thread.isEffectivelySettled(at: sidebarBoundaryNow) ? "Reopen" : "Mark done",
-                        systemImage: thread.isEffectivelySettled(at: sidebarBoundaryNow)
-                            ? "arrow.counterclockwise"
-                            : "checkmark"
-                    )
-                }
-
-                Button {
-                    let snoozed = thread.isEffectivelySnoozed(at: sidebarBoundaryNow)
-                    Task {
-                        await model.setSnoozed(
-                            thread.id,
-                            until: snoozed ? nil : Date().addingTimeInterval(60 * 60)
-                        )
-                    }
-                } label: {
-                    let snoozed = thread.isEffectivelySnoozed(at: sidebarBoundaryNow)
-                    Label(
-                        snoozed ? "Unsnooze" : "Snooze 1 hour",
-                        systemImage: snoozed ? "bell" : "clock"
-                    )
-                }
-                .disabled(
-                    thread.state == .queued
-                        || thread.state == .waitingForApproval
-                        || thread.state == .waitingForInput
-                )
-            }
-
-            Button(role: .destructive) {
-                Task { await model.deleteThread(thread.id) }
-            } label: {
-                Label("Delete", systemImage: "trash")
-            }
-        }
     }
 
     private var selectedProject: FeatureProject? {
@@ -793,7 +556,7 @@ private extension FeatureDraftAttachment {
     }
 }
 
-private struct HomePresentation {
+struct HomePresentation {
     let active: [FeatureThread]
     let snoozed: [FeatureThread]
     let settled: [FeatureThread]
@@ -821,16 +584,60 @@ private struct HomePresentation {
         snoozed = index.snoozed
         settled = index.settled
         self.archived = archived
-        searchResults = DailyUXSidebarIndex.matchingThreads(
-            index.active + index.snoozed + index.settled + archived,
-            snapshot: snapshot,
-            query: query
-        )
+        let normalizedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        searchResults = normalizedQuery.isEmpty
+            ? []
+            : DailyUXSidebarIndex.matchingThreads(
+                index.active + index.snoozed + index.settled + archived,
+                snapshot: snapshot,
+                query: normalizedQuery
+            )
         rowContexts = HomeThreadRowContext.index(snapshot: snapshot)
     }
 }
 
-private struct HomeShelfHeader: View {
+@MainActor
+private final class HomePresentationCache {
+    private struct Key: Equatable {
+        let revision: UInt64
+        let query: String
+        let projectID: String?
+        let now: Date
+    }
+
+    private var cachedKey: Key?
+    private var cachedPresentation: HomePresentation?
+
+    func presentation(
+        snapshot: FeatureSnapshot,
+        revision: UInt64,
+        query: String,
+        projectID: String?,
+        now: Date
+    ) -> HomePresentation {
+        let key = Key(
+            revision: revision,
+            query: query,
+            projectID: projectID,
+            now: now
+        )
+        if cachedKey == key, let cachedPresentation {
+            return cachedPresentation
+        }
+
+        let presentation = HomePresentation(
+            snapshot: snapshot,
+            query: query,
+            projectID: projectID,
+            now: now
+        )
+        cachedKey = key
+        cachedPresentation = presentation
+        return presentation
+    }
+}
+
+struct HomeShelfHeader: View {
     let title: String
     let count: Int
     let isExpanded: Bool
@@ -855,7 +662,7 @@ private struct HomeShelfHeader: View {
     }
 }
 
-private struct HomeThreadRowContext: Equatable {
+struct HomeThreadRowContext: Equatable {
     let projectName: String
     let environmentLabel: String?
     let providerLooksTerminal: Bool
@@ -928,29 +735,33 @@ struct FeatureThreadRow: View, Equatable {
     private let context: HomeThreadRowContext
     let isSelected: Bool
     let style: Style
+    let now: Date
+    let allowsMultilineTitle: Bool
 
-    fileprivate init(
+    init(
         thread: FeatureThread,
         context: HomeThreadRowContext,
         isSelected: Bool = false,
-        style: Style = .rich
+        style: Style = .rich,
+        now: Date = .now,
+        allowsMultilineTitle: Bool = false
     ) {
         self.thread = thread
         self.context = context
         self.isSelected = isSelected
         self.style = style
+        self.now = now
+        self.allowsMultilineTitle = allowsMultilineTitle
     }
 
     var body: some View {
-        TimelineView(.periodic(from: .now, by: refreshCadence)) { timeline in
-            row(at: timeline.date)
-                .accessibilityElement(children: .ignore)
-                .accessibilityLabel(thread.title)
-                .accessibilityValue(accessibilityValue(at: timeline.date))
-                .accessibilityHint("Opens task")
-                .accessibilityIdentifier("thread-\(thread.id)")
-                .accessibilityAddTraits(isSelected ? .isSelected : [])
-        }
+        row(at: now)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(thread.title)
+            .accessibilityValue(accessibilityValue(at: now))
+            .accessibilityHint("Opens task")
+            .accessibilityIdentifier("thread-\(thread.id)")
+            .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 
     @ViewBuilder
@@ -981,7 +792,7 @@ struct FeatureThreadRow: View, Equatable {
                 .font(T3Typography.homeTitle)
                 .tracking(-0.14)
                 .foregroundStyle(T3Colors.textPrimary)
-                .lineLimit(1)
+                .lineLimit(allowsMultilineTitle ? 2 : 1)
                 .padding(.top, 4)
 
             HStack(spacing: 6) {
@@ -1031,7 +842,7 @@ struct FeatureThreadRow: View, Equatable {
             Text(thread.title)
                 .font(T3Typography.homeTitle)
                 .foregroundStyle(T3Colors.textSecondary)
-                .lineLimit(1)
+                .lineLimit(allowsMultilineTitle ? 2 : 1)
             Spacer(minLength: 8)
             Text(SidebarRelativeAge.compact(since: thread.updatedAt, now: now))
                 .font(T3Typography.homeMetadata.monospacedDigit())
@@ -1145,9 +956,6 @@ struct FeatureThreadRow: View, Equatable {
         return values.joined(separator: ". ")
     }
 
-    private var refreshCadence: TimeInterval {
-        thread.homeStatus == .working ? 1 : 60
-    }
 }
 
 private struct ProjectBadge: View {
