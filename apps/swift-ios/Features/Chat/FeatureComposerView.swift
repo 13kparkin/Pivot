@@ -2,6 +2,7 @@ import SwiftUI
 
 struct FeatureComposerView: View {
     @State private var isManuallyExpanded = false
+    @State private var attachmentPreparation = FeatureAttachmentPreparationState()
 
     @Binding private var text: String
     @Binding private var selection: FeatureSelection?
@@ -117,7 +118,10 @@ struct FeatureComposerView: View {
             .ignoresSafeArea()
         }
         .onChange(of: focused.wrappedValue) {
-            if !focused.wrappedValue, textIsEmpty, attachments.isEmpty {
+            if !focused.wrappedValue,
+               textIsEmpty,
+               attachments.isEmpty,
+               !attachmentPreparation.isPreparing {
                 isManuallyExpanded = false
             }
         }
@@ -188,6 +192,16 @@ struct FeatureComposerView: View {
                     .padding(.bottom, 4)
             }
 
+            if attachmentPreparation.isPreparing {
+                Label(attachmentPreparation.statusLabel, systemImage: "hourglass")
+                    .font(.caption)
+                    .foregroundStyle(T3Colors.textSecondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 15)
+                    .padding(.bottom, 4)
+                    .accessibilityIdentifier("attachment-preparing")
+            }
+
             composerFooter
         }
     }
@@ -196,6 +210,7 @@ struct FeatureComposerView: View {
         HStack(spacing: 2) {
             FeatureImageAttachmentPicker(
                 attachments: $attachments,
+                preparationState: $attachmentPreparation,
                 isEnabled: imagesAllowed
             )
 
@@ -291,7 +306,7 @@ struct FeatureComposerView: View {
     }
 
     private var submitButton: some View {
-        Button(action: showsStop ? onStop : onSend) {
+        Button(action: performPrimaryAction) {
             Group {
                 if isSending {
                     ProgressView()
@@ -325,6 +340,7 @@ struct FeatureComposerView: View {
             || focused.wrappedValue
             || !textIsEmpty
             || !attachments.isEmpty
+            || attachmentPreparation.isPreparing
     }
 
     private var showsStop: Bool {
@@ -340,13 +356,25 @@ struct FeatureComposerView: View {
     }
 
     private var canSend: Bool {
-        (!textIsEmpty || !attachments.isEmpty)
-            && (attachments.isEmpty || imagesAllowed)
-            && !isSending
+        FeatureComposerSubmissionEligibility.canSend(
+            text: text,
+            attachmentCount: attachments.count,
+            imagesAllowed: imagesAllowed,
+            isSending: isSending,
+            preparationState: attachmentPreparation
+        )
     }
 
     private var imagesAllowed: Bool {
         DailyUXModelOptions.supportsImages(selection: selection, providers: providers)
+    }
+
+    private func performPrimaryAction() {
+        if showsStop {
+            onStop()
+        } else if canSend {
+            onSend()
+        }
     }
 
     private func runtimeModeLabel(_ mode: FeatureRuntimeMode) -> String {
@@ -371,6 +399,23 @@ struct FeatureComposerView: View {
     ) -> String {
         if interactionMode == .plan { return "Plan" }
         return runtimeMode.map(runtimeModeLabel) ?? "Mode"
+    }
+}
+
+enum FeatureComposerSubmissionEligibility {
+    static func canSend(
+        text: String,
+        attachmentCount: Int,
+        imagesAllowed: Bool,
+        isSending: Bool,
+        preparationState: FeatureAttachmentPreparationState
+    ) -> Bool {
+        let hasText = !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let hasAttachments = attachmentCount > 0
+        return !isSending
+            && !preparationState.isPreparing
+            && (hasText || hasAttachments)
+            && (!hasAttachments || imagesAllowed)
     }
 }
 

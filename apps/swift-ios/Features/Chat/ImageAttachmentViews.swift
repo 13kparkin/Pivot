@@ -4,23 +4,56 @@ import SwiftUI
 import UniformTypeIdentifiers
 import UIKit
 
+struct FeatureAttachmentPreparationState: Equatable {
+    struct Operation: Hashable {
+        fileprivate let id: UUID
+    }
+
+    private var pendingItemsByOperation: [Operation: Int] = [:]
+
+    var isPreparing: Bool {
+        !pendingItemsByOperation.isEmpty
+    }
+
+    var pendingItemCount: Int {
+        pendingItemsByOperation.values.reduce(0, +)
+    }
+
+    var statusLabel: String {
+        pendingItemCount == 1 ? "Preparing image…" : "Preparing \(pendingItemCount) images…"
+    }
+
+    @discardableResult
+    mutating func begin(itemCount: Int, id: UUID = UUID()) -> Operation {
+        let operation = Operation(id: id)
+        pendingItemsByOperation[operation] = max(1, itemCount)
+        return operation
+    }
+
+    mutating func finish(_ operation: Operation) {
+        pendingItemsByOperation.removeValue(forKey: operation)
+    }
+}
+
 struct FeatureImageAttachmentPicker: View {
     @Binding var attachments: [FeatureDraftAttachment]
+    @Binding var preparationState: FeatureAttachmentPreparationState
     let maximumCount: Int
     let isEnabled: Bool
 
     @State private var selection: [PhotosPickerItem] = []
-    @State private var isLoading = false
     @State private var isCameraPresented = false
     @State private var isFileImporterPresented = false
     @State private var errorMessage: String?
 
     init(
         attachments: Binding<[FeatureDraftAttachment]>,
+        preparationState: Binding<FeatureAttachmentPreparationState>,
         maximumCount: Int = 8,
         isEnabled: Bool = true
     ) {
         _attachments = attachments
+        _preparationState = preparationState
         self.maximumCount = maximumCount
         self.isEnabled = isEnabled
     }
@@ -48,7 +81,7 @@ struct FeatureImageAttachmentPicker: View {
                 Label("Files", systemImage: "folder")
             }
         } label: {
-            Image(systemName: isLoading ? "ellipsis" : "paperclip")
+            Image(systemName: preparationState.isPreparing ? "hourglass" : "paperclip")
                 .font(.system(size: 17, weight: .medium))
                 .foregroundStyle(T3Colors.textSecondary)
                 .frame(width: T3Metrics.minimumTapTarget, height: T3Metrics.minimumTapTarget)
@@ -99,11 +132,11 @@ struct FeatureImageAttachmentPicker: View {
     }
 
     private var canAdd: Bool {
-        isEnabled && !isLoading && remainingCount > 0
+        isEnabled && !preparationState.isPreparing && remainingCount > 0
     }
 
     private var attachmentAccessibilityLabel: String {
-        if isLoading { return "Adding attachment" }
+        if preparationState.isPreparing { return preparationState.statusLabel }
         if remainingCount == 0 { return "Attachment limit reached" }
         return "Add attachment"
     }
@@ -118,10 +151,10 @@ struct FeatureImageAttachmentPicker: View {
         let items = selection
         guard !items.isEmpty else { return }
         selection = []
-        isLoading = true
+        let operation = preparationState.begin(itemCount: items.count)
 
         Task {
-            defer { isLoading = false }
+            defer { preparationState.finish(operation) }
             for item in items.prefix(remainingCount) {
                 do {
                     guard let data = try await item.loadTransferable(type: Data.self) else {
@@ -139,10 +172,10 @@ struct FeatureImageAttachmentPicker: View {
     private func loadCapturedImage(_ image: UIImage) {
         isCameraPresented = false
         guard canAdd else { return }
-        isLoading = true
+        let operation = preparationState.begin(itemCount: 1)
 
         Task {
-            defer { isLoading = false }
+            defer { preparationState.finish(operation) }
             do {
                 let data = try await Task.detached(priority: .userInitiated) {
                     guard let data = image.jpegData(compressionQuality: 0.94) else {
@@ -163,10 +196,10 @@ struct FeatureImageAttachmentPicker: View {
             errorMessage = error.localizedDescription
         case .success(let urls):
             guard !urls.isEmpty, canAdd else { return }
-            isLoading = true
+            let operation = preparationState.begin(itemCount: min(urls.count, remainingCount))
 
             Task {
-                defer { isLoading = false }
+                defer { preparationState.finish(operation) }
                 for url in urls.prefix(remainingCount) {
                     do {
                         let data = try await Task.detached(priority: .userInitiated) {
