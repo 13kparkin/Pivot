@@ -27,13 +27,16 @@ the active selection are stored separately in Application Support.
 
 ## Included
 
-- Direct pairing URLs, token exchange, Keychain credentials, saved environment
-  switching and removal, reconnect, and HTTP polling.
+- Local-network preflight, direct pairing links, QR scanning, token exchange,
+  Keychain credentials, and saved environment management.
+- A merged Web V2 home across saved environments, with per-device reachability,
+  last-known rows, live active-device updates, and low-frequency passive refresh.
 - Server-side project creation from a known workspace path, plus thread search,
   creation, rename, archive, restore, delete, settle, snooze, runtime mode, and
   interaction mode.
-- Provider/model selection, synchronized conversation history, turn cancellation,
-  approval decisions, and structured user-input requests.
+- Provider/model selection, synchronized conversation history, rich Markdown,
+  photo/camera/file image attachments, turn cancellation, approval decisions, and
+  structured user-input requests.
 - Workspace files and previews, working-tree review, Git status and common actions,
   plus an interactive terminal session scoped to each thread.
 - Native settings with persisted appearance and behavior preferences.
@@ -48,12 +51,13 @@ JavaScript runtime or third-party package is embedded.
 - Adding a project requires entering a path that exists on the server. Remote
   filesystem browsing, repository cloning, and source-control account discovery are
   not implemented yet.
-- Shell updates use the reconnecting WebSocket stream with HTTP polling as a
-  fallback. Open thread details refresh from the typed thread snapshot when their
-  shell state changes.
-- Attachments and notification deep links are not exposed by the current feature
-  UI. Source-control status currently reflects changed paths but the server status
-  response does not distinguish staged files or individual change kinds.
+- The active environment uses the reconnecting WebSocket stream with HTTP polling
+  as a fallback. Other environments refresh every 20 seconds, so their home rows
+  can lag briefly. Last-known passive rows are retained in memory, not across a
+  cold app launch, and passive archived history is not fetched proactively.
+- Notification deep links are not implemented. Source-control status currently
+  reflects changed paths but the server response does not distinguish staged files
+  or individual change kinds.
 
 ## Verify
 
