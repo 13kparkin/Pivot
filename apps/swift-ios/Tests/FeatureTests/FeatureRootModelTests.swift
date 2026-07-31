@@ -242,10 +242,276 @@ struct FeatureRootModelTests {
         #expect(client.resolvedInputAnswers == answers)
         #expect(model.details[thread.id]?.userInputs.isEmpty == true)
     }
+
+    @Test
+    func granularThreadEventsMaintainCountsAndCollectionRevision() async {
+        let client = FeatureClientStub()
+        let project = FeatureProject(
+            id: "project-1",
+            environmentID: "environment-1",
+            name: "Native",
+            path: "/native"
+        )
+        client.snapshot = FeatureSnapshot(projects: [project])
+        let model = FeatureRootModel(client: client)
+        let thread = FeatureThread(
+            id: "thread-1",
+            projectID: project.id,
+            title: "Stream deltas"
+        )
+
+        let run = Task { await model.start() }
+        client.emit(.thread(thread))
+        client.emit(.thread(thread))
+        client.emit(.threadRemoved(id: thread.id))
+        let connected = FeatureConnection(state: .connected, environmentName: "Native")
+        client.emit(.connection(connected))
+        client.emit(.connection(connected))
+        client.finishEvents()
+        await run.value
+
+        #expect(model.snapshot.threads.isEmpty)
+        #expect(model.snapshot.projects[0].threadCount == 0)
+        #expect(model.threadCollectionRevision == 2)
+        #expect(model.homePresentationRevision == 4)
+    }
+
+    @Test
+    func detailEventsIgnoreDuplicatesAndAdvancePerThreadRevision() async {
+        let client = FeatureClientStub()
+        let thread = FeatureThread(
+            id: "thread-1",
+            projectID: "project-1",
+            title: "Stream transcript"
+        )
+        client.snapshot = FeatureSnapshot(threads: [thread])
+        let first = FeatureThreadDetail(
+            thread: thread,
+            messages: [FeatureMessage(id: "message-1", role: .assistant, text: "Hel")]
+        )
+        let second = FeatureThreadDetail(
+            thread: thread,
+            messages: [
+                FeatureMessage(id: "message-1", role: .assistant, text: "Hello"),
+                FeatureMessage(id: "message-2", role: .user, text: "Ship it"),
+            ]
+        )
+        let model = FeatureRootModel(client: client)
+
+        let run = Task { await model.start() }
+        client.emit(.detail(first))
+        client.emit(.detail(first))
+        client.emit(.detail(second))
+        client.finishEvents()
+        await run.value
+
+        #expect(model.details[thread.id] == second)
+        #expect(model.detailRevision == 2)
+        #expect(model.detailRevisions[thread.id] == 2)
+    }
+
+    @Test
+    func detailDeltaCarriesAContiguousRenderCursor() async {
+        let client = FeatureClientStub()
+        let thread = FeatureThread(
+            id: "thread-1",
+            projectID: "project-1",
+            title: "Incremental transcript"
+        )
+        let firstMessage = FeatureMessage(id: "message-1", role: .assistant, text: "Hel")
+        let completedMessage = FeatureMessage(id: "message-1", role: .assistant, text: "Hello")
+        let appendedMessage = FeatureMessage(id: "message-2", role: .user, text: "Ship it")
+        let first = FeatureThreadDetail(thread: thread, messages: [firstMessage])
+        let second = FeatureThreadDetail(
+            thread: thread,
+            messages: [completedMessage, appendedMessage]
+        )
+        client.snapshot = FeatureSnapshot(threads: [thread])
+        let model = FeatureRootModel(client: client)
+
+        let run = Task { await model.start() }
+        client.emit(.detail(first))
+        client.emit(.detailDelta(
+            second,
+            FeatureDetailDelta(
+                changedMessages: [completedMessage, appendedMessage],
+                appendedMessageIDs: [appendedMessage.id]
+            )
+        ))
+        client.finishEvents()
+        await run.value
+
+        #expect(model.details[thread.id] == second)
+        #expect(model.detailRevisions[thread.id] == 2)
+        guard let update = model.detailRenderUpdates[thread.id] else {
+            Issue.record("Expected an incremental render update")
+            return
+        }
+        #expect(update.baseRevision == 1)
+        #expect(update.revision == 2)
+        guard case let .delta(delta) = update.change else {
+            Issue.record("Expected a detail delta")
+            return
+        }
+        #expect(delta.appendedMessageIDs == [appendedMessage.id])
+        #expect(delta.changedMessages == [completedMessage, appendedMessage])
+    }
+
+    @Test
+    func detailReducerAppendsStreamingTailAndExposesRenderMutation() {
+        let startedAt = "2026-07-31T20:00:00Z"
+        let message = OrchestrationMessage(
+            id: "message-1",
+            role: "assistant",
+            text: "Hel",
+            attachments: nil,
+            turnId: "turn-1",
+            streaming: true,
+            createdAt: startedAt,
+            updatedAt: startedAt
+        )
+        let thread = orchestrationThread(messages: [message])
+        let event = orchestrationEvent(
+            type: "thread.message-sent",
+            sequence: 12,
+            payload: [
+                "threadId": .string(thread.id),
+                "messageId": .string(message.id),
+                "role": .string("assistant"),
+                "text": .string("lo"),
+                "turnId": .string("turn-1"),
+                "streaming": .bool(true),
+                "createdAt": .string(startedAt),
+                "updatedAt": .string("2026-07-31T20:00:01Z"),
+            ]
+        )
+
+        let reduction = NativeThreadDetailReducer.apply(event, to: thread)
+
+        #expect(reduction.sequence == 12)
+        guard case let .updated(updated) = reduction.result else {
+            Issue.record("Expected a streaming message update")
+            return
+        }
+        #expect(updated.messages[0].text == "Hello")
+        #expect(updated.messages[0].updatedAt == startedAt)
+        guard case let .message(rendered) = reduction.renderMutation else {
+            Issue.record("Expected a message-only render mutation")
+            return
+        }
+        #expect(rendered.text == "Hello")
+    }
+
+    @Test
+    func activityReducerKeepsLargeSnapshotHistorySharedAndExposesOnlyTheTail() throws {
+        let historical = (0..<1_000).map { (index: Int) in
+            OrchestrationActivity(
+                id: "history-\(index)",
+                tone: "info",
+                kind: "tool.completed",
+                summary: "Historical work",
+                payload: .object([:]),
+                turnId: "turn-1",
+                sequence: index,
+                createdAt: "2026-07-31T20:00:00Z"
+            )
+        }
+        let appended = OrchestrationActivity(
+            id: "activity-new",
+            tone: "info",
+            kind: "tool.completed",
+            summary: "New work",
+            payload: .object([:]),
+            turnId: "turn-1",
+            sequence: historical.count,
+            createdAt: "2026-07-31T20:00:01Z"
+        )
+        let thread = orchestrationThread(activities: historical)
+        let event = orchestrationEvent(
+            type: "thread.activity-appended",
+            sequence: 1_001,
+            payload: [
+                "threadId": .string(thread.id),
+                "activity": try JSONValue.encode(appended),
+            ]
+        )
+
+        let reduction = NativeThreadDetailReducer.apply(event, to: thread)
+
+        guard case let .updated(updated) = reduction.result else {
+            Issue.record("Expected an activity update")
+            return
+        }
+        #expect(updated.activities.count == historical.count)
+        guard case let .activity(rendered) = reduction.renderMutation else {
+            Issue.record("Expected an activity-tail render mutation")
+            return
+        }
+        #expect(rendered == appended)
+    }
+
+    @Test
+    func destructiveDetailEventRequestsAuthoritativeSnapshot() {
+        let thread = orchestrationThread()
+        let event = orchestrationEvent(
+            type: "thread.reverted",
+            sequence: 3,
+            payload: ["threadId": .string(thread.id)]
+        )
+
+        let reduction = NativeThreadDetailReducer.apply(event, to: thread)
+
+        #expect(reduction.result == .refresh)
+        #expect(reduction.renderMutation == .full)
+    }
+}
+
+private func orchestrationEvent(
+    type: String,
+    sequence: Int,
+    payload: [String: JSONValue]
+) -> JSONValue {
+    .object([
+        "type": .string(type),
+        "sequence": .number(Double(sequence)),
+        "occurredAt": .string("2026-07-31T20:00:02Z"),
+        "payload": .object(payload),
+    ])
+}
+
+private func orchestrationThread(
+    messages: [OrchestrationMessage] = [],
+    activities: [OrchestrationActivity] = []
+) -> OrchestrationThread {
+    OrchestrationThread(
+        id: "thread-1",
+        projectId: "project-1",
+        title: "Native detail stream",
+        modelSelection: ModelSelection(instanceId: "codex", model: "gpt-5.6-sol"),
+        runtimeMode: .fullAccess,
+        interactionMode: .default,
+        branch: "main",
+        worktreePath: "/native",
+        latestTurn: nil,
+        createdAt: "2026-07-31T20:00:00Z",
+        updatedAt: "2026-07-31T20:00:00Z",
+        archivedAt: nil,
+        settledOverride: nil,
+        settledAt: nil,
+        snoozedUntil: nil,
+        snoozedAt: nil,
+        deletedAt: nil,
+        messages: messages,
+        activities: activities,
+        checkpoints: [],
+        session: nil
+    )
 }
 
 @MainActor
 private final class FeatureClientStub: FeatureClient {
+    private let eventStream: AsyncStream<FeatureEvent>
+    private let eventContinuation: AsyncStream<FeatureEvent>.Continuation
     var snapshot = FeatureSnapshot()
     var snapshotAfterPair: FeatureSnapshot?
     var createdThread = FeatureThread(id: "created", projectID: "project", title: "Created")
@@ -260,6 +526,24 @@ private final class FeatureClientStub: FeatureClient {
     var loadThreadError: (any Error)?
     var resolvedInputID: String?
     var resolvedInputAnswers: [String: FeatureInputAnswer]?
+
+    init() {
+        let pair = AsyncStream<FeatureEvent>.makeStream()
+        eventStream = pair.stream
+        eventContinuation = pair.continuation
+    }
+
+    func events() -> AsyncStream<FeatureEvent> {
+        eventStream
+    }
+
+    func emit(_ event: FeatureEvent) {
+        eventContinuation.yield(event)
+    }
+
+    func finishEvents() {
+        eventContinuation.finish()
+    }
 
     func initialSnapshot() async throws -> FeatureSnapshot {
         if pairEndpoint != nil, let snapshotAfterPair {

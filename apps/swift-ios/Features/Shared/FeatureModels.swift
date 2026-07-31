@@ -463,6 +463,22 @@ public struct FeatureThreadDetail: Sendable, Equatable, Codable {
     }
 }
 
+/// The small rendered-message delta produced by the native thread stream.
+/// Keeping this beside the authoritative detail lets recycled transcript rows
+/// update in proportion to an event instead of rescanning the full history.
+public struct FeatureDetailDelta: Sendable, Equatable {
+    public var changedMessages: [FeatureMessage]
+    public var appendedMessageIDs: [String]
+
+    public init(
+        changedMessages: [FeatureMessage],
+        appendedMessageIDs: [String] = []
+    ) {
+        self.changedMessages = changedMessages
+        self.appendedMessageIDs = appendedMessageIDs
+    }
+}
+
 public struct FeatureModel: Identifiable, Sendable, Equatable, Hashable, Codable {
     public let id: String
     public var name: String
@@ -689,5 +705,6 @@ public enum FeatureEvent: Sendable {
     case thread(FeatureThread)
     case threadRemoved(id: String)
     case detail(FeatureThreadDetail)
+    case detailDelta(FeatureThreadDetail, FeatureDetailDelta)
     case failure(String)
 }
