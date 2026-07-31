@@ -232,7 +232,7 @@ public struct WorkspaceView: View {
                     .buttonStyle(.borderedProminent)
                     .tint(.white)
                     .foregroundStyle(.black)
-                    .disabled(model.snapshot.projects.isEmpty)
+                    .disabled(activeProjects.isEmpty)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(T3Colors.background)
@@ -285,21 +285,44 @@ public struct WorkspaceView: View {
 
     @ViewBuilder
     private var connectionBrand: some View {
-        switch model.snapshot.connection.state {
-        case .connected:
-            HStack(alignment: .firstTextBaseline, spacing: 4) {
-                Text("T3")
-                    .fontWeight(.bold)
-                    .foregroundStyle(T3Colors.textPrimary)
-                Text("Code")
-                    .fontWeight(.medium)
-                    .foregroundStyle(T3Colors.textSecondary)
+        if !unreachableEnvironments.isEmpty {
+            HStack(spacing: 7) {
+                Image(systemName: "network.slash")
+                    .font(.system(size: 13, weight: .semibold))
+                Text(unreachableBrandLabel)
+                    .lineLimit(2)
+                    .font(.system(size: 13, weight: .semibold))
+                Button("Reconnect") {
+                    Task { await model.reload() }
+                }
+                .font(.caption.weight(.bold))
+                .buttonStyle(.plain)
+                .padding(.horizontal, 9)
+                .frame(height: 26)
+                .overlay {
+                    Capsule().stroke(T3Colors.danger.opacity(0.42), lineWidth: 1)
+                }
             }
-            .font(.system(size: 16))
-            .accessibilityElement(children: .combine)
-            .accessibilityLabel("T3 Code")
-
-        case .connecting, .reconnecting:
+            .foregroundStyle(T3Colors.danger)
+            .accessibilityElement(children: .contain)
+        } else if let reconnecting = reconnectingEnvironments.first {
+            Button { showingSettings = true } label: {
+                HStack(spacing: 7) {
+                    Image(systemName: "wifi.exclamationmark")
+                        .font(.system(size: 13, weight: .semibold))
+                    Text(reconnecting.name)
+                        .lineLimit(1)
+                    Text("reconnecting")
+                        .fontWeight(.medium)
+                        .opacity(0.76)
+                }
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(T3Colors.warning)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("\(reconnecting.name) reconnecting")
+        } else if model.snapshot.connection.state == .connecting
+            || model.snapshot.connection.state == .reconnecting {
             Button { showingSettings = true } label: {
                 HStack(spacing: 7) {
                     Image(systemName: "wifi.exclamationmark")
@@ -315,17 +338,13 @@ public struct WorkspaceView: View {
             }
             .buttonStyle(.plain)
             .accessibilityLabel("\(connectionEnvironmentName) reconnecting")
-
-        case .disconnected:
+        } else if model.snapshot.connection.state == .disconnected {
             HStack(spacing: 7) {
                 Image(systemName: "network.slash")
                     .font(.system(size: 13, weight: .semibold))
-                VStack(alignment: .leading, spacing: 0) {
-                    Text(connectionEnvironmentName)
-                    Text("unreachable")
-                }
-                .lineLimit(1)
-                .font(.system(size: 13, weight: .semibold))
+                Text("\(connectionEnvironmentName) unreachable")
+                    .lineLimit(2)
+                    .font(.system(size: 13, weight: .semibold))
                 Button("Reconnect") {
                     Task { await model.reload() }
                 }
@@ -339,6 +358,18 @@ public struct WorkspaceView: View {
             }
             .foregroundStyle(T3Colors.danger)
             .accessibilityElement(children: .contain)
+        } else {
+            HStack(alignment: .firstTextBaseline, spacing: 4) {
+                Text("T3")
+                    .fontWeight(.bold)
+                    .foregroundStyle(T3Colors.textPrimary)
+                Text("Code")
+                    .fontWeight(.medium)
+                    .foregroundStyle(T3Colors.textSecondary)
+            }
+            .font(.system(size: 16))
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel("T3 Code")
         }
     }
 
@@ -389,8 +420,8 @@ public struct WorkspaceView: View {
                 .shadow(color: .black.opacity(0.7), radius: 16, y: 8)
         }
         .buttonStyle(.plain)
-        .disabled(model.snapshot.projects.isEmpty)
-        .opacity(model.snapshot.projects.isEmpty ? 0.35 : 1)
+        .disabled(activeProjects.isEmpty)
+        .opacity(activeProjects.isEmpty ? 0.35 : 1)
         .accessibilityLabel("New task")
         .accessibilityHint("Compose a message and start a thread")
         .accessibilityIdentifier("sidebar-new-task-button")
@@ -412,10 +443,11 @@ public struct WorkspaceView: View {
                     Button {
                         selectedProjectID = project.id
                     } label: {
+                        let title = projectMenuTitle(project)
                         if selectedProjectID == project.id {
-                            Label(project.name, systemImage: "checkmark")
+                            Label(title, systemImage: "checkmark")
                         } else {
-                            Text(project.name)
+                            Text(title)
                         }
                     }
                 }
@@ -563,7 +595,7 @@ public struct WorkspaceView: View {
         NavigationLink(value: thread.id) {
             FeatureThreadRow(
                 thread: thread,
-                projectName: projectName(for: thread.projectID),
+                projectName: projectName(for: thread),
                 snapshot: model.snapshot,
                 now: sidebarClock,
                 isSelected: selectedThreadID == thread.id,
@@ -670,11 +702,35 @@ public struct WorkspaceView: View {
         model.snapshot.projects.first { $0.id == selectedProjectID }
     }
 
+    private var activeProjects: [FeatureProject] {
+        guard let activeID = model.snapshot.environments.first(where: \.isActive)?.id else {
+            return model.snapshot.projects
+        }
+        return model.snapshot.projects.filter { $0.environmentID == activeID }
+    }
+
     private var connectionEnvironmentName: String {
         model.snapshot.connection.environmentName
             ?? model.snapshot.environments.first(where: \.isActive)?.name
             ?? model.snapshot.environments.first?.name
             ?? "Server"
+    }
+
+    private var unreachableEnvironments: [FeatureEnvironment] {
+        model.snapshot.environments.filter { $0.connectionState == .disconnected }
+    }
+
+    private var reconnectingEnvironments: [FeatureEnvironment] {
+        model.snapshot.environments.filter {
+            $0.connectionState == .connecting || $0.connectionState == .reconnecting
+        }
+    }
+
+    private var unreachableBrandLabel: String {
+        if unreachableEnvironments.count == 1 {
+            return "\(unreachableEnvironments[0].name) unreachable"
+        }
+        return "\(unreachableEnvironments.count) devices unreachable"
     }
 
     private var sidebarBoundarySignature: String {
@@ -703,13 +759,34 @@ public struct WorkspaceView: View {
     }
 
     private func isConnectionStale(for thread: FeatureThread) -> Bool {
+        let projectEnvironmentID = model.snapshot.projects
+            .first(where: { $0.id == thread.projectID })?
+            .environmentID
+        let environmentID = thread.environmentID ?? projectEnvironmentID
+        if let environment = model.snapshot.environments.first(where: { $0.id == environmentID }),
+           environment.connectionState == .disconnected {
+            return true
+        }
         guard model.snapshot.connection.state == .disconnected else { return false }
         let activeID = model.snapshot.environments.first(where: \.isActive)?.id
-        return thread.environmentID == nil || activeID == nil || thread.environmentID == activeID
+        return environmentID == nil || activeID == nil || environmentID == activeID
     }
 
-    private func projectName(for id: String) -> String {
-        model.snapshot.projects.first(where: { $0.id == id })?.name ?? "Project"
+    private func projectName(for thread: FeatureThread) -> String {
+        model.snapshot.projects.first {
+            $0.id == thread.projectID
+                && (thread.environmentID == nil || $0.environmentID == thread.environmentID)
+        }?.name ?? "Project"
+    }
+
+    private func projectMenuTitle(_ project: FeatureProject) -> String {
+        guard model.snapshot.environments.count > 1,
+              let environment = model.snapshot.environments.first(where: {
+                  $0.id == project.environmentID
+              }) else {
+            return project.name
+        }
+        return "\(project.name) · \(environment.name)"
     }
 }
 

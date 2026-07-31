@@ -58,7 +58,7 @@ public struct NewThreadView: View {
         }
         .onAppear {
             if projectID.isEmpty {
-                projectID = model.snapshot.projects.first?.id ?? ""
+                projectID = creationProjects.first?.id ?? ""
             }
             if selection == nil {
                 selection = initialSelection
@@ -96,7 +96,7 @@ public struct NewThreadView: View {
             HStack(spacing: 3) {
                 Text("in")
                 Menu {
-                    ForEach(model.snapshot.projects) { project in
+                    ForEach(creationProjects) { project in
                         Button {
                             projectID = project.id
                         } label: {
@@ -144,7 +144,14 @@ public struct NewThreadView: View {
     }
 
     private var selectedProject: FeatureProject? {
-        model.snapshot.projects.first { $0.id == projectID }
+        creationProjects.first { $0.id == projectID }
+    }
+
+    private var creationProjects: [FeatureProject] {
+        guard let activeID = model.snapshot.environments.first(where: \.isActive)?.id else {
+            return model.snapshot.projects
+        }
+        return model.snapshot.projects.filter { $0.environmentID == activeID }
     }
 
     private var environmentName: String {
