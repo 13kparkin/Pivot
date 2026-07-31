@@ -245,8 +245,12 @@ public struct ThreadDetailView: View {
                         Task { await model.cancelTurn(threadID: thread.id) }
                     },
                     runtimeMode: currentThread.runtimeMode,
+                    interactionMode: currentThread.interactionMode,
                     onRuntimeModeChange: { mode in
                         Task { await model.setRuntimeMode(thread.id, mode: mode) }
+                    },
+                    onInteractionModeChange: { mode in
+                        Task { await model.setInteractionMode(thread.id, mode: mode) }
                     },
                     pendingApprovals: detail.approvals,
                     pendingUserInputs: detail.userInputs,

@@ -27,115 +27,50 @@ public struct NewThreadView: View {
     }
 
     public var body: some View {
-        NavigationStack {
+        ZStack {
+            T3Colors.background.ignoresSafeArea()
+
             VStack(spacing: 0) {
-                contextBar
-                Divider()
-                    .overlay(T3Colors.separator)
-
-                ZStack(alignment: .topLeading) {
-                    if prompt.isEmpty {
-                        Text("What do you want to build?")
-                            .font(.title3)
-                            .foregroundStyle(T3Colors.textTertiary)
-                            .padding(.horizontal, 17)
-                            .padding(.top, 17)
-                            .allowsHitTesting(false)
-                    }
-
-                    TextEditor(text: $prompt)
-                        .font(.title3)
-                        .lineSpacing(3)
-                        .scrollContentBackground(.hidden)
-                        .focused($promptFocused)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 10)
-                        .accessibilityLabel("Task")
-                }
-
-                VStack(spacing: 9) {
-                    FeatureAttachmentStrip(attachments: $attachments)
-
-                    HStack(spacing: 8) {
-                        FeatureImageAttachmentPicker(
-                            attachments: $attachments,
-                            isEnabled: DailyUXModelOptions.supportsImages(
-                                selection: selection,
-                                providers: model.snapshot.providers
-                            )
-                        )
-
-                        if !attachments.isEmpty, !imagesAllowed {
-                            Text("Choose an image model")
-                                .font(.caption)
-                                .foregroundStyle(T3Colors.warning)
-                        } else if !attachments.isEmpty {
-                            Text("\(attachments.count) selected")
-                                .font(.caption)
-                                .foregroundStyle(T3Colors.textSecondary)
-                        }
-
-                        Spacer()
-
-                        Button(action: startTask) {
-                            HStack(spacing: 7) {
-                                if isSubmitting {
-                                    ProgressView()
-                                        .controlSize(.small)
-                                        .tint(.black)
-                                } else {
-                                    Text("Start task")
-                                    Image(systemName: "arrow.up")
-                                        .font(.system(size: 13, weight: .bold))
-                                }
-                            }
-                            .font(.subheadline.weight(.semibold))
-                            .foregroundStyle(.black)
-                            .padding(.horizontal, 16)
-                            .frame(height: 40)
-                            .background(.white, in: RoundedRectangle(cornerRadius: 10))
-                        }
-                        .disabled(!canSubmit)
-                        .opacity(canSubmit ? 1 : 0.35)
-                        .accessibilityLabel(isSubmitting ? "Starting task" : "Start task")
-                        .accessibilityIdentifier("new-task-submit")
-                    }
-                }
-                .padding(.horizontal, 12)
-                .padding(.top, 8)
-                .padding(.bottom, 10)
-                .background(T3Colors.background)
-                .overlay(alignment: .top) {
-                    Divider().overlay(T3Colors.separator)
-                }
+                topBar
+                hero
+                    .padding(.top, 82)
+                Spacer(minLength: 140)
             }
-            .background(T3Colors.background)
-            .navigationTitle("New task")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }
-                        .disabled(isSubmitting)
-                }
+        }
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            FeatureComposerView(
+                text: $prompt,
+                selection: $selection,
+                attachments: $attachments,
+                providers: model.snapshot.providers,
+                threadSelection: initialSelection,
+                isSending: isSubmitting,
+                isWorking: false,
+                focused: $promptFocused,
+                onSend: startTask,
+                onStop: {},
+                runtimeMode: runtimeMode,
+                interactionMode: interactionMode,
+                forceExpanded: true,
+                onRuntimeModeChange: { runtimeMode = $0 },
+                onInteractionModeChange: { interactionMode = $0 }
+            )
+        }
+        .onAppear {
+            if projectID.isEmpty {
+                projectID = model.snapshot.projects.first?.id ?? ""
             }
-            .t3NavigationChrome()
-            .onAppear {
-                if projectID.isEmpty {
-                    projectID = model.snapshot.projects.first?.id ?? ""
-                }
-                if selection == nil {
-                    selection = initialSelection
-                }
-                promptFocused = true
-            }
-            .onChange(of: projectID) {
+            if selection == nil {
                 selection = initialSelection
             }
-            .alert("Couldn’t start task", isPresented: $submissionFailed) {
-                Button("OK") {}
-            } message: {
-                Text("Check your connection and try again.")
-            }
+        }
+        .onChange(of: projectID) {
+            selection = initialSelection
+        }
+        .alert("Couldn’t start task", isPresented: $submissionFailed) {
+            Button("OK") {}
+        } message: {
+            Text("Check your connection and try again.")
         }
         .interactiveDismissDisabled(isSubmitting)
         .presentationDetents([.large])
@@ -143,9 +78,23 @@ public struct NewThreadView: View {
         .preferredColorScheme(.dark)
     }
 
-    private var contextBar: some View {
-        ScrollView(.horizontal) {
-            HStack(spacing: 18) {
+    private var topBar: some View {
+        HStack {
+            Button("Cancel") { dismiss() }
+                .font(.body)
+                .foregroundStyle(T3Colors.textSecondary)
+                .disabled(isSubmitting)
+            Spacer()
+        }
+        .padding(.horizontal, 16)
+        .frame(height: 48)
+    }
+
+    private var hero: some View {
+        VStack(spacing: 10) {
+            Text("What should we build")
+            HStack(spacing: 6) {
+                Text("in")
                 Menu {
                     ForEach(model.snapshot.projects) { project in
                         Button {
@@ -159,57 +108,50 @@ public struct NewThreadView: View {
                         }
                     }
                 } label: {
-                    contextLabel(
-                        icon: "folder",
-                        title: selectedProject?.name ?? "Choose project"
-                    )
+                    Text(selectedProject?.name ?? "a project")
+                        .foregroundStyle(T3Colors.textPrimary)
+                        .overlay(alignment: .bottom) {
+                            DottedUnderline()
+                                .stroke(
+                                    T3Colors.textPrimary.opacity(0.58),
+                                    style: StrokeStyle(lineWidth: 1, dash: [2, 3])
+                                )
+                                .frame(height: 1)
+                                .offset(y: 3)
+                        }
                 }
-
-                ProviderModelPicker(
-                    providers: model.snapshot.providers,
-                    selection: $selection,
-                    style: .compact,
-                    isLoading: model.isLoading
-                )
-
-                Menu {
-                    Section("Interaction") {
-                        Button {
-                            interactionMode = .standard
-                        } label: {
-                            modeLabel("Build", selected: interactionMode == .standard)
-                        }
-                        Button {
-                            interactionMode = .plan
-                        } label: {
-                            modeLabel("Plan", selected: interactionMode == .plan)
-                        }
-                    }
-
-                    Section("Access") {
-                        ForEach(FeatureRuntimeMode.allCases, id: \.self) { mode in
-                            Button {
-                                runtimeMode = mode
-                            } label: {
-                                modeLabel(runtimeLabel(mode), selected: runtimeMode == mode)
-                            }
-                        }
-                    }
-                } label: {
-                    contextLabel(
-                        icon: interactionMode == .plan ? "list.bullet.clipboard" : "bolt",
-                        title: interactionMode == .plan ? "Plan" : runtimeShortLabel
-                    )
-                }
+                .buttonStyle(.plain)
+                Text("?")
             }
-            .padding(.horizontal, 16)
-            .frame(height: 48)
         }
-        .scrollIndicators(.hidden)
+        .font(.system(size: 24, weight: .regular))
+        .tracking(-0.35)
+        .foregroundStyle(T3Colors.textPrimary)
+        .multilineTextAlignment(.center)
+        .frame(maxWidth: .infinity)
+        .overlay(alignment: .bottom) {
+            HStack(spacing: 6) {
+                Image(systemName: "server.rack")
+                    .font(.system(size: 11, weight: .medium))
+                Text("on \(environmentName)")
+            }
+            .font(.caption)
+            .foregroundStyle(T3Colors.textTertiary)
+            .offset(y: 29)
+        }
+        .accessibilityElement(children: .contain)
     }
 
     private var selectedProject: FeatureProject? {
         model.snapshot.projects.first { $0.id == projectID }
+    }
+
+    private var environmentName: String {
+        if let environmentID = selectedProject?.environmentID,
+           let environment = model.snapshot.environments.first(where: { $0.id == environmentID }) {
+            return environment.name
+        }
+        return model.snapshot.connection.environmentName ?? "this server"
     }
 
     private var initialSelection: FeatureSelection? {
@@ -238,47 +180,6 @@ public struct NewThreadView: View {
         )
     }
 
-    private var runtimeShortLabel: String {
-        switch runtimeMode {
-        case .approvalRequired: "Ask"
-        case .autoAcceptEdits: "Edits"
-        case .automatic: "Automatic"
-        case .fullAccess: "Full access"
-        }
-    }
-
-    private func contextLabel(icon: String, title: String) -> some View {
-        HStack(spacing: 6) {
-            Image(systemName: icon)
-            Text(title)
-                .lineLimit(1)
-            Image(systemName: "chevron.down")
-                .font(.system(size: 8, weight: .bold))
-        }
-        .font(.caption.weight(.medium))
-        .foregroundStyle(T3Colors.textSecondary)
-        .contentShape(Rectangle())
-    }
-
-    private func modeLabel(_ title: String, selected: Bool) -> some View {
-        Group {
-            if selected {
-                Label(title, systemImage: "checkmark")
-            } else {
-                Text(title)
-            }
-        }
-    }
-
-    private func runtimeLabel(_ mode: FeatureRuntimeMode) -> String {
-        switch mode {
-        case .approvalRequired: "Ask before changes"
-        case .autoAcceptEdits: "Auto-accept edits"
-        case .automatic: "Automatic"
-        case .fullAccess: "Full access"
-        }
-    }
-
     private func startTask() {
         guard canSubmit else { return }
         promptFocused = false
@@ -301,5 +202,14 @@ public struct NewThreadView: View {
                 promptFocused = true
             }
         }
+    }
+}
+
+private struct DottedUnderline: Shape {
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        path.move(to: CGPoint(x: rect.minX, y: rect.midY))
+        path.addLine(to: CGPoint(x: rect.maxX, y: rect.midY))
+        return path
     }
 }
