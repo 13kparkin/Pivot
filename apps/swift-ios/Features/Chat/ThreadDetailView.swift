@@ -417,8 +417,7 @@ struct FeatureMessageView: View {
                 VStack(alignment: .leading, spacing: 8) {
                     FeatureMessageAttachmentsView(attachments: message.attachments)
                     if !message.text.isEmpty {
-                        Text(.init(message.text))
-                            .textSelection(.enabled)
+                        MarkdownMessageView(message.text)
                     }
                 }
                 .padding(.horizontal, 13)
@@ -438,9 +437,8 @@ struct FeatureMessageView: View {
                 .foregroundStyle(.secondary)
                 FeatureMessageAttachmentsView(attachments: message.attachments)
                 if !message.text.isEmpty {
-                    Text(.init(message.text))
-                        .textSelection(.enabled)
-                        .lineSpacing(3)
+                    MarkdownMessageView(message.text)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
