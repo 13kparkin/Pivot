@@ -207,22 +207,9 @@ public struct ThreadDetailView: View {
                             .id(message.id)
                     }
 
-                    ForEach(detail.approvals) { approval in
-                        ApprovalRequestView(model: model, approval: approval)
-                            .id("approval-\(approval.id)")
-                    }
-
-                    ForEach(detail.userInputs) { input in
-                        UserInputRequestView(model: model, input: input)
-                            .id("user-input-\(input.id)")
-                    }
-
                     if detail.thread.state == .working || detail.thread.state == .queued {
                         StreamingStatusView(
-                            state: detail.thread.state,
-                            onStop: {
-                                Task { await model.cancelTurn(threadID: thread.id) }
-                            }
+                            state: detail.thread.state
                         )
                         .id("streaming-status")
                     }
@@ -256,6 +243,19 @@ public struct ThreadDetailView: View {
                     onSend: send,
                     onStop: {
                         Task { await model.cancelTurn(threadID: thread.id) }
+                    },
+                    runtimeMode: currentThread.runtimeMode,
+                    onRuntimeModeChange: { mode in
+                        Task { await model.setRuntimeMode(thread.id, mode: mode) }
+                    },
+                    pendingApprovals: detail.approvals,
+                    pendingUserInputs: detail.userInputs,
+                    isResolvingRequest: model.isPerformingAction,
+                    onApprovalDecision: { id, decision in
+                        Task { await model.resolveApproval(id, decision: decision) }
+                    },
+                    onUserInputSubmit: { id, answers in
+                        Task { await model.resolveUserInput(id, answers: answers) }
                     }
                 )
             }
@@ -317,93 +317,6 @@ private enum FeatureThreadToolSurface: String, Identifiable {
     case terminal
 
     var id: String { rawValue }
-}
-
-private struct UserInputRequestView: View {
-    @Bindable var model: FeatureRootModel
-    let input: FeatureUserInput
-    @State private var answers: [String: String] = [:]
-    @State private var isSubmitting = false
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Label("Input requested", systemImage: "questionmark.bubble")
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(.indigo)
-
-            ForEach(input.questions) { question in
-                VStack(alignment: .leading, spacing: 8) {
-                    Text(question.header)
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(.secondary)
-                    Text(question.question)
-                        .font(.callout)
-
-                    if !question.options.isEmpty {
-                        ForEach(question.options, id: \.label) { option in
-                            Button {
-                                answers[question.id] = option.label
-                            } label: {
-                                HStack(alignment: .top, spacing: 9) {
-                                    Image(
-                                        systemName: answers[question.id] == option.label
-                                            ? "checkmark.circle.fill"
-                                            : "circle"
-                                    )
-                                    VStack(alignment: .leading, spacing: 2) {
-                                        Text(option.label)
-                                        if !option.detail.isEmpty {
-                                            Text(option.detail)
-                                                .font(.caption)
-                                                .foregroundStyle(.secondary)
-                                        }
-                                    }
-                                    Spacer()
-                                }
-                                .contentShape(Rectangle())
-                            }
-                            .buttonStyle(.plain)
-                        }
-                    }
-
-                    TextField(
-                        question.options.isEmpty ? "Your answer" : "Or type another answer",
-                        text: Binding(
-                            get: { answers[question.id] ?? "" },
-                            set: { answers[question.id] = $0 }
-                        ),
-                        axis: .vertical
-                    )
-                    .lineLimit(1...4)
-                    .textFieldStyle(.roundedBorder)
-                }
-            }
-
-            Button(isSubmitting ? "Submitting…" : "Submit") {
-                isSubmitting = true
-                Task {
-                    await model.resolveUserInput(input.id, answers: answers)
-                    isSubmitting = false
-                }
-            }
-            .buttonStyle(.borderedProminent)
-            .tint(.white)
-            .foregroundStyle(.black)
-            .disabled(
-                isSubmitting
-                    || input.questions.contains {
-                        answers[$0.id]?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                            != false
-                    }
-            )
-        }
-        .padding(13)
-        .background(Color.indigo.opacity(0.1), in: RoundedRectangle(cornerRadius: 12))
-        .overlay {
-            RoundedRectangle(cornerRadius: 12)
-                .stroke(Color.indigo.opacity(0.35), lineWidth: 1)
-        }
-    }
 }
 
 struct FeatureMessageView: View {
@@ -654,77 +567,16 @@ private struct FeatureAttachmentPreview: View {
 
 struct StreamingStatusView: View {
     let state: FeatureThreadState
-    let onStop: () -> Void
 
     var body: some View {
         HStack(spacing: 9) {
-            ProgressView()
-                .controlSize(.small)
-            Text(state == .queued ? "Queued" : "Agent is working")
-                .font(.footnote)
-                .foregroundStyle(.secondary)
-            Spacer()
-            Button("Stop", role: .destructive, action: onStop)
-                .font(.footnote.weight(.semibold))
+            Image(systemName: state == .queued ? "clock" : "circle.dotted")
+                .foregroundStyle(T3Colors.statusRunning)
+            Text(state == .queued ? "Queued" : "Agent working")
+                .foregroundStyle(T3Colors.textSecondary)
         }
-        .padding(.vertical, 6)
-        .accessibilityElement(children: .contain)
-    }
-}
-
-struct ApprovalRequestView: View {
-    @Bindable var model: FeatureRootModel
-    let approval: FeatureApproval
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Label(approval.title, systemImage: icon)
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(.orange)
-
-            Text(approval.detail)
-                .font(approval.kind == .command ? .caption.monospaced() : .callout)
-                .foregroundStyle(.secondary)
-                .textSelection(.enabled)
-
-            HStack(spacing: 8) {
-                Button("Deny", role: .destructive) {
-                    decide(.deny)
-                }
-                .buttonStyle(.bordered)
-                Spacer()
-                Button("Always Allow") {
-                    decide(.allowForSession)
-                }
-                .buttonStyle(.bordered)
-                Button("Allow") {
-                    decide(.allowOnce)
-                }
-                .buttonStyle(.borderedProminent)
-                .tint(.white)
-                .foregroundStyle(.black)
-            }
-            .font(.footnote.weight(.semibold))
-        }
-        .padding(13)
-        .background(Color.orange.opacity(0.09), in: RoundedRectangle(cornerRadius: 12))
-        .overlay {
-            RoundedRectangle(cornerRadius: 12)
-                .stroke(Color.orange.opacity(0.3), lineWidth: 1)
-        }
-        .accessibilityElement(children: .contain)
-    }
-
-    private var icon: String {
-        switch approval.kind {
-        case .command: "terminal"
-        case .fileRead: "doc.text.magnifyingglass"
-        case .fileChange, .patch: "doc.badge.ellipsis"
-        case .other: "exclamationmark.shield"
-        }
-    }
-
-    private func decide(_ decision: FeatureApprovalDecision) {
-        Task { await model.resolveApproval(approval.id, decision: decision) }
+        .font(.caption.monospaced().weight(.medium))
+        .padding(.vertical, 4)
+        .accessibilityElement(children: .combine)
     }
 }

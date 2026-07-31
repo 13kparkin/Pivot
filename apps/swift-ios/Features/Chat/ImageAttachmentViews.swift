@@ -11,6 +11,8 @@ struct FeatureImageAttachmentPicker: View {
 
     @State private var selection: [PhotosPickerItem] = []
     @State private var isLoading = false
+    @State private var isCameraPresented = false
+    @State private var isFileImporterPresented = false
     @State private var errorMessage: String?
 
     init(
@@ -24,24 +26,60 @@ struct FeatureImageAttachmentPicker: View {
     }
 
     var body: some View {
-        PhotosPicker(
-            selection: $selection,
-            maxSelectionCount: max(1, maximumCount - attachments.count),
-            matching: .images
-        ) {
-            Image(systemName: isLoading ? "ellipsis" : "photo")
+        Menu {
+            PhotosPicker(
+                selection: $selection,
+                maxSelectionCount: max(1, remainingCount),
+                matching: .images
+            ) {
+                Label("Photo Library", systemImage: "photo.on.rectangle")
+            }
+
+            Button {
+                isCameraPresented = true
+            } label: {
+                Label("Camera", systemImage: "camera")
+            }
+            .disabled(!UIImagePickerController.isSourceTypeAvailable(.camera))
+
+            Button {
+                isFileImporterPresented = true
+            } label: {
+                Label("Files", systemImage: "folder")
+            }
+        } label: {
+            Image(systemName: isLoading ? "ellipsis" : "paperclip")
                 .font(.system(size: 17, weight: .medium))
                 .foregroundStyle(T3Colors.textSecondary)
                 .frame(width: T3Metrics.minimumTapTarget, height: T3Metrics.minimumTapTarget)
                 .contentShape(Rectangle())
         }
-        .disabled(!isEnabled || isLoading || attachments.count >= maximumCount)
-        .opacity(isEnabled ? 1 : 0.3)
-        .accessibilityLabel(isLoading ? "Adding images" : "Add images")
+        .buttonStyle(.plain)
+        .disabled(!canAdd)
+        .opacity(canAdd ? 1 : 0.3)
+        .accessibilityLabel(attachmentAccessibilityLabel)
         .accessibilityIdentifier("image-attachment-picker")
-        .accessibilityHint(isEnabled ? "" : "The selected model does not accept images")
+        .accessibilityHint(attachmentAccessibilityHint)
         .onChange(of: selection) {
-            loadSelection()
+            loadPhotoSelection()
+        }
+        .fullScreenCover(isPresented: $isCameraPresented) {
+            FeatureCameraPicker(
+                onCapture: loadCapturedImage,
+                onCancel: { isCameraPresented = false }
+            )
+            .ignoresSafeArea()
+        }
+        .fileImporter(
+            isPresented: $isFileImporterPresented,
+            allowedContentTypes: [.image],
+            allowsMultipleSelection: true,
+            onCompletion: loadFiles
+        )
+        .onChange(of: attachments.count) {
+            if attachments.count >= maximumCount {
+                selection = []
+            }
         }
         .alert(
             "Couldn’t add image",
@@ -56,7 +94,27 @@ struct FeatureImageAttachmentPicker: View {
         }
     }
 
-    private func loadSelection() {
+    private var remainingCount: Int {
+        max(0, maximumCount - attachments.count)
+    }
+
+    private var canAdd: Bool {
+        isEnabled && !isLoading && remainingCount > 0
+    }
+
+    private var attachmentAccessibilityLabel: String {
+        if isLoading { return "Adding attachment" }
+        if remainingCount == 0 { return "Attachment limit reached" }
+        return "Add attachment"
+    }
+
+    private var attachmentAccessibilityHint: String {
+        if !isEnabled { return "The selected model does not accept images" }
+        if remainingCount == 0 { return "Remove an attachment before adding another" }
+        return "Choose a photo, take a photo, or browse image files"
+    }
+
+    private func loadPhotoSelection() {
         let items = selection
         guard !items.isEmpty else { return }
         selection = []
@@ -64,25 +122,76 @@ struct FeatureImageAttachmentPicker: View {
 
         Task {
             defer { isLoading = false }
-            for item in items.prefix(maximumCount - attachments.count) {
+            for item in items.prefix(remainingCount) {
                 do {
                     guard let data = try await item.loadTransferable(type: Data.self) else {
                         continue
                     }
-                    let ordinal = attachments.count + 1
-                    let attachment = try await Task.detached(priority: .userInitiated) {
-                        try FeatureImageProcessor.attachment(
-                            from: data,
-                            ordinal: ordinal
-                        )
-                    }.value
-                    attachments.append(attachment)
+                    try await appendImage(data)
                 } catch {
                     errorMessage = error.localizedDescription
                     break
                 }
             }
         }
+    }
+
+    private func loadCapturedImage(_ image: UIImage) {
+        isCameraPresented = false
+        guard canAdd else { return }
+        isLoading = true
+
+        Task {
+            defer { isLoading = false }
+            do {
+                let data = try await Task.detached(priority: .userInitiated) {
+                    guard let data = image.jpegData(compressionQuality: 0.94) else {
+                        throw FeatureImageAttachmentError.encodingFailed
+                    }
+                    return data
+                }.value
+                try await appendImage(data)
+            } catch {
+                errorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    private func loadFiles(_ result: Result<[URL], Error>) {
+        switch result {
+        case .failure(let error):
+            errorMessage = error.localizedDescription
+        case .success(let urls):
+            guard !urls.isEmpty, canAdd else { return }
+            isLoading = true
+
+            Task {
+                defer { isLoading = false }
+                for url in urls.prefix(remainingCount) {
+                    do {
+                        let data = try await Task.detached(priority: .userInitiated) {
+                            let hasAccess = url.startAccessingSecurityScopedResource()
+                            defer {
+                                if hasAccess { url.stopAccessingSecurityScopedResource() }
+                            }
+                            return try Data(contentsOf: url, options: .mappedIfSafe)
+                        }.value
+                        try await appendImage(data)
+                    } catch {
+                        errorMessage = error.localizedDescription
+                        break
+                    }
+                }
+            }
+        }
+    }
+
+    private func appendImage(_ data: Data) async throws {
+        let ordinal = attachments.count + 1
+        let attachment = try await Task.detached(priority: .userInitiated) {
+            try FeatureImageProcessor.attachment(from: data, ordinal: ordinal)
+        }.value
+        attachments.append(attachment)
     }
 }
 
@@ -124,9 +233,9 @@ private struct FeatureAttachmentThumbnail: View {
                         .foregroundStyle(T3Colors.textSecondary)
                 }
             }
-            .frame(width: 66, height: 66)
+            .frame(width: 58, height: 58)
             .background(T3Colors.surface)
-            .clipShape(RoundedRectangle(cornerRadius: 9))
+            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
 
             Button(action: onRemove) {
                 Image(systemName: "xmark")
@@ -150,6 +259,50 @@ private struct FeatureAttachmentThumbnail: View {
             image = await Task.detached(priority: .utility) {
                 UIImage(data: data)
             }.value
+        }
+    }
+}
+
+private struct FeatureCameraPicker: UIViewControllerRepresentable {
+    let onCapture: (UIImage) -> Void
+    let onCancel: () -> Void
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(onCapture: onCapture, onCancel: onCancel)
+    }
+
+    func makeUIViewController(context: Context) -> UIImagePickerController {
+        let controller = UIImagePickerController()
+        controller.sourceType = .camera
+        controller.cameraCaptureMode = .photo
+        controller.delegate = context.coordinator
+        return controller
+    }
+
+    func updateUIViewController(_ controller: UIImagePickerController, context: Context) {}
+
+    final class Coordinator: NSObject, UINavigationControllerDelegate, UIImagePickerControllerDelegate {
+        private let onCapture: (UIImage) -> Void
+        private let onCancel: () -> Void
+
+        init(onCapture: @escaping (UIImage) -> Void, onCancel: @escaping () -> Void) {
+            self.onCapture = onCapture
+            self.onCancel = onCancel
+        }
+
+        func imagePickerController(
+            _ picker: UIImagePickerController,
+            didFinishPickingMediaWithInfo info: [UIImagePickerController.InfoKey: Any]
+        ) {
+            guard let image = info[.originalImage] as? UIImage else {
+                onCancel()
+                return
+            }
+            onCapture(image)
+        }
+
+        func imagePickerControllerDidCancel(_ picker: UIImagePickerController) {
+            onCancel()
         }
     }
 }
