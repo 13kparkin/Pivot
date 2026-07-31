@@ -1,9 +1,12 @@
 import SwiftUI
 
 public struct ThreadDetailView: View {
+    @SwiftUI.Environment(\.horizontalSizeClass) private var horizontalSizeClass
+
     @Bindable var model: FeatureRootModel
     let thread: FeatureThread
     let submitMessage: (FeatureMessageSubmission) async -> Bool
+    let onNavigateBack: () -> Void
 
     @State private var draft = ""
     @State private var selection: FeatureSelection?
@@ -17,11 +20,13 @@ public struct ThreadDetailView: View {
     public init(
         model: FeatureRootModel,
         thread: FeatureThread,
-        submitMessage: @escaping (FeatureMessageSubmission) async -> Bool
+        submitMessage: @escaping (FeatureMessageSubmission) async -> Bool,
+        onNavigateBack: @escaping () -> Void = {}
     ) {
         self.model = model
         self.thread = thread
         self.submitMessage = submitMessage
+        self.onNavigateBack = onNavigateBack
     }
 
     public var body: some View {
@@ -93,6 +98,20 @@ public struct ThreadDetailView: View {
         } message: {
             Text("Your draft is still here. Check your connection and try again.")
         }
+        .simultaneousGesture(edgeBackGesture)
+    }
+
+    private var edgeBackGesture: some Gesture {
+        DragGesture(minimumDistance: 18, coordinateSpace: .local)
+            .onEnded { value in
+                guard horizontalSizeClass == .compact,
+                      value.startLocation.x <= 24,
+                      value.translation.width >= 72,
+                      abs(value.translation.height) <= abs(value.translation.width) * 0.7 else {
+                    return
+                }
+                onNavigateBack()
+            }
     }
 
     private var detail: FeatureThreadDetail? {

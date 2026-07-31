@@ -215,7 +215,8 @@ public struct WorkspaceView: View {
             ThreadDetailView(
                 model: model,
                 thread: thread,
-                submitMessage: submitMessage
+                submitMessage: submitMessage,
+                onNavigateBack: closeSelectedThread
             )
             .id(id)
         } else {
