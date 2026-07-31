@@ -47,8 +47,8 @@ private struct MarkdownBlockView: View {
     var body: some View {
         switch block {
         case let .paragraph(text):
-            MarkdownInlineText(text, font: .body)
-                .lineSpacing(3)
+            MarkdownInlineText(text, font: .system(size: 14.5))
+                .lineSpacing(2.5)
 
         case let .heading(level, text):
             MarkdownInlineText(text, font: headingFont(level))
@@ -87,7 +87,7 @@ private struct MarkdownBlockView: View {
         case 1: .title3.weight(.bold)
         case 2: .headline.weight(.bold)
         case 3: .subheadline.weight(.bold)
-        default: .body.weight(.semibold)
+        default: .system(size: 14.5, weight: .semibold)
         }
     }
 }
@@ -121,12 +121,12 @@ private struct MarkdownListView: View {
                 .accessibilityLabel(task == .complete ? "Completed" : "Not completed")
         } else if let start {
             Text("\(start + offset).")
-                .font(.callout.monospacedDigit())
+                .font(.system(size: 14, design: .monospaced))
                 .foregroundStyle(T3Colors.textSecondary)
                 .accessibilityLabel("Item \(start + offset)")
         } else {
             Text("•")
-                .font(.body.weight(.semibold))
+                .font(.system(size: 14.5, weight: .semibold))
                 .foregroundStyle(T3Colors.textSecondary)
                 .accessibilityHidden(true)
         }
@@ -170,7 +170,7 @@ private struct MarkdownCodeBlockView: View {
 
             ScrollView(.horizontal) {
                 Text(verbatim: code)
-                    .font(.system(.callout, design: .monospaced))
+                    .font(.system(size: 12.5, design: .monospaced))
                     .foregroundStyle(T3Colors.textPrimary.opacity(0.9))
                     .lineSpacing(2)
                     .textSelection(.enabled)

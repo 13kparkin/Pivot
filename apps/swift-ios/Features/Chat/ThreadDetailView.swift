@@ -1,6 +1,8 @@
 import SwiftUI
 
 public struct ThreadDetailView: View {
+    @SwiftUI.Environment(\.dismiss) private var dismiss
+
     @Bindable var model: FeatureRootModel
     let thread: FeatureThread
     let submitMessage: (FeatureMessageSubmission) async -> Bool
@@ -40,87 +42,9 @@ public struct ThreadDetailView: View {
             }
         }
         .background(Color.black)
-        .navigationTitle(detail?.thread.title ?? thread.title)
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
-                Menu {
-                    Section("Workspace") {
-                        Button {
-                            toolSurface = .files
-                        } label: {
-                            Label("Files", systemImage: "folder")
-                        }
-                        Button {
-                            toolSurface = .review
-                        } label: {
-                            Label("Review changes", systemImage: "doc.text.magnifyingglass")
-                        }
-                        Button {
-                            toolSurface = .sourceControl
-                        } label: {
-                            Label("Source Control", systemImage: "arrow.triangle.branch")
-                        }
-                        Button {
-                            toolSurface = .terminal
-                        } label: {
-                            Label("Terminal", systemImage: "terminal")
-                        }
-                    }
-                    Section("Interaction") {
-                        Button {
-                            Task {
-                                await model.setInteractionMode(
-                                    thread.id,
-                                    mode: currentThread.interactionMode == .plan ? .standard : .plan
-                                )
-                            }
-                        } label: {
-                            Label(
-                                currentThread.interactionMode == .plan
-                                    ? "Use standard mode"
-                                    : "Use plan mode",
-                                systemImage: "list.bullet.clipboard"
-                            )
-                        }
-                    }
-                    Section("Access") {
-                        ForEach(FeatureRuntimeMode.allCases, id: \.self) { mode in
-                            Button {
-                                Task { await model.setRuntimeMode(thread.id, mode: mode) }
-                            } label: {
-                                if currentThread.runtimeMode == mode {
-                                    Label(runtimeModeLabel(mode), systemImage: "checkmark")
-                                } else {
-                                    Text(runtimeModeLabel(mode))
-                                }
-                            }
-                        }
-                    }
-                    Section {
-                    Button {
-                        Task { _ = await model.detail(for: thread.id, force: true) }
-                    } label: {
-                        Label("Reload", systemImage: "arrow.clockwise")
-                    }
-                    Button {
-                        Task {
-                            await model.setArchived(thread.id, archived: !thread.isArchived)
-                        }
-                    } label: {
-                        Label(
-                            thread.isArchived ? "Restore" : "Archive",
-                            systemImage: thread.isArchived
-                                ? "arrow.uturn.backward"
-                                : "archivebox"
-                        )
-                    }
-                    }
-                } label: {
-                    Image(systemName: "ellipsis")
-                }
-                .accessibilityLabel("Thread actions")
-            }
+        .toolbar(.hidden, for: .navigationBar)
+        .safeAreaInset(edge: .top, spacing: 0) {
+            detailHeader
         }
         .task(id: thread.id) {
             isLoading = true
@@ -188,10 +112,188 @@ public struct ThreadDetailView: View {
         )
     }
 
+    private var detailHeader: some View {
+        HStack(spacing: 8) {
+            Button { dismiss() } label: {
+                Image(systemName: "chevron.left")
+                    .font(.system(size: 17, weight: .semibold))
+                    .frame(width: 30, height: T3Metrics.minimumTapTarget)
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(T3Colors.textSecondary)
+            .accessibilityLabel("Back")
+
+            VStack(alignment: .leading, spacing: 1) {
+                Text(currentThread.title)
+                    .font(.system(size: 14, weight: .semibold))
+                    .tracking(-0.12)
+                    .foregroundStyle(T3Colors.textPrimary)
+                    .lineLimit(1)
+
+                HStack(spacing: 5) {
+                    Image(systemName: "arrow.triangle.branch")
+                        .font(.system(size: 9, weight: .medium))
+                    Text(headerBranch)
+                        .lineLimit(1)
+                    if let environmentName = currentThread.homeEnvironmentLabel(in: model.snapshot) {
+                        Text("·")
+                        Text(environmentName)
+                            .lineLimit(1)
+                    }
+                }
+                .font(.system(size: 10.5))
+                .foregroundStyle(Color.white.opacity(0.4))
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            TimelineView(.periodic(from: .now, by: 1)) { context in
+                headerStatus(at: context.date)
+            }
+
+            threadActionsMenu
+        }
+        .padding(.leading, 5)
+        .padding(.trailing, 8)
+        .frame(height: 49)
+        .background(T3Colors.background)
+        .overlay(alignment: .bottom) {
+            Rectangle()
+                .fill(T3Colors.separator)
+                .frame(height: 1)
+        }
+    }
+
+    @ViewBuilder
+    private func headerStatus(at now: Date) -> some View {
+        HStack(spacing: 5) {
+            if let icon = headerStatusIcon {
+                Image(systemName: icon)
+                    .font(.system(size: 10.5, weight: .semibold))
+            }
+            Text(currentThread.homeStatusLabel ?? "Ready")
+            if let duration = currentThread.homeWorkingDuration(at: now) {
+                Text(duration)
+                    .font(.system(size: 10.5, weight: .semibold, design: .monospaced))
+                    .monospacedDigit()
+            }
+        }
+        .font(.system(size: 11.5, weight: .semibold))
+        .foregroundStyle(headerStatusColor)
+        .lineLimit(1)
+        .accessibilityElement(children: .combine)
+    }
+
+    private var threadActionsMenu: some View {
+        Menu {
+            Section("Workspace") {
+                Button { toolSurface = .files } label: {
+                    Label("Files", systemImage: "folder")
+                }
+                Button { toolSurface = .review } label: {
+                    Label("Review changes", systemImage: "doc.text.magnifyingglass")
+                }
+                Button { toolSurface = .sourceControl } label: {
+                    Label("Source Control", systemImage: "arrow.triangle.branch")
+                }
+                Button { toolSurface = .terminal } label: {
+                    Label("Terminal", systemImage: "terminal")
+                }
+            }
+            Section("Interaction") {
+                Button {
+                    Task {
+                        await model.setInteractionMode(
+                            thread.id,
+                            mode: currentThread.interactionMode == .plan ? .standard : .plan
+                        )
+                    }
+                } label: {
+                    Label(
+                        currentThread.interactionMode == .plan
+                            ? "Use standard mode"
+                            : "Use plan mode",
+                        systemImage: "list.bullet.clipboard"
+                    )
+                }
+            }
+            Section("Access") {
+                ForEach(FeatureRuntimeMode.allCases, id: \.self) { mode in
+                    Button {
+                        Task { await model.setRuntimeMode(thread.id, mode: mode) }
+                    } label: {
+                        if currentThread.runtimeMode == mode {
+                            Label(runtimeModeLabel(mode), systemImage: "checkmark")
+                        } else {
+                            Text(runtimeModeLabel(mode))
+                        }
+                    }
+                }
+            }
+            Section {
+                Button {
+                    Task { _ = await model.detail(for: thread.id, force: true) }
+                } label: {
+                    Label("Reload", systemImage: "arrow.clockwise")
+                }
+                Button {
+                    Task {
+                        await model.setArchived(thread.id, archived: !currentThread.isArchived)
+                    }
+                } label: {
+                    Label(
+                        currentThread.isArchived ? "Restore" : "Archive",
+                        systemImage: currentThread.isArchived
+                            ? "arrow.uturn.backward"
+                            : "archivebox"
+                    )
+                }
+            }
+        } label: {
+            Image(systemName: "ellipsis")
+                .font(.system(size: 16, weight: .semibold))
+                .frame(width: 30, height: T3Metrics.minimumTapTarget)
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(T3Colors.textSecondary)
+        .accessibilityLabel("Thread actions")
+    }
+
+    private var headerBranch: String {
+        if let branch = currentThread.branch?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !branch.isEmpty {
+            return branch
+        }
+        if let path = currentThread.worktreePath,
+           !path.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return URL(fileURLWithPath: path).lastPathComponent
+        }
+        return "workspace"
+    }
+
+    private var headerStatusIcon: String? {
+        switch currentThread.homeStatus {
+        case .working: "circle.dotted"
+        case .done: "checkmark.circle"
+        case .failed: "exclamationmark.circle"
+        case .approval, .input, .ready: nil
+        }
+    }
+
+    private var headerStatusColor: Color {
+        switch currentThread.homeStatus {
+        case .working: T3Colors.statusRunning
+        case .approval: T3Colors.warning
+        case .input: Color(red: 0.65, green: 0.71, blue: 0.99)
+        case .failed: T3Colors.danger
+        case .done: Color(red: 0.43, green: 0.91, blue: 0.72)
+        case .ready: T3Colors.textTertiary
+        }
+    }
+
     private func timeline(_ detail: FeatureThreadDetail) -> some View {
         ScrollViewReader { proxy in
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 18) {
+                LazyVStack(alignment: .leading, spacing: 13) {
                     if detail.messages.isEmpty {
                         ContentUnavailableView(
                             "Ready for a task",
@@ -216,8 +318,8 @@ public struct ThreadDetailView: View {
 
                     Color.clear.frame(height: 1).id("timeline-bottom")
                 }
-                .padding(.horizontal, 16)
-                .padding(.top, 14)
+                .padding(.horizontal, 15)
+                .padding(.top, 13)
                 .padding(.bottom, 10)
             }
             .scrollDismissesKeyboard(.interactively)
@@ -337,21 +439,31 @@ struct FeatureMessageView: View {
                         MarkdownMessageView(message.text)
                     }
                 }
-                .padding(.horizontal, 13)
-                .padding(.vertical, 10)
-                .background(Color.white.opacity(0.11), in: RoundedRectangle(cornerRadius: 15))
+                .padding(.horizontal, 12)
+                .padding(.vertical, 9)
+                .background(
+                    Color.white.opacity(0.075),
+                    in: UnevenRoundedRectangle(
+                        topLeadingRadius: 14,
+                        bottomLeadingRadius: 14,
+                        bottomTrailingRadius: 4,
+                        topTrailingRadius: 14
+                    )
+                )
             }
             .accessibilityLabel("You")
             .accessibilityValue(accessibilityValue)
             .accessibilityIdentifier("message-\(message.id)")
         case .assistant:
             VStack(alignment: .leading, spacing: 7) {
-                HStack(spacing: 6) {
-                    Image(systemName: "sparkles")
-                    Text(message.state == .streaming ? "Agent · Working" : "Agent")
+                if message.state == .streaming {
+                    HStack(spacing: 6) {
+                        Image(systemName: "circle.dotted")
+                        Text("Working")
+                    }
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(T3Colors.statusRunning)
                 }
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
                 FeatureMessageAttachmentsView(attachments: message.attachments)
                 if !message.text.isEmpty {
                     MarkdownMessageView(message.text)
@@ -369,10 +481,10 @@ struct FeatureMessageView: View {
                     .padding(.top, 6)
             } label: {
                 Label(message.toolName ?? "Tool output", systemImage: "terminal")
-                    .font(.subheadline.weight(.medium))
+                    .font(.caption.monospaced().weight(.medium))
+                    .foregroundStyle(T3Colors.textSecondary)
             }
-            .padding(11)
-            .background(Color.white.opacity(0.055), in: RoundedRectangle(cornerRadius: 10))
+            .padding(.vertical, 4)
             .accessibilityIdentifier("message-\(message.id)")
         case .system:
             Text(message.text)

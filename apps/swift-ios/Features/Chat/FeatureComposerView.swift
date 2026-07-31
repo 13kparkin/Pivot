@@ -1,6 +1,8 @@
 import SwiftUI
 
 struct FeatureComposerView: View {
+    @State private var isManuallyExpanded = false
+
     @Binding private var text: String
     @Binding private var selection: FeatureSelection?
     @Binding private var attachments: [FeatureDraftAttachment]
@@ -114,6 +116,11 @@ struct FeatureComposerView: View {
             )
             .ignoresSafeArea()
         }
+        .onChange(of: focused.wrappedValue) {
+            if !focused.wrappedValue, textIsEmpty, attachments.isEmpty {
+                isManuallyExpanded = false
+            }
+        }
     }
 
     private var collapsedComposer: some View {
@@ -124,7 +131,11 @@ struct FeatureComposerView: View {
             )
 
             Button {
-                focused.wrappedValue = true
+                isManuallyExpanded = true
+                Task { @MainActor in
+                    await Task.yield()
+                    focused.wrappedValue = true
+                }
             } label: {
                 Text(isWorking ? "Message to queue…" : "Ask anything…")
                     .font(.body)
@@ -314,7 +325,11 @@ struct FeatureComposerView: View {
     }
 
     private var isExpanded: Bool {
-        forceExpanded || focused.wrappedValue || !textIsEmpty || !attachments.isEmpty
+        forceExpanded
+            || isManuallyExpanded
+            || focused.wrappedValue
+            || !textIsEmpty
+            || !attachments.isEmpty
     }
 
     private var showsStop: Bool {

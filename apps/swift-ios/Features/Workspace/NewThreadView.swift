@@ -93,7 +93,7 @@ public struct NewThreadView: View {
     private var hero: some View {
         VStack(spacing: 10) {
             Text("What should we build")
-            HStack(spacing: 6) {
+            HStack(spacing: 3) {
                 Text("in")
                 Menu {
                     ForEach(model.snapshot.projects) { project in
@@ -122,6 +122,7 @@ public struct NewThreadView: View {
                 }
                 .buttonStyle(.plain)
                 Text("?")
+                    .offset(x: -1)
             }
         }
         .font(.system(size: 24, weight: .regular))

@@ -1011,7 +1011,8 @@ private struct ProjectBadge: View {
     }
 
     private var paletteIndex: Int {
-        name.unicodeScalars.reduce(0) { ($0 + Int($1.value)) % 4 }
+        if label == "T3" { return 0 }
+        return name.unicodeScalars.reduce(0) { ($0 + Int($1.value)) % 4 }
     }
 
     private var background: Color {
