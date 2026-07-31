@@ -764,10 +764,13 @@ public struct WorkspaceView: View {
             .environmentID
         let environmentID = thread.environmentID ?? projectEnvironmentID
         if let environment = model.snapshot.environments.first(where: { $0.id == environmentID }) {
+            if environment.isActive {
+                return model.snapshot.connection.state
+            }
             if let state = environment.connectionState {
                 return state
             }
-            return environment.isActive ? model.snapshot.connection.state : nil
+            return nil
         }
         let activeID = model.snapshot.environments.first(where: \.isActive)?.id
         if environmentID == nil || activeID == nil || environmentID == activeID {
