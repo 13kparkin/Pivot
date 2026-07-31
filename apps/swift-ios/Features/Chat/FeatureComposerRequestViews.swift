@@ -147,7 +147,7 @@ struct FeatureComposerUserInputPanel: View {
                             .font(.caption2.weight(.bold))
                             .tracking(1.3)
                             .textCase(.uppercase)
-                            .foregroundStyle(Color.indigo.opacity(0.95))
+                            .foregroundStyle(T3Colors.accent)
 
                         Spacer()
 
@@ -303,7 +303,7 @@ struct FeatureComposerUserInputPanel: View {
                 if isSelected {
                     Image(systemName: "checkmark")
                         .font(.caption.weight(.bold))
-                        .foregroundStyle(Color.indigo.opacity(0.95))
+                        .foregroundStyle(T3Colors.accent)
                 } else if number <= 9 {
                     Text("\(number)")
                         .font(.caption2.monospacedDigit().weight(.semibold))
@@ -319,13 +319,13 @@ struct FeatureComposerUserInputPanel: View {
             .padding(.vertical, 9)
             .frame(maxWidth: .infinity, minHeight: T3Metrics.minimumTapTarget, alignment: .leading)
             .background(
-                isSelected ? Color.indigo.opacity(0.12) : Color.white.opacity(0.045),
+                isSelected ? T3Colors.accent.opacity(0.12) : Color.white.opacity(0.045),
                 in: RoundedRectangle(cornerRadius: 10)
             )
             .overlay {
                 RoundedRectangle(cornerRadius: 10)
                     .stroke(
-                        isSelected ? Color.indigo.opacity(0.46) : Color.clear,
+                        isSelected ? T3Colors.accent.opacity(0.46) : Color.clear,
                         lineWidth: 1
                     )
             }

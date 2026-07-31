@@ -170,11 +170,12 @@ public struct ThreadDetailView: View {
                 Image(systemName: icon)
                     .font(.system(size: 10.5, weight: .semibold))
             }
-            Text(currentThread.homeStatusLabel ?? "Ready")
             if let duration = currentThread.homeWorkingDuration(at: now) {
                 Text(duration)
                     .font(.system(size: 10.5, weight: .semibold, design: .monospaced))
                     .monospacedDigit()
+            } else {
+                Text(currentThread.homeStatusLabel ?? "Ready")
             }
         }
         .font(.system(size: 11.5, weight: .semibold))
@@ -309,13 +310,6 @@ public struct ThreadDetailView: View {
                             .id(message.id)
                     }
 
-                    if detail.thread.state == .working || detail.thread.state == .queued {
-                        StreamingStatusView(
-                            state: detail.thread.state
-                        )
-                        .id("streaming-status")
-                    }
-
                     Color.clear.frame(height: 1).id("timeline-bottom")
                 }
                 .padding(.horizontal, 15)
@@ -377,6 +371,7 @@ public struct ThreadDetailView: View {
         }
         draft = ""
         attachments = []
+        composerFocused = false
         isSending = true
         Task {
             let sent = await submitMessage(
@@ -400,9 +395,9 @@ public struct ThreadDetailView: View {
                     !pendingIDs.contains($0.id)
                 }
                 sendFailed = true
+                composerFocused = true
             }
             isSending = false
-            composerFocused = true
         }
     }
 
@@ -678,21 +673,5 @@ private struct FeatureAttachmentPreview: View {
             .t3NavigationChrome()
         }
         .preferredColorScheme(.dark)
-    }
-}
-
-struct StreamingStatusView: View {
-    let state: FeatureThreadState
-
-    var body: some View {
-        HStack(spacing: 9) {
-            Image(systemName: state == .queued ? "clock" : "circle.dotted")
-                .foregroundStyle(T3Colors.statusRunning)
-            Text(state == .queued ? "Queued" : "Agent working")
-                .foregroundStyle(T3Colors.textSecondary)
-        }
-        .font(.caption.monospaced().weight(.medium))
-        .padding(.vertical, 4)
-        .accessibilityElement(children: .combine)
     }
 }

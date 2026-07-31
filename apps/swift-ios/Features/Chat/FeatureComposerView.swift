@@ -125,11 +125,6 @@ struct FeatureComposerView: View {
 
     private var collapsedComposer: some View {
         HStack(spacing: 4) {
-            FeatureImageAttachmentPicker(
-                attachments: $attachments,
-                isEnabled: imagesAllowed
-            )
-
             Button {
                 isManuallyExpanded = true
                 Task { @MainActor in
@@ -151,7 +146,7 @@ struct FeatureComposerView: View {
             submitButton
                 .padding(.trailing, 7)
         }
-        .padding(.leading, 3)
+        .padding(.leading, 12)
         .padding(.vertical, 5)
     }
 
@@ -333,7 +328,7 @@ struct FeatureComposerView: View {
     }
 
     private var showsStop: Bool {
-        isWorking
+        isWorking && textIsEmpty && attachments.isEmpty
     }
 
     private var submitDisabled: Bool {

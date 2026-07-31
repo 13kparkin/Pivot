@@ -599,7 +599,7 @@ public struct WorkspaceView: View {
                 snapshot: model.snapshot,
                 now: sidebarClock,
                 isSelected: selectedThreadID == thread.id,
-                isConnectionStale: isConnectionStale(for: thread),
+                connectionState: connectionState(for: thread),
                 style: dynamicTypeSize.isAccessibilitySize ? .rich : style
             )
         }
@@ -758,18 +758,22 @@ public struct WorkspaceView: View {
         return max(0.25, min(60, nextSnooze ?? 60))
     }
 
-    private func isConnectionStale(for thread: FeatureThread) -> Bool {
+    private func connectionState(for thread: FeatureThread) -> FeatureConnection.State? {
         let projectEnvironmentID = model.snapshot.projects
             .first(where: { $0.id == thread.projectID })?
             .environmentID
         let environmentID = thread.environmentID ?? projectEnvironmentID
-        if let environment = model.snapshot.environments.first(where: { $0.id == environmentID }),
-           environment.connectionState == .disconnected {
-            return true
+        if let environment = model.snapshot.environments.first(where: { $0.id == environmentID }) {
+            if let state = environment.connectionState {
+                return state
+            }
+            return environment.isActive ? model.snapshot.connection.state : nil
         }
-        guard model.snapshot.connection.state == .disconnected else { return false }
         let activeID = model.snapshot.environments.first(where: \.isActive)?.id
-        return environmentID == nil || activeID == nil || environmentID == activeID
+        if environmentID == nil || activeID == nil || environmentID == activeID {
+            return model.snapshot.connection.state
+        }
+        return nil
     }
 
     private func projectName(for thread: FeatureThread) -> String {
@@ -867,7 +871,7 @@ struct FeatureThreadRow: View {
     let snapshot: FeatureSnapshot
     let now: Date
     let isSelected: Bool
-    let isConnectionStale: Bool
+    let connectionState: FeatureConnection.State?
     let style: Style
 
     init(
@@ -876,7 +880,7 @@ struct FeatureThreadRow: View {
         snapshot: FeatureSnapshot,
         now: Date = .now,
         isSelected: Bool = false,
-        isConnectionStale: Bool = false,
+        connectionState: FeatureConnection.State? = nil,
         style: Style = .rich
     ) {
         self.thread = thread
@@ -884,7 +888,7 @@ struct FeatureThreadRow: View {
         self.snapshot = snapshot
         self.now = now
         self.isSelected = isSelected
-        self.isConnectionStale = isConnectionStale
+        self.connectionState = connectionState
         self.style = style
     }
 
@@ -937,16 +941,12 @@ struct FeatureThreadRow: View {
                 Spacer(minLength: 8)
                 if let environmentLabel {
                     HStack(spacing: 4) {
-                        Image(systemName: "server.rack")
+                        Image(systemName: environmentIcon)
                             .font(.system(size: 9))
                         Text(environmentLabel)
                             .lineLimit(1)
                     }
-                    .foregroundStyle(
-                        isConnectionStale
-                            ? T3Colors.danger.opacity(0.72)
-                            : Color.white.opacity(0.36)
-                    )
+                    .foregroundStyle(environmentColor)
                 }
                 Image(systemName: "sparkles")
                     .font(.system(size: 9))
@@ -965,7 +965,6 @@ struct FeatureThreadRow: View {
             in: RoundedRectangle(cornerRadius: 8)
         )
         .padding(.horizontal, 8)
-        .opacity(isConnectionStale ? 0.58 : 1)
     }
 
     private var slimRow: some View {
@@ -1033,6 +1032,34 @@ struct FeatureThreadRow: View {
 
     private var environmentLabel: String? {
         thread.homeEnvironmentLabel(in: snapshot)
+    }
+
+    private var environmentIcon: String {
+        switch connectionState {
+        case .connecting, .reconnecting:
+            "wifi"
+        case .disconnected:
+            "wifi.slash"
+        case .connected, nil:
+            "server.rack"
+        }
+    }
+
+    private var environmentColor: Color {
+        switch connectionState {
+        case .connecting, .reconnecting:
+            T3Colors.warning.opacity(0.78)
+        case .disconnected:
+            T3Colors.danger.opacity(0.78)
+        case .connected, nil:
+            Color.white.opacity(0.36)
+        }
+    }
+
+    private var isConnectionStale: Bool {
+        connectionState == .connecting
+            || connectionState == .reconnecting
+            || connectionState == .disconnected
     }
 
     private var branchLabel: String {
