@@ -119,6 +119,50 @@ struct DailyUXSidebarTests {
     }
 
     @Test
+    func parentRefreshIgnoresWorkingTimersAndTargetsShelfBoundaries() {
+        var working = thread(
+            id: "working",
+            created: -20,
+            updated: -10,
+            state: .working
+        )
+        working.workingStartedAt = now.addingTimeInterval(-90)
+
+        #expect(DailyUXSidebarRefresh.nextBoundary(for: [working], after: now) == nil)
+
+        var laterSnooze = thread(id: "later", created: -30, updated: -20)
+        laterSnooze.snoozedUntil = now.addingTimeInterval(600)
+        var earlierSnooze = thread(id: "earlier", created: -40, updated: -30)
+        earlierSnooze.snoozedUntil = now.addingTimeInterval(120)
+
+        #expect(
+            DailyUXSidebarRefresh.nextBoundary(
+                for: [working, laterSnooze, earlierSnooze],
+                after: now
+            ) == earlierSnooze.snoozedUntil
+        )
+    }
+
+    @Test
+    func parentRefreshIncludesAutomaticSettlementBoundary() {
+        var resting = thread(
+            id: "resting",
+            created: -100,
+            updated: -100,
+            state: .idle
+        )
+        resting.lastActivityAt = now.addingTimeInterval(-(3 * 24 * 60 * 60) + 45)
+
+        #expect(
+            DailyUXSidebarRefresh.nextBoundary(for: [resting], after: now)
+                == now.addingTimeInterval(45)
+        )
+
+        resting.keepsActive = true
+        #expect(DailyUXSidebarRefresh.nextBoundary(for: [resting], after: now) == nil)
+    }
+
+    @Test
     func onlyFailuresRaisedAfterSnoozingWakeTheThread() {
         var acknowledged = thread(
             id: "acknowledged",

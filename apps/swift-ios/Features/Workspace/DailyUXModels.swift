@@ -220,6 +220,48 @@ struct DailyUXSidebarIndex {
     }
 }
 
+/// The Home list only needs a parent-level refresh when a thread crosses a shelf boundary.
+/// Working timers and relative ages are rendered by each visible row instead.
+enum DailyUXSidebarRefresh {
+    static func nextBoundary(
+        for threads: [FeatureThread],
+        after now: Date
+    ) -> Date? {
+        threads.reduce(nil as Date?) { earliest, thread in
+            let snoozeBoundary = thread.isEffectivelySnoozed(at: now)
+                ? thread.snoozedUntil
+                : nil
+            let settlementBoundary = automaticSettlementBoundary(for: thread, after: now)
+            let threadBoundary = [snoozeBoundary, settlementBoundary]
+                .compactMap { $0 }
+                .min()
+
+            guard let threadBoundary else { return earliest }
+            return min(earliest ?? threadBoundary, threadBoundary)
+        }
+    }
+
+    private static func automaticSettlementBoundary(
+        for thread: FeatureThread,
+        after now: Date
+    ) -> Date? {
+        guard !thread.isArchived,
+              !thread.isSettled,
+              !thread.keepsActive,
+              let lastActivityAt = thread.lastActivityAt else {
+            return nil
+        }
+        switch thread.state {
+        case .idle, .failed, .completed:
+            break
+        case .queued, .working, .waitingForApproval, .waitingForInput:
+            return nil
+        }
+        let boundary = lastActivityAt.addingTimeInterval(3 * 24 * 60 * 60)
+        return boundary > now ? boundary : nil
+    }
+}
+
 enum SidebarRelativeAge {
     static func compact(since date: Date, now: Date) -> String {
         let seconds = max(0, Int(now.timeIntervalSince(date)))

@@ -20,7 +20,8 @@ public struct WorkspaceView: View {
     @State private var showingSettings = false
     @State private var renamingThread: FeatureThread?
     @State private var renameTitle = ""
-    @State private var sidebarClock = Date.now
+    @State private var sidebarBoundaryNow = Date.now
+    @State private var preferredCompactColumn = NavigationSplitViewColumn.sidebar
     @FocusState private var isSearchFocused: Bool
 
     public init(
@@ -69,7 +70,7 @@ public struct WorkspaceView: View {
     }
 
     public var body: some View {
-        NavigationSplitView {
+        NavigationSplitView(preferredCompactColumn: $preferredCompactColumn) {
             sidebar
                 .navigationSplitViewColumnWidth(
                     min: T3Metrics.minimumSidebarWidth,
@@ -82,7 +83,7 @@ public struct WorkspaceView: View {
         .navigationSplitViewStyle(.balanced)
         .sheet(isPresented: $showingNewTask) {
             NewThreadView(model: model, submit: submitNewTask) { thread in
-                selectedThreadID = thread.id
+                openThread(thread.id)
                 showingNewTask = false
             }
         }
@@ -109,26 +110,22 @@ public struct WorkspaceView: View {
             }
             .disabled(renameTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
         }
-        .onChange(of: model.snapshot.threads) {
-            if let selectedThreadID,
-               !model.snapshot.threads.contains(where: { $0.id == selectedThreadID }) {
-                self.selectedThreadID = nil
-            }
+        .onChange(of: selectedThreadIsAvailable) { _, isAvailable in
+            if !isAvailable { closeSelectedThread() }
         }
-        .onChange(of: model.snapshot.projects.map(\.id)) {
-            if let selectedProjectID,
-               !model.snapshot.projects.contains(where: { $0.id == selectedProjectID }) {
-                self.selectedProjectID = nil
-            }
+        .onChange(of: selectedThreadID) { _, newValue in
+            preferredCompactColumn = newValue == nil ? .sidebar : .detail
         }
-        .task(id: sidebarBoundarySignature) {
-            while !Task.isCancelled {
-                sidebarClock = .now
-                do {
-                    try await Task.sleep(for: .seconds(nextSidebarRefreshDelay))
-                } catch {
-                    return
-                }
+        .onChange(of: selectedProjectIsAvailable) { _, isAvailable in
+            if !isAvailable { selectedProjectID = nil }
+        }
+        .task(id: nextSidebarBoundary) {
+            guard let boundary = nextSidebarBoundary else { return }
+            do {
+                try await Task.sleep(for: .seconds(max(0, boundary.timeIntervalSinceNow)))
+                sidebarBoundaryNow = max(.now, boundary)
+            } catch {
+                return
             }
         }
     }
@@ -160,7 +157,7 @@ public struct WorkspaceView: View {
             snapshot: model.snapshot,
             query: searchText,
             projectID: selectedProjectID,
-            now: sidebarClock
+            now: sidebarBoundaryNow
         )
 
         return List(selection: $selectedThreadID) {
@@ -171,6 +168,7 @@ public struct WorkspaceView: View {
                 shelfRows(
                     title: "Snoozed",
                     threads: presentation.snoozed,
+                    rowContexts: presentation.rowContexts,
                     isExpanded: $isSnoozedExpanded,
                     accent: T3Colors.accent,
                     isArchived: false
@@ -178,6 +176,7 @@ public struct WorkspaceView: View {
                 shelfRows(
                     title: "Settled",
                     threads: Array(presentation.settled.prefix(settledLimit)),
+                    rowContexts: presentation.rowContexts,
                     totalCount: presentation.settled.count,
                     isExpanded: $isSettledExpanded,
                     accent: nil,
@@ -190,6 +189,7 @@ public struct WorkspaceView: View {
                     shelfRows(
                         title: "Archived",
                         threads: presentation.archived,
+                        rowContexts: presentation.rowContexts,
                         isExpanded: $isArchiveExpanded,
                         accent: nil,
                         isArchived: true
@@ -459,10 +459,10 @@ public struct WorkspaceView: View {
                         .lineLimit(1)
                     Image(systemName: "chevron.down")
                         .font(.system(size: 8, weight: .bold))
-                }
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(Color.white.opacity(0.55))
-                .frame(maxWidth: .infinity, minHeight: 34, alignment: .leading)
+            }
+            .font(T3Typography.homeMetadata.weight(.semibold))
+            .foregroundStyle(Color.white.opacity(0.55))
+            .frame(maxWidth: .infinity, minHeight: 40, alignment: .leading)
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
@@ -500,7 +500,12 @@ public struct WorkspaceView: View {
                 .listRowSeparator(.hidden)
         } else {
             ForEach(presentation.active) { thread in
-                threadLink(thread, style: .rich, isArchived: false)
+                threadLink(
+                    thread,
+                    context: presentation.rowContexts[thread.id] ?? .fallback,
+                    style: .rich,
+                    isArchived: false
+                )
             }
         }
     }
@@ -509,6 +514,7 @@ public struct WorkspaceView: View {
     private func shelfRows(
         title: String,
         threads: [FeatureThread],
+        rowContexts: [String: HomeThreadRowContext],
         totalCount: Int? = nil,
         isExpanded: Binding<Bool>,
         accent: Color?,
@@ -545,7 +551,12 @@ public struct WorkspaceView: View {
                     .listRowSeparator(.hidden)
             } else {
                 ForEach(threads) { thread in
-                    threadLink(thread, style: .slim, isArchived: isArchived)
+                    threadLink(
+                        thread,
+                        context: rowContexts[thread.id] ?? .fallback,
+                        style: .slim,
+                        isArchived: isArchived
+                    )
                 }
             }
         }
@@ -582,26 +593,30 @@ public struct WorkspaceView: View {
                 .listRowSeparator(.hidden)
         } else {
             ForEach(presentation.searchResults) { thread in
-                threadLink(thread, style: .rich, isArchived: thread.isArchived)
+                threadLink(
+                    thread,
+                    context: presentation.rowContexts[thread.id] ?? .fallback,
+                    style: .rich,
+                    isArchived: thread.isArchived
+                )
             }
         }
     }
 
     private func threadLink(
         _ thread: FeatureThread,
+        context: HomeThreadRowContext,
         style: FeatureThreadRow.Style,
         isArchived: Bool
     ) -> some View {
         NavigationLink(value: thread.id) {
             FeatureThreadRow(
                 thread: thread,
-                projectName: projectName(for: thread),
-                snapshot: model.snapshot,
-                now: sidebarClock,
+                context: context,
                 isSelected: selectedThreadID == thread.id,
-                connectionState: connectionState(for: thread),
                 style: dynamicTypeSize.isAccessibilitySize ? .rich : style
             )
+            .equatable()
         }
         .tag(thread.id)
         .buttonStyle(.plain)
@@ -656,20 +671,20 @@ public struct WorkspaceView: View {
                     Task {
                         await model.setSettled(
                             thread.id,
-                            settled: !thread.isEffectivelySettled(at: sidebarClock)
+                            settled: !thread.isEffectivelySettled(at: sidebarBoundaryNow)
                         )
                     }
                 } label: {
                     Label(
-                        thread.isEffectivelySettled(at: sidebarClock) ? "Reopen" : "Mark done",
-                        systemImage: thread.isEffectivelySettled(at: sidebarClock)
+                        thread.isEffectivelySettled(at: sidebarBoundaryNow) ? "Reopen" : "Mark done",
+                        systemImage: thread.isEffectivelySettled(at: sidebarBoundaryNow)
                             ? "arrow.counterclockwise"
                             : "checkmark"
                     )
                 }
 
                 Button {
-                    let snoozed = thread.isEffectivelySnoozed(at: sidebarClock)
+                    let snoozed = thread.isEffectivelySnoozed(at: sidebarBoundaryNow)
                     Task {
                         await model.setSnoozed(
                             thread.id,
@@ -677,7 +692,7 @@ public struct WorkspaceView: View {
                         )
                     }
                 } label: {
-                    let snoozed = thread.isEffectivelySnoozed(at: sidebarClock)
+                    let snoozed = thread.isEffectivelySnoozed(at: sidebarBoundaryNow)
                     Label(
                         snoozed ? "Unsnooze" : "Snooze 1 hour",
                         systemImage: snoozed ? "bell" : "clock"
@@ -733,57 +748,31 @@ public struct WorkspaceView: View {
         return "\(unreachableEnvironments.count) devices unreachable"
     }
 
-    private var sidebarBoundarySignature: String {
-        model.snapshot.threads.map {
-            [
-                $0.id,
-                $0.state.rawValue,
-                $0.updatedAt.timeIntervalSince1970.description,
-                $0.workingStartedAt?.timeIntervalSince1970.description ?? "",
-                $0.snoozedUntil?.timeIntervalSince1970.description ?? "",
-            ].joined(separator: ":")
-        }
-        .joined(separator: "|")
+    private var nextSidebarBoundary: Date? {
+        DailyUXSidebarRefresh.nextBoundary(
+            for: model.snapshot.threads,
+            after: sidebarBoundaryNow
+        )
     }
 
-    private var nextSidebarRefreshDelay: TimeInterval {
-        if model.snapshot.threads.contains(where: { $0.homeStatus == .working }) {
-            return 1
-        }
-        let nextSnooze = model.snapshot.threads
-            .compactMap(\.snoozedUntil)
-            .filter { $0 > sidebarClock }
-            .min()
-            .map { $0.timeIntervalSince(sidebarClock) }
-        return max(0.25, min(60, nextSnooze ?? 60))
+    private var selectedThreadIsAvailable: Bool {
+        guard let selectedThreadID else { return true }
+        return model.snapshot.threads.contains { $0.id == selectedThreadID }
     }
 
-    private func connectionState(for thread: FeatureThread) -> FeatureConnection.State? {
-        let projectEnvironmentID = model.snapshot.projects
-            .first(where: { $0.id == thread.projectID })?
-            .environmentID
-        let environmentID = thread.environmentID ?? projectEnvironmentID
-        if let environment = model.snapshot.environments.first(where: { $0.id == environmentID }) {
-            if environment.isActive {
-                return model.snapshot.connection.state
-            }
-            if let state = environment.connectionState {
-                return state
-            }
-            return nil
-        }
-        let activeID = model.snapshot.environments.first(where: \.isActive)?.id
-        if environmentID == nil || activeID == nil || environmentID == activeID {
-            return model.snapshot.connection.state
-        }
-        return nil
+    private var selectedProjectIsAvailable: Bool {
+        guard let selectedProjectID else { return true }
+        return model.snapshot.projects.contains { $0.id == selectedProjectID }
     }
 
-    private func projectName(for thread: FeatureThread) -> String {
-        model.snapshot.projects.first {
-            $0.id == thread.projectID
-                && (thread.environmentID == nil || $0.environmentID == thread.environmentID)
-        }?.name ?? "Project"
+    private func openThread(_ id: String) {
+        selectedThreadID = id
+        preferredCompactColumn = .detail
+    }
+
+    private func closeSelectedThread() {
+        selectedThreadID = nil
+        preferredCompactColumn = .sidebar
     }
 
     private func projectMenuTitle(_ project: FeatureProject) -> String {
@@ -809,6 +798,7 @@ private struct HomePresentation {
     let settled: [FeatureThread]
     let archived: [FeatureThread]
     let searchResults: [FeatureThread]
+    let rowContexts: [String: HomeThreadRowContext]
 
     init(snapshot: FeatureSnapshot, query: String, projectID: String?, now: Date) {
         let index = DailyUXSidebarIndex(
@@ -835,6 +825,7 @@ private struct HomePresentation {
             snapshot: snapshot,
             query: query
         )
+        rowContexts = HomeThreadRowContext.index(snapshot: snapshot)
     }
 }
 
@@ -854,78 +845,139 @@ private struct HomeShelfHeader: View {
             Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
                 .font(.system(size: 8, weight: .bold))
         }
-        .font(.caption2.weight(.bold))
+        .font(T3Typography.homeMetadata.weight(.bold))
         .foregroundStyle(accent ?? T3Colors.textTertiary)
         .padding(.horizontal, 10)
         .padding(.top, 4)
-        .frame(height: 36)
+        .frame(minHeight: 40)
         .contentShape(Rectangle())
     }
 }
 
-struct FeatureThreadRow: View {
-    enum Style {
+private struct HomeThreadRowContext: Equatable {
+    let projectName: String
+    let environmentLabel: String?
+    let providerLooksTerminal: Bool
+    let connectionState: FeatureConnection.State?
+
+    static let fallback = HomeThreadRowContext(
+        projectName: "Project",
+        environmentLabel: nil,
+        providerLooksTerminal: false,
+        connectionState: nil
+    )
+
+    static func index(snapshot: FeatureSnapshot) -> [String: HomeThreadRowContext] {
+        let projectByID = snapshot.projects.reduce(into: [String: FeatureProject]()) {
+            $0[$1.id] = $1
+        }
+        let environmentByID = snapshot.environments.reduce(into: [String: FeatureEnvironment]()) {
+            $0[$1.id] = $1
+        }
+        let providerByID = snapshot.providers.reduce(into: [String: FeatureProvider]()) {
+            $0[$1.id] = $1
+        }
+        let activeEnvironmentID = snapshot.environments.first(where: \.isActive)?.id
+
+        return snapshot.threads.reduce(into: [String: HomeThreadRowContext]()) { result, thread in
+            let project = projectByID[thread.projectID]
+            let environmentID = thread.environmentID ?? project?.environmentID
+            let environment = environmentID.flatMap { environmentByID[$0] }
+            let environmentLabel = (environment?.name ?? thread.environmentName)?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            let explicitProvider = thread.providerName?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            let provider = (explicitProvider?.isEmpty == false ? explicitProvider : nil)
+                ?? thread.providerID.flatMap { providerByID[$0]?.name }
+                ?? thread.providerID
+                ?? ""
+
+            let connectionState: FeatureConnection.State?
+            if environment?.isActive == true
+                || environmentID == nil
+                || activeEnvironmentID == nil
+                || environmentID == activeEnvironmentID {
+                connectionState = snapshot.connection.state
+            } else {
+                connectionState = environment?.connectionState
+            }
+
+            result[thread.id] = HomeThreadRowContext(
+                projectName: project?.name ?? "Project",
+                environmentLabel: environmentLabel?.isEmpty == false ? environmentLabel : nil,
+                providerLooksTerminal: {
+                    let normalized = provider.lowercased()
+                    return normalized.contains("codex")
+                        || normalized.contains("cursor")
+                        || normalized.contains("open")
+                }(),
+                connectionState: connectionState
+            )
+        }
+    }
+}
+
+struct FeatureThreadRow: View, Equatable {
+    enum Style: Equatable {
         case rich
         case slim
     }
 
     let thread: FeatureThread
-    let projectName: String
-    let snapshot: FeatureSnapshot
-    let now: Date
+    private let context: HomeThreadRowContext
     let isSelected: Bool
-    let connectionState: FeatureConnection.State?
     let style: Style
 
-    init(
+    fileprivate init(
         thread: FeatureThread,
-        projectName: String,
-        snapshot: FeatureSnapshot,
-        now: Date = .now,
+        context: HomeThreadRowContext,
         isSelected: Bool = false,
-        connectionState: FeatureConnection.State? = nil,
         style: Style = .rich
     ) {
         self.thread = thread
-        self.projectName = projectName
-        self.snapshot = snapshot
-        self.now = now
+        self.context = context
         self.isSelected = isSelected
-        self.connectionState = connectionState
         self.style = style
     }
 
     var body: some View {
+        TimelineView(.periodic(from: .now, by: refreshCadence)) { timeline in
+            row(at: timeline.date)
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(thread.title)
+                .accessibilityValue(accessibilityValue(at: timeline.date))
+                .accessibilityHint("Opens task")
+                .accessibilityIdentifier("thread-\(thread.id)")
+                .accessibilityAddTraits(isSelected ? .isSelected : [])
+        }
+    }
+
+    @ViewBuilder
+    private func row(at now: Date) -> some View {
         Group {
             switch style {
-            case .rich: richRow
-            case .slim: slimRow
+            case .rich: richRow(at: now)
+            case .slim: slimRow(at: now)
             }
         }
         .contentShape(Rectangle())
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel(thread.title)
-        .accessibilityValue(accessibilityValue)
-        .accessibilityHint("Opens task")
-        .accessibilityIdentifier("thread-\(thread.id)")
-        .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 
-    private var richRow: some View {
+    private func richRow(at now: Date) -> some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 6) {
-                ProjectBadge(name: projectName)
-                Text(projectName)
+                ProjectBadge(name: context.projectName)
+                Text(context.projectName)
                     .lineLimit(1)
                     .foregroundStyle(Color.white.opacity(0.58))
                 Spacer(minLength: 8)
-                status
+                status(at: now)
             }
-            .font(.system(size: 11.5, weight: .medium))
-            .frame(height: 20)
+            .font(T3Typography.homeMetadata.weight(.medium))
+            .frame(minHeight: 20)
 
             Text(thread.title)
-                .font(.system(size: 15, weight: .semibold))
+                .font(T3Typography.homeTitle)
                 .tracking(-0.14)
                 .foregroundStyle(T3Colors.textPrimary)
                 .lineLimit(1)
@@ -936,7 +988,7 @@ struct FeatureThreadRow: View {
                     .font(.system(size: 10, weight: .medium))
                 Text(branchLabel)
                     .lineLimit(1)
-                if providerLooksTerminal {
+                if context.providerLooksTerminal {
                     Text(">_")
                         .font(.system(size: 9.5, weight: .bold, design: .monospaced))
                         .foregroundStyle(Color(red: 0.37, green: 0.92, blue: 0.83))
@@ -955,14 +1007,14 @@ struct FeatureThreadRow: View {
                     .font(.system(size: 9))
                     .opacity(0.48)
             }
-            .font(.system(size: 11))
-            .foregroundStyle(Color.white.opacity(0.4))
-            .frame(height: 18)
+            .font(T3Typography.homeMetadata)
+            .foregroundStyle(T3Colors.textTertiary)
+            .frame(minHeight: 20)
             .padding(.top, 3)
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 8)
-        .frame(minHeight: 78)
+        .frame(minHeight: 88)
         .background(
             isSelected ? Color.white.opacity(0.09) : Color.clear,
             in: RoundedRectangle(cornerRadius: 8)
@@ -970,22 +1022,22 @@ struct FeatureThreadRow: View {
         .padding(.horizontal, 8)
     }
 
-    private var slimRow: some View {
+    private func slimRow(at now: Date) -> some View {
         HStack(spacing: 9) {
-            ProjectBadge(name: projectName)
+            ProjectBadge(name: context.projectName)
                 .saturation(0)
                 .opacity(0.48)
             Text(thread.title)
-                .font(.system(size: 13))
-                .foregroundStyle(Color.white.opacity(0.52))
+                .font(T3Typography.homeTitle)
+                .foregroundStyle(T3Colors.textSecondary)
                 .lineLimit(1)
             Spacer(minLength: 8)
             Text(SidebarRelativeAge.compact(since: thread.updatedAt, now: now))
-                .font(.caption2.monospacedDigit())
+                .font(T3Typography.homeMetadata.monospacedDigit())
                 .foregroundStyle(T3Colors.textTertiary)
         }
         .padding(.horizontal, 10)
-        .frame(height: 36)
+        .frame(minHeight: 44)
         .padding(.horizontal, 8)
         .background(
             isSelected ? Color.white.opacity(0.07) : Color.clear,
@@ -994,7 +1046,7 @@ struct FeatureThreadRow: View {
     }
 
     @ViewBuilder
-    private var status: some View {
+    private func status(at now: Date) -> some View {
         let label = thread.homeStatusLabel
             ?? SidebarRelativeAge.compact(since: thread.updatedAt, now: now)
         HStack(spacing: 5) {
@@ -1005,11 +1057,11 @@ struct FeatureThreadRow: View {
             Text(label)
             if let duration = thread.homeWorkingDuration(at: now) {
                 Text(duration)
-                    .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                    .font(.system(.footnote, design: .monospaced, weight: .semibold))
                     .monospacedDigit()
             }
         }
-        .font(.system(size: 11.5, weight: .semibold))
+        .font(T3Typography.status)
         .foregroundStyle(statusColor)
     }
 
@@ -1033,12 +1085,8 @@ struct FeatureThreadRow: View {
         }
     }
 
-    private var environmentLabel: String? {
-        thread.homeEnvironmentLabel(in: snapshot)
-    }
-
     private var environmentIcon: String {
-        switch connectionState {
+        switch context.connectionState {
         case .connecting, .reconnecting:
             "wifi"
         case .disconnected:
@@ -1049,7 +1097,7 @@ struct FeatureThreadRow: View {
     }
 
     private var environmentColor: Color {
-        switch connectionState {
+        switch context.connectionState {
         case .connecting, .reconnecting:
             T3Colors.warning.opacity(0.78)
         case .disconnected:
@@ -1060,9 +1108,9 @@ struct FeatureThreadRow: View {
     }
 
     private var isConnectionStale: Bool {
-        connectionState == .connecting
-            || connectionState == .reconnecting
-            || connectionState == .disconnected
+        context.connectionState == .connecting
+            || context.connectionState == .reconnecting
+            || context.connectionState == .disconnected
     }
 
     private var branchLabel: String {
@@ -1077,13 +1125,12 @@ struct FeatureThreadRow: View {
         return "workspace"
     }
 
-    private var providerLooksTerminal: Bool {
-        let provider = thread.homeProviderLabel(in: snapshot)?.lowercased() ?? ""
-        return provider.contains("codex") || provider.contains("cursor") || provider.contains("open")
+    private var environmentLabel: String? {
+        context.environmentLabel
     }
 
-    private var accessibilityValue: String {
-        var values = [thread.homeStatusLabel ?? "Ready", "Project \(projectName)"]
+    private func accessibilityValue(at now: Date) -> String {
+        var values = [thread.homeStatusLabel ?? "Ready", "Project \(context.projectName)"]
         if let duration = thread.homeWorkingDuration(at: now) {
             values.append("for \(duration)")
         }
@@ -1095,6 +1142,10 @@ struct FeatureThreadRow: View {
             values.append("last known state")
         }
         return values.joined(separator: ". ")
+    }
+
+    private var refreshCadence: TimeInterval {
+        thread.homeStatus == .working ? 1 : 60
     }
 }
 

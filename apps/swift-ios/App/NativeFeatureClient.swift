@@ -1888,22 +1888,22 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging {
             }
             return live + cached
         }
+        let threadCountByProjectID = threads.reduce(into: [String: Int]()) {
+            $0[$1.projectID, default: 0] += 1
+        }
         let projects = environments.flatMap { environment in
             (shellsByEnvironmentID[environment.id]?.projects ?? []).map { project in
                 let uiID = FeatureScopedID.project(
                     environmentID: environment.id,
                     wireID: project.id
                 )
-                let count = threads.lazy.filter {
-                    $0.projectID == uiID
-                }.count
                 return FeatureProject(
                     id: uiID,
                     wireID: project.id,
                     environmentID: environment.id,
                     name: project.title,
                     path: project.workspaceRoot,
-                    threadCount: count,
+                    threadCount: threadCountByProjectID[uiID, default: 0],
                     defaultSelection: project.defaultModelSelection.map(mapSelection)
                 )
             }
