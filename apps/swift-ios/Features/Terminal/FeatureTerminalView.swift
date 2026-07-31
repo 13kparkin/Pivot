@@ -40,10 +40,10 @@ public struct FeatureTerminalView: View {
                 .frame(width: 7, height: 7)
             VStack(alignment: .leading, spacing: 1) {
                 Text(terminal?.title ?? "Terminal")
-                    .font(.subheadline.weight(.semibold))
+                    .font(T3Typography.navigationTitle)
                 Text(terminal?.workingDirectory ?? statusLabel)
-                    .font(.caption2.monospaced())
-                    .foregroundStyle(.secondary)
+                    .font(T3Typography.tool)
+                    .foregroundStyle(T3Colors.textSecondary)
                     .lineLimit(1)
             }
             Spacer()
@@ -51,12 +51,12 @@ public struct FeatureTerminalView: View {
                 Button("Stop", role: .destructive) {
                     Task { await stop() }
                 }
-                .font(.footnote.weight(.semibold))
+                .font(T3Typography.supportingStrong)
             } else {
                 Button("Start") {
                     Task { await open() }
                 }
-                .font(.footnote.weight(.semibold))
+                .font(T3Typography.supportingStrong)
                 .disabled(isLoading)
             }
         }
@@ -80,11 +80,11 @@ public struct FeatureTerminalView: View {
             ScrollViewReader { proxy in
                 ScrollView([.horizontal, .vertical]) {
                     Text(terminal?.buffer.isEmpty == false ? terminal?.buffer ?? "" : " ")
-                        .font(.system(size: 12, design: .monospaced))
+                        .font(T3Typography.code)
                         .foregroundStyle(Color(white: 0.86))
                         .textSelection(.enabled)
                         .frame(maxWidth: .infinity, minHeight: 300, alignment: .topLeading)
-                        .padding(12)
+                        .padding(14)
                         .id("terminal-end")
                 }
                 .defaultScrollAnchor(.bottom)
@@ -134,7 +134,7 @@ public struct FeatureTerminalView: View {
         Button(label) {
             Task { await write(data) }
         }
-        .font(.caption.monospaced().weight(.medium))
+        .font(T3Typography.tool.weight(.medium))
         .buttonStyle(.bordered)
         .controlSize(.small)
         .disabled(!isRunning)

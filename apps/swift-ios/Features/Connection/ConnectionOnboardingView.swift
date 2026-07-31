@@ -132,7 +132,7 @@ public struct ConnectionOnboardingView: View {
 
                 Text("Connect securely to T3 Code running on your computer.")
                     .font(.body)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(T3Colors.textSecondary)
                     .padding(.top, 12)
 
                 Button {
@@ -183,8 +183,8 @@ public struct ConnectionOnboardingView: View {
         if !model.snapshot.environments.isEmpty {
             VStack(alignment: .leading, spacing: 0) {
                 Text("KNOWN SERVERS")
-                    .font(.caption2.weight(.semibold))
-                    .foregroundStyle(.secondary)
+                    .font(T3Typography.eyebrow)
+                    .foregroundStyle(T3Colors.textSecondary)
                     .padding(.top, 34)
                     .padding(.bottom, 8)
 
@@ -204,10 +204,11 @@ public struct ConnectionOnboardingView: View {
                                 .frame(width: 24)
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(environment.name)
+                                    .font(T3Typography.threadBody)
                                     .foregroundStyle(.primary)
                                 Text(environment.endpoint)
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
+                                    .font(T3Typography.supporting)
+                                    .foregroundStyle(T3Colors.textSecondary)
                                     .lineLimit(1)
                             }
                             Spacer()
@@ -237,14 +238,14 @@ public struct ConnectionOnboardingView: View {
                         .font(.largeTitle.bold())
                         .tracking(-0.6)
                     Text("Both values are shown in T3 Code when you create a mobile connection.")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
+                        .font(T3Typography.threadBody)
+                        .foregroundStyle(T3Colors.textSecondary)
                 }
 
                 VStack(alignment: .leading, spacing: 8) {
                     Text("SERVER ADDRESS")
-                        .font(.caption2.weight(.semibold))
-                        .foregroundStyle(.secondary)
+                        .font(T3Typography.eyebrow)
+                        .foregroundStyle(T3Colors.textSecondary)
 
                     TextField("http://192.168.1.5:3773", text: $endpoint)
                         .textInputAutocapitalization(.never)
@@ -260,8 +261,8 @@ public struct ConnectionOnboardingView: View {
 
                 VStack(alignment: .leading, spacing: 8) {
                     Text("PAIRING CODE")
-                        .font(.caption2.weight(.semibold))
-                        .foregroundStyle(.secondary)
+                        .font(T3Typography.eyebrow)
+                        .foregroundStyle(T3Colors.textSecondary)
 
                     TextField("12-character code", text: $pairingCode)
                         .textInputAutocapitalization(.never)
@@ -276,7 +277,7 @@ public struct ConnectionOnboardingView: View {
                     pasteConnectionLink()
                 } label: {
                     Label("Paste a connection link instead", systemImage: "doc.on.clipboard")
-                        .font(.subheadline.weight(.semibold))
+                        .font(T3Typography.control.weight(.semibold))
                 }
                 .buttonStyle(.plain)
 
@@ -345,8 +346,8 @@ public struct ConnectionOnboardingView: View {
             Spacer()
 
             Text("Keep T3 Code open on your computer.")
-                .font(.footnote)
-                .foregroundStyle(.secondary)
+                .font(T3Typography.supporting)
+                .foregroundStyle(T3Colors.textSecondary)
         }
         .padding(.horizontal, 32)
         .padding(.vertical, 28)
@@ -362,8 +363,8 @@ public struct ConnectionOnboardingView: View {
             Text("You're connected")
                 .font(.title.bold())
             Text("Loading your projects and threads.")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
+                .font(T3Typography.threadBody)
+                .foregroundStyle(T3Colors.textSecondary)
         }
         .accessibilityElement(children: .combine)
     }
@@ -383,8 +384,8 @@ public struct ConnectionOnboardingView: View {
                     Text(title)
                         .font(.body.weight(.semibold))
                     Text(subtitle)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .font(T3Typography.supporting)
+                        .foregroundStyle(T3Colors.textSecondary)
                 }
                 Spacer()
                 Image(systemName: "chevron.right")
@@ -401,7 +402,7 @@ public struct ConnectionOnboardingView: View {
     private func connectionError(message: String) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             Label(message, systemImage: showsPermissionAction ? "network.slash" : "exclamationmark.circle")
-                .font(.subheadline)
+                .font(T3Typography.control)
                 .foregroundStyle(Color(red: 1, green: 0.58, blue: 0.2))
 
             if showsPermissionAction {
@@ -409,7 +410,7 @@ public struct ConnectionOnboardingView: View {
                     guard let url = URL(string: UIApplication.openSettingsURLString) else { return }
                     UIApplication.shared.open(url)
                 }
-                .font(.subheadline.weight(.semibold))
+                .font(T3Typography.control.weight(.semibold))
             }
         }
         .accessibilityElement(children: .combine)

@@ -50,11 +50,11 @@ public struct FeatureReviewView: View {
                 HStack {
                     VStack(alignment: .leading, spacing: 3) {
                         Text(review.title)
-                            .font(.headline)
+                            .font(T3Typography.navigationTitle)
                         if let base = review.baseReference {
                             Text(base)
-                                .font(.caption.monospaced())
-                                .foregroundStyle(.secondary)
+                                .font(T3Typography.tool)
+                                .foregroundStyle(T3Colors.textSecondary)
                         }
                     }
                     Spacer()
@@ -64,7 +64,7 @@ public struct FeatureReviewView: View {
 
                 if review.isTruncated {
                     Label("Large diff, showing a partial result", systemImage: "exclamationmark.triangle")
-                        .font(.footnote)
+                        .font(T3Typography.supporting)
                         .foregroundStyle(.orange)
                 }
             }
@@ -115,12 +115,12 @@ private struct FeatureReviewFileRow: View {
                 .frame(width: 18)
             VStack(alignment: .leading, spacing: 2) {
                 Text(fileName)
-                    .font(.subheadline.weight(.medium))
+                    .font(T3Typography.homeTitle)
                     .lineLimit(1)
                 if !directory.isEmpty {
                     Text(directory)
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
+                        .font(T3Typography.supporting)
+                        .foregroundStyle(T3Colors.textSecondary)
                         .lineLimit(1)
                 }
             }
@@ -173,7 +173,7 @@ struct FeatureDiffStatsLabel: View {
                 Text("−\(deletions)").foregroundStyle(.red)
             }
         }
-        .font(.caption2.monospacedDigit().weight(.medium))
+        .font(T3Typography.tool.monospacedDigit().weight(.medium))
         .accessibilityElement(children: .combine)
         .accessibilityLabel("\(additions) additions, \(deletions) deletions")
     }
@@ -228,8 +228,8 @@ private struct FeatureDiffLineRow: View {
                     .padding(.trailing, 12)
             }
         }
-        .font(.system(size: 12, design: .monospaced))
-        .frame(minHeight: line.kind == .hunk ? 28 : 19, alignment: .leading)
+        .font(T3Typography.code)
+        .frame(minHeight: line.kind == .hunk ? 30 : 22, alignment: .leading)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(background)
     }
@@ -237,7 +237,7 @@ private struct FeatureDiffLineRow: View {
     private func lineNumber(_ value: Int?) -> some View {
         Text(value.map(String.init) ?? "")
             .foregroundStyle(.tertiary)
-            .frame(width: 42, alignment: .trailing)
+            .frame(width: 48, alignment: .trailing)
             .padding(.trailing, 7)
             .accessibilityHidden(true)
     }

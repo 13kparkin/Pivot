@@ -20,8 +20,8 @@ public struct DevicesView: View {
                 VStack(spacing: 12) {
                     ProgressView()
                     Text("Loading devices")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
+                        .font(T3Typography.supporting)
+                        .foregroundStyle(T3Colors.textSecondary)
                 }
             } else if let errorMessage, sessions.isEmpty {
                 ContentUnavailableView {
@@ -130,12 +130,12 @@ public struct DevicesView: View {
                 Section {
                     VStack(alignment: .leading, spacing: 10) {
                         Label(errorMessage, systemImage: "exclamationmark.circle")
-                            .font(.subheadline)
+                            .font(T3Typography.control)
                             .foregroundStyle(.orange)
                         Button("Try again") {
                             Task { await reload() }
                         }
-                        .font(.subheadline.weight(.semibold))
+                        .font(T3Typography.control.weight(.semibold))
                     }
                     .padding(.vertical, 4)
                 }
@@ -221,32 +221,32 @@ private struct DeviceSessionRow: View {
             VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 8) {
                     Text(session.displayName)
-                        .font(.body.weight(.semibold))
+                        .font(T3Typography.homeTitle)
                     if session.isCurrent {
                         Text("Current")
-                            .font(.caption)
+                            .font(T3Typography.supportingStrong)
                             .foregroundStyle(.green)
                     } else if session.isConnected {
                         Text("Online")
-                            .font(.caption)
+                            .font(T3Typography.supportingStrong)
                             .foregroundStyle(.green)
                     }
                 }
 
                 if !session.platformDescription.isEmpty {
                     Text(session.platformDescription)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .font(T3Typography.supporting)
+                        .foregroundStyle(T3Colors.textSecondary)
                 }
 
                 Text(lastSeenDescription)
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
+                    .font(T3Typography.supporting)
+                    .foregroundStyle(T3Colors.textSecondary)
 
                 if let ipAddress = session.ipAddress, !ipAddress.isEmpty {
                     Text(ipAddress)
-                        .font(.caption2.monospaced())
-                        .foregroundStyle(.tertiary)
+                        .font(T3Typography.tool)
+                        .foregroundStyle(T3Colors.textSecondary)
                 }
             }
             Spacer(minLength: 8)

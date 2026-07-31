@@ -119,13 +119,13 @@ private struct FeatureFileRow: View {
                 .foregroundStyle(entry.kind == .directory ? .blue : .secondary)
                 .frame(width: 20)
             Text(entry.name)
-                .font(.subheadline)
+                .font(T3Typography.threadBody)
                 .lineLimit(1)
             Spacer()
             if let size = entry.sizeBytes, entry.kind != .directory {
                 Text(ByteCountFormatter.string(fromByteCount: Int64(size), countStyle: .file))
-                    .font(.caption2.monospacedDigit())
-                    .foregroundStyle(.tertiary)
+                    .font(T3Typography.tool.monospacedDigit())
+                    .foregroundStyle(T3Colors.textSecondary)
             }
         }
         .padding(.vertical, 3)
@@ -160,7 +160,7 @@ private struct FeatureFilePreviewView: View {
                 VStack(spacing: 0) {
                     if content.isTruncated {
                         Label("Partial preview", systemImage: "exclamationmark.triangle")
-                            .font(.caption.weight(.semibold))
+                            .font(T3Typography.supportingStrong)
                             .foregroundStyle(.orange)
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .padding(.horizontal, 12)
@@ -219,14 +219,14 @@ private struct FeatureSourceTextView: View {
                     HStack(alignment: .top, spacing: 10) {
                         Text("\(index + 1)")
                             .foregroundStyle(.tertiary)
-                            .frame(width: 38, alignment: .trailing)
+                            .frame(width: 44, alignment: .trailing)
                             .accessibilityHidden(true)
                         Text(String(line).isEmpty ? " " : String(line))
                             .foregroundStyle(.primary)
                             .textSelection(.enabled)
                     }
-                    .font(.system(size: 12, design: .monospaced))
-                    .frame(minHeight: 19)
+                    .font(T3Typography.code)
+                    .frame(minHeight: 22)
                 }
             }
             .padding(.vertical, 10)

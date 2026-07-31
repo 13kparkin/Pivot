@@ -98,15 +98,15 @@ public struct SettingsView: View {
                     .frame(width: 22)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(model.snapshot.connection.environmentName ?? "T3 server")
-                        .font(.body.weight(.semibold))
+                        .font(T3Typography.homeTitle)
                     Text(connectionDescription)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .font(T3Typography.supporting)
+                        .foregroundStyle(T3Colors.textSecondary)
                         .lineLimit(1)
                 }
                 Spacer()
                 Text(connectionStatus)
-                    .font(.caption.weight(.semibold))
+                    .font(T3Typography.supportingStrong)
                     .foregroundStyle(connectionColor)
             }
             .accessibilityElement(children: .combine)
@@ -128,10 +128,11 @@ public struct SettingsView: View {
                             .frame(width: 22)
                         VStack(alignment: .leading, spacing: 2) {
                             Text(environment.name)
+                                .font(T3Typography.threadBody)
                                 .foregroundStyle(.primary)
                             Text(environment.endpoint)
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
+                                .font(T3Typography.supporting)
+                                .foregroundStyle(T3Colors.textSecondary)
                                 .lineLimit(1)
                         }
                         Spacer()
@@ -179,8 +180,8 @@ public struct SettingsView: View {
                 LabeledContent("Provider", value: provider.name)
                 if let detail = selectedModel.detail {
                     Text(detail)
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
+                        .font(T3Typography.supporting)
+                        .foregroundStyle(T3Colors.textSecondary)
                 }
             }
         }
@@ -199,7 +200,7 @@ public struct SettingsView: View {
 
     private var aboutSection: some View {
         Section("About") {
-            LabeledContent("App", value: "T3 Code for iOS")
+            LabeledContent("App", value: "T3 Code (Native)")
             LabeledContent("Platform", value: "Native SwiftUI")
             Link("Open source", destination: URL(string: "https://github.com/pingdotgg/t3code")!)
         }

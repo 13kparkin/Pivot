@@ -39,16 +39,16 @@ public struct ProviderModelPicker: View {
                         .foregroundStyle(T3Colors.textSecondary)
                     VStack(alignment: .leading, spacing: 2) {
                         Text("Model")
-                            .font(.caption)
+                            .font(T3Typography.supporting)
                             .foregroundStyle(T3Colors.textSecondary)
                         Text(selectionLabel)
-                            .font(.subheadline.weight(.medium))
+                            .font(T3Typography.control)
                             .foregroundStyle(T3Colors.textPrimary)
                             .lineLimit(1)
                     }
                     Spacer()
                     Image(systemName: "chevron.right")
-                        .font(.caption.weight(.semibold))
+                        .font(T3Typography.supportingStrong)
                         .foregroundStyle(T3Colors.textTertiary)
                 }
                 .contentShape(Rectangle())
@@ -60,7 +60,7 @@ public struct ProviderModelPicker: View {
                     Image(systemName: "chevron.up.chevron.down")
                         .font(.system(size: 8, weight: .bold))
                 }
-                .font(.caption.weight(.medium))
+                .font(T3Typography.supportingStrong)
                 .foregroundStyle(T3Colors.textSecondary)
                 .contentShape(Rectangle())
             }
@@ -136,7 +136,7 @@ private struct ModelPickerSheet: View {
                     VStack(spacing: 12) {
                         ProgressView()
                         Text("Loading models")
-                            .font(.subheadline)
+                            .font(T3Typography.control)
                             .foregroundStyle(T3Colors.textSecondary)
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -198,7 +198,7 @@ private struct ModelPickerSheet: View {
                         "This provider fixes the model when a task starts.",
                         systemImage: "lock"
                     )
-                    .font(.caption)
+                    .font(T3Typography.supporting)
                     .foregroundStyle(T3Colors.textSecondary)
                 }
             }
@@ -475,10 +475,10 @@ private struct ModelAutomaticRow: View {
                 .frame(width: 24)
             VStack(alignment: .leading, spacing: 2) {
                 Text("Automatic")
-                    .font(.subheadline.weight(.semibold))
+                    .font(T3Typography.homeTitle)
                     .foregroundStyle(T3Colors.textPrimary)
                 Text("Use the environment default")
-                    .font(.caption)
+                    .font(T3Typography.supporting)
                     .foregroundStyle(T3Colors.textSecondary)
             }
             Spacer()
@@ -502,7 +502,7 @@ private struct ModelOptionLabel: View {
             VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 7) {
                     Text(option.model.name)
-                        .font(.subheadline.weight(.semibold))
+                        .font(T3Typography.homeTitle)
                         .foregroundStyle(T3Colors.textPrimary)
                         .lineLimit(1)
                     if option.model.supportsReasoning {
@@ -513,7 +513,7 @@ private struct ModelOptionLabel: View {
                     }
                 }
                 Text(option.model.detail ?? option.model.id)
-                    .font(.caption)
+                    .font(T3Typography.supporting)
                     .foregroundStyle(T3Colors.textSecondary)
                     .lineLimit(1)
             }
@@ -538,7 +538,7 @@ private struct ModelOptionLabel: View {
 
     private func capability(_ title: String, icon: String) -> some View {
         Label(title, systemImage: icon)
-            .font(.caption2)
+            .font(T3Typography.supporting)
             .foregroundStyle(T3Colors.textSecondary)
     }
 }

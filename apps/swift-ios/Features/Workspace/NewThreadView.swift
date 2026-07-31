@@ -125,7 +125,7 @@ public struct NewThreadView: View {
                 Text("?")
             }
         }
-        .font(.system(size: 24, weight: .regular))
+        .font(T3Typography.threadHeading1.weight(.regular))
         .tracking(-0.35)
         .foregroundStyle(T3Colors.textPrimary)
         .multilineTextAlignment(.center)
@@ -136,9 +136,9 @@ public struct NewThreadView: View {
                     .font(.system(size: 11, weight: .medium))
                 Text("on \(environmentName)")
             }
-            .font(.caption)
+            .font(T3Typography.supporting)
             .foregroundStyle(T3Colors.textTertiary)
-            .offset(y: 29)
+            .offset(y: 31)
         }
         .accessibilityElement(children: .contain)
     }

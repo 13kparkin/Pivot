@@ -75,8 +75,8 @@ private struct FeatureLoadingView: View {
             ProgressView()
                 .controlSize(.small)
             Text("Connecting to T3 Code")
-                .font(.footnote)
-                .foregroundStyle(.secondary)
+                .font(T3Typography.supporting)
+                .foregroundStyle(T3Colors.textSecondary)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color.black)

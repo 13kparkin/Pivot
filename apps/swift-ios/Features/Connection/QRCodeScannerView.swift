@@ -46,8 +46,8 @@ struct QRCodeScannerView: View {
                 if availability == .ready {
                     scannerFrame
                     Text("Point your camera at the QR code shown by T3 Code.")
-                        .font(.subheadline)
-                        .foregroundStyle(.white.opacity(0.72))
+                        .font(T3Typography.threadBody)
+                        .foregroundStyle(.white.opacity(0.78))
                         .multilineTextAlignment(.center)
                         .padding(.top, 28)
                 } else {
@@ -103,8 +103,8 @@ struct QRCodeScannerView: View {
                 Text("Camera access is off")
                     .font(.title3.bold())
                 Text("Allow camera access in Settings to scan a pairing code.")
-                    .font(.subheadline)
-                    .foregroundStyle(.white.opacity(0.65))
+                    .font(T3Typography.threadBody)
+                    .foregroundStyle(.white.opacity(0.78))
                     .multilineTextAlignment(.center)
                 Button("Open Settings") {
                     guard let url = URL(string: UIApplication.openSettingsURLString) else { return }
@@ -122,8 +122,8 @@ struct QRCodeScannerView: View {
                 Text("Camera unavailable")
                     .font(.title3.bold())
                 Text("Paste the connection link instead.")
-                    .font(.subheadline)
-                    .foregroundStyle(.white.opacity(0.65))
+                    .font(T3Typography.threadBody)
+                    .foregroundStyle(.white.opacity(0.78))
             }
         }
     }

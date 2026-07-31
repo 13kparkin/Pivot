@@ -70,8 +70,8 @@ public struct FeatureSourceControlView: View {
                     Spacer()
                     Label("\(status.behindCount) behind", systemImage: "arrow.down")
                 }
-                .font(.footnote)
-                .foregroundStyle(.secondary)
+                .font(T3Typography.supporting)
+                .foregroundStyle(T3Colors.textSecondary)
                 if let pullRequest = status.pullRequest {
                     if let url = pullRequest.url {
                         Link(destination: url) {
@@ -86,7 +86,7 @@ public struct FeatureSourceControlView: View {
             Section("Actions") {
                 if status.availableActions.isEmpty {
                     Text(status.isBusy ? "Source control operation in progress" : "No actions available")
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(T3Colors.textSecondary)
                 }
                 ForEach(status.availableActions, id: \.self) { action in
                     Button {
@@ -102,7 +102,7 @@ public struct FeatureSourceControlView: View {
             Section("\(status.files.count) changed \(status.files.count == 1 ? "file" : "files")") {
                 if status.files.isEmpty {
                     Label("Working tree clean", systemImage: "checkmark.circle")
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(T3Colors.textSecondary)
                 }
                 ForEach(status.files) { file in
                     HStack(spacing: 10) {
@@ -111,12 +111,12 @@ public struct FeatureSourceControlView: View {
                             .foregroundStyle(file.state.color)
                             .frame(width: 18)
                         Text(file.path)
-                            .font(.subheadline)
+                            .font(T3Typography.threadBody)
                             .lineLimit(1)
                         Spacer()
                         if file.isStaged {
                             Text("STAGED")
-                                .font(.system(size: 9, weight: .bold))
+                                .font(T3Typography.eyebrow)
                                 .foregroundStyle(.green)
                         }
                     }
