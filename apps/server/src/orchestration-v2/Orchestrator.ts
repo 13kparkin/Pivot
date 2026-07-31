@@ -66,7 +66,11 @@ import {
   subagentResultForRun,
   subagentThreadTitle,
 } from "./SubagentProjection.ts";
-import { defaultSubagentRole, subagentActivationId } from "./SubagentObservability.ts";
+import {
+  appendSubagentActivity,
+  defaultSubagentRole,
+  subagentActivationId,
+} from "./SubagentObservability.ts";
 import { ThreadForkServiceV2 } from "./ThreadForkService.ts";
 
 export class OrchestratorDispatchError extends Schema.TaggedErrorClass<OrchestratorDispatchError>()(
@@ -213,6 +217,7 @@ function commandThreadId(command: OrchestrationV2Command): ThreadId {
     case "prepared-run.progress":
     case "prepared-run.fail":
     case "run.interrupt":
+    case "subagent.stop":
     case "queued-message.promote-to-steer":
     case "queued-run.reorder":
     case "queued-run.cancel":
@@ -6001,6 +6006,99 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       return undefined;
     });
 
+  const dispatchSubagentStop = (
+    command: Extract<OrchestrationV2Command, { readonly type: "subagent.stop" }>,
+    events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
+    effects: Ref.Ref<Array<PendingOrchestrationEffectV2>>,
+  ) =>
+    Effect.gen(function* () {
+      const projection = yield* loadProjectionForCommand(command);
+      const subagent = projection.subagents.find(
+        (candidate) => candidate.id === command.subagentId,
+      );
+      if (subagent === undefined) {
+        return yield* new OrchestratorDispatchError({
+          commandId: command.commandId,
+          commandType: command.type,
+          cause: `Subagent ${command.subagentId} does not exist.`,
+        });
+      }
+      if (
+        subagent.status !== "pending" &&
+        subagent.status !== "running" &&
+        subagent.status !== "waiting"
+      ) {
+        return yield* new OrchestratorDispatchError({
+          commandId: command.commandId,
+          commandType: command.type,
+          cause: `Subagent ${command.subagentId} is not active (${subagent.status}).`,
+        });
+      }
+      const nativeTaskId = subagent.nativeTaskRef?.nativeId;
+      if (nativeTaskId === undefined || nativeTaskId === null) {
+        return yield* new OrchestratorDispatchError({
+          commandId: command.commandId,
+          commandType: command.type,
+          cause: `Subagent ${command.subagentId} has no native task reference to stop.`,
+        });
+      }
+      // The stop call goes through the session the subagent's run executes
+      // under; a workflow that outlived its launch run falls back to the
+      // thread's bound session, which owns background tasks between turns.
+      const run =
+        subagent.runId === null
+          ? undefined
+          : projection.runs.find((candidate) => candidate.id === subagent.runId);
+      const runProviderThread =
+        run?.providerThreadId === null
+          ? undefined
+          : projection.providerThreads.find((candidate) => candidate.id === run?.providerThreadId);
+      const providerSessionId =
+        runProviderThread?.providerSessionId ??
+        projection.providerThreads.find((candidate) => candidate.providerSessionId !== null)
+          ?.providerSessionId ??
+        null;
+      if (providerSessionId === null) {
+        return yield* new OrchestratorDispatchError({
+          commandId: command.commandId,
+          commandType: command.type,
+          cause: `Subagent ${command.subagentId} has no active provider session to stop it.`,
+        });
+      }
+
+      // The provider's task_notification is what terminalizes the subagent;
+      // this only records the user's intent so the panel and card reflect
+      // the request immediately.
+      const now = yield* DateTime.now;
+      const emitEvent = emit(events, command);
+      yield* emitEvent({
+        type: "subagent.updated",
+        threadId: command.threadId,
+        ...(subagent.runId === null ? {} : { runId: subagent.runId }),
+        nodeId: subagent.id,
+        driver: subagent.driver,
+        occurredAt: now,
+        payload: {
+          ...subagent,
+          recentActivity: appendSubagentActivity(subagent.recentActivity, "Stop requested", now),
+          updatedAt: now,
+        },
+      });
+      yield* Ref.update(effects, (existing) => [
+        ...existing,
+        {
+          id: `effect:${command.commandId}:subagent.stop:${subagent.id}`,
+          commandId: command.commandId,
+          threadId: command.threadId,
+          request: {
+            type: "subagent.stop",
+            providerSessionId,
+            nativeTaskId,
+          },
+        } satisfies PendingOrchestrationEffectV2,
+      ]);
+    });
+
   const dispatchCheckpointRollback = (
     command: Extract<OrchestrationV2Command, { readonly type: "checkpoint.rollback" }>,
     events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
@@ -6860,6 +6958,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         break;
       case "run.interrupt":
         cancelUnsettledEffects = yield* dispatchRunInterrupt(command, events, effects);
+        break;
+      case "subagent.stop":
+        yield* dispatchSubagentStop(command, events, effects);
         break;
       case "queued-message.promote-to-steer":
         yield* dispatchQueuedMessagePromoteToSteer(command, events, effects);

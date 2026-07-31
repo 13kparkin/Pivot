@@ -278,6 +278,7 @@ export interface ClaudeAgentSdkQuerySession {
   readonly offer: (message: SDKUserMessage) => Effect.Effect<void, ClaudeAgentSdkQueryRunnerError>;
   readonly setModel: (model: string) => Effect.Effect<void, ClaudeAgentSdkQueryRunnerError>;
   readonly interrupt: Effect.Effect<void, ClaudeAgentSdkQueryRunnerError>;
+  readonly stopTask: (taskId: string) => Effect.Effect<void, ClaudeAgentSdkQueryRunnerError>;
   readonly close: Effect.Effect<void, ClaudeAgentSdkQueryRunnerError>;
 }
 
@@ -398,6 +399,14 @@ export type ClaudeAgentSdkProtocolLogEvent =
       readonly stage: "decoded";
       readonly payload: {
         readonly type: "query.interrupt";
+      };
+    }
+  | {
+      readonly direction: "outgoing";
+      readonly stage: "decoded";
+      readonly payload: {
+        readonly type: "task.stop";
+        readonly taskId: string;
       };
     }
   | {
@@ -592,6 +601,35 @@ export const claudeAgentSdkQueryRunnerLiveLayer: Layer.Layer<
               }),
             ),
           ),
+          stopTask: (taskId) =>
+            Effect.tryPromise({
+              try: () => {
+                // stopTask is deliberate wire surface (the CLI's own
+                // /workflows view stops through it) but absent from the
+                // published SDK types — this cast is the single place the
+                // undocumented method is read.
+                const stop = (queryRuntime as { stopTask?: (taskId: string) => Promise<void> })
+                  .stopTask;
+                if (stop === undefined) {
+                  throw new Error(
+                    "The Claude SDK runtime for this session does not expose stopTask.",
+                  );
+                }
+                return stop.call(queryRuntime, taskId);
+              },
+              catch: (cause) => queryRunnerError(cause, "stopTask"),
+            }).pipe(
+              Effect.tap(() =>
+                logProtocolEvent({
+                  direction: "outgoing",
+                  stage: "decoded",
+                  payload: {
+                    type: "task.stop",
+                    taskId,
+                  },
+                }),
+              ),
+            ),
           close: Queue.shutdown(promptQueue).pipe(
             Effect.andThen(closeClaudeQuery(queryRuntime)),
             Effect.tap(() =>
@@ -5180,6 +5218,27 @@ export function makeClaudeAdapterV2(
           startTurn,
           steerTurn,
           interruptTurn,
+          stopTask: Effect.fn("ClaudeAdapterV2.stopTask")(function* (stopInput: {
+            readonly nativeTaskId: string;
+          }) {
+            const existing = yield* Ref.get(queryContext);
+            if (existing === null) {
+              return yield* new ProviderAdapterProtocolError({
+                driver: CLAUDE_PROVIDER,
+                detail: `Claude provider session ${input.providerSessionId} has no live query to stop task ${stopInput.nativeTaskId}.`,
+              });
+            }
+            yield* existing.query.stopTask(stopInput.nativeTaskId).pipe(
+              Effect.mapError(
+                (cause) =>
+                  new ProviderAdapterProtocolError({
+                    driver: CLAUDE_PROVIDER,
+                    detail: `Stopping Claude task ${stopInput.nativeTaskId} failed.`,
+                    payload: cause,
+                  }),
+              ),
+            );
+          }),
           respondToRuntimeRequest: Effect.fn("ClaudeAdapterV2.respondToRuntimeRequest")(
             function* (requestInput) {
               const pending = (yield* Ref.get(pendingRuntimeRequests)).get(

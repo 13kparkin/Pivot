@@ -2289,6 +2289,14 @@ export const OrchestrationV2Command = Schema.Union([
     reason: Schema.optional(Schema.String),
   }),
   Schema.Struct({
+    /** Stop one background subagent task (e.g. a workflow run) without
+     * interrupting the run that launched it. */
+    type: Schema.Literal("subagent.stop"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    subagentId: NodeId,
+  }),
+  Schema.Struct({
     type: Schema.Literal("queued-message.promote-to-steer"),
     commandId: CommandId,
     threadId: ThreadId,

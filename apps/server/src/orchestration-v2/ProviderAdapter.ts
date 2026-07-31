@@ -535,6 +535,14 @@ export interface ProviderAdapterV2SessionRuntime {
   readonly interruptTurn: (
     input: ProviderAdapterV2InterruptInput,
   ) => Effect.Effect<void, ProviderAdapterV2Error>;
+  /**
+   * Stop one background task (e.g. a workflow run) by its native task id
+   * without interrupting the turn that launched it. Absent on providers
+   * whose runtime has no task-level stop.
+   */
+  readonly stopTask?: (input: {
+    readonly nativeTaskId: string;
+  }) => Effect.Effect<void, ProviderAdapterV2Error>;
   readonly respondToRuntimeRequest: (
     input: ProviderAdapterV2RuntimeRequestResponseInput,
   ) => Effect.Effect<void, ProviderAdapterV2Error>;
