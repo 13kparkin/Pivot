@@ -11,9 +11,12 @@ final class NativeMultiEnvironmentTests: XCTestCase {
         let snapshot = try await fixture.client.initialSnapshot()
 
         XCTAssertEqual(Set(snapshot.projects.map(\.environmentID)), ["one", "two"])
-        XCTAssertEqual(Set(snapshot.threads.map(\.id)), ["thread-one", "thread-two"])
+        XCTAssertEqual(Set(snapshot.threads.compactMap(\.wireID)), ["thread-one", "thread-two"])
+        let remoteThread = try XCTUnwrap(
+            snapshot.threads.first(where: { $0.environmentID == "two" })
+        )
         XCTAssertEqual(
-            snapshot.threads.first(where: { $0.id == "thread-two" })?.environmentName,
+            remoteThread.environmentName,
             "Steam Box"
         )
         XCTAssertEqual(
@@ -21,13 +24,13 @@ final class NativeMultiEnvironmentTests: XCTestCase {
             .connected
         )
 
-        let detail = try await fixture.client.loadThread(id: "thread-two")
+        let detail = try await fixture.client.loadThread(id: remoteThread.id)
         XCTAssertEqual(detail.thread.environmentID, "two")
         XCTAssertEqual(detail.thread.environmentName, "Steam Box")
 
-        try await fixture.client.renameThread(id: "thread-two", title: "Remote rename")
+        try await fixture.client.renameThread(id: remoteThread.id, title: "Remote rename")
         try await fixture.client.sendMessage(
-            threadID: "thread-two",
+            threadID: remoteThread.id,
             text: "Run this on Steam Box",
             selection: nil
         )
@@ -45,7 +48,10 @@ final class NativeMultiEnvironmentTests: XCTestCase {
         await fixture.transport.setReachable(false, host: "two.example")
 
         let passiveFailure = try await fixture.client.initialSnapshot()
-        XCTAssertEqual(Set(passiveFailure.threads.map(\.id)), ["thread-one", "thread-two"])
+        XCTAssertEqual(
+            Set(passiveFailure.threads.compactMap(\.wireID)),
+            ["thread-one", "thread-two"]
+        )
         XCTAssertEqual(passiveFailure.connection.state, .connected)
         XCTAssertEqual(
             passiveFailure.environments.first(where: { $0.id == "two" })?.connectionState,
@@ -56,7 +62,10 @@ final class NativeMultiEnvironmentTests: XCTestCase {
         await fixture.transport.setReachable(true, host: "two.example")
 
         let activeFailure = try await fixture.client.initialSnapshot()
-        XCTAssertEqual(Set(activeFailure.threads.map(\.id)), ["thread-one", "thread-two"])
+        XCTAssertEqual(
+            Set(activeFailure.threads.compactMap(\.wireID)),
+            ["thread-one", "thread-two"]
+        )
         XCTAssertEqual(activeFailure.connection.state, .disconnected)
         XCTAssertEqual(activeFailure.connection.environmentName, "Left Book")
         XCTAssertEqual(
@@ -66,7 +75,64 @@ final class NativeMultiEnvironmentTests: XCTestCase {
         await fixture.client.disconnect()
     }
 
-    private func makeFixture() async throws -> MultiEnvironmentFixture {
+    func testDuplicateWireIDsRemainDistinctAndRouteByEnvironment() async throws {
+        let fixture = try await makeFixture(duplicateIDs: true)
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+
+        let snapshot = try await fixture.client.initialSnapshot()
+        XCTAssertEqual(snapshot.projects.count, 2)
+        XCTAssertEqual(snapshot.threads.count, 2)
+        XCTAssertEqual(Set(snapshot.projects.map(\.id)).count, 2)
+        XCTAssertEqual(Set(snapshot.threads.map(\.id)).count, 2)
+        XCTAssertEqual(Set(snapshot.projects.compactMap(\.wireID)), ["project-shared"])
+        XCTAssertEqual(Set(snapshot.threads.compactMap(\.wireID)), ["thread-shared"])
+
+        let remote = try XCTUnwrap(
+            snapshot.threads.first(where: { $0.environmentID == "two" })
+        )
+        _ = try await fixture.client.loadThread(id: remote.id)
+        try await fixture.client.renameThread(id: remote.id, title: "Remote only")
+
+        let hosts = await fixture.transport.dispatchHosts()
+        XCTAssertEqual(hosts, ["two.example"])
+        await fixture.client.disconnect()
+    }
+
+    func testPassiveCreateUsesOwningProjectDefaultAndFallbackRemainsRoutable() async throws {
+        let fixture = try await makeFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+
+        let snapshot = try await fixture.client.initialSnapshot()
+        let remoteProject = try XCTUnwrap(
+            snapshot.projects.first(where: { $0.environmentID == "two" })
+        )
+        let created = try await fixture.client.createThread(
+            projectID: remoteProject.id,
+            title: "Passive task",
+            selection: nil
+        )
+
+        XCTAssertEqual(created.environmentID, "two")
+        XCTAssertEqual(created.projectID, remoteProject.id)
+        XCTAssertNotNil(created.wireID)
+        try await fixture.client.renameThread(id: created.id, title: "Fallback routed")
+
+        let records = await fixture.transport.dispatchRecords()
+        XCTAssertEqual(records.map(\.host), ["two.example", "two.example"])
+        XCTAssertEqual(records[0].command["type"]?.stringValue, "thread.create")
+        XCTAssertEqual(records[0].command["projectId"]?.stringValue, "project-two")
+        XCTAssertEqual(
+            records[0].command["modelSelection"]?["instanceId"]?.stringValue,
+            "claudeAgent"
+        )
+        XCTAssertEqual(
+            records[1].command["threadId"]?.stringValue,
+            created.wireID
+        )
+        await fixture.client.disconnect()
+    }
+
+    private func makeFixture(duplicateIDs: Bool = false) async throws -> MultiEnvironmentFixture {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("t3-native-multi-\(UUID().uuidString)", isDirectory: true)
         let environments = [
@@ -91,14 +157,16 @@ final class NativeMultiEnvironmentTests: XCTestCase {
         let transport = MultiEnvironmentHTTPTransport(
             shells: [
                 "one.example": multiEnvironmentShell(
-                    projectID: "project-one",
-                    threadID: "thread-one",
+                    projectID: duplicateIDs ? "project-shared" : "project-one",
+                    threadID: duplicateIDs ? "thread-shared" : "thread-one",
                     title: "Local work"
                 ),
                 "two.example": multiEnvironmentShell(
-                    projectID: "project-two",
-                    threadID: "thread-two",
-                    title: "Remote work"
+                    projectID: duplicateIDs ? "project-shared" : "project-two",
+                    threadID: duplicateIDs ? "thread-shared" : "thread-two",
+                    title: "Remote work",
+                    providerID: "claudeAgent",
+                    modelID: "claude-opus-4-1"
                 ),
             ]
         )
@@ -131,11 +199,13 @@ private struct MultiEnvironmentFixture {
 }
 
 private actor MultiEnvironmentHTTPTransport: HTTPTransport {
+    private let shells: [String: OrchestrationShellSnapshot]
     private let shellData: [String: Data]
     private var reachableHosts: Set<String>
-    private var dispatchedToHosts: [String] = []
+    private var dispatched: [MultiEnvironmentDispatchRecord] = []
 
     init(shells: [String: OrchestrationShellSnapshot]) {
+        self.shells = shells
         shellData = shells.mapValues { try! JSONEncoder.t3.encode($0) }
         reachableHosts = Set(shells.keys)
     }
@@ -149,7 +219,11 @@ private actor MultiEnvironmentHTTPTransport: HTTPTransport {
     }
 
     func dispatchHosts() -> [String] {
-        dispatchedToHosts
+        dispatched.map(\.host)
+    }
+
+    func dispatchRecords() -> [MultiEnvironmentDispatchRecord] {
+        dispatched
     }
 
     func data(for request: URLRequest) throws -> (Data, HTTPURLResponse) {
@@ -163,7 +237,9 @@ private actor MultiEnvironmentHTTPTransport: HTTPTransport {
         }
         if path.hasPrefix("/api/orchestration/threads/") {
             let threadID = request.url?.lastPathComponent.removingPercentEncoding ?? "thread"
-            let projectID = threadID == "thread-two" ? "project-two" : "project-one"
+            let projectID = shells[host]?.threads
+                .first(where: { $0.id == threadID })?
+                .projectId ?? shells[host]?.projects.first?.id ?? "project"
             return (
                 try JSONEncoder.t3.encode(
                     multiEnvironmentDetail(projectID: projectID, threadID: threadID)
@@ -172,7 +248,13 @@ private actor MultiEnvironmentHTTPTransport: HTTPTransport {
             )
         }
         if path == "/api/orchestration/dispatch" {
-            dispatchedToHosts.append(host)
+            guard let body = request.httpBody else { throw URLError(.badServerResponse) }
+            dispatched.append(
+                MultiEnvironmentDispatchRecord(
+                    host: host,
+                    command: try JSONDecoder.t3.decode(JSONValue.self, from: body)
+                )
+            )
             return (
                 try JSONEncoder.t3.encode(DispatchResult(sequence: 2)),
                 multiEnvironmentResponse(request)
@@ -192,6 +274,11 @@ private actor MultiEnvironmentHTTPTransport: HTTPTransport {
     }
 }
 
+private struct MultiEnvironmentDispatchRecord: Sendable {
+    let host: String
+    let command: JSONValue
+}
+
 private struct UnavailableMultiEnvironmentWebSocketConnector: WebSocketConnecting {
     func connect(to _: URL) async throws -> any WebSocketConnection {
         throw URLError(.cannotConnectToHost)
@@ -201,10 +288,12 @@ private struct UnavailableMultiEnvironmentWebSocketConnector: WebSocketConnectin
 private func multiEnvironmentShell(
     projectID: String,
     threadID: String,
-    title: String
+    title: String,
+    providerID: String = "codex",
+    modelID: String = "gpt-5.6-sol"
 ) -> OrchestrationShellSnapshot {
     let timestamp = "2026-07-31T12:00:00.000Z"
-    let model = ModelSelection(instanceId: "codex", model: "gpt-5.6-sol")
+    let model = ModelSelection(instanceId: providerID, model: modelID)
     return OrchestrationShellSnapshot(
         snapshotSequence: 1,
         projects: [

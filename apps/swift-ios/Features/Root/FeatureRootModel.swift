@@ -231,6 +231,11 @@ public final class FeatureRootModel {
         }
     }
 
+    /// Ends any selected-thread transport work when its detail view closes.
+    public func releaseThread(_ id: String) {
+        client.releaseThread(id: id)
+    }
+
     public func sendMessage(threadID: String, text: String, selection: FeatureSelection?) async -> Bool {
         await sendMessage(
             FeatureMessageSubmission(

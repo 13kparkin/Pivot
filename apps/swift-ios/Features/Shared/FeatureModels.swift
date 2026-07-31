@@ -55,6 +55,9 @@ public struct FeatureEnvironment: Identifiable, Sendable, Equatable, Hashable, C
 
 public struct FeatureProject: Identifiable, Sendable, Equatable, Hashable, Codable {
     public let id: String
+    /// The environment-local identifier sent over the wire. Native aggregate
+    /// snapshots scope `id` by environment so cloned databases remain distinct.
+    public var wireID: String?
     public var environmentID: String
     public var name: String
     public var path: String
@@ -63,6 +66,7 @@ public struct FeatureProject: Identifiable, Sendable, Equatable, Hashable, Codab
 
     public init(
         id: String,
+        wireID: String? = nil,
         environmentID: String,
         name: String,
         path: String,
@@ -70,6 +74,7 @@ public struct FeatureProject: Identifiable, Sendable, Equatable, Hashable, Codab
         defaultSelection: FeatureSelection? = nil
     ) {
         self.id = id
+        self.wireID = wireID
         self.environmentID = environmentID
         self.name = name
         self.path = path
@@ -102,6 +107,8 @@ public enum FeatureInteractionMode: String, CaseIterable, Sendable, Codable {
 
 public struct FeatureThread: Identifiable, Sendable, Equatable, Hashable, Codable {
     public let id: String
+    /// The environment-local identifier sent over the wire.
+    public var wireID: String?
     public var projectID: String
     public var environmentID: String?
     public var environmentName: String?
@@ -131,6 +138,7 @@ public struct FeatureThread: Identifiable, Sendable, Equatable, Hashable, Codabl
 
     public init(
         id: String,
+        wireID: String? = nil,
         projectID: String,
         environmentID: String? = nil,
         environmentName: String? = nil,
@@ -159,6 +167,7 @@ public struct FeatureThread: Identifiable, Sendable, Equatable, Hashable, Codabl
         interactionMode: FeatureInteractionMode = .standard
     ) {
         self.id = id
+        self.wireID = wireID
         self.projectID = projectID
         self.environmentID = environmentID
         self.environmentName = environmentName
@@ -274,13 +283,23 @@ public enum FeatureApprovalKind: String, Sendable, Codable {
 
 public struct FeatureApproval: Identifiable, Sendable, Equatable, Hashable, Codable {
     public let id: String
+    /// The provider request identifier sent over the wire.
+    public var wireID: String?
     public var threadID: String
     public var kind: FeatureApprovalKind
     public var title: String
     public var detail: String
 
-    public init(id: String, threadID: String, kind: FeatureApprovalKind, title: String, detail: String) {
+    public init(
+        id: String,
+        wireID: String? = nil,
+        threadID: String,
+        kind: FeatureApprovalKind,
+        title: String,
+        detail: String
+    ) {
         self.id = id
+        self.wireID = wireID
         self.threadID = threadID
         self.kind = kind
         self.title = title
@@ -383,13 +402,45 @@ public struct FeatureInputQuestion: Identifiable, Sendable, Equatable, Hashable,
 
 public struct FeatureUserInput: Identifiable, Sendable, Equatable, Hashable, Codable {
     public let id: String
+    /// The provider request identifier sent over the wire.
+    public var wireID: String?
     public var threadID: String
     public var questions: [FeatureInputQuestion]
 
-    public init(id: String, threadID: String, questions: [FeatureInputQuestion]) {
+    public init(
+        id: String,
+        wireID: String? = nil,
+        threadID: String,
+        questions: [FeatureInputQuestion]
+    ) {
         self.id = id
+        self.wireID = wireID
         self.threadID = threadID
         self.questions = questions
+    }
+}
+
+/// Stable UI identity for entities merged from independent environments.
+/// Length-prefixing avoids separator collisions without requiring IDs to be parsed.
+enum FeatureScopedID {
+    static func project(environmentID: String, wireID: String) -> String {
+        make(kind: "project", environmentID: environmentID, wireID: wireID)
+    }
+
+    static func thread(environmentID: String, wireID: String) -> String {
+        make(kind: "thread", environmentID: environmentID, wireID: wireID)
+    }
+
+    static func approval(environmentID: String, wireID: String) -> String {
+        make(kind: "approval", environmentID: environmentID, wireID: wireID)
+    }
+
+    static func input(environmentID: String, wireID: String) -> String {
+        make(kind: "input", environmentID: environmentID, wireID: wireID)
+    }
+
+    private static func make(kind: String, environmentID: String, wireID: String) -> String {
+        "\(kind):\(environmentID.utf8.count):\(environmentID)\(wireID)"
     }
 }
 

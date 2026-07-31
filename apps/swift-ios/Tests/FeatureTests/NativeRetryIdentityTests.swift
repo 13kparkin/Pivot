@@ -120,7 +120,12 @@ final class NativeRetryIdentityTests: XCTestCase {
         XCTAssertNotNil(commands[0]["bootstrap"])
         XCTAssertNil(commands[1]["bootstrap"])
         assertStableIdentity(commands[0], commands[1], includesThreadID: true)
-        XCTAssertEqual(created.id, commands[0]["threadId"]?.stringValue)
+        let wireID = try XCTUnwrap(commands[0]["threadId"]?.stringValue)
+        XCTAssertEqual(created.wireID, wireID)
+        XCTAssertEqual(
+            created.id,
+            FeatureScopedID.thread(environmentID: environment.id, wireID: wireID)
+        )
         await client.disconnect()
     }
 

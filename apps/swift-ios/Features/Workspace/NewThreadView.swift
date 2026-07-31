@@ -42,8 +42,8 @@ public struct NewThreadView: View {
                 text: $prompt,
                 selection: $selection,
                 attachments: $attachments,
-                providers: model.snapshot.providers,
-                threadSelection: initialSelection,
+                providers: creationProviders,
+                threadSelection: nil,
                 isSending: isSubmitting,
                 isWorking: false,
                 focused: $promptFocused,
@@ -147,10 +147,7 @@ public struct NewThreadView: View {
     }
 
     private var creationProjects: [FeatureProject] {
-        guard let activeID = model.snapshot.environments.first(where: \.isActive)?.id else {
-            return model.snapshot.projects
-        }
-        return model.snapshot.projects.filter { $0.environmentID == activeID }
+        DailyUXCreationContext.projects(in: model.snapshot)
     }
 
     private var environmentName: String {
@@ -162,11 +159,16 @@ public struct NewThreadView: View {
     }
 
     private var initialSelection: FeatureSelection? {
-        DailyUXModelOptions.initialSelection(
-            projectDefault: selectedProject?.defaultSelection,
-            appDefault: model.snapshot.settings.defaultSelection,
-            providers: model.snapshot.providers
+        DailyUXCreationContext.initialSelection(
+            for: selectedProject,
+            in: model.snapshot
         )
+    }
+
+    /// Provider catalogues are active-device-only. For a passive project, keep
+    /// its own default selectable without leaking models from another machine.
+    private var creationProviders: [FeatureProvider] {
+        DailyUXCreationContext.providers(for: selectedProject, in: model.snapshot)
     }
 
     private var canSubmit: Bool {
@@ -183,7 +185,7 @@ public struct NewThreadView: View {
     private var imagesAllowed: Bool {
         DailyUXModelOptions.supportsImages(
             selection: selection,
-            providers: model.snapshot.providers
+            providers: creationProviders
         )
     }
 

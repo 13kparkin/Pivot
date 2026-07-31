@@ -52,6 +52,9 @@ public struct ThreadDetailView: View {
             selection = currentSelection
             isLoading = false
         }
+        .onDisappear {
+            model.releaseThread(thread.id)
+        }
         .sheet(item: $toolSurface) { surface in
             NavigationStack {
                 switch surface {

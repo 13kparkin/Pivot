@@ -168,6 +168,78 @@ struct DailyUXSidebarTests {
     }
 
     @Test
+    func searchHandlesScopedClonesAndLegacyDuplicateProjectIDs() {
+        let localProjectID = FeatureScopedID.project(
+            environmentID: "local",
+            wireID: "project-shared"
+        )
+        let remoteProjectID = FeatureScopedID.project(
+            environmentID: "remote",
+            wireID: "project-shared"
+        )
+        let projects = [
+            FeatureProject(
+                id: localProjectID,
+                wireID: "project-shared",
+                environmentID: "local",
+                name: "Mobile",
+                path: "/work/mobile"
+            ),
+            FeatureProject(
+                id: remoteProjectID,
+                wireID: "project-shared",
+                environmentID: "remote",
+                name: "Server",
+                path: "/work/server"
+            ),
+        ]
+        let local = thread(
+            id: "local-thread",
+            projectID: localProjectID,
+            title: "Polish",
+            created: -10,
+            updated: -5
+        )
+        let remote = thread(
+            id: "remote-thread",
+            projectID: remoteProjectID,
+            title: "Compression",
+            created: -20,
+            updated: -5
+        )
+        let scoped = FeatureSnapshot(projects: projects, threads: [local, remote])
+
+        #expect(
+            DailyUXSidebarIndex(snapshot: scoped, query: "server", now: now)
+                .searchResults.map(\.id) == ["remote-thread"]
+        )
+
+        let legacyDuplicates = FeatureSnapshot(
+            projects: projects.map {
+                FeatureProject(
+                    id: "project-shared",
+                    environmentID: $0.environmentID,
+                    name: $0.name,
+                    path: $0.path
+                )
+            },
+            threads: [
+                thread(
+                    id: "legacy",
+                    projectID: "project-shared",
+                    title: "Legacy",
+                    created: -10,
+                    updated: -5
+                ),
+            ]
+        )
+        #expect(
+            DailyUXSidebarIndex(snapshot: legacyDuplicates, query: "server", now: now)
+                .searchResults.map(\.id) == ["legacy"]
+        )
+    }
+
+    @Test
     func attentionScopesRemainFocusedSubsetsOfActive() {
         let approval = thread(
             id: "approval",

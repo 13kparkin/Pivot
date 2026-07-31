@@ -74,6 +74,63 @@ public struct FeatureMessageSubmission: Sendable, Equatable {
     }
 }
 
+enum DailyUXCreationContext {
+    static func projects(in snapshot: FeatureSnapshot) -> [FeatureProject] {
+        guard !snapshot.environments.isEmpty else { return snapshot.projects }
+        let availableEnvironmentIDs = Set(
+            snapshot.environments.compactMap { environment in
+                let state = environment.isActive
+                    ? snapshot.connection.state
+                    : environment.connectionState
+                return state == .disconnected ? nil : environment.id
+            }
+        )
+        return snapshot.projects.filter {
+            availableEnvironmentIDs.contains($0.environmentID)
+        }
+    }
+
+    static func providers(
+        for project: FeatureProject?,
+        in snapshot: FeatureSnapshot
+    ) -> [FeatureProvider] {
+        guard let project,
+              let activeID = snapshot.environments.first(where: \.isActive)?.id,
+              project.environmentID != activeID else {
+            return snapshot.providers
+        }
+        guard let selection = project.defaultSelection else { return [] }
+        return [
+            FeatureProvider(
+                id: selection.providerID,
+                name: selection.providerID,
+                driver: selection.providerID,
+                models: [
+                    FeatureModel(
+                        id: selection.modelID,
+                        name: selection.modelID,
+                        isDefault: true
+                    ),
+                ]
+            ),
+        ]
+    }
+
+    static func initialSelection(
+        for project: FeatureProject?,
+        in snapshot: FeatureSnapshot
+    ) -> FeatureSelection? {
+        if let projectDefault = project?.defaultSelection {
+            return projectDefault
+        }
+        return DailyUXModelOptions.initialSelection(
+            projectDefault: nil,
+            appDefault: snapshot.settings.defaultSelection,
+            providers: providers(for: project, in: snapshot)
+        )
+    }
+}
+
 struct DailyUXSidebarIndex {
     let active: [FeatureThread]
     let snoozed: [FeatureThread]
@@ -145,7 +202,12 @@ struct DailyUXSidebarIndex {
     ) -> [FeatureThread] {
         let normalizedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !normalizedQuery.isEmpty else { return [] }
-        let projectByID = Dictionary(uniqueKeysWithValues: snapshot.projects.map { ($0.id, $0) })
+        // Aggregate snapshots can include legacy fixtures with duplicate raw IDs.
+        // Native projects are environment-scoped, while this defensive reduce
+        // keeps search non-crashing for older callers during migration.
+        let projectByID = snapshot.projects.reduce(into: [String: FeatureProject]()) {
+            $0[$1.id] = $1
+        }
         return candidates.filter { thread in
             let project = projectByID[thread.projectID]
             return [
