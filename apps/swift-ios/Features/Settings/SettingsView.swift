@@ -81,6 +81,12 @@ public struct SettingsView: View {
                     }
                 )
             }
+            .onAppear {
+                model.setConnectionManagementPresented(true)
+            }
+            .onDisappear {
+                model.setConnectionManagementPresented(false)
+            }
         }
     }
 

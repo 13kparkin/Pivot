@@ -45,11 +45,25 @@ public struct FeatureRootView: View {
     }
 
     /// Keep the last-known workspace visible through a degraded connection.
-    /// A deliberate disconnect clears workspace data and returns to onboarding.
+    /// Connection management also stays mounted while saved servers are being
+    /// removed, so a disconnected fallback cannot destroy its own Settings sheet.
     private var shouldShowWorkspace: Bool {
-        model.snapshot.connection.state != .disconnected
-            || !model.snapshot.projects.isEmpty
-            || !model.snapshot.threads.isEmpty
+        FeatureRootPresentation.showsWorkspace(
+            snapshot: model.snapshot,
+            isManagingConnections: model.isManagingConnections
+        )
+    }
+}
+
+enum FeatureRootPresentation {
+    static func showsWorkspace(
+        snapshot: FeatureSnapshot,
+        isManagingConnections: Bool
+    ) -> Bool {
+        snapshot.connection.state != .disconnected
+            || !snapshot.projects.isEmpty
+            || !snapshot.threads.isEmpty
+            || (isManagingConnections && !snapshot.environments.isEmpty)
     }
 }
 

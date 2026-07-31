@@ -8,6 +8,7 @@ public final class FeatureRootModel {
     public private(set) var details: [String: FeatureThreadDetail] = [:]
     public private(set) var isLoading = true
     public private(set) var isPerformingAction = false
+    public private(set) var isManagingConnections = false
     public var errorMessage: String?
 
     let client: any FeatureClient
@@ -66,12 +67,17 @@ public final class FeatureRootModel {
     }
 
     public func disconnect() async {
+        isManagingConnections = false
         await client.disconnect()
         snapshot = FeatureSnapshot(
             environments: snapshot.environments,
             settings: snapshot.settings
         )
         details.removeAll()
+    }
+
+    public func setConnectionManagementPresented(_ isPresented: Bool) {
+        isManagingConnections = isPresented
     }
 
     public func addProject(path: String) async -> Bool {

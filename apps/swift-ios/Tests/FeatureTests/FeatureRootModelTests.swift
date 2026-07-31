@@ -6,6 +6,50 @@ import Testing
 @Suite("Feature root model")
 struct FeatureRootModelTests {
     @Test
+    func connectionManagementStaysMountedForDisconnectedSavedServers() {
+        let savedEnvironment = FeatureEnvironment(
+            id: "offline-demo",
+            name: "Offline demo",
+            endpoint: "https://offline.example",
+            connectionState: .disconnected
+        )
+        let snapshot = FeatureSnapshot(
+            connection: .init(state: .disconnected),
+            environments: [savedEnvironment]
+        )
+
+        #expect(
+            FeatureRootPresentation.showsWorkspace(
+                snapshot: snapshot,
+                isManagingConnections: true
+            )
+        )
+        #expect(
+            !FeatureRootPresentation.showsWorkspace(
+                snapshot: snapshot,
+                isManagingConnections: false
+            )
+        )
+        #expect(
+            !FeatureRootPresentation.showsWorkspace(
+                snapshot: FeatureSnapshot(connection: .init(state: .disconnected)),
+                isManagingConnections: true
+            )
+        )
+    }
+
+    @Test
+    func disconnectEndsConnectionManagement() async {
+        let client = FeatureClientStub()
+        let model = FeatureRootModel(client: client)
+        model.setConnectionManagementPresented(true)
+
+        await model.disconnect()
+
+        #expect(!model.isManagingConnections)
+    }
+
+    @Test
     func testPairReloadsConnectedSnapshot() async {
         let client = FeatureClientStub()
         client.snapshot = FeatureSnapshot(connection: .init(state: .disconnected))
