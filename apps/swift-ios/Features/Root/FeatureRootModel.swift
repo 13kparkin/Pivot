@@ -67,7 +67,10 @@ public final class FeatureRootModel {
 
     public func disconnect() async {
         await client.disconnect()
-        snapshot.connection = .init()
+        snapshot = FeatureSnapshot(
+            environments: snapshot.environments,
+            settings: snapshot.settings
+        )
         details.removeAll()
     }
 

@@ -11,7 +11,7 @@ public struct FeatureRootView: View {
         Group {
             if model.isLoading {
                 FeatureLoadingView()
-            } else if model.snapshot.connection.state != .disconnected {
+            } else if shouldShowWorkspace {
                 WorkspaceView(
                     model: model,
                     submitNewTask: { request in
@@ -42,6 +42,14 @@ public struct FeatureRootView: View {
                 Text(model.errorMessage ?? "Unknown error")
             }
         )
+    }
+
+    /// Keep the last-known workspace visible through a degraded connection.
+    /// A deliberate disconnect clears workspace data and returns to onboarding.
+    private var shouldShowWorkspace: Bool {
+        model.snapshot.connection.state != .disconnected
+            || !model.snapshot.projects.isEmpty
+            || !model.snapshot.threads.isEmpty
     }
 }
 

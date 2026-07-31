@@ -8,10 +8,13 @@ public struct WorkspaceView: View {
     private let submitMessage: (FeatureMessageSubmission) async -> Bool
 
     @State private var selectedThreadID: String?
-    @State private var searchText = ""
     @State private var selectedProjectID: String?
-    @State private var selectedScope: SidebarScope = .active
-    @State private var settledLimit = 10
+    @State private var searchText = ""
+    @State private var isSearching = false
+    @State private var isSnoozedExpanded = false
+    @State private var isSettledExpanded = true
+    @State private var isArchiveExpanded = false
+    @State private var settledLimit = 12
     @State private var showingNewTask = false
     @State private var showingAddProject = false
     @State private var showingSettings = false
@@ -78,10 +81,7 @@ public struct WorkspaceView: View {
         }
         .navigationSplitViewStyle(.balanced)
         .sheet(isPresented: $showingNewTask) {
-            NewThreadView(
-                model: model,
-                submit: submitNewTask
-            ) { thread in
+            NewThreadView(model: model, submit: submitNewTask) { thread in
                 selectedThreadID = thread.id
                 showingNewTask = false
             }
@@ -100,9 +100,7 @@ public struct WorkspaceView: View {
             )
         ) {
             TextField("Thread title", text: $renameTitle)
-            Button("Cancel", role: .cancel) {
-                renamingThread = nil
-            }
+            Button("Cancel", role: .cancel) { renamingThread = nil }
             Button("Save") {
                 guard let thread = renamingThread else { return }
                 let title = renameTitle
@@ -126,9 +124,8 @@ public struct WorkspaceView: View {
         .task(id: sidebarBoundarySignature) {
             while !Task.isCancelled {
                 sidebarClock = .now
-                let delay = nextSidebarRefreshDelay(from: sidebarClock)
                 do {
-                    try await Task.sleep(for: .seconds(delay))
+                    try await Task.sleep(for: .seconds(nextSidebarRefreshDelay))
                 } catch {
                     return
                 }
@@ -137,45 +134,78 @@ public struct WorkspaceView: View {
     }
 
     private var sidebar: some View {
-        let presentation = SidebarPresentation(
+        ZStack(alignment: .bottomTrailing) {
+            VStack(spacing: 0) {
+                homeBar
+                if isSearching {
+                    searchBar
+                        .transition(.opacity.combined(with: .move(edge: .top)))
+                }
+                threadList
+            }
+
+            composeButton
+                .padding(.trailing, 16)
+                .padding(.bottom, 14)
+        }
+        .background(T3Colors.background)
+        .toolbar(.hidden, for: .navigationBar)
+        .onChange(of: selectedProjectID) {
+            settledLimit = 12
+        }
+    }
+
+    private var threadList: some View {
+        let presentation = HomePresentation(
             snapshot: model.snapshot,
             query: searchText,
             projectID: selectedProjectID,
-            scope: selectedScope,
             now: sidebarClock
         )
 
-        return VStack(spacing: 0) {
-            sidebarNavigationBar
-            connectionHeader
-            List(selection: $selectedThreadID) {
-                scopePicker(presentation)
-                projectFilter(presentation)
+        return List(selection: $selectedThreadID) {
+            projectFilter(presentation)
 
-                if searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    scopedThreadSection(presentation)
-                } else {
-                    searchResults(presentation)
+            if searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                activeRows(presentation)
+                shelfRows(
+                    title: "Snoozed",
+                    threads: presentation.snoozed,
+                    isExpanded: $isSnoozedExpanded,
+                    accent: T3Colors.accent,
+                    isArchived: false
+                )
+                shelfRows(
+                    title: "Settled",
+                    threads: Array(presentation.settled.prefix(settledLimit)),
+                    totalCount: presentation.settled.count,
+                    isExpanded: $isSettledExpanded,
+                    accent: nil,
+                    isArchived: false
+                )
+                if presentation.settled.count > settledLimit, isSettledExpanded {
+                    showMoreSettled(presentation.settled.count - settledLimit)
                 }
+                if !presentation.archived.isEmpty {
+                    shelfRows(
+                        title: "Archived",
+                        threads: presentation.archived,
+                        isExpanded: $isArchiveExpanded,
+                        accent: nil,
+                        isArchived: true
+                    )
+                }
+            } else {
+                searchRows(presentation)
             }
-            .listStyle(.plain)
-            .environment(\.defaultMinListRowHeight, 0)
-            .scrollContentBackground(.hidden)
-            .scrollDismissesKeyboard(.interactively)
-            .contentMargins(.top, 0, for: .scrollContent)
-            .background(T3Colors.background)
         }
+        .listStyle(.plain)
+        .environment(\.defaultMinListRowHeight, 0)
+        .scrollContentBackground(.hidden)
+        .scrollDismissesKeyboard(.interactively)
+        .contentMargins(.top, 4, for: .scrollContent)
+        .contentMargins(.bottom, 74, for: .scrollContent)
         .background(T3Colors.background)
-        .safeAreaInset(edge: .bottom, spacing: 0) {
-            commandBar
-        }
-        .toolbar(.hidden, for: .navigationBar)
-        .onChange(of: selectedProjectID) {
-            settledLimit = 10
-        }
-        .onChange(of: selectedScope) {
-            settledLimit = 10
-        }
     }
 
     @ViewBuilder
@@ -189,458 +219,363 @@ public struct WorkspaceView: View {
             )
             .id(id)
         } else {
-            VStack(spacing: 18) {
-                Image(systemName: "cursorarrow.rays")
-                    .font(.system(size: 34, weight: .light))
+            VStack(spacing: 14) {
+                Image(systemName: "square.and.pencil")
+                    .font(.system(size: 30, weight: .light))
                     .foregroundStyle(T3Colors.textTertiary)
-                VStack(spacing: 5) {
-                    Text("Ready when you are")
-                        .font(.title3.weight(.semibold))
-                    Text("Pick up a task or start something new.")
-                        .font(.subheadline)
-                        .foregroundStyle(T3Colors.textSecondary)
-                }
-                Button("New task") {
-                    showingNewTask = true
-                }
-                .buttonStyle(.borderedProminent)
-                .tint(.white)
-                .foregroundStyle(.black)
-                .disabled(model.snapshot.projects.isEmpty)
+                Text("Start a task")
+                    .font(.title3.weight(.semibold))
+                Text("Choose a thread or compose something new.")
+                    .font(.subheadline)
+                    .foregroundStyle(T3Colors.textSecondary)
+                Button("New task") { showingNewTask = true }
+                    .buttonStyle(.borderedProminent)
+                    .tint(.white)
+                    .foregroundStyle(.black)
+                    .disabled(model.snapshot.projects.isEmpty)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(T3Colors.background)
         }
     }
 
-    private var sidebarNavigationBar: some View {
-        ZStack {
-            Text("T3 Code")
-                .font(.headline)
-                .foregroundStyle(T3Colors.textPrimary)
+    private var homeBar: some View {
+        HStack(spacing: 2) {
+            connectionBrand
+                .frame(maxWidth: .infinity, alignment: .leading)
 
-            HStack {
-                Button {
-                    showingSettings = true
-                } label: {
-                    Image(systemName: "gearshape")
-                        .font(.system(size: 19, weight: .medium))
-                        .frame(width: T3Metrics.minimumTapTarget, height: T3Metrics.minimumTapTarget)
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(T3Colors.textSecondary)
-                .accessibilityLabel("Settings")
-                .accessibilityIdentifier("sidebar-settings-button")
-
-                Spacer()
-
-                Button {
-                    showingAddProject = true
-                } label: {
-                    Image(systemName: "plus")
-                        .font(.system(size: 20, weight: .medium))
-                        .frame(width: T3Metrics.minimumTapTarget, height: T3Metrics.minimumTapTarget)
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(T3Colors.statusRunning)
-                .accessibilityLabel("Add project")
-                .accessibilityHint("Adds a repository to this environment")
-                .accessibilityIdentifier("sidebar-add-project-button")
-            }
-            .padding(.horizontal, 6)
-        }
-        .frame(height: T3Metrics.minimumTapTarget)
-        .background(T3Colors.background)
-    }
-
-    private var connectionHeader: some View {
-        Menu {
-            ForEach(model.snapshot.environments) { environment in
-                Button {
-                    Task { await model.activateEnvironment(environment.id) }
-                } label: {
-                    if environment.isActive {
-                        Label(environment.name, systemImage: "checkmark")
-                    } else {
-                        Text(environment.name)
-                    }
-                }
-            }
-            Divider()
             Button {
-                showingSettings = true
-            } label: {
-                Label("Manage devices", systemImage: "externaldrive.connected.to.line.below")
-            }
-        } label: {
-            Group {
-                if dynamicTypeSize.isAccessibilitySize {
-                    HStack(alignment: .top, spacing: 9) {
-                        Circle()
-                            .fill(connectionColor)
-                            .frame(width: 7, height: 7)
-                            .padding(.top, 7)
-                        VStack(alignment: .leading, spacing: 2) {
-                            HStack(spacing: 6) {
-                                Text(model.snapshot.connection.environmentName ?? "T3 environment")
-                                    .font(.subheadline.weight(.semibold))
-                                    .foregroundStyle(T3Colors.textPrimary)
-                                    .lineLimit(1)
-                                Image(systemName: "chevron.up.chevron.down")
-                                    .font(.system(size: 9, weight: .semibold))
-                                    .foregroundStyle(T3Colors.textTertiary)
-                            }
-                            Text(connectionLabel)
-                                .font(.caption)
-                                .foregroundStyle(T3Colors.textSecondary)
-                        }
-                        Spacer()
+                withAnimation(.easeOut(duration: 0.16)) {
+                    isSearching.toggle()
+                }
+                if isSearching {
+                    Task { @MainActor in
+                        await Task.yield()
+                        isSearchFocused = true
                     }
-                    .padding(.vertical, 8)
-                    .frame(minHeight: 60)
                 } else {
-                    HStack(spacing: 9) {
-                        Circle()
-                            .fill(connectionColor)
-                            .frame(width: 7, height: 7)
-                        Text(model.snapshot.connection.environmentName ?? "T3 environment")
-                            .font(.subheadline.weight(.semibold))
-                            .foregroundStyle(T3Colors.textPrimary)
-                            .lineLimit(1)
-                        Image(systemName: "chevron.up.chevron.down")
-                            .font(.system(size: 9, weight: .semibold))
-                            .foregroundStyle(T3Colors.textTertiary)
-                        Spacer()
-                        Text(connectionLabel)
-                            .font(.caption)
-                            .foregroundStyle(T3Colors.textSecondary)
-                    }
-                    .frame(minHeight: T3Metrics.minimumTapTarget)
+                    searchText = ""
+                    isSearchFocused = false
                 }
-            }
-            .padding(.horizontal, 16)
-            .contentShape(Rectangle())
-            .overlay(alignment: .bottom) {
-                Rectangle()
-                    .fill(T3Colors.separator)
-                    .frame(height: 0.5)
-            }
-        }
-        .buttonStyle(.plain)
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("Environment")
-        .accessibilityValue(
-            "\(model.snapshot.connection.environmentName ?? "T3 environment"), \(connectionLabel)"
-        )
-        .accessibilityHint("Switch environments or manage devices")
-        .accessibilityIdentifier("sidebar-environment-menu")
-    }
-
-    private var commandBar: some View {
-        HStack(spacing: 10) {
-            HStack(spacing: 8) {
-                Image(systemName: "magnifyingglass")
-                    .font(.system(size: 14, weight: .medium))
-                    .foregroundStyle(T3Colors.textTertiary)
-
-                TextField("Search tasks", text: $searchText)
-                    .font(.subheadline)
-                    .foregroundStyle(T3Colors.textPrimary)
-                    .focused($isSearchFocused)
-                    .submitLabel(.search)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
-                    .accessibilityLabel("Search tasks and projects")
-                    .accessibilityIdentifier("sidebar-search-field")
-
-                if !searchText.isEmpty {
-                    Button {
-                        searchText = ""
-                    } label: {
-                        Image(systemName: "xmark.circle.fill")
-                            .font(.system(size: 15))
-                            .foregroundStyle(T3Colors.textTertiary)
-                            .frame(width: T3Metrics.minimumTapTarget, height: T3Metrics.minimumTapTarget)
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("Clear search")
-                }
-            }
-            .padding(.horizontal, 12)
-            .frame(height: T3Metrics.minimumTapTarget)
-            .background(T3Colors.ledgerSurface, in: RoundedRectangle(cornerRadius: 10))
-            .overlay {
-                RoundedRectangle(cornerRadius: 10)
-                    .stroke(T3Colors.border, lineWidth: 0.5)
-            }
-
-            Button {
-                isSearchFocused = false
-                showingNewTask = true
             } label: {
-                Image(systemName: "square.and.pencil")
-                    .font(.system(size: 20, weight: .medium))
-                    .frame(width: T3Metrics.minimumTapTarget, height: T3Metrics.minimumTapTarget)
+                Image(systemName: isSearching ? "xmark" : "magnifyingglass")
+                    .font(.system(size: 17, weight: .medium))
+                    .frame(width: 40, height: T3Metrics.minimumTapTarget)
             }
             .buttonStyle(.plain)
-            .foregroundStyle(T3Colors.statusRunning)
-            .disabled(model.snapshot.projects.isEmpty)
-            .opacity(model.snapshot.projects.isEmpty ? 0.35 : 1)
-            .accessibilityLabel("New task")
-            .accessibilityHint("Compose a message and start a thread")
-            .accessibilityIdentifier("sidebar-new-task-button")
+            .foregroundStyle(T3Colors.textSecondary)
+            .accessibilityLabel(isSearching ? "Close search" : "Search tasks")
+            .accessibilityIdentifier("sidebar-search-button")
+
+            Button { showingSettings = true } label: {
+                Image(systemName: "slider.horizontal.3")
+                    .font(.system(size: 17, weight: .medium))
+                    .frame(width: 40, height: T3Metrics.minimumTapTarget)
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(T3Colors.textSecondary)
+            .accessibilityLabel("Settings")
+            .accessibilityIdentifier("sidebar-settings-button")
         }
-        .padding(.leading, 16)
-        .padding(.trailing, 12)
-        .padding(.vertical, 4)
+        .padding(.leading, 15)
+        .padding(.trailing, 8)
+        .frame(height: 49)
         .background(T3Colors.background)
-        .overlay(alignment: .top) {
-            Rectangle()
-                .fill(T3Colors.separator)
-                .frame(height: 0.5)
+    }
+
+    @ViewBuilder
+    private var connectionBrand: some View {
+        switch model.snapshot.connection.state {
+        case .connected:
+            HStack(alignment: .firstTextBaseline, spacing: 4) {
+                Text("T3")
+                    .fontWeight(.bold)
+                    .foregroundStyle(T3Colors.textPrimary)
+                Text("Code")
+                    .fontWeight(.medium)
+                    .foregroundStyle(T3Colors.textSecondary)
+            }
+            .font(.system(size: 16))
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel("T3 Code")
+
+        case .connecting, .reconnecting:
+            Button { showingSettings = true } label: {
+                HStack(spacing: 7) {
+                    Image(systemName: "wifi.exclamationmark")
+                        .font(.system(size: 13, weight: .semibold))
+                    Text(connectionEnvironmentName)
+                        .lineLimit(1)
+                    Text("reconnecting")
+                        .fontWeight(.medium)
+                        .opacity(0.76)
+                }
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(T3Colors.warning)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("\(connectionEnvironmentName) reconnecting")
+
+        case .disconnected:
+            HStack(spacing: 7) {
+                Image(systemName: "network.slash")
+                    .font(.system(size: 13, weight: .semibold))
+                VStack(alignment: .leading, spacing: 0) {
+                    Text(connectionEnvironmentName)
+                    Text("unreachable")
+                }
+                .lineLimit(1)
+                .font(.system(size: 13, weight: .semibold))
+                Button("Reconnect") {
+                    Task { await model.reload() }
+                }
+                .font(.caption.weight(.bold))
+                .buttonStyle(.plain)
+                .padding(.horizontal, 9)
+                .frame(height: 26)
+                .overlay {
+                    Capsule().stroke(T3Colors.danger.opacity(0.42), lineWidth: 1)
+                }
+            }
+            .foregroundStyle(T3Colors.danger)
+            .accessibilityElement(children: .contain)
         }
     }
 
-    private func scopePicker(_ presentation: SidebarPresentation) -> some View {
-        Group {
-            if dynamicTypeSize.isAccessibilitySize {
-                Menu {
-                    ForEach(SidebarScope.allCases) { scope in
-                        Button {
-                            selectedScope = scope
-                        } label: {
-                            if selectedScope == scope {
-                                Label(
-                                    "\(scope.title), \(presentation.count(for: scope))",
-                                    systemImage: "checkmark"
-                                )
-                            } else {
-                                Text("\(scope.title), \(presentation.count(for: scope))")
-                            }
-                        }
-                    }
-                } label: {
-                    HStack(spacing: 8) {
-                        Text("Status filter")
-                            .font(.subheadline)
-                            .foregroundStyle(T3Colors.textSecondary)
-                        Spacer()
-                        Text(selectedScope.title)
-                            .font(.subheadline.weight(.semibold))
-                            .foregroundStyle(T3Colors.textPrimary)
-                        Text("\(presentation.count(for: selectedScope))")
-                            .font(.subheadline.monospacedDigit())
-                            .foregroundStyle(T3Colors.textTertiary)
-                        Image(systemName: "chevron.down")
-                            .font(.system(size: 9, weight: .semibold))
-                            .foregroundStyle(T3Colors.textTertiary)
-                    }
-                    .padding(.horizontal, 16)
-                    .frame(minHeight: T3Metrics.minimumTapTarget)
-                    .contentShape(Rectangle())
+    private var searchBar: some View {
+        HStack(spacing: 9) {
+            Image(systemName: "magnifyingglass")
+                .font(.system(size: 14, weight: .medium))
+                .foregroundStyle(T3Colors.textTertiary)
+            TextField("Search tasks and projects", text: $searchText)
+                .font(.subheadline)
+                .foregroundStyle(T3Colors.textPrimary)
+                .focused($isSearchFocused)
+                .submitLabel(.search)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+                .accessibilityIdentifier("sidebar-search-field")
+            if !searchText.isEmpty {
+                Button { searchText = "" } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundStyle(T3Colors.textTertiary)
+                        .frame(width: 28, height: 28)
                 }
                 .buttonStyle(.plain)
-                .accessibilityLabel("Status filter")
-                .accessibilityValue(
-                    "\(selectedScope.title), \(presentation.count(for: selectedScope)) tasks"
-                )
-                .accessibilityHint("Filters the task list")
-            } else {
-                ScrollViewReader { proxy in
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        HStack(spacing: 22) {
-                            ForEach(SidebarScope.allCases) { scope in
-                                Button {
-                                    selectedScope = scope
-                                } label: {
-                                    VStack(spacing: 0) {
-                                        Spacer(minLength: 0)
-                                        HStack(spacing: 4) {
-                                            Text(scope.title)
-                                            if presentation.count(for: scope) > 0 {
-                                                Text("\(presentation.count(for: scope))")
-                                                    .foregroundStyle(T3Colors.textTertiary)
-                                                    .monospacedDigit()
-                                            }
-                                        }
-                                        .font(
-                                            .caption.weight(
-                                                selectedScope == scope ? .semibold : .medium
-                                            )
-                                        )
-                                        .foregroundStyle(
-                                            selectedScope == scope
-                                                ? T3Colors.textPrimary
-                                                : T3Colors.textSecondary
-                                        )
-                                        Spacer(minLength: 0)
-                                        Rectangle()
-                                            .fill(
-                                                selectedScope == scope
-                                                    ? T3Colors.textPrimary
-                                                    : Color.clear
-                                            )
-                                            .frame(width: 20, height: 2)
-                                    }
-                                    .frame(height: T3Metrics.minimumTapTarget)
-                                    .contentShape(Rectangle())
-                                }
-                                .buttonStyle(.plain)
-                                .accessibilityLabel(scope.title)
-                                .accessibilityValue("\(presentation.count(for: scope)) tasks")
-                                .accessibilityHint("Filters the task list")
-                                .accessibilityAddTraits(
-                                    selectedScope == scope ? .isSelected : []
-                                )
-                                .id(scope)
-                            }
-                        }
-                        .padding(.horizontal, 16)
-                    }
-                    .onChange(of: selectedScope) {
-                        proxy.scrollTo(selectedScope, anchor: .center)
-                    }
-                }
+                .accessibilityLabel("Clear search")
             }
         }
-        .frame(minHeight: T3Metrics.minimumTapTarget)
-        .listRowInsets(EdgeInsets())
-        .listRowSeparator(.hidden)
-        .listRowBackground(Color.clear)
+        .padding(.horizontal, 12)
+        .frame(height: T3Metrics.minimumTapTarget)
+        .background(T3Colors.input, in: RoundedRectangle(cornerRadius: 12))
+        .overlay {
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(T3Colors.border, lineWidth: 1)
+        }
+        .padding(.horizontal, 10)
+        .padding(.bottom, 4)
     }
 
-    private func projectFilter(_ presentation: SidebarPresentation) -> some View {
-        Menu {
-            Button {
-                selectedProjectID = nil
-            } label: {
-                if selectedProjectID == nil {
-                    Label("All projects", systemImage: "checkmark")
-                } else {
-                    Text("All projects")
-                }
-            }
-            ForEach(model.snapshot.projects) { project in
+    private var composeButton: some View {
+        Button {
+            isSearchFocused = false
+            showingNewTask = true
+        } label: {
+            Image(systemName: "square.and.pencil")
+                .font(.system(size: 20, weight: .medium))
+                .foregroundStyle(.black)
+                .frame(width: 52, height: 52)
+                .background(Color(white: 0.95), in: Circle())
+                .shadow(color: .black.opacity(0.7), radius: 16, y: 8)
+        }
+        .buttonStyle(.plain)
+        .disabled(model.snapshot.projects.isEmpty)
+        .opacity(model.snapshot.projects.isEmpty ? 0.35 : 1)
+        .accessibilityLabel("New task")
+        .accessibilityHint("Compose a message and start a thread")
+        .accessibilityIdentifier("sidebar-new-task-button")
+    }
+
+    private func projectFilter(_ presentation: HomePresentation) -> some View {
+        HStack(spacing: 0) {
+            Menu {
                 Button {
-                    selectedProjectID = project.id
+                    selectedProjectID = nil
                 } label: {
-                    if selectedProjectID == project.id {
-                        Label(project.name, systemImage: "checkmark")
+                    if selectedProjectID == nil {
+                        Label("All projects", systemImage: "checkmark")
                     } else {
-                        Text(project.name)
+                        Text("All projects")
                     }
                 }
+                ForEach(model.snapshot.projects) { project in
+                    Button {
+                        selectedProjectID = project.id
+                    } label: {
+                        if selectedProjectID == project.id {
+                            Label(project.name, systemImage: "checkmark")
+                        } else {
+                            Text(project.name)
+                        }
+                    }
+                }
+            } label: {
+                HStack(spacing: 7) {
+                    Image(systemName: "folder")
+                        .font(.system(size: 13, weight: .medium))
+                    Text(selectedProject?.name ?? "All projects")
+                        .lineLimit(1)
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: 8, weight: .bold))
+                }
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(Color.white.opacity(0.55))
+                .frame(maxWidth: .infinity, minHeight: 34, alignment: .leading)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Project filter")
+            .accessibilityValue(selectedProject?.name ?? "All projects")
+            .accessibilityIdentifier("sidebar-project-filter")
+
+            Button { showingAddProject = true } label: {
+                Image(systemName: "folder.badge.plus")
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(T3Colors.textTertiary)
+                    .frame(width: T3Metrics.minimumTapTarget, height: 34)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Add project")
+            .accessibilityIdentifier("sidebar-add-project-button")
+        }
+        .padding(.leading, 10)
+        .padding(.trailing, 2)
+        .listRowInsets(EdgeInsets())
+        .listRowBackground(Color.clear)
+        .listRowSeparator(.hidden)
+        .accessibilityElement(children: .contain)
+    }
+
+    @ViewBuilder
+    private func activeRows(_ presentation: HomePresentation) -> some View {
+        if presentation.active.isEmpty {
+            Text("No active tasks")
+                .font(.footnote)
+                .foregroundStyle(T3Colors.textTertiary)
+                .frame(maxWidth: .infinity, minHeight: 68, alignment: .center)
+                .listRowInsets(EdgeInsets())
+                .listRowBackground(Color.clear)
+                .listRowSeparator(.hidden)
+        } else {
+            ForEach(presentation.active) { thread in
+                threadLink(thread, style: .rich, isArchived: false)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func shelfRows(
+        title: String,
+        threads: [FeatureThread],
+        totalCount: Int? = nil,
+        isExpanded: Binding<Bool>,
+        accent: Color?,
+        isArchived: Bool
+    ) -> some View {
+        Button {
+            withAnimation(.easeOut(duration: 0.16)) {
+                isExpanded.wrappedValue.toggle()
             }
         } label: {
-            ProjectFilterRow(
-                project: model.snapshot.projects.first { $0.id == selectedProjectID },
-                totalCount: presentation.scopedThreads.count
+            HomeShelfHeader(
+                title: title,
+                count: totalCount ?? threads.count,
+                isExpanded: isExpanded.wrappedValue,
+                accent: accent
             )
         }
         .buttonStyle(.plain)
         .listRowInsets(EdgeInsets())
         .listRowBackground(Color.clear)
         .listRowSeparator(.hidden)
-        .accessibilityLabel("Project filter")
-        .accessibilityValue(
-            "\(model.snapshot.projects.first { $0.id == selectedProjectID }?.name ?? "All projects"), \(presentation.scopedThreads.count) tasks"
-        )
-        .accessibilityHint("Filters tasks by repository")
-        .accessibilityIdentifier("sidebar-project-filter")
-    }
+        .accessibilityLabel("\(title), \(totalCount ?? threads.count) tasks")
+        .accessibilityValue(isExpanded.wrappedValue ? "Expanded" : "Collapsed")
 
-    @ViewBuilder
-    private func scopedThreadSection(_ presentation: SidebarPresentation) -> some View {
-        sidebarSectionHeader(
-            selectedScope.sectionTitle,
-            count: presentation.scopedThreads.count
-        )
-
-        if visibleScopedThreads(in: presentation).isEmpty {
-            HStack {
-                Text(emptyScopeMessage)
-                    .font(.footnote)
-                    .foregroundStyle(T3Colors.textSecondary)
-                    .padding(.horizontal, 16)
-                    .frame(minHeight: 60, alignment: .leading)
-            }
-            .listRowInsets(EdgeInsets())
-            .listRowBackground(Color.clear)
-            .listRowSeparator(.hidden)
-        } else {
-            ForEach(visibleScopedThreads(in: presentation)) { thread in
-                threadLink(
-                    thread,
-                    showsProject: selectedProjectID == nil,
-                    isArchived: selectedScope == .archived
-                )
-            }
-
-            if selectedScope == .settled,
-               presentation.scopedThreads.count > settledLimit {
-                Button {
-                    settledLimit += 25
-                } label: {
-                    HStack {
-                        Text("Show more")
-                        Spacer()
-                        Text("\(presentation.scopedThreads.count - settledLimit)")
-                            .font(.caption.monospacedDigit())
-                            .foregroundStyle(T3Colors.textTertiary)
-                    }
-                    .padding(.horizontal, 16)
-                    .frame(height: T3Metrics.minimumTapTarget)
-                    .font(.subheadline)
-                    .contentShape(Rectangle())
+        if isExpanded.wrappedValue {
+            if threads.isEmpty {
+                Text("None")
+                    .font(.caption)
+                    .foregroundStyle(T3Colors.textTertiary)
+                    .padding(.leading, 34)
+                    .frame(minHeight: 34)
+                    .listRowInsets(EdgeInsets())
+                    .listRowBackground(Color.clear)
+                    .listRowSeparator(.hidden)
+            } else {
+                ForEach(threads) { thread in
+                    threadLink(thread, style: .slim, isArchived: isArchived)
                 }
-                .buttonStyle(.plain)
-                .listRowInsets(EdgeInsets())
-                .listRowBackground(Color.clear)
-                .listRowSeparator(.hidden)
             }
         }
     }
 
-    @ViewBuilder
-    private func searchResults(_ presentation: SidebarPresentation) -> some View {
-        sidebarSectionHeader("Results", count: presentation.searchThreads.count)
+    private func showMoreSettled(_ remaining: Int) -> some View {
+        Button {
+            settledLimit += 25
+        } label: {
+            HStack {
+                Text("Show more")
+                Spacer()
+                Text("\(remaining)")
+                    .monospacedDigit()
+                    .foregroundStyle(T3Colors.textTertiary)
+            }
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(T3Colors.textSecondary)
+            .padding(.horizontal, 34)
+            .frame(height: T3Metrics.minimumTapTarget)
+        }
+        .buttonStyle(.plain)
+        .listRowInsets(EdgeInsets())
+        .listRowBackground(Color.clear)
+        .listRowSeparator(.hidden)
+    }
 
-        if presentation.searchThreads.isEmpty {
+    @ViewBuilder
+    private func searchRows(_ presentation: HomePresentation) -> some View {
+        if presentation.searchResults.isEmpty {
             ContentUnavailableView.search(text: searchText)
                 .listRowInsets(EdgeInsets())
                 .listRowBackground(Color.clear)
                 .listRowSeparator(.hidden)
         } else {
-            ForEach(presentation.searchThreads) { thread in
-                threadLink(
-                    thread,
-                    showsProject: true,
-                    isArchived: thread.isArchived
-                )
+            ForEach(presentation.searchResults) { thread in
+                threadLink(thread, style: .rich, isArchived: thread.isArchived)
             }
         }
     }
 
     private func threadLink(
         _ thread: FeatureThread,
-        showsProject: Bool,
-        isArchived: Bool = false
+        style: FeatureThreadRow.Style,
+        isArchived: Bool
     ) -> some View {
         NavigationLink(value: thread.id) {
             FeatureThreadRow(
                 thread: thread,
-                projectName: showsProject ? projectName(for: thread.projectID) : nil,
+                projectName: projectName(for: thread.projectID),
+                snapshot: model.snapshot,
                 now: sidebarClock,
-                isSelected: selectedThreadID == thread.id
+                isSelected: selectedThreadID == thread.id,
+                isConnectionStale: isConnectionStale(for: thread),
+                style: dynamicTypeSize.isAccessibilitySize ? .rich : style
             )
         }
         .tag(thread.id)
         .buttonStyle(.plain)
         .navigationLinkIndicatorVisibility(.hidden)
         .listRowInsets(EdgeInsets())
-        .listRowBackground(
-            selectedThreadID == thread.id ? T3Colors.ledgerSelected : Color.clear
-        )
+        .listRowBackground(Color.clear)
         .listRowSeparator(.hidden)
         .swipeActions(edge: .trailing, allowsFullSwipe: false) {
             Button(role: .destructive) {
@@ -671,6 +606,7 @@ public struct WorkspaceView: View {
             } label: {
                 Label("Rename", systemImage: "pencil")
             }
+
             if isArchived {
                 Button {
                     Task { await model.setArchived(thread.id, archived: false) }
@@ -684,33 +620,35 @@ public struct WorkspaceView: View {
                     Label("Archive", systemImage: "archivebox")
                 }
 
-                if thread.isEffectivelySettled(at: .now) {
-                    Button {
-                        Task { await model.setSettled(thread.id, settled: false) }
-                    } label: {
-                        Label("Reopen", systemImage: "arrow.counterclockwise")
-                    }
-                } else {
-                    Button {
-                        Task { await model.setSettled(thread.id, settled: true) }
-                    } label: {
-                        Label("Mark done", systemImage: "checkmark")
-                    }
-                }
-
                 Button {
-                    let isSnoozed = thread.isEffectivelySnoozed(at: sidebarClock)
                     Task {
-                        await model.setSnoozed(
+                        await model.setSettled(
                             thread.id,
-                            until: isSnoozed ? nil : Date().addingTimeInterval(60 * 60)
+                            settled: !thread.isEffectivelySettled(at: sidebarClock)
                         )
                     }
                 } label: {
-                    let isSnoozed = thread.isEffectivelySnoozed(at: sidebarClock)
                     Label(
-                        isSnoozed ? "Unsnooze" : "Snooze 1 hour",
-                        systemImage: isSnoozed ? "bell" : "clock"
+                        thread.isEffectivelySettled(at: sidebarClock) ? "Reopen" : "Mark done",
+                        systemImage: thread.isEffectivelySettled(at: sidebarClock)
+                            ? "arrow.counterclockwise"
+                            : "checkmark"
+                    )
+                }
+
+                Button {
+                    let snoozed = thread.isEffectivelySnoozed(at: sidebarClock)
+                    Task {
+                        await model.setSnoozed(
+                            thread.id,
+                            until: snoozed ? nil : Date().addingTimeInterval(60 * 60)
+                        )
+                    }
+                } label: {
+                    let snoozed = thread.isEffectivelySnoozed(at: sidebarClock)
+                    Label(
+                        snoozed ? "Unsnooze" : "Snooze 1 hour",
+                        systemImage: snoozed ? "bell" : "clock"
                     )
                 }
                 .disabled(
@@ -719,6 +657,7 @@ public struct WorkspaceView: View {
                         || thread.state == .waitingForInput
                 )
             }
+
             Button(role: .destructive) {
                 Task { await model.deleteThread(thread.id) }
             } label: {
@@ -727,45 +666,15 @@ public struct WorkspaceView: View {
         }
     }
 
-    private func visibleScopedThreads(in presentation: SidebarPresentation) -> [FeatureThread] {
-        if selectedScope == .settled {
-            return Array(presentation.scopedThreads.prefix(settledLimit))
-        }
-        return presentation.scopedThreads
+    private var selectedProject: FeatureProject? {
+        model.snapshot.projects.first { $0.id == selectedProjectID }
     }
 
-    private var emptyScopeMessage: String {
-        let projectSuffix = selectedProjectID == nil ? "" : " in this project"
-        return switch selectedScope {
-        case .active: "No active tasks\(projectSuffix)"
-        case .needsInput: "Nothing needs input\(projectSuffix)"
-        case .failed: "No failed tasks\(projectSuffix)"
-        case .snoozed: "No snoozed tasks\(projectSuffix)"
-        case .settled: "No settled tasks\(projectSuffix)"
-        case .archived: "No archived tasks\(projectSuffix)"
-        }
-    }
-
-    private func sidebarSectionHeader(_ title: String, count: Int) -> some View {
-        HStack(spacing: 6) {
-            Text(title)
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(T3Colors.textPrimary)
-            Text("\(count)")
-                .font(.caption.monospacedDigit())
-                .foregroundStyle(T3Colors.textTertiary)
-            Spacer()
-        }
-        .padding(.horizontal, 16)
-        .frame(height: 31, alignment: .bottom)
-        .padding(.bottom, 7)
-        .contentShape(Rectangle())
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel("\(title), \(count) tasks")
-        .accessibilityAddTraits(.isHeader)
-        .listRowInsets(EdgeInsets())
-        .listRowBackground(Color.clear)
-        .listRowSeparator(.hidden)
+    private var connectionEnvironmentName: String {
+        model.snapshot.connection.environmentName
+            ?? model.snapshot.environments.first(where: \.isActive)?.name
+            ?? model.snapshot.environments.first?.name
+            ?? "Server"
     }
 
     private var sidebarBoundarySignature: String {
@@ -773,43 +682,34 @@ public struct WorkspaceView: View {
             [
                 $0.id,
                 $0.state.rawValue,
-                $0.lastActivityAt?.timeIntervalSince1970.description ?? "",
+                $0.updatedAt.timeIntervalSince1970.description,
+                $0.workingStartedAt?.timeIntervalSince1970.description ?? "",
                 $0.snoozedUntil?.timeIntervalSince1970.description ?? "",
-                $0.snoozedAt?.timeIntervalSince1970.description ?? "",
-                $0.attentionAt?.timeIntervalSince1970.description ?? "",
             ].joined(separator: ":")
         }
         .joined(separator: "|")
     }
 
-    private func nextSidebarRefreshDelay(from now: Date) -> TimeInterval {
-        let nextSnoozeBoundary = model.snapshot.threads
+    private var nextSidebarRefreshDelay: TimeInterval {
+        if model.snapshot.threads.contains(where: { $0.homeStatus == .working }) {
+            return 1
+        }
+        let nextSnooze = model.snapshot.threads
             .compactMap(\.snoozedUntil)
-            .filter { $0 > now }
+            .filter { $0 > sidebarClock }
             .min()
-            .map { $0.timeIntervalSince(now) }
-        return max(0.25, min(60, nextSnoozeBoundary ?? 60))
+            .map { $0.timeIntervalSince(sidebarClock) }
+        return max(0.25, min(60, nextSnooze ?? 60))
     }
 
-    private var connectionColor: Color {
-        switch model.snapshot.connection.state {
-        case .connected: T3Colors.success
-        case .connecting, .reconnecting: T3Colors.warning
-        case .disconnected: T3Colors.danger
-        }
-    }
-
-    private var connectionLabel: String {
-        switch model.snapshot.connection.state {
-        case .connected: "Connected"
-        case .connecting: "Connecting"
-        case .reconnecting: "Reconnecting"
-        case .disconnected: "Offline"
-        }
+    private func isConnectionStale(for thread: FeatureThread) -> Bool {
+        guard model.snapshot.connection.state == .disconnected else { return false }
+        let activeID = model.snapshot.environments.first(where: \.isActive)?.id
+        return thread.environmentID == nil || activeID == nil || thread.environmentID == activeID
     }
 
     private func projectName(for id: String) -> String {
-        model.snapshot.projects.first(where: { $0.id == id })?.name ?? "Unknown project"
+        model.snapshot.projects.first(where: { $0.id == id })?.name ?? "Project"
     }
 }
 
@@ -819,165 +719,104 @@ private extension FeatureDraftAttachment {
     }
 }
 
-private enum SidebarScope: String, CaseIterable, Identifiable {
-    case active
-    case needsInput
-    case failed
-    case snoozed
-    case settled
-    case archived
+private struct HomePresentation {
+    let active: [FeatureThread]
+    let snoozed: [FeatureThread]
+    let settled: [FeatureThread]
+    let archived: [FeatureThread]
+    let searchResults: [FeatureThread]
 
-    var id: Self { self }
-
-    var title: String {
-        switch self {
-        case .active: "Active"
-        case .needsInput: "Needs input"
-        case .failed: "Failed"
-        case .snoozed: "Snoozed"
-        case .settled: "Settled"
-        case .archived: "Archive"
-        }
-    }
-
-    var sectionTitle: String {
-        self == .archived ? "Archived" : title
-    }
-}
-
-private struct SidebarPresentation {
-    let index: DailyUXSidebarIndex
-    let archivedThreads: [FeatureThread]
-    let scopedThreads: [FeatureThread]
-    let searchThreads: [FeatureThread]
-
-    init(
-        snapshot: FeatureSnapshot,
-        query: String,
-        projectID: String?,
-        scope: SidebarScope,
-        now: Date
-    ) {
+    init(snapshot: FeatureSnapshot, query: String, projectID: String?, now: Date) {
         let index = DailyUXSidebarIndex(
             snapshot: snapshot,
             query: "",
             projectID: projectID,
             now: now
         )
-        let archivedThreads = snapshot.threads
+        let archived = snapshot.threads
             .filter { thread in
-                guard thread.isArchived else { return false }
-                return projectID == nil || thread.projectID == projectID
+                thread.isArchived && (projectID == nil || thread.projectID == projectID)
             }
-            .sorted { lhs, rhs in
-                if lhs.updatedAt != rhs.updatedAt {
-                    return lhs.updatedAt > rhs.updatedAt
-                }
-                return lhs.id < rhs.id
+            .sorted {
+                if $0.updatedAt != $1.updatedAt { return $0.updatedAt > $1.updatedAt }
+                return $0.id < $1.id
             }
-        let scopedThreads = switch scope {
-        case .active: index.active
-        case .needsInput: index.needsInput
-        case .failed: index.failed
-        case .snoozed: index.snoozed
-        case .settled: index.settled
-        case .archived: archivedThreads
-        }
 
-        self.index = index
-        self.archivedThreads = archivedThreads
-        self.scopedThreads = scopedThreads
-        searchThreads = DailyUXSidebarIndex.matchingThreads(
-            scopedThreads,
+        active = index.active
+        snoozed = index.snoozed
+        settled = index.settled
+        self.archived = archived
+        searchResults = DailyUXSidebarIndex.matchingThreads(
+            index.active + index.snoozed + index.settled + archived,
             snapshot: snapshot,
             query: query
         )
     }
-
-    func count(for scope: SidebarScope) -> Int {
-        switch scope {
-        case .active: index.active.count
-        case .needsInput: index.needsInput.count
-        case .failed: index.failed.count
-        case .snoozed: index.snoozed.count
-        case .settled: index.settled.count
-        case .archived: archivedThreads.count
-        }
-    }
 }
 
-private struct ProjectFilterRow: View {
-    let project: FeatureProject?
-    let totalCount: Int
+private struct HomeShelfHeader: View {
+    let title: String
+    let count: Int
+    let isExpanded: Bool
+    let accent: Color?
 
     var body: some View {
-        HStack(spacing: 7) {
-            Text(project?.name ?? "All projects")
-                .font(.subheadline)
-                .foregroundStyle(T3Colors.textPrimary)
+        HStack(spacing: 8) {
+            Text(count > 0 ? "\(title) (\(count))" : title)
                 .lineLimit(1)
-            Spacer()
-            Text("\(totalCount)")
-                .font(.subheadline.monospacedDigit())
-                .foregroundStyle(T3Colors.textTertiary)
-            Image(systemName: "chevron.down")
-                .font(.system(size: 9, weight: .semibold))
-                .foregroundStyle(T3Colors.textTertiary)
-        }
-        .padding(.horizontal, 16)
-        .frame(minHeight: T3Metrics.minimumTapTarget)
-        .contentShape(Rectangle())
-        .overlay(alignment: .bottom) {
             Rectangle()
-                .fill(T3Colors.separator)
-                .frame(height: 0.5)
+                .fill((accent ?? T3Colors.textTertiary).opacity(accent == nil ? 0.16 : 0.24))
+                .frame(height: 1)
+            Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
+                .font(.system(size: 8, weight: .bold))
         }
-        .accessibilityElement(children: .ignore)
+        .font(.caption2.weight(.bold))
+        .foregroundStyle(accent ?? T3Colors.textTertiary)
+        .padding(.horizontal, 10)
+        .padding(.top, 4)
+        .frame(height: 36)
+        .contentShape(Rectangle())
     }
 }
 
 struct FeatureThreadRow: View {
-    @SwiftUI.Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    enum Style {
+        case rich
+        case slim
+    }
 
     let thread: FeatureThread
-    let projectName: String?
+    let projectName: String
+    let snapshot: FeatureSnapshot
     let now: Date
     let isSelected: Bool
+    let isConnectionStale: Bool
+    let style: Style
 
     init(
         thread: FeatureThread,
-        projectName: String?,
+        projectName: String,
+        snapshot: FeatureSnapshot,
         now: Date = .now,
-        isSelected: Bool = false
+        isSelected: Bool = false,
+        isConnectionStale: Bool = false,
+        style: Style = .rich
     ) {
         self.thread = thread
         self.projectName = projectName
+        self.snapshot = snapshot
         self.now = now
         self.isSelected = isSelected
+        self.isConnectionStale = isConnectionStale
+        self.style = style
     }
 
     var body: some View {
         Group {
-            if dynamicTypeSize.isAccessibilitySize {
-                accessibleRow
-            } else {
-                regularRow
+            switch style {
+            case .rich: richRow
+            case .slim: slimRow
             }
-        }
-        .background(isSelected ? T3Colors.ledgerSelected : Color.clear)
-        .overlay(alignment: .leading) {
-            if isSelected {
-                Rectangle()
-                    .fill(T3Colors.statusRunning)
-                    .frame(width: 2)
-            }
-        }
-        .overlay(alignment: .bottom) {
-            Rectangle()
-                .fill(T3Colors.separator)
-                .frame(height: 0.5)
-                .padding(.leading, 48)
-                .padding(.trailing, 16)
         }
         .contentShape(Rectangle())
         .accessibilityElement(children: .ignore)
@@ -988,161 +827,208 @@ struct FeatureThreadRow: View {
         .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 
-    private var regularRow: some View {
-        HStack(spacing: 0) {
-            statusGlyph
-                .frame(width: 32)
-
-            VStack(alignment: .leading, spacing: 3) {
-                Text(thread.title)
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(T3Colors.textPrimary)
+    private var richRow: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 6) {
+                ProjectBadge(name: projectName)
+                Text(projectName)
                     .lineLimit(1)
-                metadata
-                    .lineLimit(1)
+                    .foregroundStyle(Color.white.opacity(0.58))
+                Spacer(minLength: 8)
+                status
             }
+            .font(.system(size: 11.5, weight: .medium))
+            .frame(height: 20)
 
-            Text(compactAge)
-                .font(.caption.monospacedDigit())
-                .foregroundStyle(T3Colors.textTertiary)
+            Text(thread.title)
+                .font(.system(size: 15, weight: .semibold))
+                .tracking(-0.14)
+                .foregroundStyle(T3Colors.textPrimary)
                 .lineLimit(1)
-                .frame(width: 42, alignment: .trailing)
+                .padding(.top, 4)
+
+            HStack(spacing: 6) {
+                Image(systemName: "arrow.triangle.branch")
+                    .font(.system(size: 10, weight: .medium))
+                Text(branchLabel)
+                    .lineLimit(1)
+                if providerLooksTerminal {
+                    Text(">_")
+                        .font(.system(size: 9.5, weight: .bold, design: .monospaced))
+                        .foregroundStyle(Color(red: 0.37, green: 0.92, blue: 0.83))
+                }
+                Spacer(minLength: 8)
+                if let environmentLabel {
+                    HStack(spacing: 4) {
+                        Image(systemName: "server.rack")
+                            .font(.system(size: 9))
+                        Text(environmentLabel)
+                            .lineLimit(1)
+                    }
+                    .foregroundStyle(
+                        isConnectionStale
+                            ? T3Colors.danger.opacity(0.72)
+                            : Color.white.opacity(0.36)
+                    )
+                }
+                Image(systemName: "sparkles")
+                    .font(.system(size: 9))
+                    .opacity(0.48)
+            }
+            .font(.system(size: 11))
+            .foregroundStyle(Color.white.opacity(0.4))
+            .frame(height: 18)
+            .padding(.top, 3)
         }
-        .padding(.leading, 16)
-        .padding(.trailing, 12)
-        .frame(minHeight: 60)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .frame(minHeight: 78)
+        .background(
+            isSelected ? Color.white.opacity(0.09) : Color.clear,
+            in: RoundedRectangle(cornerRadius: 8)
+        )
+        .padding(.horizontal, 8)
+        .opacity(isConnectionStale ? 0.58 : 1)
     }
 
-    private var accessibleRow: some View {
-        HStack(alignment: .top, spacing: 0) {
-            statusGlyph
-                .frame(width: 32, height: 28, alignment: .center)
-
-            VStack(alignment: .leading, spacing: 5) {
-                Text(thread.title)
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(T3Colors.textPrimary)
-                    .lineLimit(2)
-
-                metadata
-                    .lineLimit(2)
-
-                HStack(spacing: 6) {
-                    Text(statusText)
-                        .foregroundStyle(statusColor)
-                    Text("·")
-                        .foregroundStyle(T3Colors.textTertiary)
-                    Text("Updated \(compactAge)")
-                        .foregroundStyle(T3Colors.textSecondary)
-                }
-                .font(.caption)
-            }
+    private var slimRow: some View {
+        HStack(spacing: 9) {
+            ProjectBadge(name: projectName)
+                .saturation(0)
+                .opacity(0.48)
+            Text(thread.title)
+                .font(.system(size: 13))
+                .foregroundStyle(Color.white.opacity(0.52))
+                .lineLimit(1)
+            Spacer(minLength: 8)
+            Text(SidebarRelativeAge.compact(since: thread.updatedAt, now: now))
+                .font(.caption2.monospacedDigit())
+                .foregroundStyle(T3Colors.textTertiary)
         }
-        .padding(.leading, 16)
-        .padding(.trailing, 16)
-        .padding(.vertical, 10)
-        .frame(minHeight: 72)
+        .padding(.horizontal, 10)
+        .frame(height: 36)
+        .padding(.horizontal, 8)
+        .background(
+            isSelected ? Color.white.opacity(0.07) : Color.clear,
+            in: RoundedRectangle(cornerRadius: 7)
+        )
     }
 
     @ViewBuilder
-    private var metadata: some View {
+    private var status: some View {
+        let label = thread.homeStatusLabel
+            ?? SidebarRelativeAge.compact(since: thread.updatedAt, now: now)
         HStack(spacing: 5) {
-            if let projectName {
-                Text(projectName)
-                    .foregroundStyle(T3Colors.textSecondary)
+            if let icon = statusIcon {
+                Image(systemName: icon)
+                    .font(.system(size: 11, weight: .semibold))
             }
-            if let preview = visiblePreview {
-                if projectName != nil {
-                    Text("·")
-                        .foregroundStyle(T3Colors.textTertiary)
-                }
-                Text(preview)
-                    .foregroundStyle(thread.needsAttention ? statusColor : T3Colors.textSecondary)
+            Text(label)
+            if let duration = thread.homeWorkingDuration(at: now) {
+                Text(duration)
+                    .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                    .monospacedDigit()
             }
         }
-        .font(.caption)
+        .font(.system(size: 11.5, weight: .semibold))
+        .foregroundStyle(statusColor)
     }
 
-    private var statusGlyph: some View {
-        Image(systemName: statusIcon)
-            .font(.caption.weight(.semibold))
-            .foregroundStyle(statusColor)
-            .accessibilityHidden(true)
-    }
-
-    private var visiblePreview: String? {
-        if let preview = thread.preview?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !preview.isEmpty {
-            return preview.replacingOccurrences(of: "\n", with: " ")
-        }
-        return thread.needsAttention ? statusText : nil
-    }
-
-    private var statusIcon: String {
-        if thread.isEffectivelySnoozed(at: now) {
-            return "moon.zzz.fill"
-        }
-        if thread.isEffectivelySettled(at: now) {
-            return "checkmark.circle.fill"
-        }
-        return switch thread.state {
-        case .idle: "circle"
-        case .completed: "checkmark.circle.fill"
-        case .queued: "clock"
-        case .working: "bolt.fill"
-        case .waitingForApproval: "exclamationmark.triangle.fill"
-        case .waitingForInput: "questionmark.circle.fill"
-        case .failed: "xmark.circle.fill"
+    private var statusIcon: String? {
+        switch thread.homeStatus {
+        case .working: "circle.dotted"
+        case .done: "checkmark.circle"
+        case .failed: "exclamationmark.circle"
+        case .approval, .input, .ready: nil
         }
     }
 
     private var statusColor: Color {
-        if thread.isEffectivelySnoozed(at: now) {
-            return T3Colors.textSecondary
-        }
-        if thread.isEffectivelySettled(at: now) {
-            return T3Colors.success.opacity(0.7)
-        }
-        return switch thread.state {
-        case .idle, .completed: T3Colors.textTertiary
-        case .queued: T3Colors.textTertiary
-        case .working: T3Colors.statusRunning
-        case .waitingForApproval: T3Colors.warning
-        case .waitingForInput: .indigo
+        switch thread.homeStatus {
+        case .working: Color(red: 0.22, green: 0.74, blue: 0.97)
+        case .approval: Color(red: 0.99, green: 0.77, blue: 0.27)
+        case .input: Color(red: 0.65, green: 0.71, blue: 0.99)
         case .failed: T3Colors.danger
+        case .done: Color(red: 0.43, green: 0.91, blue: 0.72)
+        case .ready: Color.white.opacity(0.4)
         }
     }
 
-    private var statusText: String {
-        if thread.isEffectivelySnoozed(at: now) {
-            return "Snoozed"
-        }
-        if thread.isEffectivelySettled(at: now) {
-            return "Settled"
-        }
-        return switch thread.state {
-        case .waitingForApproval: "Approval needed"
-        case .waitingForInput: "Answer needed"
-        case .working: "Working"
-        case .queued: "Queued"
-        case .failed: "Failed"
-        case .idle, .completed: thread.state.rawValue.capitalized
-        }
+    private var environmentLabel: String? {
+        thread.homeEnvironmentLabel(in: snapshot)
     }
 
-    private var compactAge: String {
-        SidebarRelativeAge.compact(since: thread.updatedAt, now: now)
+    private var branchLabel: String {
+        if let branch = thread.branch?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !branch.isEmpty {
+            return branch
+        }
+        if let worktreePath = thread.worktreePath,
+           !worktreePath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return URL(fileURLWithPath: worktreePath).lastPathComponent
+        }
+        return "workspace"
+    }
+
+    private var providerLooksTerminal: Bool {
+        let provider = thread.homeProviderLabel(in: snapshot)?.lowercased() ?? ""
+        return provider.contains("codex") || provider.contains("cursor") || provider.contains("open")
     }
 
     private var accessibilityValue: String {
-        var parts = [statusText]
-        if let projectName {
-            parts.append("Project \(projectName)")
+        var values = [thread.homeStatusLabel ?? "Ready", "Project \(projectName)"]
+        if let duration = thread.homeWorkingDuration(at: now) {
+            values.append("for \(duration)")
         }
-        if let visiblePreview, visiblePreview != statusText {
-            parts.append(visiblePreview)
+        values.append("Branch \(branchLabel)")
+        if let environmentLabel {
+            values.append("on \(environmentLabel)")
         }
-        parts.append(SidebarRelativeAge.accessibility(since: thread.updatedAt, now: now))
-        return parts.joined(separator: ". ")
+        if isConnectionStale {
+            values.append("last known state")
+        }
+        return values.joined(separator: ". ")
+    }
+}
+
+private struct ProjectBadge: View {
+    let name: String
+
+    var body: some View {
+        Text(label)
+            .font(.system(size: 8, weight: .heavy))
+            .foregroundStyle(foreground)
+            .frame(width: 16, height: 16)
+            .background(background, in: RoundedRectangle(cornerRadius: 4))
+            .accessibilityHidden(true)
+    }
+
+    private var label: String {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return "?" }
+        if trimmed.lowercased().hasPrefix("t3") { return "T3" }
+        return String(trimmed.prefix(1)).uppercased()
+    }
+
+    private var paletteIndex: Int {
+        name.unicodeScalars.reduce(0) { ($0 + Int($1.value)) % 4 }
+    }
+
+    private var background: Color {
+        switch paletteIndex {
+        case 0: Color(red: 0.03, green: 0.24, blue: 0.21)
+        case 1: Color(red: 0.19, green: 0.13, blue: 0.37)
+        case 2: Color(red: 0.29, green: 0.18, blue: 0.02)
+        default: Color(red: 0.10, green: 0.18, blue: 0.34)
+        }
+    }
+
+    private var foreground: Color {
+        switch paletteIndex {
+        case 0: Color(red: 0.78, green: 0.98, blue: 0.95)
+        case 1: Color(red: 0.93, green: 0.91, blue: 1)
+        case 2: Color(red: 1, green: 0.95, blue: 0.78)
+        default: Color(red: 0.82, green: 0.9, blue: 1)
+        }
     }
 }
