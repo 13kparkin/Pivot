@@ -1,8 +1,6 @@
 import SwiftUI
 
 public struct ThreadDetailView: View {
-    @SwiftUI.Environment(\.dismiss) private var dismiss
-
     @Bindable var model: FeatureRootModel
     let thread: FeatureThread
     let submitMessage: (FeatureMessageSubmission) async -> Bool
@@ -42,9 +40,21 @@ public struct ThreadDetailView: View {
             }
         }
         .background(Color.black)
-        .toolbar(.hidden, for: .navigationBar)
-        .safeAreaInset(edge: .top, spacing: 0) {
-            detailHeader
+        .navigationBarTitleDisplayMode(.inline)
+        .navigationBarBackButtonHidden(false)
+        .t3NavigationChrome()
+        .toolbar {
+            ToolbarItem(placement: .principal) {
+                threadHeaderTitle
+            }
+            ToolbarItem(placement: .primaryAction) {
+                HStack(spacing: 2) {
+                    TimelineView(.periodic(from: .now, by: 1)) { context in
+                        headerStatus(at: context.date)
+                    }
+                    threadActionsMenu
+                }
+            }
         }
         .task(id: thread.id) {
             isLoading = true
@@ -115,55 +125,27 @@ public struct ThreadDetailView: View {
         )
     }
 
-    private var detailHeader: some View {
-        HStack(spacing: 8) {
-            Button { dismiss() } label: {
-                Image(systemName: "chevron.left")
-                    .font(.system(size: 17, weight: .semibold))
-                    .frame(width: 30, height: T3Metrics.minimumTapTarget)
-            }
-            .buttonStyle(.plain)
-            .foregroundStyle(T3Colors.textSecondary)
-            .accessibilityLabel("Back")
+    private var threadHeaderTitle: some View {
+        VStack(alignment: .leading, spacing: 1) {
+            Text(currentThread.title)
+                .font(T3Typography.navigationTitle)
+                .foregroundStyle(T3Colors.textPrimary)
+                .lineLimit(1)
 
-            VStack(alignment: .leading, spacing: 1) {
-                Text(currentThread.title)
-                    .font(.system(size: 14, weight: .semibold))
-                    .tracking(-0.12)
-                    .foregroundStyle(T3Colors.textPrimary)
+            HStack(spacing: 5) {
+                Image(systemName: "arrow.triangle.branch")
+                Text(headerBranch)
                     .lineLimit(1)
-
-                HStack(spacing: 5) {
-                    Image(systemName: "arrow.triangle.branch")
-                        .font(.system(size: 9, weight: .medium))
-                    Text(headerBranch)
+                if let environmentName = currentThread.homeEnvironmentLabel(in: model.snapshot) {
+                    Text("·")
+                    Text(environmentName)
                         .lineLimit(1)
-                    if let environmentName = currentThread.homeEnvironmentLabel(in: model.snapshot) {
-                        Text("·")
-                        Text(environmentName)
-                            .lineLimit(1)
-                    }
                 }
-                .font(.system(size: 10.5))
-                .foregroundStyle(Color.white.opacity(0.4))
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-
-            TimelineView(.periodic(from: .now, by: 1)) { context in
-                headerStatus(at: context.date)
-            }
-
-            threadActionsMenu
+            .font(T3Typography.navigationMetadata)
+            .foregroundStyle(T3Colors.textTertiary)
         }
-        .padding(.leading, 5)
-        .padding(.trailing, 8)
-        .frame(height: 49)
-        .background(T3Colors.background)
-        .overlay(alignment: .bottom) {
-            Rectangle()
-                .fill(T3Colors.separator)
-                .frame(height: 1)
-        }
+        .accessibilityElement(children: .combine)
     }
 
     @ViewBuilder
@@ -171,17 +153,16 @@ public struct ThreadDetailView: View {
         HStack(spacing: 5) {
             if let icon = headerStatusIcon {
                 Image(systemName: icon)
-                    .font(.system(size: 10.5, weight: .semibold))
             }
             if let duration = currentThread.homeWorkingDuration(at: now) {
                 Text(duration)
-                    .font(.system(size: 10.5, weight: .semibold, design: .monospaced))
+                    .monospaced()
                     .monospacedDigit()
             } else {
                 Text(currentThread.homeStatusLabel ?? "Ready")
             }
         }
-        .font(.system(size: 11.5, weight: .semibold))
+        .font(T3Typography.status)
         .foregroundStyle(headerStatusColor)
         .lineLimit(1)
         .accessibilityElement(children: .combine)
@@ -254,8 +235,8 @@ public struct ThreadDetailView: View {
             }
         } label: {
             Image(systemName: "ellipsis")
-                .font(.system(size: 16, weight: .semibold))
-                .frame(width: 30, height: T3Metrics.minimumTapTarget)
+                .font(.body.weight(.semibold))
+                .frame(width: T3Metrics.minimumTapTarget, height: T3Metrics.minimumTapTarget)
         }
         .buttonStyle(.plain)
         .foregroundStyle(T3Colors.textSecondary)
@@ -297,7 +278,7 @@ public struct ThreadDetailView: View {
     private func timeline(_ detail: FeatureThreadDetail) -> some View {
         ScrollViewReader { proxy in
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 13) {
+                LazyVStack(alignment: .leading, spacing: 22) {
                     if detail.messages.isEmpty {
                         ContentUnavailableView(
                             "Ready for a task",
@@ -315,9 +296,11 @@ public struct ThreadDetailView: View {
 
                     Color.clear.frame(height: 1).id("timeline-bottom")
                 }
-                .padding(.horizontal, 15)
-                .padding(.top, 13)
-                .padding(.bottom, 10)
+                .padding(.horizontal, 18)
+                .padding(.top, 18)
+                .padding(.bottom, 14)
+                .frame(maxWidth: T3Metrics.readingWidth)
+                .frame(maxWidth: .infinity)
             }
             .scrollDismissesKeyboard(.interactively)
             .task(id: thread.id) {
@@ -430,22 +413,23 @@ struct FeatureMessageView: View {
         switch message.role {
         case .user:
             HStack {
-                Spacer(minLength: 34)
-                VStack(alignment: .leading, spacing: 8) {
+                Spacer(minLength: 44)
+                VStack(alignment: .leading, spacing: 10) {
                     FeatureMessageAttachmentsView(attachments: message.attachments)
                     if !message.text.isEmpty {
                         MarkdownMessageView(message.text)
                     }
                 }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 9)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 11)
+                .frame(maxWidth: T3Metrics.readingWidth * 0.88, alignment: .leading)
                 .background(
-                    Color.white.opacity(0.075),
+                    Color.white.opacity(0.09),
                     in: UnevenRoundedRectangle(
-                        topLeadingRadius: 14,
-                        bottomLeadingRadius: 14,
+                        topLeadingRadius: 16,
+                        bottomLeadingRadius: 16,
                         bottomTrailingRadius: 4,
-                        topTrailingRadius: 14
+                        topTrailingRadius: 16
                     )
                 )
             }
@@ -453,13 +437,13 @@ struct FeatureMessageView: View {
             .accessibilityValue(accessibilityValue)
             .accessibilityIdentifier("message-\(message.id)")
         case .assistant:
-            VStack(alignment: .leading, spacing: 7) {
+            VStack(alignment: .leading, spacing: 10) {
                 if message.state == .streaming {
                     HStack(spacing: 6) {
                         Image(systemName: "circle.dotted")
                         Text("Working")
                     }
-                    .font(.caption.weight(.semibold))
+                    .font(T3Typography.supportingStrong)
                     .foregroundStyle(T3Colors.statusRunning)
                 }
                 FeatureMessageAttachmentsView(attachments: message.attachments)
@@ -473,21 +457,23 @@ struct FeatureMessageView: View {
         case .tool:
             DisclosureGroup {
                 Text(message.text)
-                    .font(.caption.monospaced())
-                    .foregroundStyle(.secondary)
+                    .font(T3Typography.tool)
+                    .foregroundStyle(T3Colors.textSecondary)
+                    .lineSpacing(3)
                     .textSelection(.enabled)
-                    .padding(.top, 6)
+                    .padding(.top, 8)
             } label: {
                 Label(message.toolName ?? "Tool output", systemImage: "terminal")
-                    .font(.caption.monospaced().weight(.medium))
+                    .font(T3Typography.tool.weight(.medium))
                     .foregroundStyle(T3Colors.textSecondary)
             }
-            .padding(.vertical, 4)
+            .padding(.vertical, 6)
+            .frame(minHeight: T3Metrics.minimumTapTarget)
             .accessibilityIdentifier("message-\(message.id)")
         case .system:
             Text(message.text)
-                .font(.footnote)
-                .foregroundStyle(.secondary)
+                .font(T3Typography.supporting)
+                .foregroundStyle(T3Colors.textSecondary)
                 .frame(maxWidth: .infinity, alignment: .center)
                 .accessibilityIdentifier("message-\(message.id)")
         }
@@ -563,7 +549,7 @@ private struct FeatureMessageAttachmentsView: View {
                             )
                             VStack(alignment: .leading, spacing: 1) {
                                 Text(attachment.name)
-                                    .font(.caption.weight(.medium))
+                                    .font(T3Typography.control)
                                     .lineLimit(1)
                                 Text(
                                     ByteCountFormatter.string(
@@ -571,7 +557,7 @@ private struct FeatureMessageAttachmentsView: View {
                                         countStyle: .file
                                     )
                                 )
-                                .font(.caption2.monospacedDigit())
+                                .font(T3Typography.supporting.monospacedDigit())
                                 .foregroundStyle(T3Colors.textSecondary)
                             }
                         }

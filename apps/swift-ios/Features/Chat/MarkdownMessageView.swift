@@ -29,7 +29,7 @@ struct MarkdownMessageView: View {
 
 private struct MarkdownBlocksView: View {
     let blocks: [MarkdownBlock]
-    var spacing: CGFloat = 10
+    var spacing: CGFloat = 12
 
     var body: some View {
         VStack(alignment: .leading, spacing: spacing) {
@@ -47,8 +47,8 @@ private struct MarkdownBlockView: View {
     var body: some View {
         switch block {
         case let .paragraph(text):
-            MarkdownInlineText(text, font: .system(size: 14.5))
-                .lineSpacing(2.5)
+            MarkdownInlineText(text, font: T3Typography.threadBody)
+                .lineSpacing(4)
 
         case let .heading(level, text):
             MarkdownInlineText(text, font: headingFont(level))
@@ -61,12 +61,12 @@ private struct MarkdownBlockView: View {
             MarkdownListView(items: items, start: start)
 
         case let .blockquote(document):
-            MarkdownBlocksView(blocks: document.blocks, spacing: 7)
+            MarkdownBlocksView(blocks: document.blocks, spacing: 9)
                 .foregroundStyle(T3Colors.textSecondary)
-                .padding(.leading, 12)
+                .padding(.leading, 14)
                 .overlay(alignment: .leading) {
                     Rectangle()
-                        .fill(T3Colors.textTertiary.opacity(0.75))
+                        .fill(T3Colors.textTertiary)
                         .frame(width: 2)
                 }
 
@@ -84,10 +84,10 @@ private struct MarkdownBlockView: View {
 
     private func headingFont(_ level: Int) -> Font {
         switch level {
-        case 1: .title3.weight(.bold)
-        case 2: .headline.weight(.bold)
-        case 3: .subheadline.weight(.bold)
-        default: .system(size: 14.5, weight: .semibold)
+        case 1: T3Typography.threadHeading1
+        case 2: T3Typography.threadHeading2
+        case 3: T3Typography.threadHeading3
+        default: T3Typography.threadHeading4
         }
     }
 }
@@ -97,13 +97,13 @@ private struct MarkdownListView: View {
     let start: Int?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 8) {
             ForEach(items.indices, id: \.self) { offset in
                 let item = items[offset]
-                HStack(alignment: .top, spacing: 7) {
+                HStack(alignment: .top, spacing: 8) {
                     marker(for: item, offset: offset)
-                        .frame(width: 22, height: 21, alignment: .trailing)
-                    MarkdownBlocksView(blocks: item.blocks, spacing: 5)
+                        .frame(width: 24, height: 24, alignment: .trailing)
+                    MarkdownBlocksView(blocks: item.blocks, spacing: 7)
                 }
                 .accessibilityElement(children: .contain)
             }
@@ -114,19 +114,19 @@ private struct MarkdownListView: View {
     private func marker(for item: MarkdownListItem, offset: Int) -> some View {
         if let task = item.task {
             Image(systemName: task == .complete ? "checkmark.square.fill" : "square")
-                .font(.system(size: 14, weight: .medium))
+                .font(T3Typography.control)
                 .foregroundStyle(
                     task == .complete ? T3Colors.success : T3Colors.textSecondary
                 )
                 .accessibilityLabel(task == .complete ? "Completed" : "Not completed")
         } else if let start {
             Text("\(start + offset).")
-                .font(.system(size: 14, design: .monospaced))
+                .font(T3Typography.supporting.monospaced())
                 .foregroundStyle(T3Colors.textSecondary)
                 .accessibilityLabel("Item \(start + offset)")
         } else {
             Text("•")
-                .font(.system(size: 14.5, weight: .semibold))
+                .font(T3Typography.threadBody.weight(.semibold))
                 .foregroundStyle(T3Colors.textSecondary)
                 .accessibilityHidden(true)
         }
@@ -142,11 +142,11 @@ private struct MarkdownCodeBlockView: View {
             HStack(spacing: 8) {
                 if let language, !language.isEmpty {
                     Text(language.uppercased())
-                        .font(.caption2.weight(.semibold))
+                        .font(T3Typography.supportingStrong)
                         .foregroundStyle(T3Colors.textTertiary)
                 } else {
                     Text("CODE")
-                        .font(.caption2.weight(.semibold))
+                        .font(T3Typography.supportingStrong)
                         .foregroundStyle(T3Colors.textTertiary)
                 }
                 Spacer(minLength: 8)
@@ -154,15 +154,15 @@ private struct MarkdownCodeBlockView: View {
                     UIPasteboard.general.string = code
                 } label: {
                     Label("Copy", systemImage: "doc.on.doc")
-                        .font(.caption.weight(.medium))
+                        .font(T3Typography.control)
                         .foregroundStyle(T3Colors.textSecondary)
-                        .frame(minHeight: 28)
+                        .frame(minHeight: 32)
                 }
                 .buttonStyle(.plain)
                 .accessibilityHint("Copies this code block")
             }
-            .padding(.horizontal, 11)
-            .frame(minHeight: 34)
+            .padding(.horizontal, 13)
+            .frame(minHeight: 40)
 
             Rectangle()
                 .fill(T3Colors.separator)
@@ -170,19 +170,19 @@ private struct MarkdownCodeBlockView: View {
 
             ScrollView(.horizontal) {
                 Text(verbatim: code)
-                    .font(.system(size: 12.5, design: .monospaced))
-                    .foregroundStyle(T3Colors.textPrimary.opacity(0.9))
-                    .lineSpacing(2)
+                    .font(T3Typography.code)
+                    .foregroundStyle(T3Colors.textPrimary.opacity(0.94))
+                    .lineSpacing(3)
                     .textSelection(.enabled)
                     .fixedSize(horizontal: true, vertical: true)
-                    .padding(11)
+                    .padding(13)
             }
             .scrollIndicators(.hidden)
         }
         .background(T3Colors.surfaceRaised)
-        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .clipShape(RoundedRectangle(cornerRadius: 10))
         .overlay {
-            RoundedRectangle(cornerRadius: 8)
+            RoundedRectangle(cornerRadius: 10)
                 .stroke(T3Colors.border, lineWidth: 1)
         }
     }

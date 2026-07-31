@@ -13,7 +13,7 @@ struct FeatureComposerApprovalPanel: View {
             VStack(alignment: .leading, spacing: 0) {
                 HStack(spacing: 8) {
                     Text("Pending approval")
-                        .font(.caption2.weight(.bold))
+                        .font(T3Typography.eyebrow)
                         .tracking(1.3)
                         .textCase(.uppercase)
                         .foregroundStyle(T3Colors.warning)
@@ -22,26 +22,31 @@ struct FeatureComposerApprovalPanel: View {
 
                     if total > 1 {
                         Text("\(position)/\(total)")
-                            .font(.caption2.monospacedDigit().weight(.semibold))
+                            .font(T3Typography.supportingStrong.monospacedDigit())
                             .foregroundStyle(T3Colors.textTertiary)
                     }
                 }
 
                 Text(approval.title)
-                    .font(.subheadline.weight(.semibold))
+                    .font(T3Typography.navigationTitle)
                     .foregroundStyle(T3Colors.textPrimary)
                     .padding(.top, 5)
 
                 VStack(alignment: .leading, spacing: 5) {
                     Text(detailLabel)
-                        .font(.system(size: 10, weight: .semibold))
+                        .font(T3Typography.supportingStrong)
                         .tracking(0.7)
                         .textCase(.uppercase)
                         .foregroundStyle(T3Colors.textTertiary)
 
                     Text(approval.detail)
-                        .font(approval.kind == .command ? .caption.monospaced() : .callout)
-                        .foregroundStyle(Color.white.opacity(0.84))
+                        .font(
+                            approval.kind == .command
+                                ? T3Typography.code
+                                : T3Typography.threadBody
+                        )
+                        .foregroundStyle(T3Colors.textPrimary.opacity(0.92))
+                        .lineSpacing(3)
                         .fixedSize(horizontal: false, vertical: true)
                         .textSelection(.enabled)
                 }
@@ -85,7 +90,7 @@ struct FeatureComposerApprovalPanel: View {
                     Button("Cancel turn", action: onCancelTurn)
                         .foregroundStyle(T3Colors.textTertiary)
                 }
-                .font(.caption.weight(.semibold))
+                .font(T3Typography.supportingStrong)
                 .buttonStyle(.plain)
                 .frame(maxWidth: .infinity)
             }
@@ -106,7 +111,7 @@ struct FeatureComposerApprovalPanel: View {
     ) -> some View {
         Button(action: action) {
             Text(title)
-                .font(.subheadline.weight(.semibold))
+                .font(T3Typography.control.weight(.semibold))
                 .foregroundStyle(.white)
                 .frame(maxWidth: .infinity)
                 .frame(height: T3Metrics.minimumTapTarget)
@@ -144,7 +149,7 @@ struct FeatureComposerUserInputPanel: View {
                 VStack(alignment: .leading, spacing: 0) {
                     HStack(spacing: 8) {
                         Text(question.header)
-                            .font(.caption2.weight(.bold))
+                            .font(T3Typography.eyebrow)
                             .tracking(1.3)
                             .textCase(.uppercase)
                             .foregroundStyle(T3Colors.accent)
@@ -153,20 +158,20 @@ struct FeatureComposerUserInputPanel: View {
 
                         if input.questions.count > 1 {
                             Text("\(questionIndex + 1)/\(input.questions.count)")
-                                .font(.caption2.monospacedDigit().weight(.semibold))
+                                .font(T3Typography.supportingStrong.monospacedDigit())
                                 .foregroundStyle(T3Colors.textTertiary)
                         }
                     }
 
                     Text(question.question)
-                        .font(.subheadline.weight(.semibold))
+                        .font(T3Typography.navigationTitle)
                         .foregroundStyle(T3Colors.textPrimary)
                         .fixedSize(horizontal: false, vertical: true)
                         .padding(.top, 5)
 
                     if question.allowsMultiple {
                         Text("Select one or more options")
-                            .font(.caption)
+                            .font(T3Typography.supporting)
                             .foregroundStyle(T3Colors.textTertiary)
                             .padding(.top, 4)
                     }
@@ -188,19 +193,19 @@ struct FeatureComposerUserInputPanel: View {
                     .padding(.horizontal, 10)
                     .padding(.top, 10)
                 }
-                .frame(maxHeight: 252)
+                .frame(maxHeight: 320)
                 .scrollIndicators(.hidden)
 
                 HStack(spacing: 8) {
                     Image(systemName: "pencil")
-                        .font(.caption)
+                        .font(T3Typography.supporting)
                         .foregroundStyle(T3Colors.textTertiary)
 
                     TextField(
                         "Write custom answer",
                         text: answerBinding(for: question.id)
                     )
-                    .font(.subheadline)
+                    .font(T3Typography.composer)
                     .submitLabel(.next)
                     .onSubmit(advanceOrSubmit)
                 }
@@ -219,19 +224,22 @@ struct FeatureComposerUserInputPanel: View {
                         Button("Back") {
                             questionIndex -= 1
                         }
-                        .font(.subheadline.weight(.semibold))
+                        .font(T3Typography.control.weight(.semibold))
                         .foregroundStyle(T3Colors.textSecondary)
-                        .frame(minWidth: T3Metrics.minimumTapTarget, minHeight: 36)
+                        .frame(
+                            minWidth: T3Metrics.minimumTapTarget,
+                            minHeight: T3Metrics.minimumTapTarget
+                        )
                     }
 
                     Spacer()
 
                     Button(action: advanceOrSubmit) {
                         Text(isLastQuestion ? "Submit" : "Next question")
-                            .font(.subheadline.weight(.semibold))
+                            .font(T3Typography.control.weight(.semibold))
                             .foregroundStyle(.white)
                             .padding(.horizontal, 18)
-                            .frame(height: 36)
+                            .frame(height: T3Metrics.minimumTapTarget)
                             .background(T3Colors.accent, in: Capsule())
                     }
                     .buttonStyle(.plain)
@@ -287,12 +295,12 @@ struct FeatureComposerUserInputPanel: View {
             HStack(alignment: .center, spacing: 10) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(option.label)
-                        .font(.subheadline.weight(.medium))
+                        .font(T3Typography.control)
                         .foregroundStyle(Color.white.opacity(0.9))
 
                     if !option.detail.isEmpty, option.detail != option.label {
                         Text(option.detail)
-                            .font(.caption)
+                            .font(T3Typography.supporting)
                             .foregroundStyle(T3Colors.textSecondary)
                             .fixedSize(horizontal: false, vertical: true)
                     }
@@ -302,7 +310,7 @@ struct FeatureComposerUserInputPanel: View {
 
                 if isSelected {
                     Image(systemName: "checkmark")
-                        .font(.caption.weight(.bold))
+                        .font(T3Typography.supporting.weight(.bold))
                         .foregroundStyle(T3Colors.accent)
                 } else if number <= 9 {
                     Text("\(number)")

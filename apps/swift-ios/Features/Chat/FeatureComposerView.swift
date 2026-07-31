@@ -106,9 +106,9 @@ struct FeatureComposerView: View {
                 .stroke(Color.white.opacity(0.105), lineWidth: 1)
         }
         .clipShape(composerShape)
-        .padding(.horizontal, 10)
-        .padding(.top, 10)
-        .padding(.bottom, 8)
+        .padding(.horizontal, 12)
+        .padding(.top, 12)
+        .padding(.bottom, 10)
         .background {
             LinearGradient(
                 colors: [.clear, .black.opacity(0.94), .black],
@@ -137,7 +137,7 @@ struct FeatureComposerView: View {
                 }
             } label: {
                 Text(isWorking ? "Message to queue…" : "Ask anything…")
-                    .font(.body)
+                    .font(T3Typography.composer)
                     .foregroundStyle(T3Colors.textTertiary)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .contentShape(Rectangle())
@@ -150,8 +150,8 @@ struct FeatureComposerView: View {
             submitButton
                 .padding(.trailing, 7)
         }
-        .padding(.leading, 12)
-        .padding(.vertical, 5)
+        .padding(.leading, 14)
+        .padding(.vertical, 7)
     }
 
     private var expandedComposer: some View {
@@ -171,21 +171,21 @@ struct FeatureComposerView: View {
                 text: $text,
                 axis: .vertical
             )
-            .font(.body)
+            .font(T3Typography.composer)
             .lineLimit(1...7)
             .focused(focused)
             .submitLabel(.send)
             .onSubmit {
                 if canSend { onSend() }
             }
-            .padding(.horizontal, 15)
-            .padding(.top, 12)
-            .padding(.bottom, 5)
-            .frame(minHeight: 57, alignment: .top)
+            .padding(.horizontal, 16)
+            .padding(.top, 14)
+            .padding(.bottom, 7)
+            .frame(minHeight: 62, alignment: .top)
 
             if !attachments.isEmpty, !imagesAllowed {
                 Label("Choose a model that accepts images", systemImage: "exclamationmark.circle")
-                    .font(.caption)
+                    .font(T3Typography.supporting)
                     .foregroundStyle(T3Colors.warning)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, 15)
@@ -194,7 +194,7 @@ struct FeatureComposerView: View {
 
             if attachmentPreparation.isPreparing {
                 Label(attachmentPreparation.statusLabel, systemImage: "hourglass")
-                    .font(.caption)
+                    .font(T3Typography.supporting)
                     .foregroundStyle(T3Colors.textSecondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, 15)
@@ -292,7 +292,7 @@ struct FeatureComposerView: View {
                 Image(systemName: "lock")
                     .frame(width: 30)
             }
-            .font(.caption.weight(.medium))
+            .font(T3Typography.supportingStrong)
             .foregroundStyle(T3Colors.textSecondary)
             .frame(minHeight: 30)
             .contentShape(Rectangle())
