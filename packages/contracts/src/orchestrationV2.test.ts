@@ -611,6 +611,65 @@ describe("orchestration V2 contracts", () => {
     expect(decoded.recentActivity).toEqual([]);
   });
 
+  it("keeps run handles optional on the workflow struct", () => {
+    const coordinatorRow = {
+      id: "node-workflow-1",
+      threadId: "thread-1",
+      runId: "run-1",
+      parentNodeId: "node-root-1",
+      origin: "provider_native",
+      createdBy: "agent",
+      driver: "claudeAgent",
+      providerInstanceId: "claudeAgent",
+      providerThreadId: null,
+      childThreadId: null,
+      nativeTaskRef: null,
+      prompt: "Research the parser, then implement the fix.",
+      title: "Research and implement",
+      model: null,
+      kind: "workflow",
+      status: "running",
+      result: null,
+      startedAt: DateTime.formatIso(now),
+      completedAt: null,
+      updatedAt: DateTime.formatIso(now),
+    };
+
+    // Coordinator rows stored before run handles existed carry phases only
+    // and must decode unchanged — no migration rewrites them.
+    const phasesOnly = decodeStoredOrchestrationV2Subagent(
+      JSON.stringify({
+        ...coordinatorRow,
+        workflow: { phases: [{ index: 0, title: "Research" }] },
+      }),
+    );
+    expect(phasesOnly.workflow).toEqual({ phases: [{ index: 0, title: "Research" }] });
+
+    const withHandles = decodeStoredOrchestrationV2Subagent(
+      JSON.stringify({
+        ...coordinatorRow,
+        workflow: {
+          phases: [{ index: 0, title: "Research" }],
+          name: "research-implement",
+          runId: "wf_run_1",
+          scriptPath: "/tmp/workflows/research-implement.mjs",
+          transcriptDir: "/tmp/projects/wf_run_1",
+          sessionUrl: "https://claude.ai/session/1",
+          warning: "workflow exceeded the size guideline",
+        },
+      }),
+    );
+    expect(withHandles.workflow).toEqual({
+      phases: [{ index: 0, title: "Research" }],
+      name: "research-implement",
+      runId: "wf_run_1",
+      scriptPath: "/tmp/workflows/research-implement.mjs",
+      transcriptDir: "/tmp/projects/wf_run_1",
+      sessionUrl: "https://claude.ai/session/1",
+      warning: "workflow exceeded the size guideline",
+    });
+  });
+
   it("decodes app-owned subagent parent-wake policies", () => {
     const appOwnedSubagent = {
       id: "node-subagent-2",

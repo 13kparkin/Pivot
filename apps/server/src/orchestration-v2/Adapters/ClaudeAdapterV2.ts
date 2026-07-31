@@ -1340,6 +1340,10 @@ const CLAUDE_KNOWN_TOOL_CLASSIFICATIONS: Record<
   toolsearch: { itemType: "dynamic_tool", requestKind: "command" },
   webfetch: { itemType: "web_search", requestKind: "command" },
   websearch: { itemType: "web_search", requestKind: "command" },
+  // Workflow tool_uses project as coordinator subagent rows, not tool calls;
+  // the classification only applies on the degraded path where a result
+  // arrives without its task_started.
+  workflow: { itemType: "dynamic_tool", requestKind: "command" },
   write: { itemType: "file_change", requestKind: "file-change" },
 };
 
@@ -1546,6 +1550,49 @@ const claudeWorkflowAgentStatus = (entry: unknown) => {
     default:
       return null;
   }
+};
+
+type ClaudeWorkflowRunHandles = Partial<
+  Omit<NonNullable<OrchestrationV2Subagent["workflow"]>, "phases">
+>;
+
+// Clients render `sessionUrl` into an anchor href — restrict to web URLs so a
+// hostile tool result cannot smuggle a javascript:/file: scheme through.
+const claudeWorkflowHttpUrl = (value: unknown): string | undefined => {
+  if (typeof value !== "string" || value.trim().length === 0) return undefined;
+  try {
+    const parsed = new URL(value);
+    return parsed.protocol === "https:" || parsed.protocol === "http:" ? value : undefined;
+  } catch {
+    return undefined;
+  }
+};
+
+const trimmedRecordField = (value: unknown, keys: ReadonlyArray<string>): string | undefined => {
+  const field = firstRecordField(value, keys);
+  return typeof field === "string" && field.trim().length > 0 ? field.trim() : undefined;
+};
+
+// Run handles from the Workflow tool result (script path, transcript dir,
+// run id; `sessionUrl` replaces them for remote runs). The result shape is
+// undocumented SDK surface, so every field is optional and absent fields
+// degrade to less detail, never a failure.
+const claudeWorkflowRunHandles = (value: unknown): ClaudeWorkflowRunHandles | undefined => {
+  const name = trimmedRecordField(value, ["workflowName", "workflow_name"]);
+  const runId = trimmedRecordField(value, ["runId", "run_id"]);
+  const scriptPath = trimmedRecordField(value, ["scriptPath", "script_path"]);
+  const transcriptDir = trimmedRecordField(value, ["transcriptDir", "transcript_dir"]);
+  const sessionUrl = claudeWorkflowHttpUrl(firstRecordField(value, ["sessionUrl", "session_url"]));
+  const warning = trimmedRecordField(value, ["warning"]);
+  const handles = {
+    ...(name === undefined ? {} : { name }),
+    ...(runId === undefined ? {} : { runId }),
+    ...(scriptPath === undefined ? {} : { scriptPath }),
+    ...(transcriptDir === undefined ? {} : { transcriptDir }),
+    ...(sessionUrl === undefined ? {} : { sessionUrl }),
+    ...(warning === undefined ? {} : { warning }),
+  } satisfies ClaudeWorkflowRunHandles;
+  return Object.keys(handles).length > 0 ? handles : undefined;
 };
 
 function isClaudeNonSubagentTask(message: SDKMessage): boolean {
@@ -2839,7 +2886,10 @@ export function makeClaudeAdapterV2(
           readonly roleFallback?: string;
           readonly model?: string;
           readonly kind?: OrchestrationV2Subagent["kind"];
-          readonly workflow?: OrchestrationV2Subagent["workflow"];
+          // Merged over the prior workflow value: phases arrive on progress
+          // snapshots while run handles arrive on the tool result, so neither
+          // side may clobber the other.
+          readonly workflow?: Partial<NonNullable<OrchestrationV2Subagent["workflow"]>>;
           readonly workflowMembership?: OrchestrationV2Subagent["workflowMembership"];
           readonly parentNodeId?: OrchestrationV2ExecutionNode["id"];
           readonly allowCreateSettled?: boolean;
@@ -2992,7 +3042,9 @@ export function makeClaudeAdapterV2(
             ...(input.agentType === undefined
               ? {}
               : { role: providerSubagentRole(input.agentType, input.roleFallback) }),
-            ...(input.workflow === undefined ? {} : { workflow: input.workflow }),
+            ...(input.workflow === undefined
+              ? {}
+              : { workflow: { phases: [], ...(priorTask?.workflow ?? {}), ...input.workflow } }),
             ...(input.workflowMembership === undefined
               ? {}
               : { workflowMembership: input.workflowMembership }),
@@ -4103,6 +4155,7 @@ export function makeClaudeAdapterV2(
             } else {
               const agentType = recordField(message, "subagent_type");
               const isWorkflow = message.task_type === "local_workflow";
+              const workflowName = trimmedRecordField(message, ["workflow_name", "workflowName"]);
               yield* updateClaudeSubagentNode({
                 context,
                 taskId: message.task_id,
@@ -4110,7 +4163,13 @@ export function makeClaudeAdapterV2(
                 ...(message.prompt === undefined ? {} : { prompt: message.prompt }),
                 title: message.description,
                 ...(typeof agentType === "string" ? { agentType } : {}),
-                ...(isWorkflow ? { kind: "workflow", roleFallback: "workflow-coordinator" } : {}),
+                ...(isWorkflow
+                  ? {
+                      kind: "workflow" as const,
+                      roleFallback: "workflow-coordinator",
+                      ...(workflowName === undefined ? {} : { workflow: { name: workflowName } }),
+                    }
+                  : {}),
                 status: "running",
                 reopen: true,
               });
@@ -4298,7 +4357,10 @@ export function makeClaudeAdapterV2(
           }
 
           for (const toolUse of claudeToolUseBlocksFromAssistantMessage(message)) {
-            if (toolUse.name === "Agent") {
+            // Agent and Workflow tool_uses never enter toolCalls: both
+            // project as subagent rows (task_started arrives under the same
+            // tool_use_id), and registering them too would double-render.
+            if (toolUse.name === "Agent" || toolUse.name === "Workflow") {
               continue;
             }
             yield* ensureToolCallStarted({
@@ -4322,6 +4384,24 @@ export function makeClaudeAdapterV2(
               // with an async-launch ACK while the task keeps running; only
               // the eventual task_notification terminalizes the subagent.
               if (isClaudeSubagentAsyncLaunchAck(output)) {
+                continue;
+              }
+              // The Workflow tool resolves immediately with a launch ACK
+              // carrying the run's handles (script path, transcript dir, run
+              // id) while the workflow keeps running; attach the handles and
+              // leave settling to task_notification.
+              if (subagent.task.kind === "workflow" && !isClaudeToolResultError(toolResult)) {
+                const handles = claudeWorkflowRunHandles(claudeNativeToolOutputValue(output));
+                const status = subagent.task.status;
+                if (handles !== undefined && status !== "idle" && status !== "interrupted") {
+                  yield* updateClaudeSubagentNode({
+                    context,
+                    taskId: subagent.task.nativeTaskRef?.nativeId ?? String(subagent.task.id),
+                    toolUseId: toolResult.tool_use_id,
+                    workflow: handles,
+                    status,
+                  });
+                }
                 continue;
               }
               const result = claudeSubagentResultText(output);

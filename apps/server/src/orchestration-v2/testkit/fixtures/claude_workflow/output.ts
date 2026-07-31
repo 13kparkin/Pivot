@@ -23,10 +23,31 @@ export function assertClaudeWorkflowOutput(
   const coordinator = projection.subagents.find((subagent) => subagent.kind === "workflow");
   assert.isDefined(coordinator, "the workflow must reach the projection as a coordinator");
   assert.deepEqual(coordinator?.role, { name: "workflow-coordinator", source: "app_default" });
-  assert.deepEqual(coordinator?.workflow?.phases, [
-    { index: 0, title: "Research" },
-    { index: 1, title: "Implement" },
-  ]);
+  // Phases arrive on progress snapshots; run handles arrive on the launch
+  // ACK; the name arrives on task_started. All three must merge rather than
+  // the later write clobbering the earlier ones. The fixture's hostile
+  // `javascript:` sessionUrl must be dropped by the scheme filter, not
+  // carried into the projection.
+  assert.deepEqual(coordinator?.workflow, {
+    phases: [
+      { index: 0, title: "Research" },
+      { index: 1, title: "Implement" },
+    ],
+    name: "research-implement",
+    runId: "wf_run_fixture01",
+    scriptPath: "/tmp/claude-replay-claude_workflow/.claude/workflows/research-implement.mjs",
+    transcriptDir:
+      "/tmp/claude-replay-claude_workflow/.claude/projects/-tmp-claude-replay/wf_run_fixture01",
+  });
+  // The Workflow tool_use projects as the coordinator row only; registering
+  // it as a tool call too would render the run twice in the timeline.
+  assert.lengthOf(
+    projection.turnItems.filter(
+      (item) => item.type === "dynamic_tool" && item.toolName === "Workflow",
+    ),
+    0,
+    "the Workflow tool_use must not double-render as a tool call",
+  );
 
   const members = projection.subagents
     .filter((subagent) => subagent.kind === "workflow_agent")

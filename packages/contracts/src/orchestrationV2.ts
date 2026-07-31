@@ -566,6 +566,17 @@ export const OrchestrationV2Subagent = Schema.Struct({
   workflow: Schema.NullOr(
     Schema.Struct({
       phases: Schema.Array(OrchestrationV2WorkflowPhase),
+      // Run handles from the Workflow tool result. `scriptPath` and
+      // `transcriptDir` are server-local paths clients echo back to
+      // inspection RPCs, which re-validate them before touching disk.
+      // `sessionUrl` replaces the local handles for remote runs and is
+      // scheme-restricted to http(s) at the adapter.
+      name: Schema.optional(TrimmedNonEmptyString),
+      runId: Schema.optional(TrimmedNonEmptyString),
+      scriptPath: Schema.optional(TrimmedNonEmptyString),
+      transcriptDir: Schema.optional(TrimmedNonEmptyString),
+      sessionUrl: Schema.optional(TrimmedNonEmptyString),
+      warning: Schema.optional(TrimmedNonEmptyString),
     }),
   ).pipe(Schema.withDecodingDefault(Effect.succeed(null))),
   workflowMembership: Schema.NullOr(
