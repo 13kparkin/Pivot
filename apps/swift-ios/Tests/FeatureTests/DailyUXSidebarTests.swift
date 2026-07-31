@@ -337,6 +337,25 @@ struct DailyUXSidebarTests {
     }
 
     @Test
+    func largeWorkingCollectionKeepsStableOrderWithoutParentTimerRefresh() {
+        let threads = (0..<5_000).map { offset in
+            thread(
+                id: "thread-\(offset)",
+                created: -Double(offset),
+                updated: -Double(offset),
+                state: .working
+            )
+        }
+
+        let index = makeIndex(threads)
+
+        #expect(index.active.count == threads.count)
+        #expect(index.active.prefix(3).map(\.id) == ["thread-0", "thread-1", "thread-2"])
+        #expect(index.active.last?.id == "thread-4999")
+        #expect(DailyUXSidebarRefresh.nextBoundary(for: threads, after: now) == nil)
+    }
+
+    @Test
     func compactRelativeAgeClampsFutureDatesAndUsesStableUnits() {
         #expect(
             SidebarRelativeAge.compact(
