@@ -200,7 +200,7 @@ public struct SettingsView: View {
 
     private var aboutSection: some View {
         Section("About") {
-            LabeledContent("App", value: "T3 Code (Native)")
+            LabeledContent("App", value: "T3 Code (SwiftUI)")
             LabeledContent("Platform", value: "Native SwiftUI")
             Link("Open source", destination: URL(string: "https://github.com/pingdotgg/t3code")!)
         }
