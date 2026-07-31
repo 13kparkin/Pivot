@@ -24,7 +24,7 @@ struct FeatureComposerView: View {
     private let onRuntimeModeChange: ((FeatureRuntimeMode) -> Void)?
     private let onInteractionModeChange: ((FeatureInteractionMode) -> Void)?
     private let onApprovalDecision: ((String, FeatureApprovalDecision) -> Void)?
-    private let onUserInputSubmit: ((String, [String: String]) -> Void)?
+    private let onUserInputSubmit: ((String, [String: FeatureInputAnswer]) -> Void)?
 
     init(
         text: Binding<String>,
@@ -47,7 +47,7 @@ struct FeatureComposerView: View {
         pendingUserInputs: [FeatureUserInput] = [],
         isResolvingRequest: Bool = false,
         onApprovalDecision: ((String, FeatureApprovalDecision) -> Void)? = nil,
-        onUserInputSubmit: ((String, [String: String]) -> Void)? = nil
+        onUserInputSubmit: ((String, [String: FeatureInputAnswer]) -> Void)? = nil
     ) {
         _text = text
         _selection = selection

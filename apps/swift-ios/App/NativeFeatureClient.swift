@@ -1,5 +1,16 @@
 import Foundation
 
+extension FeatureInputAnswer {
+    var jsonValue: JSONValue {
+        switch self {
+        case let .text(value):
+            .string(value)
+        case let .selections(values):
+            .array(values.map(JSONValue.string))
+        }
+    }
+}
+
 /// Composes the transport-focused Core layer with the UI-focused Features layer.
 @MainActor
 final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging {
@@ -654,7 +665,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging {
         try await refreshThread(id: threadID, client: client)
     }
 
-    func resolveUserInput(id: String, answers: [String: String]) async throws {
+    func resolveUserInput(id: String, answers: [String: FeatureInputAnswer]) async throws {
         guard let threadID = inputThreadIDs[id] else {
             throw NativeFeatureClientError.inputRequestNotFound
         }
@@ -662,7 +673,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging {
         _ = try await client.respondToUserInput(
             threadID: threadID,
             requestID: id,
-            answers: answers.mapValues(JSONValue.string)
+            answers: answers.mapValues(\.jsonValue)
         )
         try await refreshThread(id: threadID, client: client)
     }

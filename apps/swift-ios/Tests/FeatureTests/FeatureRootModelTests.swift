@@ -174,6 +174,30 @@ struct FeatureRootModelTests {
         #expect(updated.snoozedAt != oldSnooze)
         #expect(updated.snoozedAt! > updated.attentionAt!)
     }
+
+    @Test
+    func testResolveUserInputForwardsTypedAnswersAndClearsTheRequest() async {
+        let client = FeatureClientStub()
+        let thread = FeatureThread(id: "thread-1", projectID: "project-1", title: "Thread")
+        let request = FeatureUserInput(
+            id: "request-1",
+            threadID: thread.id,
+            questions: []
+        )
+        client.threadDetail = FeatureThreadDetail(thread: thread, userInputs: [request])
+        let model = FeatureRootModel(client: client)
+        _ = await model.detail(for: thread.id)
+
+        let answers: [String: FeatureInputAnswer] = [
+            "scope": .selections(["Server", "Web"]),
+            "note": .text("Ship it"),
+        ]
+        await model.resolveUserInput(request.id, answers: answers)
+
+        #expect(client.resolvedInputID == request.id)
+        #expect(client.resolvedInputAnswers == answers)
+        #expect(model.details[thread.id]?.userInputs.isEmpty == true)
+    }
 }
 
 @MainActor
@@ -190,6 +214,8 @@ private final class FeatureClientStub: FeatureClient {
     var createThreadCallCount = 0
     var sendMessageCallCount = 0
     var loadThreadError: (any Error)?
+    var resolvedInputID: String?
+    var resolvedInputAnswers: [String: FeatureInputAnswer]?
 
     func initialSnapshot() async throws -> FeatureSnapshot {
         if pairEndpoint != nil, let snapshotAfterPair {
@@ -246,5 +272,12 @@ private final class FeatureClientStub: FeatureClient {
 
     func cancelTurn(threadID: String) async throws {}
     func resolveApproval(id: String, decision: FeatureApprovalDecision) async throws {}
+    func resolveUserInput(
+        id: String,
+        answers: [String: FeatureInputAnswer]
+    ) async throws {
+        resolvedInputID = id
+        resolvedInputAnswers = answers
+    }
     func saveSettings(_ settings: FeatureSettings) async throws {}
 }

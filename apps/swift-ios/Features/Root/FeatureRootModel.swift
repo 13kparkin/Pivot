@@ -295,7 +295,7 @@ public final class FeatureRootModel {
         }
     }
 
-    public func resolveUserInput(_ id: String, answers: [String: String]) async {
+    public func resolveUserInput(_ id: String, answers: [String: FeatureInputAnswer]) async {
         let environment = currentEnvironmentIdentity
         await perform {
             try await client.resolveUserInput(id: id, answers: answers)
@@ -304,6 +304,14 @@ public final class FeatureRootModel {
                 details[key]?.userInputs.removeAll { $0.id == id }
             }
         }
+    }
+
+    /// Convenience for callers that only submit free-form or single-select text.
+    public func resolveUserInput(_ id: String, answers: [String: String]) async {
+        await resolveUserInput(
+            id,
+            answers: answers.mapValues(FeatureInputAnswer.text)
+        )
     }
 
     public func saveSettings(_ settings: FeatureSettings) async {

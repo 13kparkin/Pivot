@@ -40,7 +40,7 @@ public protocol FeatureClient: AnyObject {
     ) async throws
     func cancelTurn(threadID: String) async throws
     func resolveApproval(id: String, decision: FeatureApprovalDecision) async throws
-    func resolveUserInput(id: String, answers: [String: String]) async throws
+    func resolveUserInput(id: String, answers: [String: FeatureInputAnswer]) async throws
 
     func saveSettings(_ settings: FeatureSettings) async throws
 
@@ -72,7 +72,16 @@ public extension FeatureClient {
     func removeEnvironment(id: String) async throws {}
     func disconnect() async {}
     func addProject(path: String) async throws {}
-    func resolveUserInput(id: String, answers: [String: String]) async throws {}
+    func resolveUserInput(id: String, answers: [String: FeatureInputAnswer]) async throws {}
+
+    /// Keeps simple text-only callers source-compatible while the typed API
+    /// preserves multi-select answers as arrays.
+    func resolveUserInput(id: String, answers: [String: String]) async throws {
+        try await resolveUserInput(
+            id: id,
+            answers: answers.mapValues(FeatureInputAnswer.text)
+        )
+    }
     func setThreadSettled(id: String, settled: Bool) async throws {}
     func setThreadSnoozed(id: String, until: Date?) async throws {}
     func setRuntimeMode(id: String, mode: FeatureRuntimeMode) async throws {}

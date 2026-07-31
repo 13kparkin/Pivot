@@ -133,9 +133,9 @@ struct FeatureComposerApprovalPanel: View {
 struct FeatureComposerUserInputPanel: View {
     let input: FeatureUserInput
     let isResponding: Bool
-    let onSubmit: ([String: String]) -> Void
+    let onSubmit: ([String: FeatureInputAnswer]) -> Void
 
-    @State private var answers: [String: String] = [:]
+    @State private var answers: [String: FeatureInputAnswer] = [:]
     @State private var questionIndex = 0
 
     var body: some View {
@@ -163,6 +163,13 @@ struct FeatureComposerUserInputPanel: View {
                         .foregroundStyle(T3Colors.textPrimary)
                         .fixedSize(horizontal: false, vertical: true)
                         .padding(.top, 5)
+
+                    if question.allowsMultiple {
+                        Text("Select one or more options")
+                            .font(.caption)
+                            .foregroundStyle(T3Colors.textTertiary)
+                            .padding(.top, 4)
+                    }
 
                 }
                 .padding(.horizontal, 15)
@@ -258,8 +265,13 @@ struct FeatureComposerUserInputPanel: View {
         return normalizedAnswer(for: activeQuestion.id) != nil
     }
 
-    private var allQuestionsAnswered: Bool {
-        input.questions.allSatisfy { normalizedAnswer(for: $0.id) != nil }
+    private var normalizedAnswers: [String: FeatureInputAnswer]? {
+        var result: [String: FeatureInputAnswer] = [:]
+        for question in input.questions {
+            guard let answer = normalizedAnswer(for: question.id) else { return nil }
+            result[question.id] = answer
+        }
+        return result
     }
 
     private func optionButton(
@@ -267,7 +279,7 @@ struct FeatureComposerUserInputPanel: View {
         number: Int,
         question: FeatureInputQuestion
     ) -> some View {
-        let isSelected = answers[question.id] == option.label
+        let isSelected = isOptionSelected(option.label, for: question)
 
         return Button {
             select(option.label, for: question)
@@ -323,13 +335,20 @@ struct FeatureComposerUserInputPanel: View {
 
     private func answerBinding(for questionID: String) -> Binding<String> {
         Binding(
-            get: { answers[questionID] ?? "" },
-            set: { answers[questionID] = $0 }
+            get: {
+                guard case let .text(value)? = answers[questionID] else { return "" }
+                return value
+            },
+            set: { answers[questionID] = .text($0) }
         )
     }
 
     private func select(_ label: String, for question: FeatureInputQuestion) {
-        answers[question.id] = label
+        answers[question.id] = (answers[question.id] ?? .selections([]))
+            .togglingOption(label, allowsMultiple: question.allowsMultiple)
+        if question.allowsMultiple {
+            return
+        }
         guard !isLastQuestion else { return }
         Task { @MainActor in
             await Task.yield()
@@ -341,8 +360,8 @@ struct FeatureComposerUserInputPanel: View {
         guard canAdvance else { return }
         if !isLastQuestion {
             questionIndex += 1
-        } else if allQuestionsAnswered {
-            onSubmit(answers)
+        } else if let normalizedAnswers {
+            onSubmit(normalizedAnswers)
         } else if let unanswered = input.questions.firstIndex(where: {
             normalizedAnswer(for: $0.id) == nil
         }) {
@@ -350,11 +369,18 @@ struct FeatureComposerUserInputPanel: View {
         }
     }
 
-    private func normalizedAnswer(for questionID: String) -> String? {
-        guard let value = answers[questionID]?.trimmingCharacters(in: .whitespacesAndNewlines),
-              !value.isEmpty else {
-            return nil
+    private func normalizedAnswer(for questionID: String) -> FeatureInputAnswer? {
+        answers[questionID]?.normalized
+    }
+
+    private func isOptionSelected(_ label: String, for question: FeatureInputQuestion) -> Bool {
+        switch answers[question.id] {
+        case let .text(value):
+            return !question.allowsMultiple && value == label
+        case let .selections(values):
+            return values.contains(label)
+        case nil:
+            return false
         }
-        return value
     }
 }

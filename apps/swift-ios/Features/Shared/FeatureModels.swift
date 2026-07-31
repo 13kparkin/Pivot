@@ -298,6 +298,67 @@ public struct FeatureInputOption: Sendable, Equatable, Hashable, Codable {
     }
 }
 
+/// A provider answer is either free-form/single-select text or the selected
+/// labels for a multi-select question. Its Codable shape intentionally matches
+/// the provider wire contract: a JSON string or an array of JSON strings.
+public enum FeatureInputAnswer: Sendable, Equatable, Hashable, Codable {
+    case text(String)
+    case selections([String])
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        if let value = try? container.decode(String.self) {
+            self = .text(value)
+        } else {
+            self = try .selections(container.decode([String].self))
+        }
+    }
+
+    public func encode(to encoder: any Encoder) throws {
+        var container = encoder.singleValueContainer()
+        switch self {
+        case let .text(value):
+            try container.encode(value)
+        case let .selections(values):
+            try container.encode(values)
+        }
+    }
+}
+
+extension FeatureInputAnswer {
+    var normalized: FeatureInputAnswer? {
+        switch self {
+        case let .text(value):
+            let normalized = value.trimmingCharacters(in: .whitespacesAndNewlines)
+            return normalized.isEmpty ? nil : .text(normalized)
+        case let .selections(values):
+            var seen: Set<String> = []
+            let normalized = values.compactMap { value -> String? in
+                let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !trimmed.isEmpty, seen.insert(trimmed).inserted else { return nil }
+                return trimmed
+            }
+            return normalized.isEmpty ? nil : .selections(normalized)
+        }
+    }
+
+    func togglingOption(_ label: String, allowsMultiple: Bool) -> FeatureInputAnswer {
+        guard allowsMultiple else { return .text(label) }
+
+        let current: [String]
+        if case let .selections(values) = self {
+            current = values
+        } else {
+            current = []
+        }
+
+        if current.contains(label) {
+            return .selections(current.filter { $0 != label })
+        }
+        return .selections(current + [label])
+    }
+}
+
 public struct FeatureInputQuestion: Identifiable, Sendable, Equatable, Hashable, Codable {
     public let id: String
     public var header: String
