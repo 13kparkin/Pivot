@@ -121,6 +121,7 @@ public struct NewThreadView: View {
                         }
                 }
                 .buttonStyle(.plain)
+                .padding(.leading, 5)
                 Text("?")
             }
         }
