@@ -1,7 +1,7 @@
 import Foundation
 
 public struct FeatureConnection: Sendable, Equatable, Codable {
-    public enum State: String, Sendable, Codable {
+    public enum State: String, Sendable, Hashable, Codable {
         case disconnected
         case connecting
         case connected
@@ -31,12 +31,25 @@ public struct FeatureEnvironment: Identifiable, Sendable, Equatable, Hashable, C
     public var name: String
     public var endpoint: String
     public var isActive: Bool
+    /// Reachability from the latest aggregate refresh. `nil` means the client
+    /// has not probed this saved environment yet.
+    public var connectionState: FeatureConnection.State?
+    public var connectionDetail: String?
 
-    public init(id: String, name: String, endpoint: String, isActive: Bool = false) {
+    public init(
+        id: String,
+        name: String,
+        endpoint: String,
+        isActive: Bool = false,
+        connectionState: FeatureConnection.State? = nil,
+        connectionDetail: String? = nil
+    ) {
         self.id = id
         self.name = name
         self.endpoint = endpoint
         self.isActive = isActive
+        self.connectionState = connectionState
+        self.connectionDetail = connectionDetail
     }
 }
 

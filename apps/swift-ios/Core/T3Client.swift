@@ -976,7 +976,9 @@ public actor EnvironmentRuntime {
         try await environmentStore.remove(id: id)
     }
 
-    private func client(for environment: Environment) async -> T3Client {
+    /// Returns the cached client for a saved environment without changing the
+    /// environment used for new projects and threads.
+    public func client(for environment: Environment) async -> T3Client {
         if let existing = clients[environment.id] {
             if existing.environment == environment {
                 return existing

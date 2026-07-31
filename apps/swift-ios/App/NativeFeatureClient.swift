@@ -11,10 +11,16 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging {
     private var activeEnvironment: Environment?
     private var client: T3Client?
     private var latestShell: OrchestrationShellSnapshot?
+    private var environmentClients: [String: T3Client] = [:]
+    private var shellsByEnvironmentID: [String: OrchestrationShellSnapshot] = [:]
+    private var archivedThreadsByEnvironmentID: [String: [FeatureThread]] = [:]
+    private var threadEnvironmentIDs: [String: String] = [:]
+    private var environmentConnectionStates: [String: FeatureConnection.State] = [:]
+    private var environmentConnectionDetails: [String: String] = [:]
     private var latestServerConfig: ServerConfigSnapshot?
-    private var archivedThreads: [FeatureThread] = []
     private var latestSnapshot: FeatureSnapshot?
     private var activeThreadID: String?
+    private var activeThreadEnvironmentID: String?
     private var latestDetails: [String: FeatureThreadDetail] = [:]
     private var attachmentURLs: [AttachmentCacheKey: CachedAttachmentURL] = [:]
     private var pendingBootstrapSubmission: PendingBootstrapSubmission?
@@ -32,6 +38,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging {
     private var pollingTask: Task<Void, Never>?
     private var fallbackPollingTask: Task<Void, Never>?
     private var configurationTask: Task<Void, Never>?
+    private var aggregateRefreshTask: Task<Void, Never>?
     private var archivedRefreshTask: Task<Void, Never>?
     private var detailRefreshTask: Task<Void, Never>?
     private var detailRefreshPending = false
@@ -54,6 +61,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging {
         pollingTask?.cancel()
         fallbackPollingTask?.cancel()
         configurationTask?.cancel()
+        aggregateRefreshTask?.cancel()
         archivedRefreshTask?.cancel()
         detailRefreshTask?.cancel()
         attachmentHydrationTasks.values.forEach { $0.task.cancel() }
@@ -72,34 +80,27 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging {
 
         await adoptEnvironment(environment, client: activeClient)
         let generation = environmentGeneration
-        let shell: OrchestrationShellSnapshot
-        do {
-            shell = try await activeClient.shellSnapshot()
-        } catch {
-            guard isCurrentSession(client: activeClient, generation: generation) else {
-                throw CancellationError()
-            }
-            await clearActiveEnvironment()
-            let snapshot = disconnectedSnapshot(
-                environments: environments,
-                detail: "That server is currently unreachable."
-            )
-            latestSnapshot = snapshot
-            return snapshot
-        }
+        let loads = await loadEnvironmentShells(environments)
         guard isCurrentSession(client: activeClient, generation: generation) else {
             throw CancellationError()
         }
-        latestShell = shell
-        archivedThreads = []
+        reconcileEnvironmentLoads(loads, savedEnvironments: environments)
+        latestShell = shellsByEnvironmentID[environment.id]
         startPolling(activeClient)
-        scheduleArchivedRefresh(client: activeClient)
+        let activeIsReachable = loads.contains {
+            $0.environment.id == environment.id && $0.shell != nil
+        }
+        if activeIsReachable {
+            scheduleArchivedRefresh(client: activeClient, environment: environment)
+        }
         let snapshot = makeSnapshot(
-            shell: shell,
             environments: environments,
-            activeEnvironment: environment
+            activeEnvironment: environment,
+            connectionState: activeIsReachable ? .connected : .disconnected,
+            connectionDetail: activeIsReachable ? nil : "That server is currently unreachable."
         )
         latestSnapshot = snapshot
+        startAggregateRefresh(activeClient)
         return snapshot
     }
 
@@ -143,18 +144,28 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging {
         _ environment: Environment,
         client newClient: T3Client
     ) async {
+        if activeEnvironment?.id == environment.id, client === newClient {
+            activeEnvironment = environment
+            environmentClients[environment.id] = newClient
+            latestShell = shellsByEnvironmentID[environment.id]
+            return
+        }
         let previousClient = client
         pollingTask?.cancel()
         fallbackPollingTask?.cancel()
         configurationTask?.cancel()
+        aggregateRefreshTask?.cancel()
         archivedRefreshTask?.cancel()
         pollingTask = nil
         fallbackPollingTask = nil
         configurationTask = nil
+        aggregateRefreshTask = nil
         archivedRefreshTask = nil
-        clearEnvironmentState()
+        clearEnvironmentState(preserveEnvironmentSnapshots: true)
         activeEnvironment = environment
         client = newClient
+        environmentClients[environment.id] = newClient
+        latestShell = shellsByEnvironmentID[environment.id]
         if let previousClient, previousClient !== newClient {
             await previousClient.disconnect()
         }
@@ -165,10 +176,12 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging {
         pollingTask?.cancel()
         fallbackPollingTask?.cancel()
         configurationTask?.cancel()
+        aggregateRefreshTask?.cancel()
         archivedRefreshTask?.cancel()
         pollingTask = nil
         fallbackPollingTask = nil
         configurationTask = nil
+        aggregateRefreshTask = nil
         archivedRefreshTask = nil
         clearEnvironmentState()
         client = nil
@@ -178,7 +191,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging {
         }
     }
 
-    private func clearEnvironmentState() {
+    private func clearEnvironmentState(preserveEnvironmentSnapshots: Bool = false) {
         environmentGeneration &+= 1
         resetDetailRefresh()
         attachmentHydrationTasks.values.forEach { $0.task.cancel() }
@@ -188,9 +201,17 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging {
         latestShell = nil
         lastShellEventAt = nil
         latestServerConfig = nil
-        archivedThreads.removeAll()
+        if !preserveEnvironmentSnapshots {
+            environmentClients.removeAll()
+            shellsByEnvironmentID.removeAll()
+            archivedThreadsByEnvironmentID.removeAll()
+            threadEnvironmentIDs.removeAll()
+            environmentConnectionStates.removeAll()
+            environmentConnectionDetails.removeAll()
+        }
         latestSnapshot = nil
         activeThreadID = nil
+        activeThreadEnvironmentID = nil
         latestDetails.removeAll()
         attachmentURLs.removeAll()
         pendingBootstrapSubmission = nil
@@ -207,6 +228,15 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging {
             return false
         }
         return currentClient === client
+    }
+
+    private func isKnownClient(
+        _ client: T3Client,
+        environmentID: String,
+        generation: Int
+    ) -> Bool {
+        generation == environmentGeneration
+            && environmentClients[environmentID] === client
     }
 
     func addProject(path: String) async throws {
@@ -246,13 +276,17 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging {
         guard isCurrentSession(client: client, generation: generation) else {
             throw CancellationError()
         }
+        guard let environment = activeEnvironment else {
+            throw NativeFeatureClientError.notConnected
+        }
         latestShell = shell
+        shellsByEnvironmentID[environment.id] = shell
         if let created = shell.threads.first(where: { $0.id == threadID }) {
-            let mapped = mapThread(created)
+            let mapped = mapThread(created, environment: environment)
             await emitSnapshot(shell)
             return mapped
         }
-        await emitSnapshot(shell)
+        await emitSnapshot(shell, environment: environment)
         return FeatureThread(
             id: threadID,
             projectID: projectID,
@@ -346,10 +380,14 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging {
             guard isCurrentSession(client: client, generation: generation) else {
                 throw CancellationError()
             }
+            guard let environment = activeEnvironment else {
+                throw NativeFeatureClientError.notConnected
+            }
             latestShell = shell
+            shellsByEnvironmentID[environment.id] = shell
             await emitSnapshot(shell)
             if let created = shell.threads.first(where: { $0.id == pending.threadID }) {
-                return mapThread(created)
+                return mapThread(created, environment: environment)
             }
         }
         return FeatureThread(
@@ -416,31 +454,31 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging {
     }
 
     func renameThread(id: String, title: String) async throws {
-        let client = try requireClient()
+        let client = try requireClient(forThreadID: id)
         _ = try await client.rename(threadID: id, title: title)
         try await refresh(client: client)
     }
 
     func setThreadArchived(id: String, archived: Bool) async throws {
-        let client = try requireClient()
+        let client = try requireClient(forThreadID: id)
         _ = try await client.archive(threadID: id, archived: archived)
         try await refresh(client: client, includeArchived: true)
     }
 
     func setThreadSettled(id: String, settled: Bool) async throws {
-        let client = try requireClient()
+        let client = try requireClient(forThreadID: id)
         _ = try await client.settle(threadID: id, settled: settled)
         try await refresh(client: client)
     }
 
     func setThreadSnoozed(id: String, until: Date?) async throws {
-        let client = try requireClient()
+        let client = try requireClient(forThreadID: id)
         _ = try await client.snooze(threadID: id, until: until)
         try await refresh(client: client)
     }
 
     func setRuntimeMode(id: String, mode: FeatureRuntimeMode) async throws {
-        let client = try requireClient()
+        let client = try requireClient(forThreadID: id)
         _ = try await client.setRuntimeMode(threadID: id, mode: coreRuntimeMode(mode))
         try await refresh(client: client)
         if activeThreadID == id {
@@ -449,7 +487,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging {
     }
 
     func setInteractionMode(id: String, mode: FeatureInteractionMode) async throws {
-        let client = try requireClient()
+        let client = try requireClient(forThreadID: id)
         _ = try await client.setInteractionMode(threadID: id, mode: coreInteractionMode(mode))
         try await refresh(client: client)
         if activeThreadID == id {
@@ -458,28 +496,36 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging {
     }
 
     func deleteThread(id: String) async throws {
-        let client = try requireClient()
+        let client = try requireClient(forThreadID: id)
         _ = try await client.delete(threadID: id)
         if activeThreadID == id {
             resetDetailRefresh()
             activeThreadID = nil
+            activeThreadEnvironmentID = nil
         }
         latestDetails[id] = nil
         try await refresh(client: client, includeArchived: true)
     }
 
     func loadThread(id: String) async throws -> FeatureThreadDetail {
-        let client = try requireClient()
+        let client = try requireClient(forThreadID: id)
+        let environment = client.environment
         let generation = environmentGeneration
         resetDetailRefresh()
         activeThreadID = id
+        activeThreadEnvironmentID = environment.id
         let snapshot = try await client.threadSnapshot(id: id)
-        guard isCurrentSession(client: client, generation: generation) else {
+        guard isKnownClient(client, environmentID: environment.id, generation: generation) else {
             throw CancellationError()
         }
-        let detail = mapDetail(snapshot.thread)
+        let detail = mapDetail(snapshot.thread, environment: environment)
         latestDetails[id] = detail
-        scheduleAttachmentHydration(in: detail, threadID: id, client: client)
+        scheduleAttachmentHydration(
+            in: detail,
+            threadID: id,
+            client: client,
+            environmentID: environment.id
+        )
         return detail
     }
 
@@ -502,9 +548,11 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging {
         selection: FeatureSelection?,
         attachments: [FeatureUploadAttachment]
     ) async throws {
-        let client = try requireClient()
+        let client = try requireClient(forThreadID: threadID)
+        let environmentID = client.environment.id
         let generation = environmentGeneration
-        guard let shellThread = latestShell?.threads.first(where: { $0.id == threadID }) else {
+        guard let shellThread = shellsByEnvironmentID[environmentID]?.threads
+            .first(where: { $0.id == threadID }) else {
             throw NativeFeatureClientError.threadNotFound
         }
         let model = selection.map(coreModelSelection)
@@ -541,7 +589,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging {
                 createdAt: pending.identity.createdAt
             )
         } catch {
-            guard isCurrentSession(client: client, generation: generation) else {
+            guard isKnownClient(client, environmentID: environmentID, generation: generation) else {
                 throw CancellationError()
             }
             guard await messageWasCommitted(
@@ -554,7 +602,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging {
                 throw error
             }
         }
-        guard isCurrentSession(client: client, generation: generation) else {
+        guard isKnownClient(client, environmentID: environmentID, generation: generation) else {
             throw CancellationError()
         }
         if pendingTurnSubmissions[threadID]?.identity == pending.identity {
@@ -579,8 +627,8 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging {
     }
 
     func cancelTurn(threadID: String) async throws {
-        let client = try requireClient()
-        let turnID = latestShell?.threads
+        let client = try requireClient(forThreadID: threadID)
+        let turnID = shellsByEnvironmentID[client.environment.id]?.threads
             .first(where: { $0.id == threadID })?
             .latestTurn?
             .turnId
@@ -589,10 +637,10 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging {
     }
 
     func resolveApproval(id: String, decision: FeatureApprovalDecision) async throws {
-        let client = try requireClient()
         guard let threadID = approvalThreadIDs[id] else {
             throw NativeFeatureClientError.approvalNotFound
         }
+        let client = try requireClient(forThreadID: threadID)
         let wireDecision = switch decision {
         case .allowOnce: "accept"
         case .allowForSession: "acceptForSession"
@@ -607,10 +655,10 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging {
     }
 
     func resolveUserInput(id: String, answers: [String: String]) async throws {
-        let client = try requireClient()
         guard let threadID = inputThreadIDs[id] else {
             throw NativeFeatureClientError.inputRequestNotFound
         }
+        let client = try requireClient(forThreadID: threadID)
         _ = try await client.respondToUserInput(
             threadID: threadID,
             requestID: id,
@@ -659,14 +707,14 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging {
     }
 
     func listFiles(threadID: String, path: String?) async throws -> [FeatureFileEntry] {
-        let client = try requireClient()
+        let client = try requireClient(forThreadID: threadID)
         let context = try workspaceContext(threadID: threadID)
         let result = try await client.listProjectEntries(cwd: context.cwd)
         return NativeWorkspaceMapper.files(result.entries, directory: path)
     }
 
     func readFile(threadID: String, path: String) async throws -> FeatureFileContent {
-        let client = try requireClient()
+        let client = try requireClient(forThreadID: threadID)
         let context = try workspaceContext(threadID: threadID)
         let result = try await client.readProjectFile(
             cwd: context.cwd,
@@ -682,14 +730,14 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging {
     }
 
     func loadReview(threadID: String) async throws -> FeatureReview {
-        let client = try requireClient()
+        let client = try requireClient(forThreadID: threadID)
         let context = try workspaceContext(threadID: threadID)
         let preview = try await client.reviewDiffPreview(cwd: context.cwd)
         return NativeWorkspaceMapper.review(preview)
     }
 
     func sourceControlStatus(threadID: String) async throws -> FeatureSourceControlStatus {
-        let client = try requireClient()
+        let client = try requireClient(forThreadID: threadID)
         let context = try workspaceContext(threadID: threadID)
         return NativeWorkspaceMapper.sourceControl(
             try await client.refreshVCSStatus(cwd: context.cwd)
@@ -701,7 +749,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging {
         action: FeatureSourceControlAction,
         message: String?
     ) async throws -> FeatureSourceControlStatus {
-        let client = try requireClient()
+        let client = try requireClient(forThreadID: threadID)
         let context = try workspaceContext(threadID: threadID)
 
         if action == .pull {
@@ -736,7 +784,8 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging {
     }
 
     func terminalEvents(threadID: String) -> AsyncStream<FeatureTerminalSnapshot> {
-        guard let client else {
+        guard let environmentID = threadEnvironmentIDs[threadID],
+              let client = environmentClients[environmentID] else {
             return AsyncStream { continuation in continuation.finish() }
         }
         let generation = environmentGeneration
@@ -751,8 +800,9 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging {
                     for try await event in await client.terminalEvents() {
                         guard !Task.isCancelled else { break }
                         guard let self else { break }
-                        guard self.isCurrentSession(
-                            client: client,
+                        guard self.isKnownClient(
+                            client,
+                            environmentID: environmentID,
                             generation: generation
                         ) else {
                             break
@@ -774,8 +824,9 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging {
                         continuation.finish()
                         return
                     }
-                    guard self.isCurrentSession(
-                        client: client,
+                    guard self.isKnownClient(
+                        client,
+                        environmentID: environmentID,
                         generation: generation
                     ) else {
                         continuation.finish()
@@ -803,7 +854,8 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging {
     }
 
     func openTerminal(threadID: String, columns: Int, rows: Int) async throws {
-        let client = try requireClient()
+        let client = try requireClient(forThreadID: threadID)
+        let environmentID = client.environment.id
         let generation = environmentGeneration
         let context = try workspaceContext(threadID: threadID)
         let terminalID = terminalIDs[threadID] ?? UUID().uuidString
@@ -816,7 +868,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging {
             columns: columns,
             rows: rows
         )
-        guard isCurrentSession(client: client, generation: generation) else {
+        guard isKnownClient(client, environmentID: environmentID, generation: generation) else {
             throw CancellationError()
         }
         let mapped = NativeWorkspaceMapper.terminal(snapshot)
@@ -825,7 +877,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging {
     }
 
     func writeTerminal(threadID: String, data: String) async throws {
-        let client = try requireClient()
+        let client = try requireClient(forThreadID: threadID)
         let terminalID = try requireTerminalID(threadID: threadID)
         try await client.writeTerminal(
             threadID: threadID,
@@ -835,7 +887,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging {
     }
 
     func resizeTerminal(threadID: String, columns: Int, rows: Int) async throws {
-        let client = try requireClient()
+        let client = try requireClient(forThreadID: threadID)
         let terminalID = try requireTerminalID(threadID: threadID)
         try await client.resizeTerminal(
             threadID: threadID,
@@ -846,11 +898,12 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging {
     }
 
     func closeTerminal(threadID: String) async throws {
-        let client = try requireClient()
+        let client = try requireClient(forThreadID: threadID)
+        let environmentID = client.environment.id
         let generation = environmentGeneration
         let terminalID = try requireTerminalID(threadID: threadID)
         try await client.closeTerminal(threadID: threadID, terminalID: terminalID)
-        guard isCurrentSession(client: client, generation: generation) else {
+        guard isKnownClient(client, environmentID: environmentID, generation: generation) else {
             throw CancellationError()
         }
         terminalIDs[threadID] = nil
@@ -861,6 +914,14 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging {
 
     private func requireClient() throws -> T3Client {
         guard let client else { throw NativeFeatureClientError.notConnected }
+        return client
+    }
+
+    private func requireClient(forThreadID threadID: String) throws -> T3Client {
+        guard let environmentID = threadEnvironmentIDs[threadID],
+              let client = environmentClients[environmentID] else {
+            throw NativeFeatureClientError.threadNotFound
+        }
         return client
     }
 
@@ -875,8 +936,10 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging {
         cwd: String,
         worktreePath: String?
     ) {
-        guard let thread = latestShell?.threads.first(where: { $0.id == threadID }),
-              let project = latestShell?.projects.first(where: { $0.id == thread.projectId }) else {
+        guard let environmentID = threadEnvironmentIDs[threadID],
+              let shell = shellsByEnvironmentID[environmentID],
+              let thread = shell.threads.first(where: { $0.id == threadID }),
+              let project = shell.projects.first(where: { $0.id == thread.projectId }) else {
             throw NativeFeatureClientError.workspaceNotFound
         }
         return (
@@ -1061,6 +1124,60 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging {
         }
     }
 
+    /// Non-active environments do not hold WebSocket subscriptions. A quiet
+    /// HTTP refresh keeps their home rows and reachability useful without
+    /// multiplying live streams or creating a high-frequency battery cost.
+    private func startAggregateRefresh(_ activeClient: T3Client) {
+        aggregateRefreshTask?.cancel()
+        let generation = environmentGeneration
+        aggregateRefreshTask = Task { [weak self] in
+            while !Task.isCancelled {
+                do {
+                    try await Task.sleep(for: .seconds(20))
+                } catch {
+                    return
+                }
+                guard let self,
+                      self.isCurrentSession(
+                          client: activeClient,
+                          generation: generation
+                      ),
+                      let activeEnvironment = self.activeEnvironment,
+                      let environments = try? await self.runtime.environments() else {
+                    return
+                }
+                let passiveEnvironments = environments.filter {
+                    $0.id != activeEnvironment.id
+                }
+                guard !passiveEnvironments.isEmpty else { continue }
+                let loads = await self.loadEnvironmentShells(passiveEnvironments)
+                guard !Task.isCancelled,
+                      self.isCurrentSession(
+                          client: activeClient,
+                          generation: generation
+                      ) else {
+                    return
+                }
+                self.reconcileEnvironmentLoads(loads, savedEnvironments: environments)
+                let currentConnection = self.latestSnapshot?.connection
+                    ?? FeatureConnection(
+                        state: .disconnected,
+                        environmentName: activeEnvironment.label,
+                        endpoint: activeEnvironment.httpBaseURL.absoluteString
+                    )
+                let snapshot = self.makeSnapshot(
+                    environments: environments,
+                    activeEnvironment: activeEnvironment,
+                    connectionState: currentConnection.state,
+                    connectionDetail: currentConnection.detail
+                )
+                guard self.latestSnapshot != snapshot else { continue }
+                self.latestSnapshot = snapshot
+                self.continuation.yield(.snapshot(snapshot))
+            }
+        }
+    }
+
     private func consume(
         shell: OrchestrationShellSnapshot,
         client: T3Client,
@@ -1118,7 +1235,9 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging {
             projects.removeAll { $0.id == projectID }
         case let .threadUpserted(_, thread):
             changedThreadID = thread.id
-            archivedThreads.removeAll { $0.id == thread.id }
+            if let environmentID = activeEnvironment?.id {
+                archivedThreadsByEnvironmentID[environmentID]?.removeAll { $0.id == thread.id }
+            }
             if let index = threads.firstIndex(where: { $0.id == thread.id }) {
                 threads[index] = thread
             } else {
@@ -1132,6 +1251,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging {
             if activeThreadID == threadID {
                 resetDetailRefresh()
                 activeThreadID = nil
+                activeThreadEnvironmentID = nil
             }
         case .snapshot, .synchronized:
             return
@@ -1145,8 +1265,8 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging {
         )
         latestShell = shell
         await emitSnapshot(shell)
-        if shouldRefreshArchived {
-            scheduleArchivedRefresh(client: client)
+        if shouldRefreshArchived, let environment = activeEnvironment {
+            scheduleArchivedRefresh(client: client, environment: environment)
         }
         if let changedThreadID, activeThreadID == changedThreadID {
             scheduleDetailRefresh(threadID: changedThreadID, client: client)
@@ -1154,7 +1274,8 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging {
     }
 
     private func scheduleDetailRefresh(threadID: String, client: T3Client) {
-        guard activeThreadID == threadID else { return }
+        guard activeThreadID == threadID,
+              activeThreadEnvironmentID == activeEnvironment?.id else { return }
         guard detailRefreshTask == nil else {
             detailRefreshPending = true
             return
@@ -1197,20 +1318,109 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging {
         detailRefreshPending = false
     }
 
-    private func refresh(client: T3Client, includeArchived: Bool = false) async throws {
-        let generation = environmentGeneration
-        let shell = try await client.shellSnapshot()
-        guard isCurrentSession(client: client, generation: generation) else {
-            throw CancellationError()
+    private func loadEnvironmentShells(
+        _ environments: [Environment]
+    ) async -> [EnvironmentShellLoad] {
+        var clients: [(environment: Environment, client: T3Client)] = []
+        clients.reserveCapacity(environments.count)
+        for environment in environments {
+            clients.append(
+                (environment, await runtime.client(for: environment))
+            )
         }
-        latestShell = shell
-        if includeArchived {
-            scheduleArchivedRefresh(client: client)
+
+        return await withTaskGroup(of: EnvironmentShellLoad.self) { group in
+            for pair in clients {
+                group.addTask {
+                    EnvironmentShellLoad(
+                        environment: pair.environment,
+                        client: pair.client,
+                        shell: try? await pair.client.shellSnapshot()
+                    )
+                }
+            }
+            var loads: [EnvironmentShellLoad] = []
+            loads.reserveCapacity(environments.count)
+            for await load in group {
+                loads.append(load)
+            }
+            return loads
         }
-        await emitSnapshot(shell)
     }
 
-    private func scheduleArchivedRefresh(client: T3Client) {
+    /// Successful reads replace that environment's cache. Failed reads leave
+    /// its last-known rows intact, so one offline machine cannot empty home.
+    private func reconcileEnvironmentLoads(
+        _ loads: [EnvironmentShellLoad],
+        savedEnvironments: [Environment]
+    ) {
+        let savedIDs = Set(savedEnvironments.map(\.id))
+        environmentClients = environmentClients.filter { savedIDs.contains($0.key) }
+        shellsByEnvironmentID = shellsByEnvironmentID.filter { savedIDs.contains($0.key) }
+        archivedThreadsByEnvironmentID = archivedThreadsByEnvironmentID.filter {
+            savedIDs.contains($0.key)
+        }
+        environmentConnectionStates = environmentConnectionStates.filter {
+            savedIDs.contains($0.key)
+        }
+        environmentConnectionDetails = environmentConnectionDetails.filter {
+            savedIDs.contains($0.key)
+        }
+
+        for load in loads {
+            environmentClients[load.environment.id] = load.client
+            if let shell = load.shell {
+                shellsByEnvironmentID[load.environment.id] = shell
+                environmentConnectionStates[load.environment.id] = .connected
+                environmentConnectionDetails[load.environment.id] = nil
+            } else {
+                environmentConnectionStates[load.environment.id] = .disconnected
+                environmentConnectionDetails[load.environment.id] =
+                    "That server is currently unreachable."
+            }
+        }
+        rebuildThreadEnvironmentIndex(savedEnvironments)
+    }
+
+    private func rebuildThreadEnvironmentIndex(_ environments: [Environment]) {
+        var owners: [String: String] = [:]
+        // Prefer the active environment only in the vanishingly unlikely case
+        // that two independent servers generated the same thread UUID.
+        let activeID = activeEnvironment?.id
+        let ordered = environments.filter { $0.id != activeID }
+            + environments.filter { $0.id == activeID }
+        for environment in ordered {
+            for thread in shellsByEnvironmentID[environment.id]?.threads ?? [] {
+                owners[thread.id] = environment.id
+            }
+            for thread in archivedThreadsByEnvironmentID[environment.id] ?? [] {
+                owners[thread.id] = environment.id
+            }
+        }
+        threadEnvironmentIDs = owners
+    }
+
+    private func refresh(client: T3Client, includeArchived: Bool = false) async throws {
+        let environment = client.environment
+        let generation = environmentGeneration
+        let shell = try await client.shellSnapshot()
+        guard isKnownClient(client, environmentID: environment.id, generation: generation) else {
+            throw CancellationError()
+        }
+        shellsByEnvironmentID[environment.id] = shell
+        if activeEnvironment?.id == environment.id {
+            latestShell = shell
+        }
+        rebuildThreadEnvironmentIndex(
+            (try? await runtime.environments()) ?? [environment]
+        )
+        if includeArchived, activeEnvironment?.id == environment.id {
+            scheduleArchivedRefresh(client: client, environment: environment)
+        }
+        await emitSnapshot(shell, environment: environment)
+    }
+
+    private func scheduleArchivedRefresh(client: T3Client, environment: Environment) {
         archivedRefreshTask?.cancel()
         let generation = environmentGeneration
         archivedRefreshTask = Task { [weak self] in
@@ -1220,7 +1430,12 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging {
                   self.isCurrentSession(client: client, generation: generation) else {
                 return
             }
-            self.archivedThreads = archivedShell.threads.map(self.mapThread)
+            self.archivedThreadsByEnvironmentID[environment.id] = archivedShell.threads.map {
+                self.mapThread($0, environment: environment)
+            }
+            self.rebuildThreadEnvironmentIndex(
+                (try? await self.runtime.environments()) ?? [environment]
+            )
             if let shell = self.latestShell {
                 await self.emitSnapshot(shell)
             }
@@ -1228,15 +1443,13 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging {
     }
 
     private func refreshThread(id: String, client: T3Client) async throws {
+        let environment = client.environment
         let generation = environmentGeneration
-        guard let environmentID = activeEnvironment?.id else {
-            throw CancellationError()
-        }
         let snapshot = try await client.threadSnapshot(id: id)
-        guard isCurrentSession(client: client, generation: generation) else {
+        guard isKnownClient(client, environmentID: environment.id, generation: generation) else {
             throw CancellationError()
         }
-        let detail = mapDetail(snapshot.thread)
+        let detail = mapDetail(snapshot.thread, environment: environment)
         if latestDetails[id] != detail {
             latestDetails[id] = detail
             continuation.yield(.detail(detail))
@@ -1245,10 +1458,10 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging {
         let hydrated = await hydratedAttachmentURLs(
             in: hydrationBase,
             client: client,
-            environmentID: environmentID,
+            environmentID: environment.id,
             generation: generation
         )
-        guard isCurrentSession(client: client, generation: generation),
+        guard isKnownClient(client, environmentID: environment.id, generation: generation),
               latestDetails[id] == hydrationBase,
               hydrated != hydrationBase else {
             return
@@ -1257,18 +1470,41 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging {
         continuation.yield(.detail(hydrated))
     }
 
-    private func emitSnapshot(_ shell: OrchestrationShellSnapshot) async {
+    private func emitSnapshot(
+        _ shell: OrchestrationShellSnapshot,
+        environment sourceEnvironment: Environment? = nil
+    ) async {
         guard let environment = activeEnvironment else { return }
+        let sourceEnvironment = sourceEnvironment ?? environment
         let generation = environmentGeneration
         let environments = (try? await runtime.environments()) ?? [environment]
         guard generation == environmentGeneration,
               activeEnvironment?.id == environment.id else {
             return
         }
+        shellsByEnvironmentID[sourceEnvironment.id] = shell
+        environmentConnectionStates[sourceEnvironment.id] = .connected
+        environmentConnectionDetails[sourceEnvironment.id] = nil
+        if sourceEnvironment.id == environment.id {
+            latestShell = shell
+        }
+        rebuildThreadEnvironmentIndex(environments)
+        let connectionState: FeatureConnection.State
+        let connectionDetail: String?
+        if sourceEnvironment.id == environment.id {
+            connectionState = .connected
+            connectionDetail = nil
+        } else {
+            connectionState = latestSnapshot?.connection.state
+                ?? environmentConnectionStates[environment.id]
+                ?? .disconnected
+            connectionDetail = latestSnapshot?.connection.detail
+        }
         let snapshot = makeSnapshot(
-            shell: shell,
             environments: environments,
-            activeEnvironment: environment
+            activeEnvironment: environment,
+            connectionState: connectionState,
+            connectionDetail: connectionDetail
         )
         guard latestSnapshot != snapshot else { return }
         latestSnapshot = snapshot
@@ -1291,48 +1527,68 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging {
         detail: String? = nil
     ) {
         guard let environment = activeEnvironment else { return }
+        environmentConnectionStates[environment.id] = state
+        environmentConnectionDetails[environment.id] = detail
+        let connection = FeatureConnection(
+            state: state,
+            environmentName: environment.label,
+            endpoint: environment.httpBaseURL.absoluteString,
+            detail: detail
+        )
+        if var snapshot = latestSnapshot {
+            snapshot.connection = connection
+            if let index = snapshot.environments.firstIndex(where: { $0.id == environment.id }) {
+                snapshot.environments[index].connectionState = state
+                snapshot.environments[index].connectionDetail = detail
+            }
+            latestSnapshot = snapshot
+        }
         continuation.yield(
-            .connection(
-                FeatureConnection(
-                    state: state,
-                    environmentName: environment.label,
-                    endpoint: environment.httpBaseURL.absoluteString,
-                    detail: detail
-                )
-            )
+            .connection(connection)
         )
     }
 
     private func makeSnapshot(
-        shell: OrchestrationShellSnapshot,
         environments: [Environment],
-        activeEnvironment: Environment
+        activeEnvironment: Environment,
+        connectionState: FeatureConnection.State,
+        connectionDetail: String? = nil
     ) -> FeatureSnapshot {
-        let threads = shell.threads.map(mapThread) + archivedThreads
-        let threadCountByProject = threads.reduce(into: [String: Int]()) { counts, thread in
-            counts[thread.projectID, default: 0] += 1
+        let threads = environments.flatMap { environment in
+            let live = shellsByEnvironmentID[environment.id]?.threads.map {
+                mapThread($0, environment: environment)
+            } ?? []
+            return live + (archivedThreadsByEnvironmentID[environment.id] ?? [])
         }
+        let projects = environments.flatMap { environment in
+            (shellsByEnvironmentID[environment.id]?.projects ?? []).map { project in
+                let count = threads.lazy.filter {
+                    $0.environmentID == environment.id && $0.projectID == project.id
+                }.count
+                return FeatureProject(
+                    id: project.id,
+                    environmentID: environment.id,
+                    name: project.title,
+                    path: project.workspaceRoot,
+                    threadCount: count,
+                    defaultSelection: project.defaultModelSelection.map(mapSelection)
+                )
+            }
+        }
+        let activeShell = shellsByEnvironmentID[activeEnvironment.id]
         return FeatureSnapshot(
             connection: FeatureConnection(
-                state: .connected,
+                state: connectionState,
                 environmentName: activeEnvironment.label,
-                endpoint: activeEnvironment.httpBaseURL.absoluteString
+                endpoint: activeEnvironment.httpBaseURL.absoluteString,
+                detail: connectionDetail
             ),
             environments: environments.map {
                 mapEnvironment($0, activeID: activeEnvironment.id)
             },
-            projects: shell.projects.map { project in
-                FeatureProject(
-                    id: project.id,
-                    environmentID: activeEnvironment.id,
-                    name: project.title,
-                    path: project.workspaceRoot,
-                    threadCount: threadCountByProject[project.id, default: 0],
-                    defaultSelection: project.defaultModelSelection.map(mapSelection)
-                )
-            },
+            projects: projects,
             threads: threads,
-            providers: mapProviders(shell),
+            providers: activeShell.map(mapProviders) ?? [],
             settings: loadSettings()
         )
     }
@@ -1342,16 +1598,21 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging {
             id: environment.id,
             name: environment.label,
             endpoint: environment.httpBaseURL.absoluteString,
-            isActive: environment.id == activeID
+            isActive: environment.id == activeID,
+            connectionState: environmentConnectionStates[environment.id],
+            connectionDetail: environmentConnectionDetails[environment.id]
         )
     }
 
-    private func mapThread(_ thread: OrchestrationThreadShell) -> FeatureThread {
+    private func mapThread(
+        _ thread: OrchestrationThreadShell,
+        environment: Environment
+    ) -> FeatureThread {
         FeatureThread(
             id: thread.id,
             projectID: thread.projectId,
-            environmentID: activeEnvironment?.id,
-            environmentName: activeEnvironment?.label,
+            environmentID: environment.id,
+            environmentName: environment.label,
             title: thread.title,
             branch: thread.branch,
             worktreePath: thread.worktreePath,
@@ -1394,12 +1655,15 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging {
         )
     }
 
-    private func mapThread(_ thread: OrchestrationThread) -> FeatureThread {
+    private func mapThread(
+        _ thread: OrchestrationThread,
+        environment: Environment
+    ) -> FeatureThread {
         FeatureThread(
             id: thread.id,
             projectID: thread.projectId,
-            environmentID: activeEnvironment?.id,
-            environmentName: activeEnvironment?.label,
+            environmentID: environment.id,
+            environmentName: environment.label,
             title: thread.title,
             preview: previewText(thread.messages.last?.text),
             branch: thread.branch,
@@ -1443,7 +1707,10 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging {
         )
     }
 
-    private func mapDetail(_ thread: OrchestrationThread) -> FeatureThreadDetail {
+    private func mapDetail(
+        _ thread: OrchestrationThread,
+        environment: Environment
+    ) -> FeatureThreadDetail {
         let approvals = pendingApprovals(thread)
         let userInputs = pendingUserInputs(thread)
         let messages = thread.messages.map { message in
@@ -1459,7 +1726,10 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging {
                         name: $0.name,
                         mimeType: $0.mimeType,
                         sizeBytes: $0.sizeBytes,
-                        url: cachedAttachmentURL(for: $0.id)
+                        url: cachedAttachmentURL(
+                            for: $0.id,
+                            environmentID: environment.id
+                        )
                     )
                 }
             )
@@ -1482,8 +1752,8 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging {
         let mappedThread = FeatureThread(
             id: thread.id,
             projectID: thread.projectId,
-            environmentID: activeEnvironment?.id,
-            environmentName: activeEnvironment?.label,
+            environmentID: environment.id,
+            environmentName: environment.label,
             title: thread.title,
             preview: previewText(thread.messages.last?.text),
             branch: thread.branch,
@@ -1941,9 +2211,9 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging {
     private func scheduleAttachmentHydration(
         in detail: FeatureThreadDetail,
         threadID: String,
-        client: T3Client
+        client: T3Client,
+        environmentID: String
     ) {
-        guard let environmentID = activeEnvironment?.id else { return }
         attachmentHydrationTasks[threadID]?.task.cancel()
         let generation = environmentGeneration
         let workID = UUID()
@@ -1955,7 +2225,11 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging {
                 environmentID: environmentID,
                 generation: generation
             )
-            guard self.isCurrentSession(client: client, generation: generation),
+            guard self.isKnownClient(
+                client,
+                environmentID: environmentID,
+                generation: generation
+            ),
                   self.latestDetails[threadID] == detail,
                   hydrated != detail else {
                 self.finishAttachmentHydration(threadID: threadID, workID: workID)
@@ -1979,7 +2253,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging {
         environmentID: String,
         generation: Int
     ) async -> FeatureThreadDetail {
-        guard isCurrentSession(client: client, generation: generation) else {
+        guard isKnownClient(client, environmentID: environmentID, generation: generation) else {
             return detail
         }
         let imageIDs = Set(
@@ -2004,7 +2278,11 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging {
             }
             while let (id, resolved) = await group.next() {
                 if let resolved,
-                   isCurrentSession(client: client, generation: generation) {
+                   isKnownClient(
+                       client,
+                       environmentID: environmentID,
+                       generation: generation
+                   ) {
                     let key = AttachmentCacheKey(
                         environmentID: environmentID,
                         attachmentID: id
@@ -2014,7 +2292,11 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging {
                         expiresAt: resolved.expiresAt
                     )
                 }
-                if isCurrentSession(client: client, generation: generation),
+                if isKnownClient(
+                    client,
+                    environmentID: environmentID,
+                    generation: generation
+                ),
                    let nextID = iterator.next() {
                     group.addTask {
                         (
@@ -2028,7 +2310,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging {
             }
         }
 
-        guard isCurrentSession(client: client, generation: generation) else {
+        guard isKnownClient(client, environmentID: environmentID, generation: generation) else {
             return detail
         }
         var hydrated = detail
@@ -2169,6 +2451,12 @@ private struct AttachmentCacheKey: Hashable {
 private struct CachedAttachmentURL {
     let url: URL
     let expiresAt: Date
+}
+
+private struct EnvironmentShellLoad: Sendable {
+    let environment: Environment
+    let client: T3Client
+    let shell: OrchestrationShellSnapshot?
 }
 
 private struct CommandIdentity: Equatable {
