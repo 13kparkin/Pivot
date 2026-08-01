@@ -72,6 +72,20 @@ export function assertClaudeWorkflowOutput(
     0,
     "a member without membership would render outside its workflow",
   );
+  const waitingProgressItem = result.domainEvents.find(
+    (event) =>
+      event.type === "turn-item.updated" &&
+      event.payload.type === "reasoning" &&
+      event.payload.text === "Read" &&
+      event.payload.status === "waiting",
+  );
+  assert.isDefined(waitingProgressItem);
+  if (waitingProgressItem?.type === "turn-item.updated") {
+    assert.isNull(waitingProgressItem.payload.completedAt);
+    assert.isTrue(
+      waitingProgressItem.payload.type === "reasoning" && waitingProgressItem.payload.streaming,
+    );
+  }
   // The coordinator's usage already covers its members, so the panel subtracts
   // theirs from it. That only stays non-negative if the provider's totals are
   // carried through unmodified.

@@ -3275,11 +3275,11 @@ export function makeClaudeAdapterV2(
                 status: input.status,
                 title: "Subagent progress",
                 startedAt: progressStartedAt,
-                completedAt: input.status === "running" ? null : now,
+                completedAt: settled ? now : null,
                 updatedAt: now,
                 type: "reasoning",
                 text: progress,
-                streaming: input.status === "running",
+                streaming: !settled,
               },
             });
           }

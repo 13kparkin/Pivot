@@ -3577,6 +3577,21 @@ describe("CodexAdapterV2 post-settle continuation", () => {
         assert.equal(firstCompletion?.subagent.activationCount, 1);
         assert.equal(firstCompletion?.subagent.usage?.totalTokens, 100);
         assert.isNull(firstCompletion?.subagent.currentActivationId);
+        const firstActivationUpdates = harness
+          .subagentActivationUpdates()
+          .filter((event) => event.activation.ordinal === 1);
+        const firstActivation = firstActivationUpdates.at(-1)?.activation;
+        assert.equal(firstActivation?.ordinal, 1);
+        assert.equal(firstActivation?.status, "completed");
+        assert.equal(firstActivation?.usage?.totalTokens, 100);
+        assert.equal(
+          firstActivation?.completedAt,
+          firstActivationUpdates.at(-2)?.activation.completedAt,
+        );
+        assert.equal(
+          firstActivation?.updatedAt,
+          firstActivationUpdates.at(-2)?.activation.updatedAt,
+        );
         assert.lengthOf(
           new Set(
             settledUpdates
@@ -3629,6 +3644,15 @@ describe("CodexAdapterV2 post-settle continuation", () => {
           [RESUME_CHILD_TURN_1, RESUME_CHILD_TURN_2],
         );
         assert.equal(activations.at(-1)?.activation.status, "completed");
+        assert.equal(activations.at(-1)?.activation.usage?.totalTokens, 80);
+        assert.equal(
+          activations.at(-1)?.activation.completedAt,
+          activations.at(-2)?.activation.completedAt,
+        );
+        assert.equal(
+          activations.at(-1)?.activation.updatedAt,
+          activations.at(-2)?.activation.updatedAt,
+        );
         assert.isFalse(yield* harness.hasPendingBackgroundWork);
         assert.lengthOf(harness.terminalEvents(), 1);
         assert.lengthOf(harness.continuationRequests, 0);
