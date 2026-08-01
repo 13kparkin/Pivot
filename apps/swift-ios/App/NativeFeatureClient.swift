@@ -131,13 +131,16 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
 
     func initialSnapshot() async throws -> FeatureSnapshot {
         let environments = try await runtime.environments()
-        guard let environment = try await runtime.activeEnvironment(),
-              let activeClient = try await runtime.activeClient() else {
+        guard let activeClient = try await runtime.activeClient() else {
             await clearActiveEnvironment()
             let snapshot = disconnectedSnapshot(environments: environments)
             latestSnapshot = snapshot
             return snapshot
         }
+        // The runtime actor can change its active selection at any suspension
+        // point. Derive both values from one client so the snapshot cannot pair
+        // one environment with another environment's connection.
+        let environment = activeClient.environment
 
         await adoptEnvironment(environment, client: activeClient)
         let generation = environmentGeneration

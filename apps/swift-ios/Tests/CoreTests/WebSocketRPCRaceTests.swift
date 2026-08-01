@@ -198,6 +198,145 @@ final class WebSocketRPCRaceTests: XCTestCase {
         await client.stop()
         await first.releaseSend()
     }
+
+    func testStopDuringConnectClosesTheLateSocketWithoutPublishingIt() async {
+        let lateConnection = CloseTrackingConnection()
+        let connector = GatedConnector(connection: lateConnection)
+        let client = WebSocketRPCClient(
+            connector: connector,
+            endpointProvider: { URL(string: "wss://studio.example/ws")! }
+        )
+
+        await client.start()
+        await connector.waitUntilConnectStarted()
+        await client.stop()
+        await connector.release()
+        await lateConnection.waitUntilClosed()
+
+        let isConnected = await client.isConnected()
+        XCTAssertFalse(isConnected, "A socket returned after stop must never become active.")
+        let receiveCount = await lateConnection.receiveCallCount()
+        XCTAssertEqual(receiveCount, 0)
+    }
+
+    func testRestartWhileOldSocketClosesKeepsTheNewConnection() async throws {
+        let closing = BlockingStopConnection()
+        let recovered = AutoReplyConnection()
+        let connector = SequencedConnector(connections: [closing, recovered])
+        let client = WebSocketRPCClient(
+            connector: connector,
+            connectionWaitTimeout: .seconds(2),
+            endpointProvider: { URL(string: "wss://studio.example/ws")! }
+        )
+
+        await client.start()
+        await closing.waitUntilReceiving()
+
+        let stop = Task { await client.stop() }
+        await closing.waitUntilCloseStarted()
+        let request = Task {
+            try await client.request("server.afterRestart", as: JSONValue.self)
+        }
+        await connector.waitUntilConnectionCount(2)
+        await closing.releaseClose()
+        await stop.value
+
+        let response = try await request.value
+        XCTAssertEqual(response, .object([:]))
+        let isConnected = await client.isConnected()
+        XCTAssertTrue(isConnected, "Completing an old stop must not clear a newer socket.")
+        await client.stop()
+    }
+}
+
+private actor CloseTrackingConnection: WebSocketConnection {
+    private var closed = false
+    private var closeWaiters: [CheckedContinuation<Void, Never>] = []
+    private var receives = 0
+
+    func send(_: Data) {}
+
+    func receive() throws -> Data {
+        receives += 1
+        throw URLError(.cannotLoadFromNetwork)
+    }
+
+    func close() {
+        closed = true
+        let waiters = closeWaiters
+        closeWaiters.removeAll()
+        waiters.forEach { $0.resume() }
+    }
+
+    func waitUntilClosed() async {
+        guard !closed else { return }
+        await withCheckedContinuation { continuation in
+            closeWaiters.append(continuation)
+        }
+    }
+
+    func receiveCallCount() -> Int {
+        receives
+    }
+}
+
+private actor BlockingStopConnection: WebSocketConnection {
+    private var receiveContinuation: CheckedContinuation<Data, Error>?
+    private var receiveWaiters: [CheckedContinuation<Void, Never>] = []
+    private var closeStarted = false
+    private var closeReleased = false
+    private var closeStartWaiters: [CheckedContinuation<Void, Never>] = []
+    private var closeReleaseWaiters: [CheckedContinuation<Void, Never>] = []
+
+    func send(_: Data) throws {
+        throw URLError(.networkConnectionLost)
+    }
+
+    func receive() async throws -> Data {
+        let waiters = receiveWaiters
+        receiveWaiters.removeAll()
+        waiters.forEach { $0.resume() }
+        return try await withCheckedThrowingContinuation { continuation in
+            receiveContinuation = continuation
+        }
+    }
+
+    func close() async {
+        if !closeStarted {
+            closeStarted = true
+            let waiters = closeStartWaiters
+            closeStartWaiters.removeAll()
+            waiters.forEach { $0.resume() }
+        }
+        if !closeReleased {
+            await withCheckedContinuation { continuation in
+                closeReleaseWaiters.append(continuation)
+            }
+        }
+        receiveContinuation?.resume(throwing: CancellationError())
+        receiveContinuation = nil
+    }
+
+    func waitUntilReceiving() async {
+        guard receiveContinuation == nil else { return }
+        await withCheckedContinuation { continuation in
+            receiveWaiters.append(continuation)
+        }
+    }
+
+    func waitUntilCloseStarted() async {
+        guard !closeStarted else { return }
+        await withCheckedContinuation { continuation in
+            closeStartWaiters.append(continuation)
+        }
+    }
+
+    func releaseClose() {
+        closeReleased = true
+        let waiters = closeReleaseWaiters
+        closeReleaseWaiters.removeAll()
+        waiters.forEach { $0.resume() }
+    }
 }
 
 private actor DeadlineWebSocketConnection: WebSocketConnection {

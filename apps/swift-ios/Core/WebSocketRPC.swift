@@ -177,6 +177,7 @@ public actor WebSocketRPCClient {
     private var connection: (any WebSocketConnection)?
     private var connectionID: UUID?
     private var loopTask: Task<Void, Never>?
+    private var loopID: UUID?
     private var keepaliveTask: Task<Void, Never>?
     private var desired = false
     private var nextRequestID = 1
@@ -204,7 +205,9 @@ public actor WebSocketRPCClient {
     public func start() {
         desired = true
         guard loopTask == nil else { return }
-        loopTask = Task { await self.connectionLoop() }
+        let id = UUID()
+        loopID = id
+        loopTask = Task { await self.connectionLoop(id: id) }
     }
 
     public func isConnected() -> Bool {
@@ -212,21 +215,23 @@ public actor WebSocketRPCClient {
     }
 
     public func stop() async {
+        let closingConnection = connection
         desired = false
+        loopID = nil
         loopTask?.cancel()
         loopTask = nil
         keepaliveTask?.cancel()
         keepaliveTask = nil
-        if let connection {
-            await connection.close()
-        }
         connection = nil
         connectionID = nil
         failUnary(RPCError.disconnected, includingUnsent: true)
-        let active = subscriptions.values
+        let active = Array(subscriptions.values)
         subscriptions.removeAll()
         subscriptionByRequestID.removeAll()
         active.forEach { $0.finish(RPCError.disconnected) }
+        // Publish the stopped state before suspension. A new start while the
+        // old socket closes owns independent state and must survive this call.
+        await closingConnection?.close()
     }
 
     public func request<Result: Decodable & Sendable>(
@@ -312,33 +317,53 @@ public actor WebSocketRPCClient {
         }
     }
 
-    private func connectionLoop() async {
+    private func connectionLoop(id loopID: UUID) async {
         var retry = 0
-        while desired, !Task.isCancelled {
+        while isCurrentConnectionLoop(loopID), !Task.isCancelled {
+            var openedID: UUID?
             do {
                 let url = try await endpointProvider()
+                guard isCurrentConnectionLoop(loopID), !Task.isCancelled else { break }
                 let opened = try await connector.connect(to: url)
-                let openedID = UUID()
+                guard isCurrentConnectionLoop(loopID), !Task.isCancelled else {
+                    await opened.close()
+                    break
+                }
+                let id = UUID()
+                openedID = id
                 connection = opened
-                connectionID = openedID
+                connectionID = id
                 retry = 0
                 await connected()
                 // Sending queued work during setup is actor-reentrant. A send
                 // failure can discard this socket before setup completes, so
                 // never enter its receive loop after ownership has moved on.
-                guard connectionID == openedID else {
+                guard isCurrentConnectionLoop(loopID), connectionID == id else {
+                    await disconnected(expectedConnectionID: id)
+                    guard isCurrentConnectionLoop(loopID), !Task.isCancelled else { break }
                     throw RPCError.disconnected
                 }
                 try await receiveLoop(opened)
+                await disconnected(expectedConnectionID: id)
+                guard isCurrentConnectionLoop(loopID), !Task.isCancelled else { break }
             } catch {
-                await disconnected()
-                guard desired, !Task.isCancelled else { break }
+                if let openedID {
+                    await disconnected(expectedConnectionID: openedID)
+                }
+                guard isCurrentConnectionLoop(loopID), !Task.isCancelled else { break }
                 retry += 1
                 let delay = min(5.0, 0.35 * pow(1.7, Double(retry - 1)))
                 try? await Task.sleep(for: .seconds(delay))
             }
         }
-        loopTask = nil
+        if self.loopID == loopID {
+            self.loopID = nil
+            loopTask = nil
+        }
+    }
+
+    private func isCurrentConnectionLoop(_ id: UUID) -> Bool {
+        desired && loopID == id
     }
 
     private func connected() async {
