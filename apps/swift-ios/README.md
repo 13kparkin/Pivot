@@ -87,9 +87,8 @@ chooses an available iPhone from the newest installed Simulator runtime:
 ./Scripts/ci-test.sh
 ```
 
-Set `T3_SWIFT_SIMULATOR_ID` to pin a specific simulator. The path-filtered
-`.github/workflows/swift-ios.yml` workflow runs this native unit-test target on
-pull requests and pushes to `main` that change the Swift app.
+Set `T3_SWIFT_SIMULATOR_ID` to pin a specific simulator. CI can invoke this same
+entry point without duplicating the simulator-selection or signing policy.
 
 ## Install on a physical device
 
@@ -114,7 +113,7 @@ Connect build settings above as environment variables. Optional overrides are
 1. Set a unique `MARKETING_VERSION` and a higher `CURRENT_PROJECT_VERSION`.
 2. Confirm the production bundle identifier, display name, app icon, signing team,
    and T3 Connect HTTPS relay configuration.
-3. Run `./Scripts/ci-test.sh` and confirm the Swift iOS GitHub workflow is green.
+3. Run `./Scripts/ci-test.sh` and confirm the native test job is green.
 4. Smoke-test direct URL and QR pairing, T3 Connect, multi-environment navigation,
    task creation, follow-up messages, attachments, approvals, input requests,
    background/reconnect behavior, and deep links on an iPhone and iPad.
