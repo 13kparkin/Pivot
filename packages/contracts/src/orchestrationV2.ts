@@ -2418,6 +2418,7 @@ export const ORCHESTRATION_V2_WS_METHODS = {
   getFullThreadDiff: "orchestration.getFullThreadDiff",
   searchThreads: "orchestration.searchThreads",
   getArchivedShellSnapshot: "orchestration.getArchivedShellSnapshot",
+  listAllThreadRefs: "orchestration.listAllThreadRefs",
   getThreadProjection: "orchestration.getThreadProjection",
   getWorkflowScript: "orchestration.getWorkflowScript",
   launchThread: "orchestration.launchThread",
@@ -2452,6 +2453,19 @@ export const OrchestrationV2ArchivedShellStreamItem = Schema.Union([
 ]);
 export type OrchestrationV2ArchivedShellStreamItem =
   typeof OrchestrationV2ArchivedShellStreamItem.Type;
+
+export const OrchestrationV2ThreadRef = Schema.Struct({
+  threadId: ThreadId,
+  projectId: ProjectId,
+  worktreePath: Schema.NullOr(TrimmedNonEmptyString),
+});
+export type OrchestrationV2ThreadRef = typeof OrchestrationV2ThreadRef.Type;
+
+export const OrchestrationV2ListAllThreadRefsResult = Schema.Struct({
+  threadRefs: Schema.Array(OrchestrationV2ThreadRef),
+});
+export type OrchestrationV2ListAllThreadRefsResult =
+  typeof OrchestrationV2ListAllThreadRefsResult.Type;
 
 export const OrchestrationV2ThreadLaunchWorkspaceStrategy = Schema.Union([
   Schema.Struct({
@@ -2678,6 +2692,10 @@ export const OrchestrationV2RpcSchemas = {
   getArchivedShellSnapshot: {
     input: Schema.Struct({}),
     output: OrchestrationV2ArchivedShellSnapshot,
+  },
+  listAllThreadRefs: {
+    input: Schema.Struct({}),
+    output: OrchestrationV2ListAllThreadRefsResult,
   },
   getThreadProjection: {
     input: OrchestrationV2GetThreadProjectionInput,

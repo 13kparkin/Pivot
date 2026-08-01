@@ -13,6 +13,7 @@ import { sortPinnedThreadsByOrderKey } from "@t3tools/client-runtime/state/threa
 import type { EnvironmentId, ProjectId } from "@t3tools/contracts";
 
 import type { PendingNewTask } from "../../state/use-pending-new-tasks";
+import { isInternalSubagentThread } from "./threadVisibility";
 
 export { snoozeWakeLabel };
 
@@ -389,7 +390,7 @@ export function buildThreadListV2Items(input: {
   const snoozed: EnvironmentThreadShell[] = [];
   let nextSnoozeWakeAt: string | null = null;
   for (const thread of input.threads) {
-    if (thread.lineage.relationshipToParent === "subagent") continue;
+    if (isInternalSubagentThread(thread)) continue;
     // Callers pass live (unarchived) shells; settled threads are among them
     // and partition into the tail via effectiveSettled.
     if (input.environmentId !== null && thread.environmentId !== input.environmentId) continue;

@@ -7,6 +7,7 @@ import {
   type OrchestrationV2Command,
   type OrchestrationV2ConversationMessage,
   type OrchestrationV2CreationSource,
+  type OrchestrationV2ListAllThreadRefsResult,
   type OrchestrationV2Run,
   type OrchestrationV2ThreadShellSnapshot,
   type OrchestrationV2ThreadProjection,
@@ -283,6 +284,10 @@ export interface ThreadManagementServiceShape {
     OrchestrationV2ThreadShellSnapshot,
     OrchestratorV2Error
   >;
+  readonly listAllThreadRefs: () => Effect.Effect<
+    OrchestrationV2ListAllThreadRefsResult,
+    OrchestratorV2Error
+  >;
   readonly getThreadShell: OrchestratorV2["Service"]["getThreadShell"];
   readonly listProjectThreads: (input: {
     readonly projectId: ProjectId;
@@ -471,6 +476,17 @@ const make = Effect.gen(function* () {
       ),
     );
 
+  const listAllThreadRefs: ThreadManagementServiceShape["listAllThreadRefs"] = () =>
+    orchestrator.getShellSnapshot().pipe(
+      Effect.map((snapshot) => ({
+        threadRefs: snapshot.threads.map(({ id, projectId, worktreePath }) => ({
+          threadId: id,
+          projectId,
+          worktreePath,
+        })),
+      })),
+    );
+
   const sendToThread: ThreadManagementServiceShape["sendToThread"] = (input) =>
     Effect.gen(function* () {
       const target = yield* getProjectThread(input);
@@ -657,6 +673,7 @@ const make = Effect.gen(function* () {
     getThreadSnapshot,
     getProjectThread,
     getShellSnapshot: orchestrator.getShellSnapshot,
+    listAllThreadRefs,
     getThreadShell: orchestrator.getThreadShell,
     listProjectThreads,
     sendToThread,

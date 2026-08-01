@@ -250,18 +250,6 @@ export function readEnvironmentThreadRefs(
     .map((thread) => scopeThreadRef(thread.environmentId, thread.id));
 }
 
-/** Every thread in the environment, including internal subagent threads.
-    Worktree bookkeeping must see all threads that can hold a worktree
-    reference, or deleting a parent reads its subagents' worktree as orphaned. */
-export function readEnvironmentAllThreadRefs(
-  environmentId: EnvironmentId,
-): ReadonlyArray<ScopedThreadRef> {
-  return appAtomRegistry
-    .get(environmentThreadShells.threadShellsAtom)
-    .filter((thread) => thread.environmentId === environmentId)
-    .map((thread) => scopeThreadRef(thread.environmentId, thread.id));
-}
-
 export function readThreadRefs(): ReadonlyArray<ScopedThreadRef> {
   return appAtomRegistry
     .get(environmentThreadShells.threadShellsAtom)

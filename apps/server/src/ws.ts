@@ -1131,6 +1131,20 @@ const makeWsRpcLayer = (
             getOrchestrationV2ArchivedShellSnapshot,
             { "rpc.aggregate": "orchestration" },
           ),
+        [ORCHESTRATION_V2_WS_METHODS.listAllThreadRefs]: (_input) =>
+          observeRpcEffect(
+            ORCHESTRATION_V2_WS_METHODS.listAllThreadRefs,
+            threadManagement.listAllThreadRefs().pipe(
+              Effect.mapError(
+                (cause) =>
+                  new OrchestrationV2GetShellSnapshotError({
+                    message: "Failed to list orchestration V2 thread references",
+                    cause,
+                  }),
+              ),
+            ),
+            { "rpc.aggregate": "orchestrationV2" },
+          ),
         [ORCHESTRATION_V2_WS_METHODS.getThreadProjection]: (input) =>
           observeRpcEffect(
             ORCHESTRATION_V2_WS_METHODS.getThreadProjection,

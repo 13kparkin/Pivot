@@ -71,6 +71,7 @@ import {
   ThreadInspectorContentStack,
   type ThreadInspectorMode,
 } from "./thread-inspector-content-stack";
+import { isInternalSubagentThread } from "./threadVisibility";
 
 interface ThreadInspectorSelection {
   readonly routeThreadIdentity: string | null;
@@ -182,7 +183,7 @@ export function ThreadRouteScreen(props: ThreadRouteScreenProps) {
     // Internal subagent threads are hidden from user-facing lists; a deep
     // link or stale selection still lands here, so send it to the parent
     // thread instead of exposing the hidden transcript.
-    if (selectedThread.lineage.relationshipToParent === "subagent") {
+    if (isInternalSubagentThread(selectedThread)) {
       return (
         <SubagentThreadRedirect
           environmentId={selectedThread.environmentId}
