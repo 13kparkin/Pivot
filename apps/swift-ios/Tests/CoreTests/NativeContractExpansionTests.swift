@@ -179,6 +179,27 @@ final class NativeContractExpansionTests: XCTestCase {
                           "currentValue": true
                         }]
                       }
+                    }, {
+                      "slug": "gpt-5.6-terra",
+                      "name": "GPT-5.6 Terra",
+                      "shortName": "Terra",
+                      "isCustom": false,
+                      "isDefault": false,
+                      "capabilities": null
+                    }],
+                    "slashCommands": [{
+                      "name": "review",
+                      "description": "Review the current changes",
+                      "input": { "hint": "focus" }
+                    }],
+                    "skills": [{
+                      "name": "gh-fix-ci",
+                      "description": "Fix CI failures",
+                      "path": "/skills/gh-fix-ci/SKILL.md",
+                      "scope": "user",
+                      "enabled": true,
+                      "displayName": "Fix CI",
+                      "shortDescription": "Debug GitHub Actions"
                     }]
                   }]
                 }
@@ -189,6 +210,10 @@ final class NativeContractExpansionTests: XCTestCase {
         let provider = try XCTUnwrap(config.providers.first)
         XCTAssertEqual(provider.instanceId, "codex-work")
         XCTAssertEqual(provider.auth.status, "authenticated")
+        XCTAssertEqual(provider.models.map(\.slug), ["gpt-5.6-sol", "gpt-5.6-terra"])
+        XCTAssertEqual(provider.slashCommands?.first?.name, "review")
+        XCTAssertEqual(provider.slashCommands?.first?.input?.hint, "focus")
+        XCTAssertEqual(provider.skills?.first?.displayName, "Fix CI")
         let model = try XCTUnwrap(provider.models.first)
         XCTAssertEqual(model.slug, "gpt-5.6-sol")
         let descriptors = try XCTUnwrap(model.capabilities?.optionDescriptors)

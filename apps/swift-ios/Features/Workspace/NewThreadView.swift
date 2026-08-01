@@ -5,6 +5,7 @@ public struct NewThreadView: View {
     @Bindable var model: FeatureRootModel
     let submit: (NewTaskRequest) async -> FeatureThread?
     let onCreated: (FeatureThread) -> Void
+    private let draftStore: FeatureComposerDraftStore
 
     @State private var projectID = ""
     @State private var prompt = ""
@@ -19,16 +20,21 @@ public struct NewThreadView: View {
     @State private var showingBranchPicker = false
     @State private var isSubmitting = false
     @State private var submissionFailed = false
+    @State private var restoredDraftProjectID: String?
+    @State private var draftSaveTask: Task<Void, Never>?
+    @State private var submittedSuccessfully = false
     @FocusState private var promptFocused: Bool
 
     public init(
         model: FeatureRootModel,
         submit: @escaping (NewTaskRequest) async -> FeatureThread?,
-        onCreated: @escaping (FeatureThread) -> Void
+        onCreated: @escaping (FeatureThread) -> Void,
+        draftStore: FeatureComposerDraftStore = .shared
     ) {
         self.model = model
         self.submit = submit
         self.onCreated = onCreated
+        self.draftStore = draftStore
     }
 
     public var body: some View {
@@ -57,7 +63,8 @@ public struct NewThreadView: View {
                     focused: $promptFocused,
                     onSend: startTask,
                     onStop: {},
-                    forceExpanded: true
+                    forceExpanded: true,
+                    powerFeatures: composerPowerFeatures
                 )
             }
             .background(T3Colors.background)
@@ -66,15 +73,23 @@ public struct NewThreadView: View {
             if projectID.isEmpty {
                 projectID = creationProjects.first?.id ?? ""
             }
-            if selection == nil {
-                selection = initialSelection
-            }
         }
         .onChange(of: projectID) {
+            restoredDraftProjectID = nil
             selection = initialSelection
             resetWorkspaceSelection()
         }
-        .task(id: projectID) { await loadBranches() }
+        .onChange(of: prompt) { scheduleDraftSave() }
+        .onChange(of: selection) { scheduleDraftSave() }
+        .onChange(of: attachments) { scheduleDraftSave() }
+        .onChange(of: workspaceMode) { scheduleDraftSave() }
+        .onChange(of: selectedBranch) { scheduleDraftSave() }
+        .onChange(of: startFromOrigin) { scheduleDraftSave() }
+        .task(id: projectID) { await restoreDraftAndLoadBranches() }
+        .onDisappear {
+            guard !submittedSuccessfully else { return }
+            persistCurrentDraftImmediately()
+        }
         .sheet(isPresented: $showingBranchPicker) {
             NewTaskBranchPicker(
                 branches: branches,
@@ -119,7 +134,7 @@ public struct NewThreadView: View {
                 Menu {
                     ForEach(creationProjects) { project in
                         Button {
-                            projectID = project.id
+                            selectProject(project.id)
                         } label: {
                             if project.id == projectID {
                                 Label(project.name, systemImage: "checkmark")
@@ -282,10 +297,41 @@ public struct NewThreadView: View {
         )
     }
 
-    /// Provider catalogues are active-device-only. For a passive project, keep
-    /// its own default selectable without leaking models from another machine.
+    /// Model and provider capabilities belong to the project's environment,
+    /// which may not be the connection currently selected in Settings.
     private var creationProviders: [FeatureProvider] {
         DailyUXCreationContext.providers(for: selectedProject, in: model.snapshot)
+    }
+
+    private var composerPowerFeatures: FeatureComposerPowerFeatures {
+        let provider = creationProviders.first {
+            $0.id == selection?.providerID
+        }
+        guard let project = selectedProject else {
+            return FeatureComposerPowerFeatures(
+                slashCommands: provider?.slashCommands ?? [],
+                skills: provider?.skills ?? []
+            )
+        }
+        return FeatureComposerPowerFeatures(
+            slashCommands: provider?.slashCommands ?? [],
+            skills: provider?.skills ?? [],
+            pathSearchScopeID: project.id,
+            searchPaths: { query in
+                try await model.client.searchProjectFiles(
+                    projectID: project.id,
+                    query: query,
+                    limit: 20
+                ).map(Self.composerPathEntry)
+            }
+        )
+    }
+
+    private static func composerPathEntry(_ entry: FeatureFileEntry) -> FeatureComposerPathEntry {
+        FeatureComposerPathEntry(
+            path: entry.path,
+            kind: entry.kind == .directory ? .directory : .file
+        )
     }
 
     private var canSubmit: Bool {
@@ -311,6 +357,9 @@ public struct NewThreadView: View {
         guard canSubmit else { return }
         promptFocused = false
         isSubmitting = true
+        draftSaveTask?.cancel()
+        let draftKey = currentDraftKey
+        let draftSnapshot = composerDraft
         let request = NewTaskRequest(
             projectID: projectID,
             prompt: trimmedPrompt,
@@ -330,7 +379,15 @@ public struct NewThreadView: View {
         )
 
         Task {
+            if let draftKey {
+                try? await draftStore.setDraft(draftSnapshot, for: draftKey)
+            }
             if let thread = await submit(request) {
+                submittedSuccessfully = true
+                draftSaveTask?.cancel()
+                if let draftKey {
+                    try? await draftStore.removeDraft(for: draftKey)
+                }
                 onCreated(thread)
             } else {
                 isSubmitting = false
@@ -344,6 +401,12 @@ public struct NewThreadView: View {
         branches = []
         selectedBranch = nil
         branchLoadFailed = false
+    }
+
+    private func selectProject(_ id: String) {
+        guard id != projectID else { return }
+        persistCurrentDraftImmediately()
+        projectID = id
     }
 
     private func setWorkspaceMode(_ mode: FeatureWorkspaceMode) {
@@ -370,7 +433,7 @@ public struct NewThreadView: View {
             branches = loaded.sorted(by: Self.branchSort)
 
             if let selectedBranch,
-               let updated = branches.first(where: { $0.id == selectedBranch.id }) {
+               let updated = branches.first(where: { $0.name == selectedBranch.name }) {
                 self.selectedBranch = updated
             } else {
                 self.selectedBranch = switch workspaceMode {
@@ -386,6 +449,103 @@ public struct NewThreadView: View {
         }
         guard projectID == requestedProjectID else { return }
         branchesLoading = false
+    }
+
+    @MainActor
+    private func restoreDraftAndLoadBranches() async {
+        let requestedProjectID = projectID
+        guard let project = selectedProject, !requestedProjectID.isEmpty else { return }
+        let key = FeatureComposerDraftStore.newTaskKey(project: project)
+        let saved = try? await draftStore.draft(for: key)
+        guard !Task.isCancelled, projectID == requestedProjectID else { return }
+
+        if let saved {
+            prompt = saved.text
+            attachments = saved.attachments
+            selection = saved.selection ?? initialSelection
+            if let workspace = saved.workspace {
+                workspaceMode = workspace.mode
+                selectedBranch = workspace.branch.map {
+                    FeatureWorkspaceBranch(
+                        name: $0,
+                        worktreePath: workspace.worktreePath
+                    )
+                }
+                startFromOrigin = workspace.startFromOrigin
+            } else {
+                workspaceMode = .local
+                selectedBranch = nil
+                startFromOrigin = true
+            }
+        } else {
+            prompt = ""
+            attachments = []
+            selection = initialSelection
+            workspaceMode = .local
+            selectedBranch = nil
+            startFromOrigin = true
+        }
+        restoredDraftProjectID = requestedProjectID
+        await loadBranches()
+    }
+
+    private var currentDraftKey: String? {
+        guard let project = selectedProject else { return nil }
+        return FeatureComposerDraftStore.newTaskKey(project: project)
+    }
+
+    private var composerDraft: FeatureComposerDraft {
+        FeatureComposerDraft(
+            text: prompt,
+            attachments: attachments,
+            selection: selection,
+            workspace: FeatureComposerWorkspaceDraft(
+                mode: workspaceMode,
+                branch: selectedBranch?.name,
+                worktreePath: workspaceMode == .local
+                    ? NewTaskWorkspaceDefaults.normalizedWorktreePath(
+                        for: selectedBranch,
+                        projectPath: selectedProject?.path ?? ""
+                    )
+                    : nil,
+                startFromOrigin: startFromOrigin
+            )
+        )
+    }
+
+    private func scheduleDraftSave() {
+        guard restoredDraftProjectID == projectID,
+              !submittedSuccessfully,
+              let key = currentDraftKey else {
+            return
+        }
+        draftSaveTask?.cancel()
+        let snapshot = composerDraft
+        draftSaveTask = Task {
+            do {
+                try await Task.sleep(for: .milliseconds(220))
+                try Task.checkCancellation()
+                try await draftStore.setDraft(snapshot, for: key)
+            } catch is CancellationError {
+                return
+            } catch {
+                return
+            }
+        }
+    }
+
+    private func persistCurrentDraftImmediately() {
+        guard restoredDraftProjectID == projectID,
+              !submittedSuccessfully,
+              let key = currentDraftKey else {
+            return
+        }
+        draftSaveTask?.cancel()
+        let snapshot = composerDraft
+        draftSaveTask = nil
+        Task {
+            try? await draftStore.setDraft(snapshot, for: key)
+        }
     }
 
     private static func branchSort(

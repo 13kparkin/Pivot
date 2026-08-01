@@ -237,6 +237,7 @@ public actor T3Client {
         interactionMode: InteractionMode = .default,
         branch: String? = nil,
         worktreePath: String? = nil,
+        worktreePreparation: ThreadWorktreePreparation? = nil,
         attachments: [UploadChatImageAttachment] = [],
         commandID: String = UUID().uuidString,
         messageID: String = UUID().uuidString,
@@ -253,6 +254,7 @@ public actor T3Client {
                 interactionMode: interactionMode,
                 branch: branch,
                 worktreePath: worktreePath,
+                worktreePreparation: worktreePreparation,
                 attachments: attachments,
                 commandID: commandID,
                 messageID: messageID,
@@ -1140,6 +1142,7 @@ public enum OrchestrationCommands {
         interactionMode: InteractionMode = .default,
         branch: String? = nil,
         worktreePath: String? = nil,
+        worktreePreparation: ThreadWorktreePreparation? = nil,
         attachments: [UploadChatImageAttachment] = [],
         commandID: String = UUID().uuidString,
         messageID: String = UUID().uuidString,
@@ -1156,6 +1159,19 @@ public enum OrchestrationCommands {
             "createdAt": .string(createdAt),
         ]
         create["createdAt"] = .string(createdAt)
+        var bootstrap: [String: JSONValue] = ["createThread": .object(create)]
+        if let worktreePreparation {
+            var prepareWorktree: [String: JSONValue] = [
+                "projectCwd": .string(worktreePreparation.projectCwd),
+                "baseBranch": .string(worktreePreparation.baseBranch),
+                "branch": .string(worktreePreparation.branch),
+            ]
+            if worktreePreparation.startFromOrigin {
+                prepareWorktree["startFromOrigin"] = .bool(true)
+            }
+            bootstrap["prepareWorktree"] = .object(prepareWorktree)
+            bootstrap["runSetupScript"] = .bool(true)
+        }
         return .object([
             "type": .string("thread.turn.start"),
             "commandId": .string(commandID),
@@ -1170,7 +1186,7 @@ public enum OrchestrationCommands {
             "titleSeed": .string(title),
             "runtimeMode": .string(runtimeMode.rawValue),
             "interactionMode": .string(interactionMode.rawValue),
-            "bootstrap": .object(["createThread": .object(create)]),
+            "bootstrap": .object(bootstrap),
             "createdAt": .string(createdAt),
         ])
     }

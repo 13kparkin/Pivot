@@ -4,19 +4,41 @@ public struct FeatureComposerDraft: Sendable, Equatable {
     public var text: String
     public var attachments: [FeatureDraftAttachment]
     public var selection: FeatureSelection?
+    public var workspace: FeatureComposerWorkspaceDraft?
 
     public init(
         text: String = "",
         attachments: [FeatureDraftAttachment] = [],
-        selection: FeatureSelection? = nil
+        selection: FeatureSelection? = nil,
+        workspace: FeatureComposerWorkspaceDraft? = nil
     ) {
         self.text = text
         self.attachments = attachments
         self.selection = selection
+        self.workspace = workspace
     }
 
     public var isEmpty: Bool {
-        text.isEmpty && attachments.isEmpty && selection == nil
+        text.isEmpty && attachments.isEmpty && selection == nil && workspace == nil
+    }
+}
+
+public struct FeatureComposerWorkspaceDraft: Sendable, Equatable {
+    public var mode: FeatureWorkspaceMode
+    public var branch: String?
+    public var worktreePath: String?
+    public var startFromOrigin: Bool
+
+    public init(
+        mode: FeatureWorkspaceMode,
+        branch: String?,
+        worktreePath: String?,
+        startFromOrigin: Bool
+    ) {
+        self.mode = mode
+        self.branch = branch
+        self.worktreePath = worktreePath
+        self.startFromOrigin = startFromOrigin
     }
 }
 
@@ -35,18 +57,44 @@ public actor FeatureComposerDraftStore {
         var text: String
         var attachments: [PersistedAttachment]
         var selection: FeatureSelection?
+        var workspace: PersistedWorkspace?
 
         init(_ draft: FeatureComposerDraft) {
             text = draft.text
             attachments = draft.attachments.map(PersistedAttachment.init)
             selection = draft.selection
+            workspace = draft.workspace.map(PersistedWorkspace.init)
         }
 
         var featureValue: FeatureComposerDraft {
             FeatureComposerDraft(
                 text: text,
                 attachments: attachments.map(\.featureValue),
-                selection: selection
+                selection: selection,
+                workspace: workspace?.featureValue
+            )
+        }
+    }
+
+    private struct PersistedWorkspace: Codable {
+        var mode: FeatureWorkspaceMode
+        var branch: String?
+        var worktreePath: String?
+        var startFromOrigin: Bool
+
+        init(_ workspace: FeatureComposerWorkspaceDraft) {
+            mode = workspace.mode
+            branch = workspace.branch
+            worktreePath = workspace.worktreePath
+            startFromOrigin = workspace.startFromOrigin
+        }
+
+        var featureValue: FeatureComposerWorkspaceDraft {
+            FeatureComposerWorkspaceDraft(
+                mode: mode,
+                branch: branch,
+                worktreePath: worktreePath,
+                startFromOrigin: startFromOrigin
             )
         }
     }

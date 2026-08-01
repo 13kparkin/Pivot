@@ -82,6 +82,26 @@ public struct ServerProviderModelSnapshot: Codable, Identifiable, Equatable, Sen
     public let capabilities: ServerModelCapabilities?
 }
 
+public struct ServerProviderSlashCommandSnapshot: Codable, Equatable, Sendable {
+    public struct Input: Codable, Equatable, Sendable {
+        public let hint: String
+    }
+
+    public let name: String
+    public let description: String?
+    public let input: Input?
+}
+
+public struct ServerProviderSkillSnapshot: Codable, Equatable, Sendable {
+    public let name: String
+    public let description: String?
+    public let path: String
+    public let scope: String?
+    public let enabled: Bool
+    public let displayName: String?
+    public let shortDescription: String?
+}
+
 public struct ServerProviderSnapshot: Codable, Identifiable, Equatable, Sendable {
     public var id: String { instanceId }
 
@@ -102,6 +122,8 @@ public struct ServerProviderSnapshot: Codable, Identifiable, Equatable, Sendable
     public let availability: String?
     public let unavailableReason: String?
     public let models: [ServerProviderModelSnapshot]
+    public let slashCommands: [ServerProviderSlashCommandSnapshot]?
+    public let skills: [ServerProviderSkillSnapshot]?
 }
 
 /// Narrow decode view of the much larger `ServerConfig` RPC result.

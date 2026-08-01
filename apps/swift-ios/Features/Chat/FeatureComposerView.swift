@@ -3,6 +3,9 @@ import SwiftUI
 struct FeatureComposerView: View {
     @State private var isManuallyExpanded = false
     @State private var attachmentPreparation = FeatureAttachmentPreparationState()
+    @State private var pathEntries: [FeatureComposerPathEntry] = []
+    @State private var isPathSearchLoading = false
+    @State private var pathSearchError: String?
 
     @Binding private var text: String
     @Binding private var selection: FeatureSelection?
@@ -18,6 +21,7 @@ struct FeatureComposerView: View {
     private let pendingApprovals: [FeatureApproval]
     private let pendingUserInputs: [FeatureUserInput]
     private let isResolvingRequest: Bool
+    private let powerFeatures: FeatureComposerPowerFeatures
     private let onSend: () -> Void
     private let onStop: () -> Void
     private let onApprovalDecision: ((String, FeatureApprovalDecision) -> Void)?
@@ -39,6 +43,7 @@ struct FeatureComposerView: View {
         pendingApprovals: [FeatureApproval] = [],
         pendingUserInputs: [FeatureUserInput] = [],
         isResolvingRequest: Bool = false,
+        powerFeatures: FeatureComposerPowerFeatures = .disabled,
         onApprovalDecision: ((String, FeatureApprovalDecision) -> Void)? = nil,
         onUserInputSubmit: ((String, [String: FeatureInputAnswer]) -> Void)? = nil
     ) {
@@ -57,11 +62,53 @@ struct FeatureComposerView: View {
         self.pendingApprovals = pendingApprovals
         self.pendingUserInputs = pendingUserInputs
         self.isResolvingRequest = isResolvingRequest
+        self.powerFeatures = powerFeatures
         self.onApprovalDecision = onApprovalDecision
         self.onUserInputSubmit = onUserInputSubmit
     }
 
     var body: some View {
+        composerSurface
+            .overlay(alignment: .top) {
+                if showsCommandMenu, let trigger = composerTrigger {
+                    FeatureComposerCommandPopover(
+                        triggerKind: trigger.kind,
+                        items: commandMenuItems,
+                        isLoading: isPathSearchLoading,
+                        errorMessage: pathSearchError,
+                        pathSearchAvailable: powerFeatures.searchPaths != nil,
+                        onSelect: selectCommandItem
+                    )
+                    .alignmentGuide(.top) { dimensions in
+                        dimensions[.bottom] + 8
+                    }
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.top, 12)
+            .padding(.bottom, 10)
+            .background {
+                LinearGradient(
+                    colors: [.clear, .black.opacity(0.94), .black],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+                .ignoresSafeArea()
+            }
+            .onChange(of: focused.wrappedValue) {
+                if !focused.wrappedValue,
+                   textIsEmpty,
+                   attachments.isEmpty,
+                   !attachmentPreparation.isPreparing {
+                    isManuallyExpanded = false
+                }
+            }
+            .task(id: pathSearchRequest) {
+                await updatePathSearch()
+            }
+    }
+
+    private var composerSurface: some View {
         VStack(spacing: 0) {
             if let approval = pendingApprovals.first, let onApprovalDecision {
                 FeatureComposerApprovalPanel(
@@ -94,25 +141,6 @@ struct FeatureComposerView: View {
                 .stroke(Color.white.opacity(0.105), lineWidth: 1)
         }
         .clipShape(composerShape)
-        .padding(.horizontal, 12)
-        .padding(.top, 12)
-        .padding(.bottom, 10)
-        .background {
-            LinearGradient(
-                colors: [.clear, .black.opacity(0.94), .black],
-                startPoint: .top,
-                endPoint: .bottom
-            )
-            .ignoresSafeArea()
-        }
-        .onChange(of: focused.wrappedValue) {
-            if !focused.wrappedValue,
-               textIsEmpty,
-               attachments.isEmpty,
-               !attachmentPreparation.isPreparing {
-                isManuallyExpanded = false
-            }
-        }
     }
 
     private var collapsedComposer: some View {
@@ -276,7 +304,8 @@ struct FeatureComposerView: View {
     }
 
     private var canSend: Bool {
-        FeatureComposerSubmissionEligibility.canSend(
+        guard composerTrigger?.kind != .model else { return false }
+        return FeatureComposerSubmissionEligibility.canSend(
             text: text,
             attachmentCount: attachments.count,
             imagesAllowed: imagesAllowed,
@@ -289,6 +318,99 @@ struct FeatureComposerView: View {
         DailyUXModelOptions.supportsImages(selection: selection, providers: providers)
     }
 
+    private var composerTrigger: FeatureComposerTrigger? {
+        FeatureComposerTriggerParser.detect(in: text)
+    }
+
+    private var commandMenuItems: [FeatureComposerMenuItem] {
+        guard let composerTrigger else { return [] }
+        return FeatureComposerMenuBuilder.items(
+            trigger: composerTrigger,
+            providers: providers,
+            currentSelection: selection,
+            threadSelection: threadSelection,
+            powerFeatures: powerFeatures,
+            pathEntries: pathEntries
+        )
+    }
+
+    private var showsCommandMenu: Bool {
+        isExpanded
+            && pendingApprovals.isEmpty
+            && pendingUserInputs.isEmpty
+            && composerTrigger != nil
+    }
+
+    private var pathSearchRequest: FeatureComposerPathSearchRequest? {
+        guard let trigger = composerTrigger,
+              trigger.kind == .path,
+              powerFeatures.searchPaths != nil else {
+            return nil
+        }
+        let query = trigger.query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else { return nil }
+        return FeatureComposerPathSearchRequest(
+            scopeID: powerFeatures.pathSearchScopeID,
+            query: query
+        )
+    }
+
+    @MainActor
+    private func updatePathSearch() async {
+        guard let request = pathSearchRequest, let searchPaths = powerFeatures.searchPaths else {
+            pathEntries = []
+            isPathSearchLoading = false
+            pathSearchError = nil
+            return
+        }
+
+        pathEntries = []
+        pathSearchError = nil
+        isPathSearchLoading = true
+        do {
+            try await Task.sleep(for: .milliseconds(140))
+            let result = try await searchPaths(request.query)
+            guard !Task.isCancelled else { return }
+            pathEntries = result
+            isPathSearchLoading = false
+        } catch is CancellationError {
+            return
+        } catch {
+            guard !Task.isCancelled else { return }
+            pathSearchError = "Couldn’t search files."
+            isPathSearchLoading = false
+        }
+    }
+
+    private func selectCommandItem(_ item: FeatureComposerMenuItem) {
+        guard let trigger = composerTrigger else { return }
+        let replacement: String
+        switch item {
+        case .modelCommand:
+            replacement = "/model "
+        case let .model(nextSelection, _, _):
+            selection = nextSelection
+            replacement = ""
+        case let .providerCommand(command):
+            replacement = "/\(command.name) "
+        case let .skill(skill):
+            replacement = "$\(skill.name) "
+        case let .path(entry):
+            replacement = FeatureComposerFileLinkSerializer.markdownLink(for: entry.path) + " "
+        }
+        text = FeatureComposerTriggerParser.replacing(
+            trigger.range,
+            in: text,
+            with: replacement
+        )
+        pathEntries = []
+        pathSearchError = nil
+        Task { @MainActor in
+            await Task.yield()
+            focused.wrappedValue = true
+        }
+    }
+
     private func performPrimaryAction() {
         if showsStop {
             onStop()
@@ -297,6 +419,11 @@ struct FeatureComposerView: View {
         }
     }
 
+}
+
+private struct FeatureComposerPathSearchRequest: Hashable {
+    let scopeID: String
+    let query: String
 }
 
 enum FeatureComposerSubmissionEligibility {

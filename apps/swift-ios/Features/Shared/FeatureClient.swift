@@ -62,6 +62,16 @@ public protocol FeatureClient: AnyObject {
     func saveSettings(_ settings: FeatureSettings) async throws
 
     func listFiles(threadID: String, path: String?) async throws -> [FeatureFileEntry]
+    func searchProjectFiles(
+        projectID: String,
+        query: String,
+        limit: Int
+    ) async throws -> [FeatureFileEntry]
+    func searchThreadFiles(
+        threadID: String,
+        query: String,
+        limit: Int
+    ) async throws -> [FeatureFileEntry]
     func readFile(threadID: String, path: String) async throws -> FeatureFileContent
     func loadReview(threadID: String) async throws -> FeatureReview
 
@@ -172,6 +182,22 @@ public extension FeatureClient {
 
     func listFiles(threadID: String, path: String?) async throws -> [FeatureFileEntry] {
         throw FeatureCapabilityUnavailable("Files")
+    }
+
+    func searchProjectFiles(
+        projectID: String,
+        query: String,
+        limit: Int
+    ) async throws -> [FeatureFileEntry] {
+        throw FeatureCapabilityUnavailable("File search")
+    }
+
+    func searchThreadFiles(
+        threadID: String,
+        query: String,
+        limit: Int
+    ) async throws -> [FeatureFileEntry] {
+        throw FeatureCapabilityUnavailable("File search")
     }
 
     func readFile(threadID: String, path: String) async throws -> FeatureFileContent {

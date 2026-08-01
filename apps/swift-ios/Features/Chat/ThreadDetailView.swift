@@ -139,7 +139,7 @@ public struct ThreadDetailView: View {
            defaultSelection.modelID == modelID {
             return defaultSelection
         }
-        let provider = model.snapshot.providers.first { $0.id == providerID }
+        let provider = threadProviders.first { $0.id == providerID }
         let featureModel = provider?.models.first { $0.id == modelID }
         let savedOptions = detail?.thread.modelOptions ?? thread.modelOptions
         return FeatureSelection(
@@ -323,7 +323,7 @@ public struct ThreadDetailView: View {
                 text: $draft,
                 selection: $selection,
                 attachments: $attachments,
-                providers: model.snapshot.providers,
+                providers: threadProviders,
                 threadSelection: currentSelection,
                 isSending: isSending,
                 isWorking: detail.thread.state == .working || detail.thread.state == .queued,
@@ -335,6 +335,7 @@ public struct ThreadDetailView: View {
                 pendingApprovals: detail.approvals,
                 pendingUserInputs: detail.userInputs,
                 isResolvingRequest: model.isPerformingAction,
+                powerFeatures: composerPowerFeatures,
                 onApprovalDecision: { id, decision in
                     Task { await model.resolveApproval(id, decision: decision) }
                 },
@@ -356,6 +357,33 @@ public struct ThreadDetailView: View {
                 }
                 dismissKeyboard()
             }
+    }
+
+    private var composerPowerFeatures: FeatureComposerPowerFeatures {
+        let selectedProviderID = selection?.providerID ?? currentSelection?.providerID
+        let provider = threadProviders.first { $0.id == selectedProviderID }
+        return FeatureComposerPowerFeatures(
+            slashCommands: provider?.slashCommands ?? [],
+            skills: provider?.skills ?? [],
+            pathSearchScopeID: currentThread.id,
+            searchPaths: { query in
+                try await model.client.searchThreadFiles(
+                    threadID: currentThread.id,
+                    query: query,
+                    limit: 20
+                ).map { entry in
+                    FeatureComposerPathEntry(
+                        path: entry.path,
+                        kind: entry.kind == .directory ? .directory : .file
+                    )
+                }
+            }
+        )
+    }
+
+    private var threadProviders: [FeatureProvider] {
+        let project = model.snapshot.projects.first { $0.id == currentThread.projectID }
+        return DailyUXCreationContext.providers(for: project, in: model.snapshot)
     }
 
     private func dismissKeyboard() {

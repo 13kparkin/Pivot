@@ -91,6 +91,42 @@ final class CoreContractTests: XCTestCase {
         )
     }
 
+    func testFirstSendCanPrepareAWorktreeBeforeDispatchingTheTurn() throws {
+        let command = try OrchestrationCommands.createThreadAndSend(
+            threadID: "thread-worktree",
+            projectID: "project-1",
+            title: "Build in isolation",
+            text: "Build in isolation",
+            model: ModelSelection(instanceId: "codex", model: "gpt-5.6-sol"),
+            runtimeMode: .fullAccess,
+            branch: "main",
+            worktreePreparation: ThreadWorktreePreparation(
+                projectCwd: "/work/t3",
+                baseBranch: "main",
+                branch: "t3code/deadbeef",
+                startFromOrigin: true
+            )
+        )
+
+        XCTAssertEqual(
+            command["bootstrap"]?["prepareWorktree"]?["projectCwd"]?.stringValue,
+            "/work/t3"
+        )
+        XCTAssertEqual(
+            command["bootstrap"]?["prepareWorktree"]?["baseBranch"]?.stringValue,
+            "main"
+        )
+        XCTAssertEqual(
+            command["bootstrap"]?["prepareWorktree"]?["branch"]?.stringValue,
+            "t3code/deadbeef"
+        )
+        XCTAssertEqual(
+            command["bootstrap"]?["prepareWorktree"]?["startFromOrigin"],
+            .bool(true)
+        )
+        XCTAssertEqual(command["bootstrap"]?["runSetupScript"], .bool(true))
+    }
+
     func testEnvironmentStorePersistsSelectionAndClearsRemovedActiveEnvironment() async throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("t3-swift-core-\(UUID().uuidString)", isDirectory: true)

@@ -629,6 +629,8 @@ public struct FeatureProvider: Identifiable, Sendable, Equatable, Hashable, Coda
     public var driver: String
     public var requiresNewThreadForModelChange: Bool
     public var models: [FeatureModel]
+    public var slashCommands: [FeatureProviderSlashCommand]?
+    public var skills: [FeatureProviderSkill]?
 
     public init(
         id: String,
@@ -636,7 +638,9 @@ public struct FeatureProvider: Identifiable, Sendable, Equatable, Hashable, Coda
         isAvailable: Bool = true,
         driver: String = "",
         requiresNewThreadForModelChange: Bool = false,
-        models: [FeatureModel] = []
+        models: [FeatureModel] = [],
+        slashCommands: [FeatureProviderSlashCommand] = [],
+        skills: [FeatureProviderSkill] = []
     ) {
         self.id = id
         self.name = name
@@ -644,6 +648,8 @@ public struct FeatureProvider: Identifiable, Sendable, Equatable, Hashable, Coda
         self.driver = driver
         self.requiresNewThreadForModelChange = requiresNewThreadForModelChange
         self.models = models
+        self.slashCommands = slashCommands
+        self.skills = skills
     }
 }
 
@@ -693,6 +699,9 @@ public struct FeatureSnapshot: Sendable, Equatable, Codable {
     public var projects: [FeatureProject]
     public var threads: [FeatureThread]
     public var providers: [FeatureProvider]
+    /// Provider catalogues are environment-scoped. `providers` remains the
+    /// active environment's catalogue for source-compatible consumers.
+    public var providersByEnvironment: [String: [FeatureProvider]]?
     public var settings: FeatureSettings
 
     public init(
@@ -701,6 +710,7 @@ public struct FeatureSnapshot: Sendable, Equatable, Codable {
         projects: [FeatureProject] = [],
         threads: [FeatureThread] = [],
         providers: [FeatureProvider] = [],
+        providersByEnvironment: [String: [FeatureProvider]]? = nil,
         settings: FeatureSettings = .init()
     ) {
         self.connection = connection
@@ -708,6 +718,7 @@ public struct FeatureSnapshot: Sendable, Equatable, Codable {
         self.projects = projects
         self.threads = threads
         self.providers = providers
+        self.providersByEnvironment = providersByEnvironment
         self.settings = settings
     }
 }

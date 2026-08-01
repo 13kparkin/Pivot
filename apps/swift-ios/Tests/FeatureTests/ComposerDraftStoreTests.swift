@@ -19,7 +19,13 @@ struct ComposerDraftStoreTests {
         let draft = FeatureComposerDraft(
             text: "Keep this work",
             attachments: [attachment],
-            selection: FeatureSelection(providerID: "openai", modelID: "gpt-5.6")
+            selection: FeatureSelection(providerID: "openai", modelID: "gpt-5.6"),
+            workspace: FeatureComposerWorkspaceDraft(
+                mode: .worktree,
+                branch: "main",
+                worktreePath: nil,
+                startFromOrigin: true
+            )
         )
 
         try await store.setDraft(draft, for: "environment:test:thread:one")

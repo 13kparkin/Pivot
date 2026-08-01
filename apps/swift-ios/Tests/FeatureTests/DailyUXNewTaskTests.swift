@@ -91,7 +91,7 @@ struct DailyUXNewTaskTests {
     }
 
     @Test
-    func passiveProjectsKeepTheirOwnModelCatalogAndDefault() throws {
+    func passiveProjectsExposeTheirFullEnvironmentModelCatalogAndDefault() throws {
         let passiveDefault = FeatureSelection(
             providerID: "claudeAgent",
             modelID: "claude-opus-4-1"
@@ -148,6 +148,18 @@ struct DailyUXNewTaskTests {
                     name: "Codex",
                     models: [.init(id: "gpt-5.6-sol", name: "GPT-5.6")]
                 ),
+            ],
+            providersByEnvironment: [
+                "passive": [
+                    .init(
+                        id: "claudeAgent",
+                        name: "Claude",
+                        models: [
+                            .init(id: "claude-opus-4-1", name: "Opus"),
+                            .init(id: "claude-sonnet-4", name: "Sonnet"),
+                        ]
+                    ),
+                ],
             ]
         )
 
@@ -160,7 +172,10 @@ struct DailyUXNewTaskTests {
             in: snapshot
         )
         #expect(passiveProviders.map(\.id) == ["claudeAgent"])
-        #expect(passiveProviders.first?.models.map(\.id) == ["claude-opus-4-1"])
+        #expect(
+            passiveProviders.first?.models.map(\.id)
+                == ["claude-opus-4-1", "claude-sonnet-4"]
+        )
         #expect(
             DailyUXCreationContext.initialSelection(for: passiveProject, in: snapshot)
                 == passiveDefault

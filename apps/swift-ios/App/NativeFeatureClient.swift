@@ -33,6 +33,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging, FeaturePr
     private var environmentConnectionStates: [String: FeatureConnection.State] = [:]
     private var environmentConnectionDetails: [String: String] = [:]
     private var latestServerConfig: ServerConfigSnapshot?
+    private var serverConfigsByEnvironmentID: [String: ServerConfigSnapshot] = [:]
     private var latestSnapshot: FeatureSnapshot?
     private var activeThreadID: String?
     private var activeThreadEnvironmentID: String?
@@ -239,6 +240,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging, FeaturePr
         if !preserveEnvironmentSnapshots {
             environmentClients.removeAll()
             shellsByEnvironmentID.removeAll()
+            serverConfigsByEnvironmentID.removeAll()
             archivedThreadsByEnvironmentID.removeAll()
             projectEnvironmentIDs.removeAll()
             projectWireIDs.removeAll()
@@ -350,6 +352,29 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging, FeaturePr
         try await refresh(client: client)
     }
 
+    func listWorkspaceBranches(
+        projectID: String,
+        refresh: Bool
+    ) async throws -> [FeatureWorkspaceBranch] {
+        let route = try projectRoute(for: projectID)
+        let project = try project(for: route)
+        let result = try await route.client.listVCSRefs(
+            cwd: project.workspaceRoot,
+            refresh: refresh,
+            limit: 100
+        )
+        guard result.isRepo else { return [] }
+        return result.refs.map { ref in
+            FeatureWorkspaceBranch(
+                name: ref.name,
+                isRemote: ref.isRemote ?? false,
+                isCurrent: ref.current,
+                isDefault: ref.isDefault,
+                worktreePath: ref.worktreePath
+            )
+        }
+    }
+
     func createThread(
         projectID: String,
         title: String?,
@@ -416,10 +441,42 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging, FeaturePr
         interactionMode: FeatureInteractionMode,
         attachments: [FeatureUploadAttachment]
     ) async throws -> FeatureThread {
+        try await createThreadAndSend(
+            projectID: projectID,
+            prompt: prompt,
+            selection: selection,
+            runtimeMode: runtimeMode,
+            interactionMode: interactionMode,
+            workspaceMode: .local,
+            branch: nil,
+            worktreePath: nil,
+            startFromOrigin: false,
+            attachments: attachments
+        )
+    }
+
+    func createThreadAndSend(
+        projectID: String,
+        prompt: String,
+        selection: FeatureSelection?,
+        runtimeMode: FeatureRuntimeMode,
+        interactionMode: FeatureInteractionMode,
+        workspaceMode: FeatureWorkspaceMode,
+        branch: String?,
+        worktreePath: String?,
+        startFromOrigin: Bool,
+        attachments: [FeatureUploadAttachment]
+    ) async throws -> FeatureThread {
         let route = try projectRoute(for: projectID)
         let client = route.client
         let environment = client.environment
         let generation = environmentGeneration
+        let routedProject = try project(for: route)
+        let branch = branch?.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard workspaceMode != .worktree || branch?.isEmpty == false else {
+            throw NativeFeatureClientError.branchRequired
+        }
+        let worktreePath = workspaceMode == .local ? worktreePath : nil
         let model = modelSelection(
             selection,
             projectID: route.wireID,
@@ -435,6 +492,10 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging, FeaturePr
             model: model,
             runtimeMode: runtime,
             interactionMode: interaction,
+            workspaceMode: workspaceMode,
+            branch: branch,
+            worktreePath: worktreePath,
+            startFromOrigin: startFromOrigin,
             attachments: attachments
         )
         let pending: PendingBootstrapSubmission
@@ -445,7 +506,10 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging, FeaturePr
             pending = PendingBootstrapSubmission(
                 signature: signature,
                 threadID: UUID().uuidString,
-                identity: CommandIdentity()
+                identity: CommandIdentity(),
+                worktreeBranchName: workspaceMode == .worktree
+                    ? Self.temporaryWorktreeBranchName()
+                    : nil
             )
             pendingBootstrapSubmission = pending
         }
@@ -459,6 +523,18 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging, FeaturePr
                 model: model,
                 runtimeMode: runtime,
                 interactionMode: interaction,
+                branch: branch,
+                worktreePath: worktreePath,
+                worktreePreparation: pending.worktreeBranchName.flatMap { worktreeBranch in
+                    branch.map {
+                        ThreadWorktreePreparation(
+                            projectCwd: routedProject.workspaceRoot,
+                            baseBranch: $0,
+                            branch: worktreeBranch,
+                            startFromOrigin: startFromOrigin
+                        )
+                    }
+                },
                 attachments: uploads,
                 commandID: pending.identity.commandID,
                 messageID: pending.identity.messageID,
@@ -519,6 +595,8 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging, FeaturePr
             environmentID: environment.id,
             environmentName: environment.label,
             title: title,
+            branch: workspaceMode == .worktree ? pending.worktreeBranchName : branch,
+            worktreePath: worktreePath,
             providerID: model.instanceId,
             providerName: providerDisplayName(model.instanceId),
             modelID: model.model,
@@ -889,6 +967,46 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging, FeaturePr
         return NativeWorkspaceMapper.files(result.entries, directory: path)
     }
 
+    func searchProjectFiles(
+        projectID: String,
+        query: String,
+        limit: Int
+    ) async throws -> [FeatureFileEntry] {
+        let route = try projectRoute(for: projectID)
+        let project = try project(for: route)
+        let result = try await route.client.searchProjectEntries(
+            cwd: project.workspaceRoot,
+            query: query,
+            limit: limit
+        )
+        return result.entries.map(Self.mapSearchEntry)
+    }
+
+    func searchThreadFiles(
+        threadID: String,
+        query: String,
+        limit: Int
+    ) async throws -> [FeatureFileEntry] {
+        let route = try threadRoute(for: threadID)
+        let context = try workspaceContext(route: route)
+        let result = try await route.client.searchProjectEntries(
+            cwd: context.cwd,
+            query: query,
+            limit: limit
+        )
+        return result.entries.map(Self.mapSearchEntry)
+    }
+
+    private static func mapSearchEntry(_ entry: ProjectEntry) -> FeatureFileEntry {
+        let name = URL(fileURLWithPath: entry.path).lastPathComponent
+        return FeatureFileEntry(
+            path: entry.path,
+            name: name,
+            kind: entry.kind == .directory ? .directory : .file,
+            isHidden: name.hasPrefix(".")
+        )
+    }
+
     func readFile(threadID: String, path: String) async throws -> FeatureFileContent {
         let route = try threadRoute(for: threadID)
         let context = try workspaceContext(route: route)
@@ -1127,6 +1245,15 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging, FeaturePr
             environmentID: environmentID,
             client: client
         )
+    }
+
+    private func project(for route: NativeProjectRoute) throws -> OrchestrationProject {
+        guard let project = shellsByEnvironmentID[route.environmentID]?.projects.first(where: {
+            $0.id == route.wireID
+        }) else {
+            throw NativeFeatureClientError.projectNotFound
+        }
+        return project
     }
 
     private func threadRoute(for threadID: String) throws -> NativeThreadRoute {
@@ -1408,8 +1535,11 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging, FeaturePr
                     switch event {
                     case let .snapshot(config):
                         self.latestServerConfig = config
+                        self.serverConfigsByEnvironmentID[activeClient.environment.id] = config
                     case let .providerStatuses(providers):
-                        self.latestServerConfig = ServerConfigSnapshot(providers: providers)
+                        let config = ServerConfigSnapshot(providers: providers)
+                        self.latestServerConfig = config
+                        self.serverConfigsByEnvironmentID[activeClient.environment.id] = config
                     case .unrelated:
                         continue
                     }
@@ -1854,10 +1984,13 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging, FeaturePr
         return await withTaskGroup(of: EnvironmentShellLoad.self) { group in
             for pair in clients {
                 group.addTask {
-                    EnvironmentShellLoad(
+                    async let shell: OrchestrationShellSnapshot? = try? await pair.client.shellSnapshot()
+                    async let config: ServerConfigSnapshot? = try? await pair.client.serverConfig()
+                    return await EnvironmentShellLoad(
                         environment: pair.environment,
                         client: pair.client,
-                        shell: try? await pair.client.shellSnapshot()
+                        shell: shell,
+                        config: config
                     )
                 }
             }
@@ -1879,6 +2012,9 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging, FeaturePr
         let savedIDs = Set(savedEnvironments.map(\.id))
         environmentClients = environmentClients.filter { savedIDs.contains($0.key) }
         shellsByEnvironmentID = shellsByEnvironmentID.filter { savedIDs.contains($0.key) }
+        serverConfigsByEnvironmentID = serverConfigsByEnvironmentID.filter {
+            savedIDs.contains($0.key)
+        }
         archivedThreadsByEnvironmentID = archivedThreadsByEnvironmentID.filter {
             savedIDs.contains($0.key)
         }
@@ -1891,6 +2027,12 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging, FeaturePr
 
         for load in loads {
             environmentClients[load.environment.id] = load.client
+            if let config = load.config {
+                serverConfigsByEnvironmentID[load.environment.id] = config
+                if load.environment.id == activeEnvironment?.id {
+                    latestServerConfig = config
+                }
+            }
             if let shell = load.shell {
                 shellsByEnvironmentID[load.environment.id] = shell
                 environmentConnectionStates[load.environment.id] = .connected
@@ -2358,7 +2500,15 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging, FeaturePr
                 )
             }
         }
-        let activeShell = shellsByEnvironmentID[activeEnvironment.id]
+        let providersByEnvironment = environments.reduce(
+            into: [String: [FeatureProvider]]()
+        ) { catalogues, environment in
+            guard let shell = shellsByEnvironmentID[environment.id] else { return }
+            catalogues[environment.id] = mapProviders(
+                shell,
+                config: serverConfigsByEnvironmentID[environment.id]
+            )
+        }
         return FeatureSnapshot(
             connection: FeatureConnection(
                 state: connectionState,
@@ -2371,7 +2521,8 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging, FeaturePr
             },
             projects: projects,
             threads: threads,
-            providers: activeShell.map(mapProviders) ?? [],
+            providers: providersByEnvironment[activeEnvironment.id] ?? [],
+            providersByEnvironment: providersByEnvironment,
             settings: loadSettings()
         )
     }
@@ -2999,8 +3150,11 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging, FeaturePr
         .default
     }
 
-    private func mapProviders(_ shell: OrchestrationShellSnapshot) -> [FeatureProvider] {
-        if let providers = latestServerConfig?.providers, !providers.isEmpty {
+    private func mapProviders(
+        _ shell: OrchestrationShellSnapshot,
+        config: ServerConfigSnapshot?
+    ) -> [FeatureProvider] {
+        if let providers = config?.providers, !providers.isEmpty {
             return providers.map { provider in
                 FeatureProvider(
                     id: provider.instanceId,
@@ -3029,6 +3183,24 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging, FeaturePr
                             },
                             isDefault: model.isDefault ?? false,
                             options: options
+                        )
+                    },
+                    slashCommands: (provider.slashCommands ?? []).map { command in
+                        FeatureProviderSlashCommand(
+                            name: command.name,
+                            description: command.description,
+                            inputHint: command.input?.hint
+                        )
+                    },
+                    skills: (provider.skills ?? []).map { skill in
+                        FeatureProviderSkill(
+                            name: skill.name,
+                            displayName: skill.displayName,
+                            description: skill.description,
+                            shortDescription: skill.shortDescription,
+                            path: skill.path,
+                            scope: skill.scope,
+                            isEnabled: skill.enabled
                         )
                     }
                 )
@@ -3406,6 +3578,10 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging, FeaturePr
         }
         guard compact.count > 72 else { return compact }
         return "\(compact.prefix(69).trimmingCharacters(in: .whitespacesAndNewlines))..."
+    }
+
+    private static func temporaryWorktreeBranchName() -> String {
+        "t3code/\(UUID().uuidString.prefix(8).lowercased())"
     }
 
     private func previewText(_ text: String?) -> String? {
@@ -3884,6 +4060,7 @@ private struct EnvironmentShellLoad: Sendable {
     let environment: Environment
     let client: T3Client
     let shell: OrchestrationShellSnapshot?
+    let config: ServerConfigSnapshot?
 }
 
 private struct EntityWireOwner: Hashable {
@@ -3937,6 +4114,10 @@ private struct BootstrapSubmissionSignature: Equatable {
     let model: ModelSelection
     let runtimeMode: RuntimeMode
     let interactionMode: InteractionMode
+    let workspaceMode: FeatureWorkspaceMode
+    let branch: String?
+    let worktreePath: String?
+    let startFromOrigin: Bool
     let attachments: [FeatureUploadAttachment]
 }
 
@@ -3944,6 +4125,7 @@ private struct PendingBootstrapSubmission {
     let signature: BootstrapSubmissionSignature
     let threadID: String
     let identity: CommandIdentity
+    let worktreeBranchName: String?
 }
 
 private struct TurnSubmissionSignature: Equatable {
@@ -3968,6 +4150,7 @@ private enum NativeFeatureClientError: LocalizedError {
     case approvalNotFound
     case inputRequestNotFound
     case invalidProjectPath
+    case branchRequired
     case terminalNotOpen
     case deviceSessionNotFound
     case missingScope(String)
@@ -3983,6 +4166,7 @@ private enum NativeFeatureClientError: LocalizedError {
         case .approvalNotFound: "The approval request is no longer active."
         case .inputRequestNotFound: "The input request is no longer active."
         case .invalidProjectPath: "Enter a workspace path on the connected environment."
+        case .branchRequired: "Choose a base branch for the new worktree."
         case .terminalNotOpen: "Open the terminal before sending input."
         case .deviceSessionNotFound: "That device session is no longer active."
         case .missingScope: "This connection does not have permission to manage devices."

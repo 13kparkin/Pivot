@@ -28,6 +28,25 @@ public struct ProjectWriteFileResult: Codable, Equatable, Sendable {
     public let relativePath: String
 }
 
+public struct ThreadWorktreePreparation: Equatable, Sendable {
+    public let projectCwd: String
+    public let baseBranch: String
+    public let branch: String
+    public let startFromOrigin: Bool
+
+    public init(
+        projectCwd: String,
+        baseBranch: String,
+        branch: String,
+        startFromOrigin: Bool
+    ) {
+        self.projectCwd = projectCwd
+        self.baseBranch = baseBranch
+        self.branch = branch
+        self.startFromOrigin = startFromOrigin
+    }
+}
+
 public struct FilesystemBrowseEntry: Codable, Equatable, Sendable {
     public let name: String
     public let fullPath: String

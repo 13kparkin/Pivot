@@ -114,6 +114,11 @@ enum DailyUXCreationContext {
         for project: FeatureProject?,
         in snapshot: FeatureSnapshot
     ) -> [FeatureProvider] {
+        if let project,
+           let providers = snapshot.providersByEnvironment?[project.environmentID],
+           !providers.isEmpty {
+            return providers
+        }
         guard let project,
               let activeID = snapshot.environments.first(where: \.isActive)?.id,
               project.environmentID != activeID else {
