@@ -4274,7 +4274,11 @@ export function makeClaudeAdapterV2(
                 const status = claudeWorkflowAgentStatus(entry);
                 if (status === null) continue;
                 const phaseIndex = nonNegativeRecordField(entry, ["phaseIndex", "phase_index"]);
-                const attempt = (nonNegativeInteger(recordField(entry, "attempt")) ?? 0) + 1;
+                // The live SDK reports `attempt` 1-based once an agent starts
+                // (verified against 2.1.x: first attempts arrive as 1, and a
+                // +1 here stamped every agent with a spurious "retry 2"
+                // badge). Clamp 0 — absent or pre-start — up to 1 instead.
+                const attempt = Math.max(nonNegativeInteger(recordField(entry, "attempt")) ?? 1, 1);
                 const model = recordField(entry, "model");
                 const lastToolName = firstRecordField(entry, ["lastToolName", "last_tool_name"]);
                 const tokens = nonNegativeRecordField(entry, ["tokens", "total_tokens"]);
