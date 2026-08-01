@@ -65,15 +65,15 @@ does not embed a JavaScript runtime.
 The project expands these user-defined Xcode build settings into its generated
 Info.plist:
 
-| Setting | Required | Purpose |
-| --- | --- | --- |
-| `T3CODE_CLERK_PUBLISHABLE_KEY` | T3 Connect only | Clerk publishable key. |
-| `T3CODE_CLERK_JWT_TEMPLATE` | No | Relay JWT template; defaults to `t3-relay`. |
-| `T3CODE_RELAY_URL` | T3 Connect only | Relay base URL using HTTPS. |
-| `DEVELOPMENT_TEAM` | Device/archive | Apple Developer team used by automatic signing. |
-| `PRODUCT_BUNDLE_IDENTIFIER` | No | Defaults to `com.t3tools.t3code.swiftui`. |
-| `MARKETING_VERSION` | Release | User-facing version. |
-| `CURRENT_PROJECT_VERSION` | Release | Monotonically increasing build number. |
+| Setting                        | Required        | Purpose                                         |
+| ------------------------------ | --------------- | ----------------------------------------------- |
+| `T3CODE_CLERK_PUBLISHABLE_KEY` | T3 Connect only | Clerk publishable key.                          |
+| `T3CODE_CLERK_JWT_TEMPLATE`    | No              | Relay JWT template; defaults to `t3-relay`.     |
+| `T3CODE_RELAY_URL`             | T3 Connect only | Relay base URL using HTTPS.                     |
+| `DEVELOPMENT_TEAM`             | Device/archive  | Apple Developer team used by automatic signing. |
+| `PRODUCT_BUNDLE_IDENTIFIER`    | No              | Defaults to `com.t3tools.t3code.swiftui`.       |
+| `MARKETING_VERSION`            | Release         | User-facing version.                            |
+| `CURRENT_PROJECT_VERSION`      | Release         | Monotonically increasing build number.          |
 
 Unset T3 Connect values disable that connection method without affecting direct
 pairing. Supply settings on the `xcodebuild` command line or through a local
