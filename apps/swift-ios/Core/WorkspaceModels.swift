@@ -76,6 +76,214 @@ public struct SourceControlPublishResult: Codable, Equatable, Sendable {
     public let status: String
 }
 
+public enum SourceControlDiscoveryStatus: String, Codable, Sendable {
+    case available
+    case missing
+}
+
+public enum SourceControlProviderAuthStatus: String, Codable, Sendable {
+    case authenticated
+    case unauthenticated
+    case unknown
+}
+
+public struct SourceControlProviderAuth: Decodable, Equatable, Sendable {
+    public let status: SourceControlProviderAuthStatus
+    public let account: String?
+    public let host: String?
+    public let detail: String?
+
+    private enum CodingKeys: String, CodingKey {
+        case status
+        case account
+        case host
+        case detail
+    }
+
+    public init(
+        status: SourceControlProviderAuthStatus,
+        account: String? = nil,
+        host: String? = nil,
+        detail: String? = nil
+    ) {
+        self.status = status
+        self.account = account
+        self.host = host
+        self.detail = detail
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        status = try container.decode(SourceControlProviderAuthStatus.self, forKey: .status)
+        account = try container.decodeEffectOptionalString(forKey: .account)
+        host = try container.decodeEffectOptionalString(forKey: .host)
+        detail = try container.decodeEffectOptionalString(forKey: .detail)
+    }
+}
+
+public struct SourceControlVCSDiscoveryItem: Decodable, Equatable, Sendable {
+    public let kind: String
+    public let label: String
+    public let executable: String?
+    public let implemented: Bool
+    public let status: SourceControlDiscoveryStatus
+    public let version: String?
+    public let installHint: String
+    public let detail: String?
+
+    private enum CodingKeys: String, CodingKey {
+        case kind
+        case label
+        case executable
+        case implemented
+        case status
+        case version
+        case installHint
+        case detail
+    }
+
+    public init(
+        kind: String,
+        label: String,
+        executable: String? = nil,
+        implemented: Bool,
+        status: SourceControlDiscoveryStatus,
+        version: String? = nil,
+        installHint: String,
+        detail: String? = nil
+    ) {
+        self.kind = kind
+        self.label = label
+        self.executable = executable
+        self.implemented = implemented
+        self.status = status
+        self.version = version
+        self.installHint = installHint
+        self.detail = detail
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        kind = try container.decode(String.self, forKey: .kind)
+        label = try container.decode(String.self, forKey: .label)
+        executable = try container.decodeIfPresent(String.self, forKey: .executable)
+        implemented = try container.decode(Bool.self, forKey: .implemented)
+        status = try container.decode(SourceControlDiscoveryStatus.self, forKey: .status)
+        version = try container.decodeEffectOptionalString(forKey: .version)
+        installHint = try container.decode(String.self, forKey: .installHint)
+        detail = try container.decodeEffectOptionalString(forKey: .detail)
+    }
+}
+
+public struct SourceControlProviderDiscoveryItem: Decodable, Equatable, Sendable {
+    public let kind: SourceControlProviderKind
+    public let label: String
+    public let executable: String?
+    public let status: SourceControlDiscoveryStatus
+    public let version: String?
+    public let installHint: String
+    public let detail: String?
+    public let auth: SourceControlProviderAuth
+
+    private enum CodingKeys: String, CodingKey {
+        case kind
+        case label
+        case executable
+        case status
+        case version
+        case installHint
+        case detail
+        case auth
+    }
+
+    public init(
+        kind: SourceControlProviderKind,
+        label: String,
+        executable: String? = nil,
+        status: SourceControlDiscoveryStatus,
+        version: String? = nil,
+        installHint: String,
+        detail: String? = nil,
+        auth: SourceControlProviderAuth
+    ) {
+        self.kind = kind
+        self.label = label
+        self.executable = executable
+        self.status = status
+        self.version = version
+        self.installHint = installHint
+        self.detail = detail
+        self.auth = auth
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        kind = try container.decode(SourceControlProviderKind.self, forKey: .kind)
+        label = try container.decode(String.self, forKey: .label)
+        executable = try container.decodeIfPresent(String.self, forKey: .executable)
+        status = try container.decode(SourceControlDiscoveryStatus.self, forKey: .status)
+        version = try container.decodeEffectOptionalString(forKey: .version)
+        installHint = try container.decode(String.self, forKey: .installHint)
+        detail = try container.decodeEffectOptionalString(forKey: .detail)
+        auth = try container.decode(SourceControlProviderAuth.self, forKey: .auth)
+    }
+}
+
+public struct SourceControlDiscoveryResult: Decodable, Equatable, Sendable {
+    public let versionControlSystems: [SourceControlVCSDiscoveryItem]
+    public let sourceControlProviders: [SourceControlProviderDiscoveryItem]
+
+    public init(
+        versionControlSystems: [SourceControlVCSDiscoveryItem],
+        sourceControlProviders: [SourceControlProviderDiscoveryItem]
+    ) {
+        self.versionControlSystems = versionControlSystems
+        self.sourceControlProviders = sourceControlProviders
+    }
+}
+
+private struct EffectOptionalString: Decodable {
+    let value: String?
+
+    private enum CodingKeys: String, CodingKey {
+        case _tag
+        case value
+    }
+
+    init(from decoder: any Decoder) throws {
+        let singleValue = try decoder.singleValueContainer()
+        if singleValue.decodeNil() {
+            value = nil
+            return
+        }
+        if let direct = try? singleValue.decode(String.self) {
+            value = direct
+            return
+        }
+
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        switch try container.decode(String.self, forKey: ._tag) {
+        case "Some":
+            value = try container.decode(String.self, forKey: .value)
+        case "None":
+            value = nil
+        case let tag:
+            throw DecodingError.dataCorruptedError(
+                forKey: ._tag,
+                in: container,
+                debugDescription: "Unknown Effect Option tag \(tag)"
+            )
+        }
+    }
+}
+
+private extension KeyedDecodingContainer {
+    func decodeEffectOptionalString(forKey key: Key) throws -> String? {
+        guard contains(key), try !decodeNil(forKey: key) else { return nil }
+        return try decode(EffectOptionalString.self, forKey: key).value
+    }
+}
+
 public struct VCSWorkingTreeFile: Codable, Equatable, Sendable {
     public let path: String
     public let insertions: Int

@@ -628,6 +628,14 @@ public actor T3Client {
         )
     }
 
+    public func discoverSourceControl() async throws -> SourceControlDiscoveryResult {
+        try await rpc.request(
+            RPCMethod.serverDiscoverSourceControl.rawValue,
+            payload: .object([:]),
+            as: SourceControlDiscoveryResult.self
+        )
+    }
+
     public func cloneRepository(
         provider: SourceControlProviderKind? = nil,
         repository: String? = nil,
@@ -1011,6 +1019,7 @@ public enum RPCMethod: String, Sendable {
     case filesystemBrowse = "filesystem.browse"
     case assetsCreateURL = "assets.createUrl"
     case subscribeServerConfig
+    case serverDiscoverSourceControl = "server.discoverSourceControl"
     case subscribeVCSStatus = "subscribeVcsStatus"
     case vcsPull = "vcs.pull"
     case vcsRefreshStatus = "vcs.refreshStatus"

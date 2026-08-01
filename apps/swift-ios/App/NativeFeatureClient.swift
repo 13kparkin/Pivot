@@ -13,7 +13,7 @@ extension FeatureInputAnswer {
 
 /// Composes the transport-focused Core layer with the UI-focused Features layer.
 @MainActor
-final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging {
+final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging, FeatureProjectCreationClient {
     private let runtime: EnvironmentRuntime
     private let settingsStore: UserDefaults
     private let stream: AsyncStream<FeatureEvent>
@@ -282,7 +282,59 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging {
     }
 
     func addProject(path: String) async throws {
-        let client = try requireClient()
+        guard let environmentID = activeEnvironment?.id else {
+            throw NativeFeatureClientError.notConnected
+        }
+        try await addProject(environmentID: environmentID, path: path)
+    }
+
+    func addProject(environmentID: String, path: String) async throws {
+        let client = try await projectCreationClient(environmentID: environmentID)
+        try await createProject(client: client, path: path)
+    }
+
+    func browseProjectFolders(
+        environmentID: String,
+        partialPath: String
+    ) async throws -> FilesystemBrowseResult {
+        let client = try await projectCreationClient(environmentID: environmentID)
+        return try await client.browseFilesystem(partialPath: partialPath)
+    }
+
+    func discoverProjectSources(
+        environmentID: String
+    ) async throws -> SourceControlDiscoveryResult {
+        let client = try await projectCreationClient(environmentID: environmentID)
+        return try await client.discoverSourceControl()
+    }
+
+    func lookupProjectRepository(
+        environmentID: String,
+        provider: SourceControlProviderKind,
+        repository: String
+    ) async throws -> SourceControlRepositoryInfo {
+        let client = try await projectCreationClient(environmentID: environmentID)
+        return try await client.lookupRepository(
+            provider: provider,
+            repository: repository
+        )
+    }
+
+    func cloneProjectRepository(
+        environmentID: String,
+        remoteURL: String,
+        destinationPath: String
+    ) async throws -> SourceControlCloneResult {
+        let client = try await projectCreationClient(environmentID: environmentID)
+        let result = try await client.cloneRepository(
+            remoteURL: remoteURL,
+            destinationPath: destinationPath
+        )
+        try await createProject(client: client, path: result.cwd)
+        return result
+    }
+
+    private func createProject(client: T3Client, path: String) async throws {
         let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
             throw NativeFeatureClientError.invalidProjectPath
@@ -291,7 +343,9 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging {
         _ = try await client.createProject(
             title: title.isEmpty ? "Project" : title,
             workspaceRoot: trimmed,
-            defaultModel: defaultModelSelection()
+            defaultModel: client.environment.id == activeEnvironment?.id
+                ? defaultModelSelection()
+                : nil
         )
         try await refresh(client: client)
     }
@@ -1044,6 +1098,20 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging {
 
     private func requireClient() throws -> T3Client {
         guard let client else { throw NativeFeatureClientError.notConnected }
+        return client
+    }
+
+    private func projectCreationClient(environmentID: String) async throws -> T3Client {
+        if let client = environmentClients[environmentID] {
+            return client
+        }
+        guard let environment = try await runtime.environments().first(where: {
+            $0.id == environmentID
+        }) else {
+            throw NativeFeatureClientError.environmentNotFound
+        }
+        let client = await runtime.client(for: environment)
+        environmentClients[environmentID] = client
         return client
     }
 
@@ -3893,6 +3961,7 @@ private struct PendingTurnSubmission {
 
 private enum NativeFeatureClientError: LocalizedError {
     case notConnected
+    case environmentNotFound
     case projectNotFound
     case threadNotFound
     case workspaceNotFound
@@ -3907,6 +3976,7 @@ private enum NativeFeatureClientError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .notConnected: "Connect to a T3 environment first."
+        case .environmentNotFound: "That T3 environment is no longer available."
         case .projectNotFound: "The selected project is no longer available."
         case .threadNotFound: "The selected thread is no longer available."
         case .workspaceNotFound: "The thread workspace is no longer available."
