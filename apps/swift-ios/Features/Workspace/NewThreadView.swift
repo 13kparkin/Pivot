@@ -7,6 +7,7 @@ public struct NewThreadView: View {
     let onCreated: (FeatureThread) -> Void
     let onCreateProject: @MainActor () -> Void
     private let draftStore: FeatureComposerDraftStore
+    private let initialProjectID: String?
 
     @State private var projectID = ""
     @State private var prompt = ""
@@ -34,12 +35,14 @@ public struct NewThreadView: View {
         submit: @escaping (NewTaskRequest) async -> FeatureThread?,
         onCreated: @escaping (FeatureThread) -> Void,
         onCreateProject: @escaping @MainActor () -> Void = {},
+        initialProjectID: String? = nil,
         draftStore: FeatureComposerDraftStore = .shared
     ) {
         self.model = model
         self.submit = submit
         self.onCreated = onCreated
         self.onCreateProject = onCreateProject
+        self.initialProjectID = initialProjectID
         self.draftStore = draftStore
     }
 
@@ -84,7 +87,10 @@ public struct NewThreadView: View {
         }
         .onAppear {
             if projectID.isEmpty {
-                selectInitialProject(creationProjects.first?.id ?? "")
+                let initialID = creationProjects.first(where: { $0.id == initialProjectID })?.id
+                    ?? creationProjects.first?.id
+                    ?? ""
+                selectInitialProject(initialID)
             }
         }
         .onChange(of: projectID) { prepareProjectIfNeeded(projectID) }

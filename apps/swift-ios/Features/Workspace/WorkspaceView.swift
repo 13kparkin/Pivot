@@ -1,9 +1,27 @@
 import SwiftUI
 
+struct FeatureWorkspaceNavigationRequest: Equatable, Sendable {
+    enum Destination: Equatable, Sendable {
+        case thread(id: String)
+        case project(id: String)
+        case newTask(projectID: String?)
+    }
+
+    let id: UUID
+    let destination: Destination
+
+    init(id: UUID = UUID(), destination: Destination) {
+        self.id = id
+        self.destination = destination
+    }
+}
+
 public struct WorkspaceView: View {
     @SwiftUI.Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     @Bindable var model: FeatureRootModel
+    private let navigationRequest: FeatureWorkspaceNavigationRequest?
+    private let onNavigationRequestConsumed: @MainActor (UUID) -> Void
     private let submitNewTask: (NewTaskRequest) async -> FeatureThread?
     private let submitMessage: (FeatureMessageSubmission) async -> Bool
 
@@ -16,6 +34,7 @@ public struct WorkspaceView: View {
     @State private var isArchiveExpanded = false
     @State private var settledLimit = 12
     @State private var showingNewTask = false
+    @State private var newTaskInitialProjectID: String?
     @State private var showingAddProject = false
     @State private var showingSettings = false
     @State private var renamingThread: FeatureThread?
@@ -30,7 +49,25 @@ public struct WorkspaceView: View {
         submitNewTask: ((NewTaskRequest) async -> FeatureThread?)? = nil,
         submitMessage: ((FeatureMessageSubmission) async -> Bool)? = nil
     ) {
+        self.init(
+            model: model,
+            navigationRequest: nil,
+            onNavigationRequestConsumed: { _ in },
+            submitNewTask: submitNewTask,
+            submitMessage: submitMessage
+        )
+    }
+
+    init(
+        model: FeatureRootModel,
+        navigationRequest: FeatureWorkspaceNavigationRequest?,
+        onNavigationRequestConsumed: @escaping @MainActor (UUID) -> Void,
+        submitNewTask: ((NewTaskRequest) async -> FeatureThread?)? = nil,
+        submitMessage: ((FeatureMessageSubmission) async -> Bool)? = nil
+    ) {
         self.model = model
+        self.navigationRequest = navigationRequest
+        self.onNavigationRequestConsumed = onNavigationRequestConsumed
         self.submitNewTask = submitNewTask ?? { request in
             do {
                 let thread = try await model.client.createThreadAndSend(
@@ -94,7 +131,8 @@ public struct WorkspaceView: View {
                     openThread(thread.id)
                     showingNewTask = false
                 },
-                onCreateProject: openProjectCreation
+                onCreateProject: openProjectCreation,
+                initialProjectID: newTaskInitialProjectID
             )
         }
         .sheet(isPresented: $showingAddProject) {
@@ -128,6 +166,9 @@ public struct WorkspaceView: View {
         }
         .onChange(of: selectedProjectIsAvailable) { _, isAvailable in
             if !isAvailable { selectedProjectID = nil }
+        }
+        .onChange(of: navigationRequest?.id, initial: true) { _, _ in
+            consumeNavigationRequest()
         }
         .task(id: nextSidebarBoundary) {
             guard let boundary = nextSidebarBoundary else { return }
@@ -553,11 +594,49 @@ public struct WorkspaceView: View {
     }
 
     private func openNewTaskOrProjectCreation() {
+        openNewTaskOrProjectCreation(initialProjectID: nil)
+    }
+
+    private func openNewTaskOrProjectCreation(initialProjectID: String?) {
         if creationProjects.isEmpty {
             showingAddProject = true
         } else {
+            newTaskInitialProjectID = initialProjectID
             showingNewTask = true
         }
+    }
+
+    private func consumeNavigationRequest() {
+        guard let navigationRequest else { return }
+        switch navigationRequest.destination {
+        case let .thread(id):
+            guard model.snapshot.threads.contains(where: { $0.id == id }) else { return }
+            dismissTransientPresentations()
+            openThread(id)
+        case let .project(id):
+            guard model.snapshot.projects.contains(where: { $0.id == id }) else { return }
+            dismissTransientPresentations()
+            selectedProjectID = id
+            closeSelectedThread()
+        case let .newTask(projectID):
+            if let projectID,
+               model.snapshot.projects.contains(where: { $0.id == projectID }) {
+                selectedProjectID = projectID
+            }
+            dismissTransientPresentations()
+            Task { @MainActor in
+                await Task.yield()
+                openNewTaskOrProjectCreation(initialProjectID: projectID)
+            }
+        }
+        onNavigationRequestConsumed(navigationRequest.id)
+    }
+
+    private func dismissTransientPresentations() {
+        showingNewTask = false
+        showingAddProject = false
+        showingSettings = false
+        renamingThread = nil
     }
 
     private func projectMenuTitle(_ project: FeatureProject) -> String {

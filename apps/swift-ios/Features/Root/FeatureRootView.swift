@@ -2,9 +2,23 @@ import SwiftUI
 
 public struct FeatureRootView: View {
     @State private var model: FeatureRootModel
+    private let navigationRequest: FeatureWorkspaceNavigationRequest?
+    private let onNavigationRequestConsumed: @MainActor (UUID) -> Void
 
     public init(client: any FeatureClient) {
         _model = State(initialValue: FeatureRootModel(client: client))
+        navigationRequest = nil
+        onNavigationRequestConsumed = { _ in }
+    }
+
+    init(
+        model: FeatureRootModel,
+        navigationRequest: FeatureWorkspaceNavigationRequest? = nil,
+        onNavigationRequestConsumed: @escaping @MainActor (UUID) -> Void = { _ in }
+    ) {
+        _model = State(initialValue: model)
+        self.navigationRequest = navigationRequest
+        self.onNavigationRequestConsumed = onNavigationRequestConsumed
     }
 
     public var body: some View {
@@ -14,6 +28,8 @@ public struct FeatureRootView: View {
             } else if shouldShowWorkspace {
                 WorkspaceView(
                     model: model,
+                    navigationRequest: navigationRequest,
+                    onNavigationRequestConsumed: onNavigationRequestConsumed,
                     submitNewTask: { request in
                         await model.startTask(request)
                     },

@@ -1,13 +1,20 @@
 import SwiftUI
 
 @main
+@MainActor
 struct T3CodeApp: App {
-    @State private var client = NativeFeatureClient()
+    @UIApplicationDelegateAdaptor(T3PlatformAppDelegate.self) private var appDelegate
+    @State private var model: FeatureRootModel
+
+    init() {
+        let client = NativeFeatureClient()
+        _model = State(initialValue: FeatureRootModel(client: client))
+    }
 
     var body: some Scene {
         WindowGroup {
             RootView {
-                FeatureRootView(client: client)
+                PlatformRootView(model: model)
             }
         }
     }
