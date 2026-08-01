@@ -147,6 +147,51 @@ final class NativeMultiEnvironmentTests: XCTestCase {
         await fixture.client.disconnect()
     }
 
+    func testAggregateRefreshRetriesTransientEnvironmentLoadFailures() async throws {
+        let retryObserved = expectation(description: "aggregate refresh retried")
+        let loader = FailOnceAggregateEnvironmentLoader(retryObserved: retryObserved)
+        let fixture = try await makeFixture(
+            aggregateRefreshInterval: .milliseconds(5),
+            aggregateEnvironmentLoader: { runtime in
+                try await loader.load(from: runtime)
+            }
+        )
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+
+        _ = try await fixture.client.initialSnapshot()
+
+        await fulfillment(of: [retryObserved], timeout: 1)
+        let retryCallCount = await loader.callCount
+        XCTAssertGreaterThanOrEqual(retryCallCount, 2)
+        await fixture.client.disconnect()
+    }
+
+    func testSameClientSnapshotRestartsAggregateRefresh() async throws {
+        let firstLoadStarted = expectation(description: "first aggregate load started")
+        let restartedLoadObserved = expectation(description: "restarted aggregate load observed")
+        let loader = BlockingFirstAggregateEnvironmentLoader(
+            firstLoadStarted: firstLoadStarted,
+            restartedLoadObserved: restartedLoadObserved
+        )
+        let fixture = try await makeFixture(
+            aggregateRefreshInterval: .milliseconds(5),
+            aggregateEnvironmentLoader: { runtime in
+                try await loader.load(from: runtime)
+            }
+        )
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+
+        _ = try await fixture.client.initialSnapshot()
+        await fulfillment(of: [firstLoadStarted], timeout: 1)
+
+        _ = try await fixture.client.initialSnapshot()
+
+        await fulfillment(of: [restartedLoadObserved], timeout: 1)
+        let restartedCallCount = await loader.callCount
+        XCTAssertGreaterThanOrEqual(restartedCallCount, 2)
+        await fixture.client.disconnect()
+    }
+
     func testDuplicateWireIDsRemainDistinctAndRouteByEnvironment() async throws {
         let fixture = try await makeFixture(duplicateIDs: true)
         defer { try? FileManager.default.removeItem(at: fixture.directory) }
@@ -289,7 +334,11 @@ final class NativeMultiEnvironmentTests: XCTestCase {
     private func makeFixture(
         duplicateIDs: Bool = false,
         fallbackPollingInitialDelay: Duration = .seconds(3),
-        fallbackPollingInterval: Duration = .seconds(2)
+        fallbackPollingInterval: Duration = .seconds(2),
+        aggregateRefreshInterval: Duration = .seconds(20),
+        aggregateEnvironmentLoader: @escaping @Sendable (EnvironmentRuntime) async throws -> [Environment] = {
+            try await $0.environments()
+        }
     ) async throws -> MultiEnvironmentFixture {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("t3-native-multi-\(UUID().uuidString)", isDirectory: true)
@@ -349,9 +398,53 @@ final class NativeMultiEnvironmentTests: XCTestCase {
                 runtime: runtime,
                 settingsStore: settings,
                 fallbackPollingInitialDelay: fallbackPollingInitialDelay,
-                fallbackPollingInterval: fallbackPollingInterval
+                fallbackPollingInterval: fallbackPollingInterval,
+                aggregateRefreshInterval: aggregateRefreshInterval,
+                aggregateEnvironmentLoader: aggregateEnvironmentLoader
             )
         )
+    }
+}
+
+private actor FailOnceAggregateEnvironmentLoader {
+    private let retryObserved: XCTestExpectation
+    private(set) var callCount = 0
+
+    init(retryObserved: XCTestExpectation) {
+        self.retryObserved = retryObserved
+    }
+
+    func load(from runtime: EnvironmentRuntime) async throws -> [Environment] {
+        callCount += 1
+        if callCount == 1 {
+            throw URLError(.cannotOpenFile)
+        }
+        retryObserved.fulfill()
+        return try await runtime.environments()
+    }
+}
+
+private actor BlockingFirstAggregateEnvironmentLoader {
+    private let firstLoadStarted: XCTestExpectation
+    private let restartedLoadObserved: XCTestExpectation
+    private(set) var callCount = 0
+
+    init(
+        firstLoadStarted: XCTestExpectation,
+        restartedLoadObserved: XCTestExpectation
+    ) {
+        self.firstLoadStarted = firstLoadStarted
+        self.restartedLoadObserved = restartedLoadObserved
+    }
+
+    func load(from runtime: EnvironmentRuntime) async throws -> [Environment] {
+        callCount += 1
+        if callCount == 1 {
+            firstLoadStarted.fulfill()
+            try await Task.sleep(for: .seconds(60))
+        }
+        restartedLoadObserved.fulfill()
+        return try await runtime.environments()
     }
 }
 

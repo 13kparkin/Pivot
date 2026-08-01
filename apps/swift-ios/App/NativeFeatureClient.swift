@@ -22,6 +22,8 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
     private let settingsStore: UserDefaults
     private let fallbackPollingInitialDelay: Duration
     private let fallbackPollingInterval: Duration
+    private let aggregateRefreshInterval: Duration
+    private let aggregateEnvironmentLoader: @Sendable (EnvironmentRuntime) async throws -> [Environment]
     private let stream: AsyncStream<FeatureEvent>
     private let continuation: AsyncStream<FeatureEvent>.Continuation
 
@@ -65,6 +67,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
     private var fallbackPollingTask: Task<Void, Never>?
     private var configurationTask: Task<Void, Never>?
     private var aggregateRefreshTask: Task<Void, Never>?
+    private var aggregateRefreshID: UUID?
     private var shellPublishTask: Task<Void, Never>?
     private var archivedRefreshTask: Task<Void, Never>?
     private var detailRefreshTask: Task<Void, Never>?
@@ -85,7 +88,11 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         t3ConnectController: T3ConnectController? = nil,
         settingsStore: UserDefaults = .standard,
         fallbackPollingInitialDelay: Duration = .seconds(3),
-        fallbackPollingInterval: Duration = .seconds(2)
+        fallbackPollingInterval: Duration = .seconds(2),
+        aggregateRefreshInterval: Duration = .seconds(20),
+        aggregateEnvironmentLoader: @escaping @Sendable (EnvironmentRuntime) async throws -> [Environment] = {
+            try await $0.environments()
+        }
     ) {
         let controller: T3ConnectController
         if let t3ConnectController {
@@ -109,6 +116,8 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         self.settingsStore = settingsStore
         self.fallbackPollingInitialDelay = fallbackPollingInitialDelay
         self.fallbackPollingInterval = fallbackPollingInterval
+        self.aggregateRefreshInterval = aggregateRefreshInterval
+        self.aggregateEnvironmentLoader = aggregateEnvironmentLoader
         let pair = AsyncStream<FeatureEvent>.makeStream()
         stream = pair.stream
         continuation = pair.continuation
@@ -285,6 +294,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             activeEnvironment = environment
             environmentClients[environment.id] = newClient
             latestShell = shellsByEnvironmentID[environment.id]
+            startAggregateRefresh(newClient)
             return
         }
         let previousClient = client
@@ -298,6 +308,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         fallbackPollingTask = nil
         configurationTask = nil
         aggregateRefreshTask = nil
+        aggregateRefreshID = nil
         archivedRefreshTask = nil
         passiveDetailPollingTask = nil
         clearEnvironmentState(preserveEnvironmentSnapshots: true)
@@ -323,6 +334,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         fallbackPollingTask = nil
         configurationTask = nil
         aggregateRefreshTask = nil
+        aggregateRefreshID = nil
         archivedRefreshTask = nil
         passiveDetailPollingTask = nil
         clearEnvironmentState()
@@ -2006,20 +2018,43 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
     private func startAggregateRefresh(_ activeClient: T3Client) {
         aggregateRefreshTask?.cancel()
         let generation = environmentGeneration
+        let refreshID = UUID()
+        let interval = aggregateRefreshInterval
+        let loadEnvironments = aggregateEnvironmentLoader
+        aggregateRefreshID = refreshID
         aggregateRefreshTask = Task { [weak self] in
             while !Task.isCancelled {
                 do {
-                    try await Task.sleep(for: .seconds(20))
+                    try await Task.sleep(for: interval)
                 } catch {
                     return
                 }
                 guard let self,
+                      self.aggregateRefreshID == refreshID,
                       self.isCurrentSession(
                           client: activeClient,
                           generation: generation
                       ),
-                      let activeEnvironment = self.activeEnvironment,
-                      let environments = try? await self.runtime.environments() else {
+                      let activeEnvironment = self.activeEnvironment else {
+                    return
+                }
+                let environments: [Environment]
+                do {
+                    environments = try await loadEnvironments(self.runtime)
+                } catch is CancellationError where Task.isCancelled {
+                    return
+                } catch {
+                    // Persistence can be briefly unavailable while another
+                    // actor atomically replaces the environment document.
+                    // Keep the low-frequency loop alive for the next cadence.
+                    continue
+                }
+                guard !Task.isCancelled,
+                      self.aggregateRefreshID == refreshID,
+                      self.isCurrentSession(
+                          client: activeClient,
+                          generation: generation
+                      ) else {
                     return
                 }
                 let passiveEnvironments = environments.filter {
@@ -2028,6 +2063,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
                 guard !passiveEnvironments.isEmpty else { continue }
                 let loads = await self.loadEnvironmentShells(passiveEnvironments)
                 guard !Task.isCancelled,
+                      self.aggregateRefreshID == refreshID,
                       self.isCurrentSession(
                           client: activeClient,
                           generation: generation
