@@ -19,6 +19,55 @@ struct FeatureToolStateTests {
     }
 
     @Test
+    func filePreviewKindUsesImageMarkdownAndSourceSemantics() {
+        #expect(FeatureFilePreviewKind.infer(path: "art/hero.webp") == .image)
+        #expect(FeatureFilePreviewKind.infer(path: "README.md") == .markdown)
+        #expect(FeatureFilePreviewKind.infer(path: "Package.swift") == .source)
+        #expect(FeatureFilePreviewKind.infer(path: "LICENSE") == .plainText)
+        #expect(FeatureFilePreviewKind.infer(path: "template", language: "html") == .source)
+    }
+
+    @Test
+    func sourceHighlighterPreservesTextAndClassifiesStableSpans() {
+        let source = """
+        let count = 42 // total
+        /* first
+           second */ return "done"
+        """
+        let lines = FeatureSourceHighlighter.lines(text: source, language: "swift")
+
+        #expect(lines.map(\.text).joined(separator: "\n") == source)
+        #expect(lines[0].spans.contains { $0.text == "let" && $0.kind == .keyword })
+        #expect(lines[0].spans.contains { $0.text == "42" && $0.kind == .number })
+        #expect(lines[0].spans.last?.kind == .comment)
+        #expect(lines[1].spans.allSatisfy { $0.kind == .comment })
+        #expect(lines[2].spans.first?.kind == .comment)
+        #expect(lines[2].spans.contains { $0.text.contains("return") && $0.kind == .keyword })
+        #expect(lines[2].spans.last?.kind == .literal)
+    }
+
+    @Test
+    func sourceHighlighterRecognizesJSONProperties() {
+        let line = FeatureSourceHighlighter.lines(
+            text: #"{"enabled": true, "count": 3}"#,
+            language: "json"
+        )[0]
+
+        #expect(line.spans.contains { $0.text == #""enabled""# && $0.kind == .property })
+        #expect(line.spans.contains { $0.text == "true" && $0.kind == .literal })
+        #expect(line.spans.contains { $0.text == "3" && $0.kind == .number })
+    }
+
+    @Test
+    func sourceHighlighterBoundsWorkForLargeMinifiedLines() {
+        let source = String(repeating: #"{"value":42}"#, count: 3_000)
+        let line = FeatureSourceHighlighter.lines(text: source, language: "json")[0]
+
+        #expect(line.text == source)
+        #expect(line.spans == [FeatureSourceSpan(text: source, kind: .plain)])
+    }
+
+    @Test
     func reviewTotalsAggregateAcrossFiles() {
         let review = FeatureReview(files: [
             FeatureReviewFile(path: "a.swift", change: .modified, additions: 4, deletions: 1),
@@ -27,6 +76,67 @@ struct FeatureToolStateTests {
 
         #expect(review.additions == 12)
         #expect(review.deletions == 1)
+    }
+
+    @Test
+    func wordDiffHighlightsOnlyChangedTokens() {
+        let result = FeatureDiffWordHighlighter.spans(
+            old: "let color = blue",
+            new: "let color = green"
+        )
+
+        #expect(result.old.map(\.text).joined() == "let color = blue")
+        #expect(result.new.map(\.text).joined() == "let color = green")
+        #expect(result.old.filter { $0.kind == .changed }.map(\.text) == ["blue"])
+        #expect(result.new.filter { $0.kind == .changed }.map(\.text) == ["green"])
+    }
+
+    @Test
+    func workspaceReviewMapperPairsReplacementLinesAndCarriesBaseReference() {
+        let preview = ReviewDiffPreview(
+            cwd: "/tmp/project",
+            generatedAt: "2026-08-01T00:00:00Z",
+            sources: [
+                ReviewDiffSource(
+                    id: "working-tree",
+                    kind: "working-tree",
+                    title: "Working tree",
+                    baseRef: "main",
+                    headRef: nil,
+                    diff: """
+                    diff --git a/App.swift b/App.swift
+                    --- a/App.swift
+                    +++ b/App.swift
+                    @@ -1,1 +1,1 @@
+                    -let color = blue
+                    +let color = green
+                    """,
+                    diffHash: "hash",
+                    truncated: false
+                ),
+            ]
+        )
+
+        let review = NativeWorkspaceMapper.review(preview)
+        let deletion = review.files[0].lines.first { $0.kind == .deletion }
+        let addition = review.files[0].lines.first { $0.kind == .addition }
+
+        #expect(review.baseReference == "main")
+        #expect(deletion?.spans?.filter { $0.kind == .changed }.map(\.text) == ["blue"])
+        #expect(addition?.spans?.filter { $0.kind == .changed }.map(\.text) == ["green"])
+    }
+
+    @Test
+    func reviewCommentPromptIncludesActionableFileAndLineContext() {
+        let draft = FeatureReviewCommentDraft(
+            filePath: "Sources/App.swift",
+            line: FeatureReviewLineSelection(side: .new, line: 42),
+            body: "  Handle the nil case.  "
+        )
+
+        #expect(draft.prompt.contains("`Sources/App.swift` at new line 42"))
+        #expect(draft.prompt.contains("Handle the nil case."))
+        #expect(!draft.prompt.contains("  Handle the nil case.  "))
     }
 
     @Test

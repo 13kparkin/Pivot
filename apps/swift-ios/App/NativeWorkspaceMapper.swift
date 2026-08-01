@@ -43,11 +43,15 @@ enum NativeWorkspaceMapper {
         case "json": "json"
         case "md", "mdx": "markdown"
         case "css", "scss": "css"
-        case "html": "html"
+        case "html", "htm": "html"
+        case "xml", "svg": "xml"
         case "sh", "zsh", "bash": "shell"
         case "py": "python"
         case "rs": "rust"
         case "go": "go"
+        case "rb": "ruby"
+        case "sql": "sql"
+        case "toml": "toml"
         case "yml", "yaml": "yaml"
         default: nil
         }
@@ -56,6 +60,7 @@ enum NativeWorkspaceMapper {
     static func review(_ preview: ReviewDiffPreview) -> FeatureReview {
         FeatureReview(
             title: "Working tree",
+            baseReference: preview.sources.compactMap(\.baseRef).first,
             files: preview.sources.flatMap(parseDiff),
             isTruncated: preview.sources.contains(where: \.truncated)
         )
@@ -183,7 +188,7 @@ enum NativeWorkspaceMapper {
                     change: change,
                     additions: additions,
                     deletions: deletions,
-                    lines: lines
+                    lines: annotateChangedSpans(lines)
                 )
             )
         }
@@ -295,11 +300,43 @@ enum NativeWorkspaceMapper {
                     change: .modified,
                     additions: additions,
                     deletions: deletions,
-                    lines: lines
+                    lines: annotateChangedSpans(lines)
                 ),
             ]
         }
         return files
+    }
+
+    /// Git presents replacements as adjacent deletion/addition blocks. Pairing those
+    /// lines here keeps the view dumb and makes word-level highlighting stable on scroll.
+    private static func annotateChangedSpans(
+        _ source: [FeatureDiffLine]
+    ) -> [FeatureDiffLine] {
+        var lines = source
+        var index = 0
+        while index < lines.count {
+            guard lines[index].kind == .deletion || lines[index].kind == .addition else {
+                index += 1
+                continue
+            }
+            let start = index
+            while index < lines.count,
+                  lines[index].kind == .deletion || lines[index].kind == .addition {
+                index += 1
+            }
+            let changedIndices = start ..< index
+            let deletions = changedIndices.filter { lines[$0].kind == .deletion }
+            let additions = changedIndices.filter { lines[$0].kind == .addition }
+            for (deletionIndex, additionIndex) in zip(deletions, additions) {
+                let spans = FeatureDiffWordHighlighter.spans(
+                    old: lines[deletionIndex].text,
+                    new: lines[additionIndex].text
+                )
+                lines[deletionIndex].spans = spans.old
+                lines[additionIndex].spans = spans.new
+            }
+        }
+        return lines
     }
 
     private static func stripDiffPrefix(_ path: String) -> String {

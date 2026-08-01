@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 public struct FeatureReviewView: View {
     let client: any FeatureClient
@@ -80,7 +81,7 @@ public struct FeatureReviewView: View {
                 }
                 ForEach(review.files) { file in
                     NavigationLink {
-                        FeatureDiffView(file: file)
+                        FeatureDiffView(client: client, threadID: threadID, file: file)
                     } label: {
                         FeatureReviewFileRow(file: file)
                     }
@@ -180,7 +181,16 @@ struct FeatureDiffStatsLabel: View {
 }
 
 private struct FeatureDiffView: View {
+    let client: any FeatureClient
+    let threadID: String
     let file: FeatureReviewFile
+
+    @State private var selectedLine: FeatureReviewLineSelection?
+    @State private var isCommenting = false
+    @State private var comment = ""
+    @State private var isSending = false
+    @State private var commentError: String?
+    @FocusState private var isCommentFocused: Bool
 
     var body: some View {
         Group {
@@ -194,7 +204,14 @@ private struct FeatureDiffView: View {
                 ScrollView([.horizontal, .vertical]) {
                     LazyVStack(alignment: .leading, spacing: 0) {
                         ForEach(file.lines) { line in
-                            FeatureDiffLineRow(line: line)
+                            FeatureDiffLineRow(
+                                line: line,
+                                isSelected: selection(for: line) == selectedLine
+                            ) {
+                                guard let selection = selection(for: line) else { return }
+                                selectedLine = selection
+                                openCommentComposer()
+                            }
                         }
                     }
                     .padding(.vertical, 8)
@@ -204,11 +221,175 @@ private struct FeatureDiffView: View {
         .background(Color.black)
         .navigationTitle(file.path.split(separator: "/").last.map(String.init) ?? file.path)
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button {
+                    selectedLine = nil
+                    openCommentComposer()
+                } label: {
+                    Image(systemName: "text.bubble")
+                }
+                .accessibilityLabel("Add file review comment")
+            }
+        }
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            if isCommenting {
+                commentComposer
+            }
+        }
+    }
+
+    private var commentComposer: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("REVIEW COMMENT")
+                        .font(T3Typography.eyebrow)
+                        .foregroundStyle(T3Colors.textTertiary)
+                    Text(commentLocation)
+                        .font(T3Typography.supporting)
+                        .foregroundStyle(T3Colors.textSecondary)
+                        .lineLimit(1)
+                }
+                Spacer(minLength: 8)
+                Button {
+                    isCommenting = false
+                    isCommentFocused = false
+                    commentError = nil
+                } label: {
+                    Image(systemName: "xmark")
+                        .frame(width: T3Metrics.minimumTapTarget, height: T3Metrics.minimumTapTarget)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(T3Colors.textSecondary)
+                .accessibilityLabel("Close review comment")
+            }
+
+            TextField(
+                "What should change?",
+                text: $comment,
+                axis: .vertical
+            )
+            .font(T3Typography.composer)
+            .lineLimit(2 ... 6)
+            .focused($isCommentFocused)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+            .background(T3Colors.input)
+            .clipShape(RoundedRectangle(cornerRadius: 10))
+            .overlay {
+                RoundedRectangle(cornerRadius: 10)
+                    .stroke(T3Colors.border, lineWidth: 1)
+            }
+
+            if let commentError {
+                Text(commentError)
+                    .font(T3Typography.supporting)
+                    .foregroundStyle(T3Colors.danger)
+            }
+
+            HStack(spacing: 10) {
+                Button {
+                    UIPasteboard.general.string = reviewDraft.prompt
+                } label: {
+                    Label("Copy prompt", systemImage: "doc.on.doc")
+                        .frame(maxWidth: .infinity, minHeight: 42)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(T3Colors.textSecondary)
+                .background(T3Colors.surfaceRaised)
+                .clipShape(RoundedRectangle(cornerRadius: 9))
+                .disabled(trimmedComment.isEmpty)
+
+                Button {
+                    sendComment()
+                } label: {
+                    HStack(spacing: 7) {
+                        if isSending {
+                            ProgressView()
+                                .controlSize(.small)
+                        } else {
+                            Image(systemName: "arrow.up")
+                        }
+                        Text("Send to agent")
+                    }
+                    .frame(maxWidth: .infinity, minHeight: 42)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.white)
+                .background(T3Colors.accent)
+                .clipShape(RoundedRectangle(cornerRadius: 9))
+                .disabled(trimmedComment.isEmpty || isSending)
+            }
+            .font(T3Typography.control)
+        }
+        .padding(.horizontal, 14)
+        .padding(.top, 10)
+        .padding(.bottom, 8)
+        .background(T3Colors.surface)
+        .overlay(alignment: .top) {
+            Rectangle()
+                .fill(T3Colors.separator)
+                .frame(height: 1)
+        }
+    }
+
+    private var trimmedComment: String {
+        comment.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var reviewDraft: FeatureReviewCommentDraft {
+        FeatureReviewCommentDraft(filePath: file.path, line: selectedLine, body: comment)
+    }
+
+    private var commentLocation: String {
+        guard let selectedLine else { return file.path }
+        return "\(file.path) · \(selectedLine.side.rawValue) line \(selectedLine.line)"
+    }
+
+    private func selection(for line: FeatureDiffLine) -> FeatureReviewLineSelection? {
+        if let newLine = line.newLine {
+            return FeatureReviewLineSelection(side: .new, line: newLine)
+        }
+        if let oldLine = line.oldLine {
+            return FeatureReviewLineSelection(side: .old, line: oldLine)
+        }
+        return nil
+    }
+
+    private func openCommentComposer() {
+        isCommenting = true
+        commentError = nil
+        Task { @MainActor in
+            await Task.yield()
+            isCommentFocused = true
+        }
+    }
+
+    private func sendComment() {
+        guard !trimmedComment.isEmpty, !isSending else { return }
+        let prompt = reviewDraft.prompt
+        isSending = true
+        commentError = nil
+        Task {
+            do {
+                try await client.sendMessage(threadID: threadID, text: prompt, selection: nil)
+                comment = ""
+                selectedLine = nil
+                isCommenting = false
+                isCommentFocused = false
+            } catch {
+                commentError = error.localizedDescription
+            }
+            isSending = false
+        }
     }
 }
 
 private struct FeatureDiffLineRow: View {
     let line: FeatureDiffLine
+    let isSelected: Bool
+    let select: () -> Void
 
     var body: some View {
         HStack(alignment: .top, spacing: 0) {
@@ -222,8 +403,7 @@ private struct FeatureDiffLineRow: View {
                 Text(prefix)
                     .foregroundStyle(prefixColor)
                     .frame(width: 18)
-                Text(line.text.isEmpty ? " " : line.text)
-                    .foregroundStyle(.primary)
+                diffText
                     .textSelection(.enabled)
                     .padding(.trailing, 12)
             }
@@ -231,7 +411,17 @@ private struct FeatureDiffLineRow: View {
         .font(T3Typography.code)
         .frame(minHeight: line.kind == .hunk ? 30 : 22, alignment: .leading)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(background)
+        .background(isSelected ? T3Colors.accent.opacity(0.14) : background)
+        .overlay(alignment: .leading) {
+            if isSelected {
+                Rectangle()
+                    .fill(T3Colors.accent)
+                    .frame(width: 2)
+            }
+        }
+        .contentShape(Rectangle())
+        .onTapGesture(perform: select)
+        .accessibilityAction(named: "Add review comment", select)
     }
 
     private func lineNumber(_ value: Int?) -> some View {
@@ -255,6 +445,32 @@ private struct FeatureDiffLineRow: View {
         case .addition: .green
         case .deletion: .red
         case .context, .hunk: .secondary
+        }
+    }
+
+    @ViewBuilder
+    private var diffText: some View {
+        if let spans = line.spans, !spans.isEmpty {
+            HStack(spacing: 0) {
+                ForEach(spans.indices, id: \.self) { index in
+                    let span = spans[index]
+                    Text(verbatim: span.text.isEmpty ? " " : span.text)
+                        .foregroundStyle(.primary)
+                        .fontWeight(span.kind == .changed ? .semibold : .regular)
+                        .background(span.kind == .changed ? changedSpanBackground : Color.clear)
+                }
+            }
+        } else {
+            Text(line.text.isEmpty ? " " : line.text)
+                .foregroundStyle(.primary)
+        }
+    }
+
+    private var changedSpanBackground: Color {
+        switch line.kind {
+        case .addition: Color.green.opacity(0.28)
+        case .deletion: Color.red.opacity(0.28)
+        case .context, .hunk: Color.clear
         }
     }
 

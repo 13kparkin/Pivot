@@ -12,6 +12,13 @@ public struct FeatureCapabilityUnavailable: LocalizedError, Sendable, Equatable 
     }
 }
 
+/// Optional rich-file capability. The base file contract is deliberately text-only,
+/// while native clients can resolve the existing signed workspace asset route for images.
+@MainActor
+public protocol FeatureWorkspaceAssetResolving: AnyObject {
+    func workspaceAssetURL(threadID: String, path: String) async throws -> URL
+}
+
 public enum FeatureFileKind: String, Sendable, Codable {
     case file
     case directory
@@ -80,6 +87,284 @@ public struct FeatureFileContent: Sendable, Equatable, Codable {
     }
 }
 
+public enum FeatureFilePreviewKind: Sendable, Equatable {
+    case image
+    case markdown
+    case source
+    case plainText
+
+    public static func infer(path: String, language: String? = nil) -> Self {
+        let fileExtension = URL(fileURLWithPath: path).pathExtension.lowercased()
+        if imageExtensions.contains(fileExtension) { return .image }
+        if language?.lowercased() == "markdown" || ["md", "mdx"].contains(fileExtension) {
+            return .markdown
+        }
+        if language != nil || sourceExtensions.contains(fileExtension) { return .source }
+        return .plainText
+    }
+
+    private static let imageExtensions: Set<String> = [
+        "avif", "gif", "ico", "jpeg", "jpg", "png", "webp",
+    ]
+
+    private static let sourceExtensions: Set<String> = [
+        "c", "cc", "cpp", "cs", "css", "go", "h", "hpp", "html", "java", "js", "jsx",
+        "json", "kt", "kts", "m", "mm", "php", "py", "rb", "rs", "scss", "sh", "sql",
+        "swift", "toml", "ts", "tsx", "vue", "xml", "yaml", "yml", "zsh",
+    ]
+}
+
+public enum FeatureSourceTokenKind: String, Sendable, Equatable, Hashable, Codable {
+    case plain
+    case comment
+    case keyword
+    case literal
+    case number
+    case property
+}
+
+public struct FeatureSourceSpan: Sendable, Equatable, Hashable, Codable {
+    public var text: String
+    public var kind: FeatureSourceTokenKind
+
+    public init(text: String, kind: FeatureSourceTokenKind) {
+        self.text = text
+        self.kind = kind
+    }
+}
+
+public struct FeatureSourceLine: Identifiable, Sendable, Equatable, Hashable, Codable {
+    public let id: Int
+    public var spans: [FeatureSourceSpan]
+
+    public init(id: Int, spans: [FeatureSourceSpan]) {
+        self.id = id
+        self.spans = spans
+    }
+
+    public var number: Int { id + 1 }
+    public var text: String { spans.map(\.text).joined() }
+}
+
+/// A bounded, language-aware lexer for file previews. It runs once when a file loads;
+/// SwiftUI receives immutable line plans and performs no regex or token work while scrolling.
+public enum FeatureSourceHighlighter {
+    public static func lines(text: String, language: String?) -> [FeatureSourceLine] {
+        let sourceLines = text.split(separator: "\n", omittingEmptySubsequences: false)
+        let highlightsContent = text.utf8.count <= 512 * 1_024
+        var isInsideBlockComment = false
+        return sourceLines.enumerated().map { index, line in
+            guard highlightsContent, line.utf8.count <= 32 * 1_024 else {
+                return FeatureSourceLine(
+                    id: index,
+                    spans: line.isEmpty
+                        ? []
+                        : [FeatureSourceSpan(text: String(line), kind: .plain)]
+                )
+            }
+            return FeatureSourceLine(
+                id: index,
+                spans: spans(
+                    in: String(line),
+                    language: language?.lowercased(),
+                    isInsideBlockComment: &isInsideBlockComment
+                )
+            )
+        }
+    }
+
+    private static func spans(
+        in line: String,
+        language: String?,
+        isInsideBlockComment: inout Bool
+    ) -> [FeatureSourceSpan] {
+        let characters = Array(line)
+        var output: [FeatureSourceSpan] = []
+        var index = 0
+        let lineComment = lineCommentMarker(for: language)
+        let supportsBlockComments = blockCommentLanguages.contains(language ?? "")
+        let keywords = keywords(for: language)
+
+        func hasPrefix(_ prefix: [Character], at offset: Int) -> Bool {
+            guard offset + prefix.count <= characters.count else { return false }
+            return characters[offset ..< offset + prefix.count].elementsEqual(prefix)
+        }
+
+        func append(_ range: Range<Int>, kind: FeatureSourceTokenKind) {
+            guard !range.isEmpty else { return }
+            let text = String(characters[range])
+            if output.last?.kind == kind {
+                output[output.count - 1].text += text
+            } else {
+                output.append(FeatureSourceSpan(text: text, kind: kind))
+            }
+        }
+
+        while index < characters.count {
+            if isInsideBlockComment {
+                let start = index
+                while index < characters.count, !hasPrefix(["*", "/"], at: index) {
+                    index += 1
+                }
+                if index < characters.count {
+                    index += 2
+                    isInsideBlockComment = false
+                }
+                append(start ..< index, kind: .comment)
+                continue
+            }
+
+            if let lineComment, hasPrefix(Array(lineComment), at: index) {
+                append(index ..< characters.count, kind: .comment)
+                break
+            }
+
+            if supportsBlockComments, hasPrefix(["/", "*"], at: index) {
+                let start = index
+                index += 2
+                while index < characters.count, !hasPrefix(["*", "/"], at: index) {
+                    index += 1
+                }
+                if index < characters.count {
+                    index += 2
+                } else {
+                    isInsideBlockComment = true
+                }
+                append(start ..< index, kind: .comment)
+                continue
+            }
+
+            if ["\"", "'", "`"].contains(characters[index]) {
+                let start = index
+                let delimiter = characters[index]
+                index += 1
+                var isEscaped = false
+                while index < characters.count {
+                    let character = characters[index]
+                    index += 1
+                    if character == delimiter, !isEscaped { break }
+                    isEscaped = character == "\\" && !isEscaped
+                    if character != "\\" { isEscaped = false }
+                }
+                var next = index
+                while next < characters.count, characters[next].isWhitespace { next += 1 }
+                let kind: FeatureSourceTokenKind = next < characters.count
+                    && characters[next] == ":"
+                    && propertyLanguages.contains(language ?? "")
+                    ? .property
+                    : .literal
+                append(start ..< index, kind: kind)
+                continue
+            }
+
+            if characters[index].isNumber {
+                let start = index
+                index += 1
+                while index < characters.count,
+                      characters[index].isNumber
+                        || [".", "_", "x", "X", "a", "b", "c", "d", "e", "f", "A", "B", "C", "D", "E", "F"].contains(characters[index]) {
+                    index += 1
+                }
+                append(start ..< index, kind: .number)
+                continue
+            }
+
+            if isIdentifierStart(characters[index]) {
+                let start = index
+                index += 1
+                while index < characters.count, isIdentifierBody(characters[index]) {
+                    index += 1
+                }
+                let token = String(characters[start ..< index])
+                var next = index
+                while next < characters.count, characters[next].isWhitespace { next += 1 }
+                let kind: FeatureSourceTokenKind
+                if ["true", "false", "null", "nil", "undefined"].contains(token) {
+                    kind = .literal
+                } else if keywords.contains(token) {
+                    kind = .keyword
+                } else if next < characters.count,
+                          characters[next] == ":",
+                          propertyLanguages.contains(language ?? "") {
+                    kind = .property
+                } else {
+                    kind = .plain
+                }
+                append(start ..< index, kind: kind)
+                continue
+            }
+
+            append(index ..< index + 1, kind: .plain)
+            index += 1
+        }
+        return output
+    }
+
+    private static func lineCommentMarker(for language: String?) -> String? {
+        switch language {
+        case "plain": nil
+        case "python", "shell", "ruby", "yaml", "toml": "#"
+        case "sql": "--"
+        case "html", "xml", "css", "scss": nil
+        default: "//"
+        }
+    }
+
+    private static func keywords(for language: String?) -> Set<String> {
+        switch language {
+        case "plain": []
+        case "swift": swiftKeywords
+        case "typescript", "javascript": javascriptKeywords
+        case "python": pythonKeywords
+        case "rust": rustKeywords
+        case "go": goKeywords
+        case "shell": shellKeywords
+        default: commonKeywords
+        }
+    }
+
+    private static func isIdentifierStart(_ character: Character) -> Bool {
+        character == "_" || character == "$" || character.isLetter
+    }
+
+    private static func isIdentifierBody(_ character: Character) -> Bool {
+        isIdentifierStart(character) || character.isNumber || character == "-"
+    }
+
+    private static let propertyLanguages: Set<String> = ["json", "typescript", "javascript", "yaml"]
+    private static let blockCommentLanguages: Set<String> = [
+        "css", "go", "java", "javascript", "rust", "scss", "swift", "typescript",
+    ]
+    private static let commonKeywords: Set<String> = [
+        "class", "const", "else", "enum", "false", "for", "func", "function", "if", "import",
+        "let", "nil", "null", "private", "public", "return", "struct", "true", "var", "while",
+    ]
+    private static let swiftKeywords = commonKeywords.union([
+        "actor", "any", "associatedtype", "async", "await", "case", "defer", "extension", "guard",
+        "in", "init", "internal", "nonisolated", "opaque", "protocol", "self", "some", "switch",
+        "throws", "try", "typealias", "where",
+    ])
+    private static let javascriptKeywords = commonKeywords.union([
+        "as", "break", "case", "catch", "continue", "default", "export", "extends", "from", "interface",
+        "new", "of", "static", "throw", "type", "typeof", "undefined",
+    ])
+    private static let pythonKeywords = commonKeywords.union([
+        "and", "as", "assert", "async", "await", "def", "elif", "except", "finally", "from", "in",
+        "is", "lambda", "not", "or", "pass", "raise", "with", "yield",
+    ])
+    private static let rustKeywords = commonKeywords.union([
+        "as", "async", "await", "crate", "dyn", "impl", "in", "loop", "match", "mod", "move", "mut",
+        "ref", "self", "trait", "type", "unsafe", "use", "where",
+    ])
+    private static let goKeywords = commonKeywords.union([
+        "break", "case", "chan", "continue", "defer", "fallthrough", "go", "goto", "interface", "map",
+        "package", "range", "select", "type",
+    ])
+    private static let shellKeywords = commonKeywords.union([
+        "case", "do", "done", "elif", "esac", "export", "fi", "in", "then",
+    ])
+}
+
 public enum FeatureDiffLineKind: String, Sendable, Codable {
     case context
     case addition
@@ -93,19 +378,185 @@ public struct FeatureDiffLine: Identifiable, Sendable, Equatable, Hashable, Coda
     public var oldLine: Int?
     public var newLine: Int?
     public var text: String
+    public var spans: [FeatureDiffTextSpan]?
 
     public init(
         id: String,
         kind: FeatureDiffLineKind,
         oldLine: Int? = nil,
         newLine: Int? = nil,
-        text: String
+        text: String,
+        spans: [FeatureDiffTextSpan]? = nil
     ) {
         self.id = id
         self.kind = kind
         self.oldLine = oldLine
         self.newLine = newLine
         self.text = text
+        self.spans = spans
+    }
+}
+
+public enum FeatureDiffTextSpanKind: String, Sendable, Equatable, Hashable, Codable {
+    case unchanged
+    case changed
+}
+
+public struct FeatureDiffTextSpan: Sendable, Equatable, Hashable, Codable {
+    public var text: String
+    public var kind: FeatureDiffTextSpanKind
+
+    public init(text: String, kind: FeatureDiffTextSpanKind) {
+        self.text = text
+        self.kind = kind
+    }
+}
+
+public enum FeatureDiffWordHighlighter {
+    public static func spans(
+        old: String,
+        new: String
+    ) -> (old: [FeatureDiffTextSpan], new: [FeatureDiffTextSpan]) {
+        guard old != new else {
+            let unchanged = [FeatureDiffTextSpan(text: old, kind: .unchanged)]
+            return (unchanged, unchanged)
+        }
+        let oldTokens = tokens(in: old)
+        let newTokens = tokens(in: new)
+        guard !oldTokens.isEmpty, !newTokens.isEmpty,
+              oldTokens.count * newTokens.count <= 20_000 else {
+            return (changed(old), changed(new))
+        }
+
+        var lengths = Array(
+            repeating: Array(repeating: 0, count: newTokens.count + 1),
+            count: oldTokens.count + 1
+        )
+        for oldIndex in oldTokens.indices.reversed() {
+            for newIndex in newTokens.indices.reversed() {
+                lengths[oldIndex][newIndex] = oldTokens[oldIndex] == newTokens[newIndex]
+                    ? lengths[oldIndex + 1][newIndex + 1] + 1
+                    : max(lengths[oldIndex + 1][newIndex], lengths[oldIndex][newIndex + 1])
+            }
+        }
+
+        var oldMatches = Array(repeating: false, count: oldTokens.count)
+        var newMatches = Array(repeating: false, count: newTokens.count)
+        var oldIndex = 0
+        var newIndex = 0
+        while oldIndex < oldTokens.count, newIndex < newTokens.count {
+            if oldTokens[oldIndex] == newTokens[newIndex] {
+                oldMatches[oldIndex] = true
+                newMatches[newIndex] = true
+                oldIndex += 1
+                newIndex += 1
+            } else if lengths[oldIndex + 1][newIndex] >= lengths[oldIndex][newIndex + 1] {
+                oldIndex += 1
+            } else {
+                newIndex += 1
+            }
+        }
+
+        return (
+            makeSpans(tokens: oldTokens, matches: oldMatches),
+            makeSpans(tokens: newTokens, matches: newMatches)
+        )
+    }
+
+    private static func tokens(in text: String) -> [String] {
+        var output: [String] = []
+        var current = ""
+        var currentClass: TokenClass?
+        for character in text {
+            let tokenClass: TokenClass = if character.isWhitespace {
+                .whitespace
+            } else if character.isLetter || character.isNumber || character == "_" || character == "$" {
+                .word
+            } else {
+                .punctuation
+            }
+            if tokenClass == .punctuation {
+                if !current.isEmpty { output.append(current) }
+                output.append(String(character))
+                current = ""
+                currentClass = nil
+            } else if currentClass == tokenClass {
+                current.append(character)
+            } else {
+                if !current.isEmpty { output.append(current) }
+                current = String(character)
+                currentClass = tokenClass
+            }
+        }
+        if !current.isEmpty { output.append(current) }
+        return output
+    }
+
+    private static func makeSpans(
+        tokens: [String],
+        matches: [Bool]
+    ) -> [FeatureDiffTextSpan] {
+        var output: [FeatureDiffTextSpan] = []
+        for (index, token) in tokens.enumerated() {
+            let isWhitespace = token.allSatisfy(\.isWhitespace)
+            let kind: FeatureDiffTextSpanKind = matches[index] || isWhitespace
+                ? .unchanged
+                : .changed
+            if output.last?.kind == kind {
+                output[output.count - 1].text += token
+            } else {
+                output.append(FeatureDiffTextSpan(text: token, kind: kind))
+            }
+        }
+        return output
+    }
+
+    private static func changed(_ text: String) -> [FeatureDiffTextSpan] {
+        [FeatureDiffTextSpan(text: text, kind: .changed)]
+    }
+
+    private enum TokenClass {
+        case whitespace
+        case word
+        case punctuation
+    }
+}
+
+public enum FeatureReviewLineSide: String, Sendable, Equatable, Hashable, Codable {
+    case old
+    case new
+}
+
+public struct FeatureReviewLineSelection: Sendable, Equatable, Hashable, Codable {
+    public var side: FeatureReviewLineSide
+    public var line: Int
+
+    public init(side: FeatureReviewLineSide, line: Int) {
+        self.side = side
+        self.line = line
+    }
+}
+
+public struct FeatureReviewCommentDraft: Sendable, Equatable, Hashable {
+    public var filePath: String
+    public var line: FeatureReviewLineSelection?
+    public var body: String
+
+    public init(filePath: String, line: FeatureReviewLineSelection? = nil, body: String) {
+        self.filePath = filePath
+        self.line = line
+        self.body = body
+    }
+
+    public var prompt: String {
+        let location = line.map { " at \($0.side.rawValue) line \($0.line)" } ?? ""
+        return """
+        Address this review comment in `\(filePath)`\(location):
+
+        \(body.trimmingCharacters(in: .whitespacesAndNewlines))
+
+        Inspect the surrounding code, make the smallest correct change, and report what changed.
+        """
     }
 }
 
