@@ -156,6 +156,13 @@ enum PlatformAgentAwarenessProjection {
 final class PlatformAgentAwarenessCoordinator {
     static let shared = PlatformAgentAwarenessCoordinator()
 
+    private let updateLiveActivity: @MainActor (
+        T3RelayAgentActivityAggregateState,
+        Bool,
+        Date
+    ) async throws -> Void
+    private let endLiveActivities: @MainActor () async -> Void
+
     private struct Signature: Equatable {
         let activeCount: Int
         let subtitle: String
@@ -175,6 +182,26 @@ final class PlatformAgentAwarenessCoordinator {
     private var inFlightSignature: Signature?
     private var latestSynchronization: Synchronization?
     private var synchronizationGeneration = 0
+
+    init(
+        updateLiveActivity: @escaping @MainActor (
+            T3RelayAgentActivityAggregateState,
+            Bool,
+            Date
+        ) async throws -> Void = { aggregate, enabled, now in
+            try await PlatformAgentAwarenessCoordinator.synchronizeLiveActivity(
+                aggregate: aggregate,
+                enabled: enabled,
+                now: now
+            )
+        },
+        endLiveActivities: @escaping @MainActor () async -> Void = {
+            await PlatformAgentAwarenessCoordinator.endAllLiveActivities()
+        }
+    ) {
+        self.updateLiveActivity = updateLiveActivity
+        self.endLiveActivities = endLiveActivities
+    }
 
     func synchronize(snapshot: FeatureSnapshot, liveActivitiesEnabled: Bool) {
         let now = Date.now
@@ -209,30 +236,24 @@ final class PlatformAgentAwarenessCoordinator {
         schedule(synchronization)
     }
 
-    /// Account sign-out removes any activity that may contain account-scoped
-    /// content, then restores the latest local projection without waiting for
-    /// an unrelated thread update.
+    /// Account sign-out invalidates the cached account-scoped projection before
+    /// removing its activity. Only a later snapshot may publish new content.
     func resetAndResynchronizeLiveActivity() {
+        activityUpdateTask?.cancel()
+        synchronizationGeneration &+= 1
+        let generation = synchronizationGeneration
         lastSignature = nil
-        guard let latestSynchronization else {
-            activityUpdateTask?.cancel()
-            synchronizationGeneration &+= 1
-            inFlightSignature = nil
-            activityUpdateTask = Task { @MainActor in
-                for activity in Activity<LiveActivityAttributes>.activities {
-                    await activity.end(nil, dismissalPolicy: .immediate)
-                }
-                notifyActivityChanged()
-            }
-            return
+        inFlightSignature = nil
+        latestSynchronization = nil
+        activityUpdateTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            await endLiveActivities()
+            guard synchronizationGeneration == generation else { return }
+            activityUpdateTask = nil
         }
-        schedule(latestSynchronization, endingExistingActivitiesFirst: true)
     }
 
-    private func schedule(
-        _ synchronization: Synchronization,
-        endingExistingActivitiesFirst: Bool = false
-    ) {
+    private func schedule(_ synchronization: Synchronization) {
         activityUpdateTask?.cancel()
         synchronizationGeneration &+= 1
         let generation = synchronizationGeneration
@@ -240,16 +261,10 @@ final class PlatformAgentAwarenessCoordinator {
         activityUpdateTask = Task { @MainActor [weak self] in
             guard let self else { return }
             do {
-                if endingExistingActivitiesFirst {
-                    for activity in Activity<LiveActivityAttributes>.activities {
-                        await activity.end(nil, dismissalPolicy: .immediate)
-                    }
-                    try Task.checkCancellation()
-                }
-                try await synchronizeLiveActivity(
-                    aggregate: synchronization.aggregate,
-                    enabled: synchronization.enabled,
-                    now: synchronization.now
+                try await updateLiveActivity(
+                    synchronization.aggregate,
+                    synchronization.enabled,
+                    synchronization.now
                 )
                 try Task.checkCancellation()
                 guard synchronizationGeneration == generation,
@@ -268,7 +283,7 @@ final class PlatformAgentAwarenessCoordinator {
         }
     }
 
-    private func synchronizeLiveActivity(
+    private static func synchronizeLiveActivity(
         aggregate: T3RelayAgentActivityAggregateState,
         enabled: Bool,
         now: Date
@@ -319,7 +334,14 @@ final class PlatformAgentAwarenessCoordinator {
         notifyActivityChanged()
     }
 
-    private func notifyActivityChanged() {
+    private static func endAllLiveActivities() async {
+        for activity in Activity<LiveActivityAttributes>.activities {
+            await activity.end(nil, dismissalPolicy: .immediate)
+        }
+        notifyActivityChanged()
+    }
+
+    private static func notifyActivityChanged() {
         NotificationCenter.default.post(name: .platformLiveActivityChanged, object: nil)
     }
 }

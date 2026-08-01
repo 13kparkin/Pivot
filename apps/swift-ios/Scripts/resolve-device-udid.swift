@@ -4,11 +4,11 @@ private struct DeviceList: Decodable {
     struct Result: Decodable {
         struct Device: Decodable {
             struct HardwareProperties: Decodable {
-                let udid: String
+                let udid: String?
             }
 
             let identifier: String
-            let hardwareProperties: HardwareProperties
+            let hardwareProperties: HardwareProperties?
         }
 
         let devices: [Device]
@@ -28,13 +28,17 @@ do {
         from: Data(contentsOf: URL(fileURLWithPath: CommandLine.arguments[1]))
     )
     let requested = CommandLine.arguments[2]
-    guard let device = payload.result.devices.first(where: {
-        $0.identifier.caseInsensitiveCompare(requested) == .orderedSame
-            || $0.hardwareProperties.udid.caseInsensitiveCompare(requested) == .orderedSame
-    }) else {
+    guard let udid = payload.result.devices.lazy.compactMap({ device -> String? in
+        guard let udid = device.hardwareProperties?.udid, !udid.isEmpty else {
+            return nil
+        }
+        let matchesIdentifier = device.identifier.caseInsensitiveCompare(requested) == .orderedSame
+        let matchesUDID = udid.caseInsensitiveCompare(requested) == .orderedSame
+        return matchesIdentifier || matchesUDID ? udid : nil
+    }).first else {
         throw CocoaError(.fileNoSuchFile)
     }
-    print(device.hardwareProperties.udid)
+    print(udid)
 } catch {
     FileHandle.standardError.write(
         Data("Could not resolve that device identifier: \(error.localizedDescription)\n".utf8)

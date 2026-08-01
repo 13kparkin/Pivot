@@ -117,6 +117,30 @@ struct PlatformAgentAwarenessTests {
         #expect(widget.updatedAt == aggregate.updatedAt)
     }
 
+    @Test
+    @MainActor
+    func signOutEndsActivitiesWithoutRepublishingTheCachedProjection() async {
+        let recorder = PlatformAgentAwarenessOperationRecorder()
+        let coordinator = PlatformAgentAwarenessCoordinator(
+            updateLiveActivity: { _, _, _ in
+                recorder.recordUpdate()
+            },
+            endLiveActivities: {
+                recorder.recordEnd()
+            }
+        )
+
+        coordinator.synchronize(snapshot: FeatureSnapshot(), liveActivitiesEnabled: true)
+        await recorder.waitForUpdateCount(1)
+
+        coordinator.resetAndResynchronizeLiveActivity()
+        await recorder.waitForEndCount(1)
+        await Task.yield()
+
+        #expect(recorder.updateCount == 1)
+        #expect(recorder.endCount == 1)
+    }
+
     private static func thread(
         id: String,
         state: FeatureThreadState,
@@ -133,5 +157,46 @@ struct PlatformAgentAwarenessTests {
             providerID: "claude",
             modelID: "claude-opus-5"
         )
+    }
+}
+
+@MainActor
+private final class PlatformAgentAwarenessOperationRecorder {
+    private(set) var updateCount = 0
+    private(set) var endCount = 0
+    private var updateWaiters: [(Int, CheckedContinuation<Void, Never>)] = []
+    private var endWaiters: [(Int, CheckedContinuation<Void, Never>)] = []
+
+    func recordUpdate() {
+        updateCount += 1
+        resumeReadyWaiters(&updateWaiters, count: updateCount)
+    }
+
+    func recordEnd() {
+        endCount += 1
+        resumeReadyWaiters(&endWaiters, count: endCount)
+    }
+
+    func waitForUpdateCount(_ count: Int) async {
+        guard updateCount < count else { return }
+        await withCheckedContinuation { continuation in
+            updateWaiters.append((count, continuation))
+        }
+    }
+
+    func waitForEndCount(_ count: Int) async {
+        guard endCount < count else { return }
+        await withCheckedContinuation { continuation in
+            endWaiters.append((count, continuation))
+        }
+    }
+
+    private func resumeReadyWaiters(
+        _ waiters: inout [(Int, CheckedContinuation<Void, Never>)],
+        count: Int
+    ) {
+        let ready = waiters.filter { count >= $0.0 }
+        waiters.removeAll { count >= $0.0 }
+        ready.forEach { $0.1.resume() }
     }
 }
