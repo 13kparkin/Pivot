@@ -56,12 +56,7 @@ public struct ThreadDetailView: View {
                 threadHeaderTitle
             }
             ToolbarItem(placement: .primaryAction) {
-                HStack(spacing: 2) {
-                    TimelineView(.periodic(from: .now, by: 1)) { context in
-                        headerStatus(at: context.date)
-                    }
-                    threadActionsMenu
-                }
+                threadActionsMenu
             }
         }
         .task(id: thread.id) {
@@ -153,21 +148,36 @@ public struct ThreadDetailView: View {
                 .font(T3Typography.navigationTitle)
                 .foregroundStyle(T3Colors.textPrimary)
                 .lineLimit(1)
+                .truncationMode(.tail)
+                .layoutPriority(1)
 
             HStack(spacing: 5) {
-                Image(systemName: "arrow.triangle.branch")
-                Text(headerBranch)
-                    .lineLimit(1)
-                if let environmentName = currentThread.homeEnvironmentLabel(in: model.snapshot) {
-                    Text("·")
-                    Text(environmentName)
+                HStack(spacing: 5) {
+                    Image(systemName: "arrow.triangle.branch")
+                    Text(headerBranch)
                         .lineLimit(1)
+                    if let environmentName = currentThread.homeEnvironmentLabel(in: model.snapshot) {
+                        Text("·")
+                        Text(environmentName)
+                            .lineLimit(1)
+                    }
                 }
+                .lineLimit(1)
+                .truncationMode(.tail)
+
+                Spacer(minLength: 6)
+
+                TimelineView(.periodic(from: .now, by: 1)) { context in
+                    headerStatus(at: context.date)
+                }
+                .fixedSize(horizontal: true, vertical: false)
             }
             .font(T3Typography.navigationMetadata)
             .foregroundStyle(T3Colors.textTertiary)
         }
+        .frame(maxWidth: horizontalSizeClass == .compact ? 260 : 460, alignment: .leading)
         .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(.isHeader)
     }
 
     @ViewBuilder
@@ -204,23 +214,6 @@ public struct ThreadDetailView: View {
                 }
                 Button { toolSurface = .terminal } label: {
                     Label("Terminal", systemImage: "terminal")
-                }
-            }
-            Section("Interaction") {
-                Button {
-                    Task {
-                        await model.setInteractionMode(
-                            thread.id,
-                            mode: currentThread.interactionMode == .plan ? .standard : .plan
-                        )
-                    }
-                } label: {
-                    Label(
-                        currentThread.interactionMode == .plan
-                            ? "Use standard mode"
-                            : "Use plan mode",
-                        systemImage: "list.bullet.clipboard"
-                    )
                 }
             }
             Section("Access") {
@@ -311,7 +304,8 @@ public struct ThreadDetailView: View {
                     threadID: thread.id,
                     messages: detail.messages,
                     renderUpdate: model.detailRenderUpdates[thread.id],
-                    dynamicTypeSize: dynamicTypeSize
+                    dynamicTypeSize: dynamicTypeSize,
+                    onDismissKeyboard: dismissKeyboard
                 )
             }
         }
@@ -329,14 +323,6 @@ public struct ThreadDetailView: View {
                 onStop: {
                     Task { await model.cancelTurn(threadID: thread.id) }
                 },
-                runtimeMode: currentThread.runtimeMode,
-                interactionMode: currentThread.interactionMode,
-                onRuntimeModeChange: { mode in
-                    Task { await model.setRuntimeMode(thread.id, mode: mode) }
-                },
-                onInteractionModeChange: { mode in
-                    Task { await model.setInteractionMode(thread.id, mode: mode) }
-                },
                 pendingApprovals: detail.approvals,
                 pendingUserInputs: detail.userInputs,
                 isResolvingRequest: model.isPerformingAction,
@@ -347,7 +333,31 @@ public struct ThreadDetailView: View {
                     Task { await model.resolveUserInput(id, answers: answers) }
                 }
             )
+            .simultaneousGesture(composerKeyboardDismissGesture)
         }
+    }
+
+    private var composerKeyboardDismissGesture: some Gesture {
+        DragGesture(minimumDistance: 6, coordinateSpace: .local)
+            .onChanged { value in
+                guard composerFocused,
+                      value.translation.height > 8,
+                      value.translation.height > abs(value.translation.width) else {
+                    return
+                }
+                dismissKeyboard()
+            }
+    }
+
+    private func dismissKeyboard() {
+        guard composerFocused else { return }
+        composerFocused = false
+        UIApplication.shared.sendAction(
+            #selector(UIResponder.resignFirstResponder),
+            to: nil,
+            from: nil,
+            for: nil
+        )
     }
 
     private func send() {
@@ -419,6 +429,7 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
     let messages: [FeatureMessage]
     let renderUpdate: FeatureDetailRenderUpdate?
     let dynamicTypeSize: DynamicTypeSize
+    let onDismissKeyboard: () -> Void
 
     func makeCoordinator() -> Coordinator {
         Coordinator()
@@ -432,6 +443,7 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
         collectionView.backgroundColor = .black
         collectionView.alwaysBounceVertical = true
         collectionView.keyboardDismissMode = .interactive
+        collectionView.delaysContentTouches = false
         collectionView.contentInsetAdjustmentBehavior = .never
         collectionView.isPrefetchingEnabled = true
         collectionView.accessibilityIdentifier = "thread-transcript"
@@ -445,6 +457,7 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
             messages: messages,
             renderUpdate: renderUpdate,
             dynamicTypeSize: dynamicTypeSize,
+            onDismissKeyboard: onDismissKeyboard,
             in: collectionView
         )
     }
@@ -488,6 +501,7 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
         private var currentDetailRevision: UInt64?
         private var currentDynamicTypeSize: DynamicTypeSize?
         private var markdownPrefetches: [String: MarkdownPrefetch] = [:]
+        private var onDismissKeyboard: (() -> Void)?
 
         deinit {
             markdownPrefetches.values.forEach { $0.task.cancel() }
@@ -528,9 +542,11 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
             messages: [FeatureMessage],
             renderUpdate: FeatureDetailRenderUpdate?,
             dynamicTypeSize: DynamicTypeSize,
+            onDismissKeyboard: @escaping () -> Void,
             in collectionView: UICollectionView
         ) {
             guard let dataSource else { return }
+            self.onDismissKeyboard = onDismissKeyboard
 
             let threadChanged = currentThreadID != threadID
             let typeSizeChanged = currentDynamicTypeSize != dynamicTypeSize
@@ -765,6 +781,8 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
 
         func scrollViewWillBeginDragging(_ scrollView: UIScrollView) {
             (scrollView as? BottomAnchoredTranscriptCollectionView)?.maintainsBottomAnchor = false
+            scrollView.window?.endEditing(false)
+            onDismissKeyboard?()
         }
 
         func scrollViewDidEndDragging(_ scrollView: UIScrollView, willDecelerate decelerate: Bool) {
@@ -785,33 +803,61 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
     }
 }
 
-/// Self-sizing hosted Markdown can change the transcript height after a snapshot finishes.
+struct TranscriptViewportGeometry: Equatable {
+    let contentHeight: CGFloat
+    let viewportHeight: CGFloat
+    let topInset: CGFloat
+    let bottomInset: CGFloat
+
+    func restoredBottomOffset(
+        after previous: Self?,
+        maintainsBottomAnchor: Bool,
+        isInteracting: Bool
+    ) -> CGFloat? {
+        guard maintainsBottomAnchor,
+              !isInteracting,
+              let previous,
+              previous.contentHeight > 0,
+              previous.viewportHeight > 0 else {
+            return nil
+        }
+
+        let contentChanged = abs(contentHeight - previous.contentHeight) > 0.5
+        let viewportChanged = abs(viewportHeight - previous.viewportHeight) > 0.5
+            || abs(bottomInset - previous.bottomInset) > 0.5
+        guard contentChanged || viewportChanged else { return nil }
+
+        return max(-topInset, contentHeight - viewportHeight + bottomInset)
+    }
+}
+
+/// Self-sizing hosted Markdown can change the transcript height after a snapshot finishes,
+/// while presenting the keyboard changes the viewport without changing the content at all.
 /// Preserve the visual bottom only while the reader is already following the latest turn.
 private final class BottomAnchoredTranscriptCollectionView: UICollectionView {
     var maintainsBottomAnchor = false
 
-    private var lastLaidOutContentHeight: CGFloat = 0
+    private var lastLaidOutGeometry: TranscriptViewportGeometry?
     private var isRestoringBottomAnchor = false
 
     override func layoutSubviews() {
         super.layoutSubviews()
 
-        let newHeight = contentSize.height
-        defer { lastLaidOutContentHeight = newHeight }
-        guard maintainsBottomAnchor,
-              !isDragging,
-              !isDecelerating,
-              !isRestoringBottomAnchor,
-              lastLaidOutContentHeight > 0,
-              abs(newHeight - lastLaidOutContentHeight) > 0.5 else {
+        let geometry = TranscriptViewportGeometry(
+            contentHeight: contentSize.height,
+            viewportHeight: bounds.height,
+            topInset: adjustedContentInset.top,
+            bottomInset: adjustedContentInset.bottom
+        )
+        defer { lastLaidOutGeometry = geometry }
+
+        guard let bottomY = geometry.restoredBottomOffset(
+            after: lastLaidOutGeometry,
+            maintainsBottomAnchor: maintainsBottomAnchor,
+            isInteracting: isDragging || isDecelerating || isRestoringBottomAnchor
+        ) else {
             return
         }
-
-        let minimumY = -adjustedContentInset.top
-        let bottomY = max(
-            minimumY,
-            newHeight - bounds.height + adjustedContentInset.bottom
-        )
         guard abs(contentOffset.y - bottomY) > 0.5 else { return }
 
         isRestoringBottomAnchor = true
