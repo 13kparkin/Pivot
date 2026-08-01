@@ -47,6 +47,7 @@ export class ProviderTaskStopError extends Schema.TaggedErrorClass<ProviderTaskS
 ) {}
 
 const isProviderTurnControlError = Schema.is(ProviderTurnControlError);
+export const isProviderTaskStopError = Schema.is(ProviderTaskStopError);
 
 export interface ProviderTurnControlServiceV2Shape {
   readonly interrupt: (input: {
@@ -291,7 +292,7 @@ export const layer: Layer.Layer<
           yield* stop({ nativeTaskId: input.nativeTaskId });
         }).pipe(
           Effect.mapError((cause) =>
-            Schema.is(ProviderTaskStopError)(cause)
+            isProviderTaskStopError(cause)
               ? cause
               : new ProviderTaskStopError({
                   threadId: input.threadId,

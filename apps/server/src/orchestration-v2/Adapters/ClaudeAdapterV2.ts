@@ -602,22 +602,24 @@ export const claudeAgentSdkQueryRunnerLiveLayer: Layer.Layer<
             ),
           ),
           stopTask: (taskId) =>
-            Effect.tryPromise({
-              try: () => {
-                // stopTask is deliberate wire surface (the CLI's own
-                // /workflows view stops through it) but absent from the
-                // published SDK types — this cast is the single place the
-                // undocumented method is read.
-                const stop = (queryRuntime as { stopTask?: (taskId: string) => Promise<void> })
-                  .stopTask;
-                if (stop === undefined) {
-                  throw new Error(
-                    "The Claude SDK runtime for this session does not expose stopTask.",
-                  );
-                }
-                return stop.call(queryRuntime, taskId);
-              },
-              catch: (cause) => queryRunnerError(cause, "stopTask"),
+            Effect.suspend(() => {
+              // stopTask is deliberate wire surface (the CLI's own
+              // /workflows view stops through it) but absent from the
+              // published SDK types — this cast is the single place the
+              // undocumented method is read.
+              const stop = (queryRuntime as { stopTask?: (taskId: string) => Promise<void> })
+                .stopTask;
+              return stop === undefined
+                ? Effect.fail(
+                    new ClaudeAgentSdkQueryRunnerError({
+                      method: "stopTask",
+                      cause: "The Claude SDK runtime for this session does not expose stopTask.",
+                    }),
+                  )
+                : Effect.tryPromise({
+                    try: () => stop.call(queryRuntime, taskId),
+                    catch: (cause) => queryRunnerError(cause, "stopTask"),
+                  });
             }).pipe(
               Effect.tap(() =>
                 logProtocolEvent({
