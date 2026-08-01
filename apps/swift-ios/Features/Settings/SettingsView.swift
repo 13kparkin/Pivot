@@ -219,6 +219,7 @@ public struct SettingsView: View {
             }
             Toggle("Haptics", isOn: $settings.hapticsEnabled)
             Toggle("Notifications", isOn: $settings.notificationsEnabled)
+            Toggle("Live Activities", isOn: $settings.liveActivitiesEnabled)
         }
     }
 

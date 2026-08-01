@@ -8,6 +8,9 @@ struct PlatformRootView: View {
     @State private var pendingRoute: PlatformRoute?
     @State private var previousThreads: [String: FeatureThread]?
     @State private var lastNotificationPreference: Bool?
+    @State private var incomingShareCoordinator = PlatformIncomingShareCoordinator()
+    @State private var incomingShareNeedsProject = false
+    @State private var importedShareProjectID: String?
 
     init(model: FeatureRootModel) {
         self.model = model
@@ -38,8 +41,10 @@ struct PlatformRootView: View {
             guard !isLoading else { return }
             processThreadChanges()
             synchronizeNotificationPreference()
+            synchronizeCloudDelivery()
             consumePendingRouteIfPossible()
             consumeMailboxRouteIfAvailable()
+            refreshIncomingShares()
         }
         .onChange(of: model.homePresentationRevision) { _, _ in
             processThreadChanges()
@@ -48,11 +53,65 @@ struct PlatformRootView: View {
             if phase == .active {
                 consumeMailboxRouteIfAvailable()
                 synchronizeNotificationPreference()
+                synchronizeCloudDelivery()
+                refreshIncomingShares()
+            } else if phase == .background {
+                PlatformBackgroundRefreshCoordinator.shared.schedule()
             }
         }
         .onChange(of: model.snapshot.settings.notificationsEnabled) { _, _ in
             synchronizeNotificationPreference()
+            synchronizeCloudDelivery()
         }
+        .onChange(of: model.snapshot.settings.liveActivitiesEnabled) { _, _ in
+            synchronizeAgentAwareness()
+            synchronizeCloudDelivery()
+        }
+        .onChange(of: model.snapshot.projects.map(\.id)) { _, _ in
+            refreshIncomingShares()
+        }
+        .sheet(item: presentedIncomingShare, onDismiss: openImportedShareDraft) { envelope in
+            PlatformIncomingShareDestinationSheet(
+                envelope: envelope,
+                projects: incomingShareProjects,
+                environments: model.snapshot.environments,
+                isImporting: incomingShareCoordinator.isImporting,
+                onCancel: incomingShareCoordinator.dismissDestination,
+                onSelect: importIncomingShare(into:)
+            )
+        }
+        .alert("Create a project to continue", isPresented: $incomingShareNeedsProject) {
+            Button("Not now", role: .cancel) {}
+            Button("Create project") {
+                navigationRequest = FeatureWorkspaceNavigationRequest(
+                    destination: .newTask(projectID: nil)
+                )
+            }
+        } message: {
+            Text("Your share is saved. Connect an environment and create a project to finish importing it.")
+        }
+    }
+
+    private var incomingShareProjects: [FeatureProject] {
+        DailyUXCreationContext.projects(in: model.snapshot).sorted {
+            if $0.name.localizedStandardCompare($1.name) == .orderedSame {
+                return $0.environmentID < $1.environmentID
+            }
+            return $0.name.localizedStandardCompare($1.name) == .orderedAscending
+        }
+    }
+
+    private var presentedIncomingShare: Binding<T3IncomingShareEnvelope?> {
+        Binding(
+            get: {
+                guard !incomingShareProjects.isEmpty else { return nil }
+                return incomingShareCoordinator.pendingEnvelope
+            },
+            set: { value in
+                guard value == nil, importedShareProjectID == nil else { return }
+                incomingShareCoordinator.dismissDestination()
+            }
+        )
     }
 
     private var shouldShowWorkspace: Bool {
@@ -121,6 +180,48 @@ struct PlatformRootView: View {
             settings.notificationsEnabled = false
             await model.saveSettings(settings)
         }
+    }
+
+    private func synchronizeCloudDelivery() {
+        guard !model.isLoading else { return }
+        PlatformCloudDeliveryCoordinator.shared.synchronize(
+            settings: model.snapshot.settings
+        )
+    }
+
+    private func refreshIncomingShares() {
+        guard !model.isLoading else { return }
+        let hasProjects = !incomingShareProjects.isEmpty
+        Task { @MainActor in
+            if await incomingShareCoordinator.refresh(hasProjects: hasProjects) {
+                incomingShareNeedsProject = true
+            }
+        }
+    }
+
+    private func importIncomingShare(into project: FeatureProject) {
+        guard !incomingShareCoordinator.isImporting else { return }
+        importedShareProjectID = project.id
+        Task { @MainActor in
+            do {
+                try await incomingShareCoordinator.importPending(into: project)
+            } catch {
+                importedShareProjectID = nil
+                model.errorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    private func openImportedShareDraft() {
+        guard let projectID = importedShareProjectID else { return }
+        importedShareProjectID = nil
+        navigationRequest = FeatureWorkspaceNavigationRequest(
+            destination: .newTask(projectID: projectID)
+        )
+        PlatformHapticEngine.shared.emit(
+            .success,
+            enabled: model.snapshot.settings.hapticsEnabled
+        )
     }
 
     @MainActor
@@ -216,6 +317,7 @@ struct PlatformRootView: View {
         )
         previousThreads = current
         PlatformRecentThreadStore.shared.update(from: model.snapshot.threads)
+        synchronizeAgentAwareness()
 
         for signal in signals {
             if scenePhase == .active {
@@ -227,5 +329,12 @@ struct PlatformRootView: View {
                 Task { await PlatformNotificationService.shared.schedule(signal) }
             }
         }
+    }
+
+    private func synchronizeAgentAwareness() {
+        PlatformAgentAwarenessCoordinator.shared.synchronize(
+            snapshot: model.snapshot,
+            liveActivitiesEnabled: model.snapshot.settings.liveActivitiesEnabled
+        )
     }
 }

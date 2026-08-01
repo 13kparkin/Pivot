@@ -1,6 +1,8 @@
 import Foundation
 
 enum PlatformRoute: Codable, Hashable, Identifiable, Sendable {
+    static let nativeScheme = "t3code-swiftui"
+
     case connection(endpoint: String, token: String?)
     case environment(id: String)
     case project(environmentID: String?, projectID: String)
@@ -24,7 +26,7 @@ enum PlatformRoute: Codable, Hashable, Identifiable, Sendable {
 
     var url: URL? {
         var components = URLComponents()
-        components.scheme = "t3code"
+        components.scheme = Self.nativeScheme
 
         switch self {
         case let .connection(endpoint, token):
@@ -91,7 +93,7 @@ enum PlatformDeepLinkParser {
         }
 
         let query = queryValues(components.queryItems ?? [])
-        if ["t3", "t3code"].contains(scheme) {
+        if ["t3", "t3code", PlatformRoute.nativeScheme].contains(scheme) {
             let segments = customSchemeSegments(components)
             if isConnectionRoute(segments: segments, query: query) {
                 return try connectionRoute(url)

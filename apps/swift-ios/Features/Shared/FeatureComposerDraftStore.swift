@@ -42,6 +42,19 @@ public struct FeatureComposerWorkspaceDraft: Sendable, Equatable {
     }
 }
 
+public enum FeatureComposerDraftImportError: LocalizedError, Equatable, Sendable {
+    case attachmentLimitExceeded(available: Int)
+
+    public var errorDescription: String? {
+        switch self {
+        case let .attachmentLimitExceeded(available):
+            available == 0
+                ? "This draft already has eight attachments. Remove one before importing the share."
+                : "This share needs more attachment slots. The current draft has room for \(available)."
+        }
+    }
+}
+
 /// Persists composer state independently of view navigation. Draft writes are
 /// atomic, and callers debounce high-frequency text changes before reaching
 /// this actor so image data is not repeatedly encoded for every keystroke.
@@ -59,12 +72,14 @@ public actor FeatureComposerDraftStore {
         var attachments: [PersistedAttachment]
         var selection: FeatureSelection?
         var workspace: PersistedWorkspace?
+        var importedShareIDs: [String]?
 
         init(_ draft: FeatureComposerDraft) {
             text = draft.text
             attachments = draft.attachments.map(PersistedAttachment.init)
             selection = draft.selection
             workspace = draft.workspace.map(PersistedWorkspace.init)
+            importedShareIDs = nil
         }
 
         var featureValue: FeatureComposerDraft {
@@ -152,10 +167,56 @@ public actor FeatureComposerDraftStore {
         if draft.isEmpty {
             drafts.removeValue(forKey: key)
         } else {
-            drafts[key] = PersistedDraft(draft)
+            var persisted = PersistedDraft(draft)
+            // Preserve the crash-replay ledger while the composer performs its
+            // ordinary debounced saves after opening an imported share.
+            persisted.importedShareIDs = drafts[key]?.importedShareIDs
+            drafts[key] = persisted
         }
         try persist(drafts)
         loadedDrafts = drafts
+    }
+
+    /// Atomically imports one share-extension envelope into the latest stored
+    /// draft. The share ID is committed with the content, so a host crash after
+    /// this write but before inbox cleanup cannot duplicate the import.
+    @discardableResult
+    public func importSharedContent(
+        shareID: String,
+        text: String,
+        attachments: [FeatureDraftAttachment],
+        for key: String,
+        maximumAttachmentCount: Int = 8
+    ) throws -> FeatureComposerDraft {
+        var drafts = try loadIfNeeded()
+        var persisted = drafts[key] ?? PersistedDraft(FeatureComposerDraft())
+        var importedIDs = persisted.importedShareIDs ?? []
+        guard !importedIDs.contains(shareID) else { return persisted.featureValue }
+
+        let existingIDs = Set(persisted.attachments.map(\.id))
+        let uniqueAttachments = attachments.filter { !existingIDs.contains($0.id) }
+        let availableCount = max(0, maximumAttachmentCount - persisted.attachments.count)
+        guard uniqueAttachments.count <= availableCount else {
+            throw FeatureComposerDraftImportError.attachmentLimitExceeded(
+                available: availableCount
+            )
+        }
+
+        let incomingText = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !incomingText.isEmpty {
+            persisted.text = persisted.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            persisted.text = persisted.text.isEmpty
+                ? incomingText
+                : "\(persisted.text)\n\n\(incomingText)"
+        }
+
+        persisted.attachments.append(contentsOf: uniqueAttachments.map(PersistedAttachment.init))
+        importedIDs.append(shareID)
+        persisted.importedShareIDs = Array(importedIDs.suffix(32))
+        drafts[key] = persisted
+        try persist(drafts)
+        loadedDrafts = drafts
+        return persisted.featureValue
     }
 
     public func removeDraft(for key: String) throws {

@@ -8,7 +8,16 @@ struct T3CodeApp: App {
 
     init() {
         let client = NativeFeatureClient()
-        _model = State(initialValue: FeatureRootModel(client: client))
+        let model = FeatureRootModel(client: client)
+        _model = State(initialValue: model)
+        PlatformCloudDeliveryCoordinator.shared.install(
+            controller: client.t3ConnectController
+        )
+        PlatformBackgroundRefreshCoordinator.shared.install { [weak model] in
+            guard let model else { return false }
+            await model.reload()
+            return !Task.isCancelled
+        }
     }
 
     var body: some Scene {

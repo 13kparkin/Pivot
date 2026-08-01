@@ -60,6 +60,10 @@ final class PlatformPersistedDeviceTokenSink: PlatformDeviceTokenSink {
         self.defaults = defaults
     }
 
+    var currentToken: String? {
+        defaults.string(forKey: key)
+    }
+
     func registered(token: String) {
         defaults.set(token, forKey: key)
         NotificationCenter.default.post(
@@ -239,6 +243,7 @@ final class T3PlatformAppDelegate: NSObject, UIApplicationDelegate {
         _ application: UIApplication,
         didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
     ) -> Bool {
+        PlatformBackgroundRefreshCoordinator.shared.register()
         PlatformNotificationService.shared.installDelegate()
         if let payload = launchOptions?[.remoteNotification] as? [AnyHashable: Any],
            let route = PlatformNotificationPayload.route(from: payload) {

@@ -66,8 +66,21 @@ struct PlatformDeepLinkTests {
 
         for route in routes {
             let url = try #require(route.url)
+            #expect(url.scheme == PlatformRoute.nativeScheme)
             #expect(try PlatformDeepLinkParser.parse(url) == route)
         }
+    }
+
+    @Test
+    func acceptsLegacyRoutesWithoutClaimingTheirSharedSchemes() throws {
+        #expect(
+            try PlatformDeepLinkParser.parse("t3code://threads/environment/thread")
+                == .thread(environmentID: "environment", threadID: "thread")
+        )
+        #expect(
+            try PlatformDeepLinkParser.parse("t3://threads/environment/thread")
+                == .thread(environmentID: "environment", threadID: "thread")
+        )
     }
 
     @Test

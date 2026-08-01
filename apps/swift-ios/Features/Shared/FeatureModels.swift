@@ -673,18 +673,62 @@ public struct FeatureSettings: Sendable, Equatable, Codable {
     public var appearance: FeatureAppearance
     public var hapticsEnabled: Bool
     public var notificationsEnabled: Bool
+    public var liveActivitiesEnabled: Bool
     public var defaultSelection: FeatureSelection?
 
     public init(
         appearance: FeatureAppearance = .dark,
         hapticsEnabled: Bool = true,
         notificationsEnabled: Bool = true,
+        liveActivitiesEnabled: Bool = true,
         defaultSelection: FeatureSelection? = nil
     ) {
         self.appearance = appearance
         self.hapticsEnabled = hapticsEnabled
         self.notificationsEnabled = notificationsEnabled
+        self.liveActivitiesEnabled = liveActivitiesEnabled
         self.defaultSelection = defaultSelection
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case appearance
+        case hapticsEnabled
+        case notificationsEnabled
+        case liveActivitiesEnabled
+        case defaultSelection
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        appearance = try container.decodeIfPresent(
+            FeatureAppearance.self,
+            forKey: .appearance
+        ) ?? .dark
+        hapticsEnabled = try container.decodeIfPresent(
+            Bool.self,
+            forKey: .hapticsEnabled
+        ) ?? true
+        notificationsEnabled = try container.decodeIfPresent(
+            Bool.self,
+            forKey: .notificationsEnabled
+        ) ?? true
+        liveActivitiesEnabled = try container.decodeIfPresent(
+            Bool.self,
+            forKey: .liveActivitiesEnabled
+        ) ?? true
+        defaultSelection = try container.decodeIfPresent(
+            FeatureSelection.self,
+            forKey: .defaultSelection
+        )
+    }
+
+    public func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(appearance, forKey: .appearance)
+        try container.encode(hapticsEnabled, forKey: .hapticsEnabled)
+        try container.encode(notificationsEnabled, forKey: .notificationsEnabled)
+        try container.encode(liveActivitiesEnabled, forKey: .liveActivitiesEnabled)
+        try container.encodeIfPresent(defaultSelection, forKey: .defaultSelection)
     }
 }
 

@@ -51,7 +51,11 @@ the active selection are stored separately in Application Support.
 - Workspace files and previews, working-tree review, Git status and common actions,
   plus an interactive terminal session scoped to each thread.
 - Native settings with persisted appearance and behavior preferences, platform
-  deep links, shortcuts, and local notification routing.
+  deep links, shortcuts, background refresh, and notification routing.
+- A Share extension that imports text, URLs, and images into persistent project
+  drafts, plus Home Screen widgets and aggregate Live Activities for active work.
+- DPoP-bound T3 Connect sessions with account-scoped relay credentials, APNs
+  device registration on iOS 18+, and automatic credential recovery.
 
 The app speaks the existing HTTP and Effect RPC WebSocket contracts directly. It
 does not embed a JavaScript runtime.
@@ -117,9 +121,9 @@ Connect build settings above as environment variables. Optional overrides are
 4. Smoke-test direct URL and QR pairing, T3 Connect, multi-environment navigation,
    task creation, follow-up messages, attachments, approvals, input requests,
    background/reconnect behavior, and deep links on an iPhone and iPad.
-5. If remote push is shipping, add the APNs entitlement and matching provisioning
-   before archiving, then verify device-token registration end to end. Local
-   notifications do not require that entitlement.
+5. Confirm the host, widget, and share-extension identifiers have App Group
+   provisioning, and the host has Push Notifications provisioning. Verify APNs
+   device registration and Share-extension handoff end to end.
 6. Archive the `T3Code` scheme in Release, run Xcode's Validate App and privacy
    report, and confirm `PrivacyInfo.xcprivacy` is bundled. Re-audit the manifest
    whenever code adds a Required Reason API or data collection.
