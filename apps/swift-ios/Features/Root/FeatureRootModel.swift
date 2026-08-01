@@ -35,6 +35,8 @@ public final class FeatureRootModel {
     private let outboxStore: FeatureOutboxStore
     private var pendingSubmissionsByID: [String: FeatureQueuedSubmission] = [:]
     private var pendingThreadsByID: [String: FeatureThread] = [:]
+    private var pendingCompletionSubmissionIDs: Set<String> = []
+    private var pendingDiscardSubmissionIDs: Set<String> = []
     private var outboxDrainTask: Task<Void, Never>?
     private var outboxRetryAttempt = 0
     private var outboxGeneration: UInt64 = 0
@@ -82,7 +84,8 @@ public final class FeatureRootModel {
         }
     }
 
-    public func activateEnvironment(_ id: String) async {
+    @discardableResult
+    public func activateEnvironment(_ id: String) async -> Bool {
         await perform {
             try await client.activateEnvironment(id: id)
             install(try await client.initialSnapshot())
@@ -94,8 +97,13 @@ public final class FeatureRootModel {
         await stopOutboxDrain()
         await perform {
             try await client.removeEnvironment(id: id)
-            try? await outboxStore.removeAll(environmentID: id)
-            removePendingSubmissions(environmentID: id)
+            do {
+                try await outboxStore.removeAll(environmentID: id)
+                removePendingSubmissions(environmentID: id)
+            } catch {
+                markPendingSubmissionsForDiscard(environmentID: id)
+                errorMessage = "Environment removed, but its queued messages could not be cleared: \(error.localizedDescription)"
+            }
             install(try await client.initialSnapshot())
             clearDetails()
         }
@@ -204,7 +212,9 @@ public final class FeatureRootModel {
                 attachments: uploads,
                 identity: identity
             )
-            await completeQueuedSubmission(queued)
+            if !(await completeQueuedSubmission(queued)) {
+                scheduleOutboxRetry()
+            }
             if thread.id != queued.threadID {
                 removeThread(id: queued.threadID)
                 removeDetail(id: queued.threadID)
@@ -218,8 +228,11 @@ public final class FeatureRootModel {
                 }
                 return pendingThreadsByID[threadID]
             }
-            await discardQueuedSubmission(queued)
-            if !Self.isBenignCancellation(error) {
+            let discarded = await discardQueuedSubmission(queued)
+            if !discarded {
+                scheduleOutboxRetry()
+            }
+            if discarded, !Self.isBenignCancellation(error) {
                 errorMessage = error.localizedDescription
             }
             return nil
@@ -401,7 +414,9 @@ public final class FeatureRootModel {
                 attachments: uploads,
                 identity: identity
             )
-            await completeQueuedSubmission(queued)
+            if !(await completeQueuedSubmission(queued)) {
+                scheduleOutboxRetry()
+            }
             return true
         } catch {
             if Self.shouldQueue(error, environmentID: environmentID, snapshot: snapshot) {
@@ -410,11 +425,11 @@ public final class FeatureRootModel {
                 }
                 return true
             }
-            await discardQueuedSubmission(queued)
-            mutateDetail(id: submission.threadID) {
-                $0.messages.removeAll { $0.id == identity.messageID }
+            let discarded = await discardQueuedSubmission(queued)
+            if !discarded {
+                scheduleOutboxRetry()
             }
-            if !Self.isBenignCancellation(error) {
+            if discarded, !Self.isBenignCancellation(error) {
                 errorMessage = error.localizedDescription
             }
             return false
@@ -720,14 +735,14 @@ public final class FeatureRootModel {
         for submission in submissions {
             if let creation = submission.creation {
                 if snapshot.threads.contains(where: { $0.id == submission.threadID }) {
-                    try? await outboxStore.remove(id: submission.id)
+                    await discardRestoredSubmission(submission)
                     continue
                 }
                 guard let project = snapshot.projects.first(where: {
                     $0.id == creation.projectID && $0.environmentID == submission.environmentID
                 }) else {
                     if isEnvironmentConnected(submission.environmentID) {
-                        try? await outboxStore.remove(id: submission.id)
+                        await discardRestoredSubmission(submission)
                     } else {
                         pendingSubmissionsByID[submission.id] = submission
                     }
@@ -742,7 +757,7 @@ public final class FeatureRootModel {
                 if pendingThreadsByID[submission.threadID] != nil {
                     pendingSubmissionsByID[submission.id] = submission
                 } else if isEnvironmentConnected(submission.environmentID) {
-                    try? await outboxStore.remove(id: submission.id)
+                    await discardRestoredSubmission(submission)
                 } else {
                     pendingSubmissionsByID[submission.id] = submission
                 }
@@ -753,6 +768,11 @@ public final class FeatureRootModel {
                 store(addingPendingMessages(to: detail))
             }
         }
+    }
+
+    private func discardRestoredSubmission(_ submission: FeatureQueuedSubmission) async {
+        pendingSubmissionsByID[submission.id] = submission
+        await discardQueuedSubmission(submission)
     }
 
     private func enqueue(_ submission: FeatureQueuedSubmission) async -> Bool {
@@ -848,14 +868,11 @@ public final class FeatureRootModel {
     }
 
     private func acknowledgeAuthoritativeThread(_ id: String) {
-        guard pendingThreadsByID.removeValue(forKey: id) != nil,
+        guard pendingThreadsByID[id] != nil,
               let submission = pendingSubmissionsByID.values.first(where: {
                   $0.threadID == id && $0.creation != nil
               }) else { return }
-        pendingSubmissionsByID.removeValue(forKey: submission.id)
-        markQueuedMessageDelivered(submission)
-        let store = outboxStore
-        Task { try? await store.remove(id: submission.id) }
+        scheduleQueuedSubmissionCompletion(submission)
     }
 
     private func acknowledgeDeliveredMessages(_ messages: [FeatureMessage]) {
@@ -869,18 +886,37 @@ public final class FeatureRootModel {
             $0.creation == nil && messageIDs.contains($0.identity.messageID)
         }
         for submission in delivered {
-            pendingSubmissionsByID.removeValue(forKey: submission.id)
-            let store = outboxStore
-            Task { try? await store.remove(id: submission.id) }
+            scheduleQueuedSubmissionCompletion(submission)
         }
     }
 
-    private func completeQueuedSubmission(_ submission: FeatureQueuedSubmission) async {
-        try? await outboxStore.remove(id: submission.id)
+    private func scheduleQueuedSubmissionCompletion(_ submission: FeatureQueuedSubmission) {
+        guard pendingCompletionSubmissionIDs.insert(submission.id).inserted else { return }
+        pendingDiscardSubmissionIDs.remove(submission.id)
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            if !(await self.completeQueuedSubmission(submission)) {
+                self.scheduleOutboxRetry()
+            }
+        }
+    }
+
+    @discardableResult
+    private func completeQueuedSubmission(_ submission: FeatureQueuedSubmission) async -> Bool {
+        pendingCompletionSubmissionIDs.insert(submission.id)
+        pendingDiscardSubmissionIDs.remove(submission.id)
+        do {
+            try await outboxStore.remove(id: submission.id)
+        } catch {
+            errorMessage = "The message was delivered, but its queued copy could not be cleared: \(error.localizedDescription)"
+            return false
+        }
+        pendingCompletionSubmissionIDs.remove(submission.id)
         pendingSubmissionsByID.removeValue(forKey: submission.id)
         pendingThreadsByID.removeValue(forKey: submission.threadID)
         markQueuedMessageDelivered(submission)
         outboxRetryAttempt = 0
+        return true
     }
 
     private func markQueuedMessageDelivered(_ submission: FeatureQueuedSubmission) {
@@ -895,8 +931,17 @@ public final class FeatureRootModel {
         }
     }
 
-    private func discardQueuedSubmission(_ submission: FeatureQueuedSubmission) async {
-        try? await outboxStore.remove(id: submission.id)
+    @discardableResult
+    private func discardQueuedSubmission(_ submission: FeatureQueuedSubmission) async -> Bool {
+        pendingCompletionSubmissionIDs.remove(submission.id)
+        pendingDiscardSubmissionIDs.insert(submission.id)
+        do {
+            try await outboxStore.remove(id: submission.id)
+        } catch {
+            errorMessage = "Could not remove the queued message: \(error.localizedDescription)"
+            return false
+        }
+        pendingDiscardSubmissionIDs.remove(submission.id)
         pendingSubmissionsByID.removeValue(forKey: submission.id)
         let wasPendingCreation = pendingThreadsByID.removeValue(forKey: submission.threadID) != nil
         if wasPendingCreation {
@@ -907,6 +952,7 @@ public final class FeatureRootModel {
                 $0.messages.removeAll { $0.id == submission.identity.messageID }
             }
         }
+        return true
     }
 
     private func removePendingSubmissions(environmentID: String) {
@@ -914,6 +960,8 @@ public final class FeatureRootModel {
             $0.environmentID == environmentID
         }
         for submission in removed {
+            pendingCompletionSubmissionIDs.remove(submission.id)
+            pendingDiscardSubmissionIDs.remove(submission.id)
             pendingSubmissionsByID.removeValue(forKey: submission.id)
             if pendingThreadsByID.removeValue(forKey: submission.threadID) != nil {
                 removeThread(id: submission.threadID)
@@ -923,6 +971,13 @@ public final class FeatureRootModel {
                     $0.messages.removeAll { $0.id == submission.identity.messageID }
                 }
             }
+        }
+    }
+
+    private func markPendingSubmissionsForDiscard(environmentID: String) {
+        for submission in pendingSubmissionsByID.values where submission.environmentID == environmentID {
+            pendingCompletionSubmissionIDs.remove(submission.id)
+            pendingDiscardSubmissionIDs.insert(submission.id)
         }
     }
 
@@ -968,6 +1023,18 @@ public final class FeatureRootModel {
         var needsRetry = false
         for submission in submissions where pendingSubmissionsByID[submission.id] != nil {
             guard !Task.isCancelled, outboxGeneration == generation else { return false }
+            if pendingCompletionSubmissionIDs.contains(submission.id) {
+                if !(await completeQueuedSubmission(submission)) {
+                    needsRetry = true
+                }
+                continue
+            }
+            if pendingDiscardSubmissionIDs.contains(submission.id) {
+                if !(await discardQueuedSubmission(submission)) {
+                    needsRetry = true
+                }
+                continue
+            }
             var policySnapshot = snapshot
             if pendingThreadsByID[submission.threadID] != nil {
                 policySnapshot.threads.removeAll { $0.id == submission.threadID }
@@ -978,7 +1045,9 @@ public final class FeatureRootModel {
                 pendingCreationThreadIDs: Set(pendingThreadsByID.keys)
             ) {
             case .discard:
-                await discardQueuedSubmission(submission)
+                if !(await discardQueuedSubmission(submission)) {
+                    needsRetry = true
+                }
             case .wait:
                 // Connectivity and snapshot events wake the drain immediately.
                 // Avoid a permanent timer while the owning device is offline.
@@ -1007,7 +1076,9 @@ public final class FeatureRootModel {
                         )
                         guard !Task.isCancelled,
                               outboxGeneration == generation else { return false }
-                        await completeQueuedSubmission(submission)
+                        if !(await completeQueuedSubmission(submission)) {
+                            needsRetry = true
+                        }
                         if thread.id != submission.threadID {
                             removeThread(id: submission.threadID)
                             removeDetail(id: submission.threadID)
@@ -1023,7 +1094,9 @@ public final class FeatureRootModel {
                         )
                         guard !Task.isCancelled,
                               outboxGeneration == generation else { return false }
-                        await completeQueuedSubmission(submission)
+                        if !(await completeQueuedSubmission(submission)) {
+                            needsRetry = true
+                        }
                     }
                 } catch {
                     if Self.shouldQueue(
@@ -1033,8 +1106,11 @@ public final class FeatureRootModel {
                     ) {
                         needsRetry = true
                     } else {
-                        await discardQueuedSubmission(submission)
-                        errorMessage = error.localizedDescription
+                        if !(await discardQueuedSubmission(submission)) {
+                            needsRetry = true
+                        } else {
+                            errorMessage = error.localizedDescription
+                        }
                     }
                 }
             }

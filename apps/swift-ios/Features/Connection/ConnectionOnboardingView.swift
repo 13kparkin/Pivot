@@ -548,8 +548,7 @@ public struct ConnectionOnboardingView: View {
             case let .pair(endpoint, code):
                 didConnect = await model.pair(endpoint: endpoint, token: code)
             case let .activate(id, _):
-                await model.activateEnvironment(id)
-                didConnect = model.snapshot.connection.state == .connected
+                didConnect = await model.activateEnvironment(id)
             }
             guard !Task.isCancelled, connectionAttemptID == attemptID else { return }
 
