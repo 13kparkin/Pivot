@@ -206,7 +206,7 @@ struct FeatureComposerUserInputPanel: View {
 
                         TextField(
                             "Write custom answer",
-                            text: answerBinding(for: question.id),
+                            text: answerBinding(for: question),
                             axis: .vertical
                         )
                         .font(T3Typography.composer)
@@ -364,13 +364,21 @@ struct FeatureComposerUserInputPanel: View {
         .buttonStyle(.plain)
     }
 
-    private func answerBinding(for questionID: String) -> Binding<String> {
+    private func answerBinding(for question: FeatureInputQuestion) -> Binding<String> {
         Binding(
             get: {
-                guard case let .text(value)? = answers[questionID] else { return "" }
-                return value
+                FeatureComposerCustomAnswer.text(
+                    in: answers[question.id],
+                    for: question
+                )
             },
-            set: { answers[questionID] = .text($0) }
+            set: {
+                answers[question.id] = FeatureComposerCustomAnswer.replacingText(
+                    in: answers[question.id],
+                    with: $0,
+                    for: question
+                )
+            }
         )
     }
 
@@ -418,6 +426,39 @@ struct FeatureComposerUserInputPanel: View {
         case nil:
             return false
         }
+    }
+}
+
+enum FeatureComposerCustomAnswer {
+    static func text(
+        in answer: FeatureInputAnswer?,
+        for question: FeatureInputQuestion
+    ) -> String {
+        let optionLabels = Set(question.options.map(\.label))
+        switch answer {
+        case let .text(value):
+            return optionLabels.contains(value) ? "" : value
+        case let .selections(values):
+            return values.first(where: { !optionLabels.contains($0) }) ?? ""
+        case nil:
+            return ""
+        }
+    }
+
+    static func replacingText(
+        in answer: FeatureInputAnswer?,
+        with text: String,
+        for question: FeatureInputQuestion
+    ) -> FeatureInputAnswer {
+        guard question.allowsMultiple else { return .text(text) }
+        let optionLabels = Set(question.options.map(\.label))
+        let selectedOptions: [String]
+        if case let .selections(values) = answer {
+            selectedOptions = values.filter(optionLabels.contains)
+        } else {
+            selectedOptions = []
+        }
+        return .selections(text.isEmpty ? selectedOptions : selectedOptions + [text])
     }
 }
 

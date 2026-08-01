@@ -61,4 +61,34 @@ struct UserInputAnswerTests {
         #expect(FeatureInputAnswer.text("   ").normalized == nil)
         #expect(FeatureInputAnswer.selections([]).normalized == nil)
     }
+
+    @Test
+    func testMultiSelectCustomTextStaysInTheSelectionArray() {
+        let question = FeatureInputQuestion(
+            id: "surfaces",
+            header: "Surfaces",
+            question: "Where should this ship?",
+            options: [
+                .init(label: "Server", detail: "Backend"),
+                .init(label: "Web", detail: "Browser"),
+            ],
+            allowsMultiple: true
+        )
+        let selected = FeatureInputAnswer.selections(["Server"])
+        let withCustom = FeatureComposerCustomAnswer.replacingText(
+            in: selected,
+            with: "CLI",
+            for: question
+        )
+
+        #expect(withCustom == .selections(["Server", "CLI"]))
+        #expect(FeatureComposerCustomAnswer.text(in: withCustom, for: question) == "CLI")
+        #expect(
+            FeatureComposerCustomAnswer.replacingText(
+                in: withCustom,
+                with: "",
+                for: question
+            ) == .selections(["Server"])
+        )
+    }
 }

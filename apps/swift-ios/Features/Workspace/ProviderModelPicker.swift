@@ -99,6 +99,7 @@ public struct ProviderModelPicker: View {
     }
 
     private func materializeSelection() {
+        guard !normalizedProviders.isEmpty else { return }
         let resolved = ProviderModelSelectionResolver.materialized(
             selection,
             in: normalizedProviders
@@ -401,7 +402,15 @@ enum ProviderModelSelectionResolver {
         _ selection: FeatureSelection?,
         in providers: [FeatureProvider]
     ) -> FeatureSelection? {
-        if let validated = DailyUXModelOptions.validated(selection, in: providers) {
+        guard !providers.isEmpty else { return selection }
+        if var validated = DailyUXModelOptions.validated(selection, in: providers),
+           let model = providers
+               .first(where: { $0.id == validated.providerID })?
+               .models.first(where: { $0.id == validated.modelID }) {
+            validated.options = ProviderModelConfiguration.materializedOptions(
+                for: model,
+                preserving: validated.options
+            )
             return validated
         }
         let currentProviders = providers.compactMap { provider -> FeatureProvider? in
@@ -429,6 +438,22 @@ enum ProviderModelCatalogNormalizer {
                 existing.requiresNewThreadForModelChange =
                     existing.requiresNewThreadForModelChange
                     || provider.requiresNewThreadForModelChange
+                if existing.name.isEmpty {
+                    existing.name = provider.name
+                }
+                if existing.driver.isEmpty {
+                    existing.driver = provider.driver
+                }
+                existing.slashCommands = mergingMetadata(
+                    existing.slashCommands,
+                    provider.slashCommands,
+                    id: \.id
+                )
+                existing.skills = mergingMetadata(
+                    existing.skills,
+                    provider.skills,
+                    id: \.id
+                )
                 providersByID[provider.id] = existing
             } else {
                 var normalized = provider
@@ -449,6 +474,18 @@ enum ProviderModelCatalogNormalizer {
         }
 
         return order.compactMap { providersByID[$0] }
+    }
+
+    private static func mergingMetadata<Value>(
+        _ first: [Value]?,
+        _ second: [Value]?,
+        id: KeyPath<Value, String>
+    ) -> [Value]? {
+        guard first != nil || second != nil else { return nil }
+        var seen = Set<String>()
+        return ((first ?? []) + (second ?? [])).filter {
+            seen.insert($0[keyPath: id]).inserted
+        }
     }
 
     private static func isImplicitModel(_ model: FeatureModel) -> Bool {
@@ -537,7 +574,10 @@ private struct ModelConfigurationView: View {
         self.onConfirm = onConfirm
         if currentSelection?.providerID == option.provider.id,
            currentSelection?.modelID == option.model.id {
-            _optionSelections = State(initialValue: currentSelection?.options ?? [])
+            _optionSelections = State(initialValue: ProviderModelConfiguration.materializedOptions(
+                for: option.model,
+                preserving: currentSelection?.options ?? []
+            ))
         } else {
             _optionSelections = State(initialValue: DailyUXModelOptions.defaults(for: option.model))
         }
@@ -645,6 +685,18 @@ private struct ModelConfigurationView: View {
                 )
             }
         )
+    }
+}
+
+enum ProviderModelConfiguration {
+    static func materializedOptions(
+        for model: FeatureModel,
+        preserving selections: [FeatureModelOptionSelection]
+    ) -> [FeatureModelOptionSelection] {
+        let selectedIDs = Set(selections.map(\.id))
+        return selections + DailyUXModelOptions.defaults(for: model).filter {
+            !selectedIDs.contains($0.id)
+        }
     }
 }
 

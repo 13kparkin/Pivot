@@ -424,6 +424,58 @@ struct FeatureRootModelTests {
     }
 
     @Test
+    func environmentScopedCatalogAndPreferencesInvalidateHomePresentation() async {
+        let client = FeatureClientStub()
+        let model = testRootModel(client: client)
+        client.snapshot = FeatureSnapshot(
+            providersByEnvironment: [
+                "studio": [
+                    .init(
+                        id: "codex",
+                        name: "Codex",
+                        models: [.init(id: "gpt-5.6-sol", name: "Sol")]
+                    ),
+                ],
+            ]
+        )
+
+        await model.reload()
+        let catalogRevision = model.homePresentationRevision
+        #expect(catalogRevision == 1)
+
+        client.snapshot.preferencesByEnvironment = [
+            "studio": .init(defaultWorkspaceMode: .worktree),
+        ]
+        await model.reload()
+
+        #expect(model.homePresentationRevision == catalogRevision + 1)
+    }
+
+    @Test
+    func responseTimeoutKeepsDurableSubmissionQueued() {
+        let snapshot = FeatureSnapshot(
+            connection: .init(state: .connected),
+            environments: [
+                .init(
+                    id: "studio",
+                    name: "Studio",
+                    endpoint: "https://studio.example",
+                    isActive: true,
+                    connectionState: .connected
+                ),
+            ]
+        )
+
+        #expect(
+            FeatureRootModel.shouldQueue(
+                RPCError.responseTimedOut,
+                environmentID: "studio",
+                snapshot: snapshot
+            )
+        )
+    }
+
+    @Test
     func detailEventsIgnoreDuplicatesAndAdvancePerThreadRevision() async {
         let client = FeatureClientStub()
         let thread = FeatureThread(

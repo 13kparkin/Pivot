@@ -194,4 +194,28 @@ struct ComposerDraftStoreTests {
         #expect(merged.selection == liveSelection)
         #expect(merged.workspace == fallbackWorkspace)
     }
+
+    @Test func successfulSubmissionFenceWaitsForCancelledDraftWrites() async {
+        let started = AsyncStream<Void>.makeStream()
+        let release = AsyncStream<Void>.makeStream()
+        let events = AsyncStream<String>.makeStream()
+        let pendingWrite = Task {
+            started.continuation.yield()
+            for await _ in release.stream { break }
+            events.continuation.yield("write finished")
+        }
+        var startedIterator = started.stream.makeAsyncIterator()
+        _ = await startedIterator.next()
+
+        let fencedRemoval = Task {
+            await NewTaskDraftWriteFence.cancelAndWait(pendingWrite)
+            events.continuation.yield("draft removed")
+        }
+        release.continuation.yield()
+        await fencedRemoval.value
+
+        var eventIterator = events.stream.makeAsyncIterator()
+        #expect(await eventIterator.next() == "write finished")
+        #expect(await eventIterator.next() == "draft removed")
+    }
 }

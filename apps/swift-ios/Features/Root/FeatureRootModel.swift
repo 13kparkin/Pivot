@@ -593,6 +593,8 @@ public final class FeatureRootModel {
             || snapshot.environments != value.environments
             || snapshot.projects != value.projects
             || snapshot.providers != value.providers
+            || snapshot.providersByEnvironment != value.providersByEnvironment
+            || snapshot.preferencesByEnvironment != value.preferencesByEnvironment
             || snapshot.threads != value.threads {
             homePresentationRevision &+= 1
         }
@@ -1048,12 +1050,16 @@ public final class FeatureRootModel {
             || (environment.isActive && snapshot.connection.state == .connected)
     }
 
-    private static func shouldQueue(
+    static func shouldQueue(
         _ error: any Error,
         environmentID: String,
         snapshot: FeatureSnapshot
     ) -> Bool {
         if error is CancellationError || error is URLError { return true }
+        if let rpcError = error as? RPCError,
+           case .responseTimedOut = rpcError {
+            return true
+        }
         if let environment = snapshot.environments.first(where: { $0.id == environmentID }) {
             let disconnected = environment.connectionState != .connected
                 && !(environment.isActive && snapshot.connection.state == .connected)

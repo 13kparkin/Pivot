@@ -82,6 +82,7 @@ public struct AddProjectView: View {
                         .padding(.horizontal, 18)
                         .padding(.top, 14)
                         .padding(.bottom, 32)
+                        .disabled(isSubmitting)
                     }
                     .scrollDismissesKeyboard(.interactively)
                 } else {

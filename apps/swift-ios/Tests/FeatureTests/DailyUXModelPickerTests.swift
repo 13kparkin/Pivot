@@ -265,6 +265,89 @@ struct DailyUXModelPickerTests {
     }
 
     @Test
+    func selectionWaitsForTheProviderCatalogBeforeMaterializing() {
+        let saved = FeatureSelection(
+            providerID: "claude",
+            modelID: "claude-opus-5"
+        )
+
+        #expect(ProviderModelSelectionResolver.materialized(saved, in: []) == saved)
+        #expect(ProviderModelSelectionResolver.materialized(nil, in: []) == nil)
+    }
+
+    @Test
+    func configurationMaterializesDisplayedDefaultsWithoutOverwritingSelections() {
+        let model = FeatureModel(
+            id: "gpt-5.6-sol",
+            name: "Sol",
+            options: [
+                .init(
+                    id: "effort",
+                    label: "Effort",
+                    kind: .select,
+                    choices: [
+                        .init(id: "high", label: "High", isDefault: true),
+                    ]
+                ),
+                .init(
+                    id: "fast",
+                    label: "Fast",
+                    kind: .boolean,
+                    defaultValue: .boolean(true)
+                ),
+            ]
+        )
+        let existing = [
+            FeatureModelOptionSelection(id: "effort", value: .string("custom")),
+        ]
+
+        #expect(
+            ProviderModelConfiguration.materializedOptions(
+                for: model,
+                preserving: existing
+            ) == [
+                .init(id: "effort", value: .string("custom")),
+                .init(id: "fast", value: .boolean(true)),
+            ]
+        )
+    }
+
+    @Test
+    func concreteSelectionIncludesTheOptionDefaultsShownByThePicker() {
+        let providers = [
+            FeatureProvider(
+                id: "codex",
+                name: "Codex",
+                models: [
+                    .init(
+                        id: "gpt-5.6-sol",
+                        name: "Sol",
+                        options: [
+                            .init(
+                                id: "effort",
+                                label: "Effort",
+                                kind: .select,
+                                choices: [
+                                    .init(id: "high", label: "High", isDefault: true),
+                                ]
+                            ),
+                        ]
+                    ),
+                ]
+            ),
+        ]
+
+        #expect(
+            ProviderModelSelectionResolver.materialized(
+                .init(providerID: "codex", modelID: "gpt-5.6-sol"),
+                in: providers
+            )?.options == [
+                .init(id: "effort", value: .string("high")),
+            ]
+        )
+    }
+
+    @Test
     func duplicateCatalogEntriesCollapseAndImplicitModelsDisappear() {
         let normalized = ProviderModelCatalogNormalizer.normalized([
             FeatureProvider(
@@ -289,6 +372,31 @@ struct DailyUXModelPickerTests {
         #expect(normalized[0].name == "Claude")
         #expect(normalized[0].models.map(\.id) == ["opus", "sonnet"])
         #expect(normalized[0].models.map(\.name) == ["Opus", "Sonnet"])
+    }
+
+    @Test
+    func duplicateProvidersMergeComposerCommandsAndSkills() {
+        let normalized = ProviderModelCatalogNormalizer.normalized([
+            FeatureProvider(
+                id: "claude",
+                name: "Claude",
+                models: [.init(id: "opus", name: "Opus")],
+                slashCommands: [.init(name: "review")],
+                skills: [.init(name: "deploy")]
+            ),
+            FeatureProvider(
+                id: "claude",
+                name: "Claude",
+                driver: "claudeAgent",
+                models: [.init(id: "sonnet", name: "Sonnet")],
+                slashCommands: [.init(name: "review"), .init(name: "compact")],
+                skills: [.init(name: "deploy"), .init(name: "fix-ci")]
+            ),
+        ])
+
+        #expect(normalized[0].driver == "claudeAgent")
+        #expect(normalized[0].slashCommands?.map(\.name) == ["review", "compact"])
+        #expect(normalized[0].skills?.map(\.name) == ["deploy", "fix-ci"])
     }
 
     @Test

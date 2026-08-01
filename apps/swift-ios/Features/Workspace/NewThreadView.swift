@@ -27,6 +27,7 @@ public struct NewThreadView: View {
     @State private var restoredDraftProjectID: String?
     @State private var draftRestoreContext: NewTaskDraftRestoreContext?
     @State private var draftSaveTask: Task<Void, Never>?
+    @State private var immediateDraftSaveTasks: [String: Task<Void, Never>] = [:]
     @State private var submittedSuccessfully = false
     @FocusState private var promptFocused: Bool
 
@@ -447,9 +448,14 @@ public struct NewThreadView: View {
         }
         promptFocused = false
         isSubmitting = true
-        draftSaveTask?.cancel()
+        let pendingDraftSaveTask = draftSaveTask
+        pendingDraftSaveTask?.cancel()
+        draftSaveTask = nil
         let draftKey = currentDraftKey
         let draftSnapshot = composerDraft
+        let immediateDraftSaveTask = draftKey.flatMap {
+            immediateDraftSaveTasks.removeValue(forKey: $0)
+        }
         let request = NewTaskRequest(
             projectID: project.id,
             prompt: trimmedPrompt,
@@ -468,14 +474,20 @@ public struct NewThreadView: View {
             attachments: attachments
         )
 
-        Task {
+        Task { @MainActor in
+            await NewTaskDraftWriteFence.cancelAndWait(pendingDraftSaveTask)
+            await NewTaskDraftWriteFence.cancelAndWait(immediateDraftSaveTask)
             if let draftKey {
                 try? await draftStore.setDraft(draftSnapshot, for: draftKey)
             }
             if let thread = await submit(request) {
                 submittedSuccessfully = true
-                draftSaveTask?.cancel()
+                let trailingDraftSaveTask = draftSaveTask
+                draftSaveTask = nil
+                await NewTaskDraftWriteFence.cancelAndWait(trailingDraftSaveTask)
                 if let draftKey {
+                    let trailingSave = immediateDraftSaveTasks.removeValue(forKey: draftKey)
+                    await NewTaskDraftWriteFence.cancelAndWait(trailingSave)
                     try? await draftStore.removeDraft(for: draftKey)
                 }
                 onCreated(thread)
@@ -594,6 +606,13 @@ public struct NewThreadView: View {
             return
         }
         let key = FeatureComposerDraftStore.newTaskKey(project: project)
+        let pendingImmediateSave = immediateDraftSaveTasks[key]
+        await NewTaskDraftWriteFence.wait(pendingImmediateSave)
+        guard !Task.isCancelled,
+              projectID == requestedProjectID,
+              draftRestoreContext?.projectID == requestedProjectID else {
+            return
+        }
         let saved = try? await draftStore.draft(for: key)
         guard !Task.isCancelled,
               projectID == requestedProjectID,
@@ -666,13 +685,17 @@ public struct NewThreadView: View {
 
     private func scheduleDraftSave() {
         guard restoredDraftProjectID == projectID,
+              !isSubmitting,
               !submittedSuccessfully,
               let key = currentDraftKey else {
             return
         }
-        draftSaveTask?.cancel()
+        let pendingDraftSaveTask = draftSaveTask
+        pendingDraftSaveTask?.cancel()
+        draftSaveTask = nil
         let snapshot = composerDraft
         draftSaveTask = Task {
+            await NewTaskDraftWriteFence.wait(pendingDraftSaveTask)
             do {
                 try await Task.sleep(for: .milliseconds(220))
                 try Task.checkCancellation()
@@ -690,23 +713,31 @@ public struct NewThreadView: View {
               let key = currentDraftKey else {
             return
         }
-        draftSaveTask?.cancel()
+        let pendingDraftSaveTask = draftSaveTask
+        pendingDraftSaveTask?.cancel()
+        draftSaveTask = nil
         let snapshot = composerDraft
         let restoreContext = draftRestoreContext
         let draftProjectID = projectID
         let needsRestoreMerge = restoredDraftProjectID != draftProjectID
-        draftSaveTask = nil
-        Task {
+        let previousSave = immediateDraftSaveTasks[key]
+        previousSave?.cancel()
+        let task = Task { @MainActor in
+            await NewTaskDraftWriteFence.wait(pendingDraftSaveTask)
+            await NewTaskDraftWriteFence.wait(previousSave)
+            guard !Task.isCancelled else { return }
             if needsRestoreMerge,
                let restoreContext,
                restoreContext.projectID == draftProjectID {
                 let saved = try? await draftStore.draft(for: key)
+                guard !Task.isCancelled else { return }
                 let merged = restoreContext.merging(saved: saved, current: snapshot)
                 try? await draftStore.setDraft(merged, for: key)
             } else {
                 try? await draftStore.setDraft(snapshot, for: key)
             }
         }
+        immediateDraftSaveTasks[key] = task
     }
 
     private static func branchSort(
@@ -717,6 +748,17 @@ public struct NewThreadView: View {
         let rhsRank = rhs.isCurrent ? 0 : rhs.isDefault ? 1 : rhs.isRemote ? 3 : 2
         if lhsRank != rhsRank { return lhsRank < rhsRank }
         return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
+    }
+}
+
+enum NewTaskDraftWriteFence {
+    static func wait(_ task: Task<Void, Never>?) async {
+        await task?.value
+    }
+
+    static func cancelAndWait(_ task: Task<Void, Never>?) async {
+        task?.cancel()
+        await task?.value
     }
 }
 
