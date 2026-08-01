@@ -10,6 +10,7 @@ public struct ThreadDetailView: View {
     let thread: FeatureThread
     let submitMessage: (FeatureMessageSubmission) async -> Bool
     let onNavigateBack: () -> Void
+    private let draftStore: FeatureComposerDraftStore
 
     @State private var draft = ""
     @State private var selection: FeatureSelection?
@@ -17,6 +18,8 @@ public struct ThreadDetailView: View {
     @State private var isSending = false
     @State private var isLoading = true
     @State private var sendFailed = false
+    @State private var didRestoreDraft = false
+    @State private var draftSaveTask: Task<Void, Never>?
     @State private var toolSurface: FeatureThreadToolSurface?
     @FocusState private var composerFocused: Bool
 
@@ -24,12 +27,14 @@ public struct ThreadDetailView: View {
         model: FeatureRootModel,
         thread: FeatureThread,
         submitMessage: @escaping (FeatureMessageSubmission) async -> Bool,
-        onNavigateBack: @escaping () -> Void = {}
+        onNavigateBack: @escaping () -> Void = {},
+        draftStore: FeatureComposerDraftStore = .shared
     ) {
         self.model = model
         self.thread = thread
         self.submitMessage = submitMessage
         self.onNavigateBack = onNavigateBack
+        self.draftStore = draftStore
     }
 
     public var body: some View {
@@ -62,11 +67,15 @@ public struct ThreadDetailView: View {
         .task(id: thread.id) {
             isLoading = true
             _ = await model.detail(for: thread.id, force: true)
-            selection = currentSelection
+            await restoreDraft()
             isLoading = false
         }
+        .onChange(of: draft) { scheduleDraftSave() }
+        .onChange(of: attachments) { scheduleDraftSave() }
+        .onChange(of: selection) { scheduleDraftSave() }
         .onDisappear {
             model.releaseThread(thread.id)
+            persistDraftBeforeLeaving()
         }
         .sheet(item: $toolSurface) { surface in
             NavigationStack {
@@ -367,10 +376,11 @@ public struct ThreadDetailView: View {
             || !pendingAttachments.isEmpty else {
             return
         }
+        draftSaveTask?.cancel()
+        isSending = true
         draft = ""
         attachments = []
         composerFocused = false
-        isSending = true
         Task {
             let sent = await submitMessage(
                 FeatureMessageSubmission(
@@ -380,7 +390,14 @@ public struct ThreadDetailView: View {
                 attachments: pendingAttachments
                 )
             )
-            if !sent {
+            if sent {
+                let followUpDraft = composerDraft
+                if followUpDraft.text.isEmpty && followUpDraft.attachments.isEmpty {
+                    try? await draftStore.removeDraft(for: draftKey)
+                } else {
+                    try? await draftStore.setDraft(followUpDraft, for: draftKey)
+                }
+            } else {
                 let currentDraft = draft
                 let restoredMessage = message.trimmingCharacters(in: .whitespacesAndNewlines)
                 if currentDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -396,7 +413,68 @@ public struct ThreadDetailView: View {
                 composerFocused = true
             }
             isSending = false
+            if !sent {
+                persistDraftImmediately()
+            }
         }
+    }
+
+    private var draftKey: String {
+        FeatureComposerDraftStore.threadKey(currentThread)
+    }
+
+    @MainActor
+    private func restoreDraft() async {
+        let saved = try? await draftStore.draft(for: draftKey)
+        if let saved {
+            draft = saved.text
+            attachments = saved.attachments
+            selection = saved.selection ?? currentSelection
+        } else {
+            selection = currentSelection
+        }
+        didRestoreDraft = true
+    }
+
+    private func scheduleDraftSave() {
+        guard didRestoreDraft, !isSending else { return }
+        draftSaveTask?.cancel()
+        let snapshot = composerDraft
+        let key = draftKey
+        draftSaveTask = Task {
+            do {
+                try await Task.sleep(for: .milliseconds(220))
+                try Task.checkCancellation()
+                try await draftStore.setDraft(snapshot, for: key)
+            } catch is CancellationError {
+                return
+            } catch {
+                return
+            }
+        }
+    }
+
+    private func persistDraftImmediately() {
+        guard didRestoreDraft else { return }
+        draftSaveTask?.cancel()
+        let snapshot = composerDraft
+        let key = draftKey
+        draftSaveTask = Task {
+            try? await draftStore.setDraft(snapshot, for: key)
+        }
+    }
+
+    private func persistDraftBeforeLeaving() {
+        guard didRestoreDraft, !isSending else { return }
+        persistDraftImmediately()
+    }
+
+    private var composerDraft: FeatureComposerDraft {
+        FeatureComposerDraft(
+            text: draft,
+            attachments: attachments,
+            selection: selection
+        )
     }
 
     private func runtimeModeLabel(_ mode: FeatureRuntimeMode) -> String {
