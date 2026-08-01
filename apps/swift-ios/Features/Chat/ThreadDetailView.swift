@@ -34,7 +34,7 @@ public struct ThreadDetailView: View {
 
     public var body: some View {
         Group {
-            if isLoading, detail == nil {
+            if isLoading {
                 ProgressView("Loading thread…")
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if let detail {
@@ -66,7 +66,19 @@ public struct ThreadDetailView: View {
         }
         .task(id: thread.id) {
             isLoading = true
-            _ = await model.detail(for: thread.id, force: true)
+            let cachedDetail = detail
+            if let cachedDetail {
+                await prepareInitialMarkdown(in: cachedDetail.messages)
+                guard !Task.isCancelled else { return }
+                selection = currentSelection
+                isLoading = false
+            }
+
+            let loadedDetail = await model.detail(for: thread.id, force: true)
+            if cachedDetail == nil, let loadedDetail {
+                await prepareInitialMarkdown(in: loadedDetail.messages)
+            }
+            guard !Task.isCancelled else { return }
             selection = currentSelection
             isLoading = false
         }
@@ -145,6 +157,31 @@ public struct ThreadDetailView: View {
                 ? featureModel.map(DailyUXModelOptions.defaults) ?? []
                 : savedOptions
         )
+    }
+
+    /// The transcript opens at the bottom, so warming a bounded tail covers the
+    /// initial viewport without delaying presentation for an entire large history.
+    private func prepareInitialMarkdown(in messages: [FeatureMessage]) async {
+        var revisions: [MarkdownContentRevision] = []
+        var preparedBytes = 0
+
+        for message in messages.reversed() {
+            guard revisions.count < 24, preparedBytes < 192 * 1_024 else { break }
+            guard !message.text.isEmpty,
+                  message.state != .streaming,
+                  message.role == .user || message.role == .assistant else {
+                continue
+            }
+
+            let revision = MarkdownContentRevision(message.text)
+            revisions.append(revision)
+            preparedBytes += revision.utf8Count
+        }
+
+        for revision in revisions {
+            guard !Task.isCancelled else { return }
+            _ = await MarkdownRenderCache.shared.document(for: revision)
+        }
     }
 
     private var threadHeaderTitle: some View {
@@ -503,6 +540,7 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
 
                 cell.contentConfiguration = UIHostingConfiguration {
                     FeatureMessageView(message: message)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 .margins(.all, 0)
                 cell.backgroundConfiguration = UIBackgroundConfiguration.clear()
@@ -571,7 +609,7 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
             }
             orderedIDs = newIDs
             (collectionView as? BottomAnchoredTranscriptCollectionView)?.maintainsBottomAnchor =
-                isInitialLoad || wasNearBottom
+                !isInitialLoad && wasNearBottom
 
             var snapshot: NSDiffableDataSourceSnapshot<Section, String>
             if !threadChanged, !idsChanged {
@@ -591,14 +629,22 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
             snapshot.reconfigureItems(changedIDs.filter { !appendedIDSet.contains($0) })
 
             let shouldFollowBottom = isInitialLoad || wasNearBottom
+            if isInitialLoad {
+                collectionView.alpha = 0
+            }
             dataSource.apply(snapshot, animatingDifferences: false) {
                 [weak self, weak collectionView] in
                 guard shouldFollowBottom, let self, let collectionView else { return }
                 DispatchQueue.main.async {
+                    collectionView.layoutIfNeeded()
                     self.scrollToBottom(
                         collectionView,
                         animated: !isInitialLoad && lastIDChanged
                     )
+                    if isInitialLoad {
+                        collectionView.layoutIfNeeded()
+                        collectionView.alpha = 1
+                    }
                 }
             }
         }
@@ -784,8 +830,8 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
     }
 }
 
-/// Self-sizing hosted Markdown can change the transcript height after a snapshot finishes.
-/// Preserve the visual bottom only while the reader is already following the latest turn.
+/// Self-sizing hosted content can change transcript height after a snapshot finishes.
+/// Follow the bottom for the latest turn; otherwise pin the reader's top visible row.
 private final class BottomAnchoredTranscriptCollectionView: UICollectionView {
     var maintainsBottomAnchor = false
 
@@ -793,12 +839,12 @@ private final class BottomAnchoredTranscriptCollectionView: UICollectionView {
     private var isRestoringBottomAnchor = false
 
     override func layoutSubviews() {
+        let visibleAnchor = topVisibleAnchor()
         super.layoutSubviews()
 
         let newHeight = contentSize.height
         defer { lastLaidOutContentHeight = newHeight }
-        guard maintainsBottomAnchor,
-              !isDragging,
+        guard !isDragging,
               !isDecelerating,
               !isRestoringBottomAnchor,
               lastLaidOutContentHeight > 0,
@@ -806,6 +852,12 @@ private final class BottomAnchoredTranscriptCollectionView: UICollectionView {
             return
         }
 
+        if !maintainsBottomAnchor, let visibleAnchor {
+            restore(visibleAnchor)
+            return
+        }
+
+        guard maintainsBottomAnchor else { return }
         let minimumY = -adjustedContentInset.top
         let bottomY = max(
             minimumY,
@@ -815,6 +867,44 @@ private final class BottomAnchoredTranscriptCollectionView: UICollectionView {
 
         isRestoringBottomAnchor = true
         contentOffset = CGPoint(x: contentOffset.x, y: bottomY)
+        isRestoringBottomAnchor = false
+    }
+
+    private struct VisibleAnchor {
+        let indexPath: IndexPath
+        let viewportOffset: CGFloat
+    }
+
+    private func topVisibleAnchor() -> VisibleAnchor? {
+        indexPathsForVisibleItems
+            .compactMap { indexPath -> (IndexPath, CGFloat)? in
+                guard let attributes = layoutAttributesForItem(at: indexPath) else { return nil }
+                return (indexPath, attributes.frame.minY)
+            }
+            .min { $0.1 < $1.1 }
+            .map { anchor in
+                VisibleAnchor(
+                    indexPath: anchor.0,
+                    viewportOffset: anchor.1 - contentOffset.y
+                )
+            }
+    }
+
+    private func restore(_ anchor: VisibleAnchor) {
+        guard let attributes = layoutAttributesForItem(at: anchor.indexPath) else { return }
+        let minimumY = -adjustedContentInset.top
+        let maximumY = max(
+            minimumY,
+            contentSize.height - bounds.height + adjustedContentInset.bottom
+        )
+        let targetY = min(
+            maximumY,
+            max(minimumY, attributes.frame.minY - anchor.viewportOffset)
+        )
+        guard abs(contentOffset.y - targetY) > 0.5 else { return }
+
+        isRestoringBottomAnchor = true
+        contentOffset = CGPoint(x: contentOffset.x, y: targetY)
         isRestoringBottomAnchor = false
     }
 }

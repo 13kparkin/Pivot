@@ -19,15 +19,20 @@ struct MarkdownMessageView: View {
         self.isStreaming = isStreaming
         let revision = MarkdownContentRevision(source)
         self.revision = revision
+        let initialDocument = if isStreaming {
+            MarkdownRenderCache.shared.cachedDocument(for: revision)
+        } else {
+            MarkdownRenderCache.shared.documentImmediately(for: revision)
+        }
         _renderedDocument = State(
-            initialValue: MarkdownRenderCache.shared.cachedDocument(for: revision)
+            initialValue: initialDocument
         )
     }
 
     var body: some View {
         Group {
-            if let renderedDocument, renderedDocument.revision == revision {
-                MarkdownBlocksView(blocks: renderedDocument.blocks)
+            if let displayDocument {
+                MarkdownBlocksView(blocks: displayDocument.blocks)
             } else {
                 // Parsing waits briefly so token-by-token streaming cancels stale revisions
                 // instead of scheduling work for content the user will never see.
@@ -57,13 +62,18 @@ struct MarkdownMessageView: View {
             UIPasteboard.general.string = source
         }
         .task(id: RenderRequest(revision: revision, isStreaming: isStreaming)) {
+            if !isStreaming {
+                renderedDocument = MarkdownRenderCache.shared.documentImmediately(for: revision)
+                return
+            }
+
             if let cached = MarkdownRenderCache.shared.cachedDocument(for: revision) {
                 renderedDocument = cached
                 return
             }
 
             do {
-                try await Task.sleep(for: .milliseconds(isStreaming ? 200 : 40))
+                try await Task.sleep(for: .milliseconds(200))
             } catch {
                 return
             }
@@ -76,6 +86,14 @@ struct MarkdownMessageView: View {
             }
             renderedDocument = rendered
         }
+    }
+
+    private var displayDocument: MarkdownRenderedDocument? {
+        if let renderedDocument, renderedDocument.revision == revision {
+            return renderedDocument
+        }
+        guard !isStreaming else { return nil }
+        return MarkdownRenderCache.shared.documentImmediately(for: revision)
     }
 }
 

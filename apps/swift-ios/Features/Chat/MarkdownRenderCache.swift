@@ -136,6 +136,24 @@ final class MarkdownRenderCache: @unchecked Sendable {
         return document?.revision == revision ? document : nil
     }
 
+    /// Completed transcript rows must have their final geometry on first display.
+    /// Prefetching normally makes this a cache hit; the synchronous fallback prevents
+    /// a visible plain-text-to-Markdown layout swap when UIKit misses a prefetch window.
+    func documentImmediately(
+        for revision: MarkdownContentRevision
+    ) -> MarkdownRenderedDocument? {
+        if let cached = cachedDocument(for: revision) {
+            return cached
+        }
+        guard let document = renderDocument(revision) else { return nil }
+        documents.setObject(
+            document,
+            forKey: revision.source as NSString,
+            cost: documentCost(document)
+        )
+        return document
+    }
+
     func document(for revision: MarkdownContentRevision) async -> MarkdownRenderedDocument? {
         guard !Task.isCancelled else { return nil }
         if let cached = cachedDocument(for: revision) {

@@ -32,6 +32,20 @@ struct MarkdownRenderCacheTests {
     }
 
     @Test
+    func immediatelyRendersAndCachesCompletedContent() {
+        let cache = MarkdownRenderCache(documentCountLimit: 8, documentCostLimit: 64_000)
+        let revision = MarkdownContentRevision("# Stable heading\n\n- First\n- Second")
+
+        guard let document = cache.documentImmediately(for: revision) else {
+            Issue.record("Expected an immediate Markdown document")
+            return
+        }
+
+        #expect(cache.cachedDocument(for: revision) === document)
+        #expect(document.blocks.count == 2)
+    }
+
+    @Test
     func coalescesConcurrentRequestsForOneRevision() async {
         let cache = MarkdownRenderCache(documentCountLimit: 8, documentCostLimit: 64_000)
         let revision = MarkdownContentRevision("A paragraph with `code` and [a link](https://t3.gg).")
