@@ -71,4 +71,81 @@ struct ComposerDraftStoreTests {
             try await store.draft(for: "environment:second:new-task:two")?.text == "keep"
         )
     }
+
+    @Test func restorationPreservesLiveEditsAndRestoresUntouchedFields() {
+        let baseline = FeatureComposerDraft(
+            selection: FeatureSelection(providerID: "openai", modelID: "gpt-default"),
+            workspace: FeatureComposerWorkspaceDraft(
+                mode: .local,
+                branch: nil,
+                worktreePath: nil,
+                startFromOrigin: true
+            )
+        )
+        let liveAttachment = FeatureDraftAttachment(
+            data: Data([0x01]),
+            filename: "live.png",
+            mimeType: "image/png"
+        )
+        let current = FeatureComposerDraft(
+            text: "Typed while loading",
+            attachments: [liveAttachment],
+            selection: baseline.selection,
+            workspace: FeatureComposerWorkspaceDraft(
+                mode: .local,
+                branch: nil,
+                worktreePath: nil,
+                startFromOrigin: false
+            )
+        )
+        let saved = FeatureComposerDraft(
+            text: "Older text",
+            attachments: [],
+            selection: FeatureSelection(providerID: "anthropic", modelID: "claude-opus"),
+            workspace: FeatureComposerWorkspaceDraft(
+                mode: .worktree,
+                branch: "main",
+                worktreePath: "/tmp/worktree",
+                startFromOrigin: true
+            )
+        )
+
+        let merged = FeatureComposerDraftRestoration.merge(
+            saved: saved,
+            baseline: baseline,
+            current: current
+        )
+
+        #expect(merged.text == "Typed while loading")
+        #expect(merged.attachments == [liveAttachment])
+        #expect(merged.selection == saved.selection)
+        #expect(merged.workspace?.mode == .worktree)
+        #expect(merged.workspace?.branch == "main")
+        #expect(merged.workspace?.worktreePath == "/tmp/worktree")
+        #expect(merged.workspace?.startFromOrigin == false)
+    }
+
+    @Test func restorationUsesFallbacksWithoutOverwritingLiveChoices() {
+        let baseline = FeatureComposerDraft()
+        let liveSelection = FeatureSelection(providerID: "anthropic", modelID: "claude-sonnet")
+        let current = FeatureComposerDraft(selection: liveSelection)
+        let fallbackSelection = FeatureSelection(providerID: "openai", modelID: "gpt-default")
+        let fallbackWorkspace = FeatureComposerWorkspaceDraft(
+            mode: .local,
+            branch: nil,
+            worktreePath: nil,
+            startFromOrigin: true
+        )
+
+        let merged = FeatureComposerDraftRestoration.merge(
+            saved: nil,
+            baseline: baseline,
+            current: current,
+            fallbackSelection: fallbackSelection,
+            fallbackWorkspace: fallbackWorkspace
+        )
+
+        #expect(merged.selection == liveSelection)
+        #expect(merged.workspace == fallbackWorkspace)
+    }
 }

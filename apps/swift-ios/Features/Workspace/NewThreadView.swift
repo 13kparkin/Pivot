@@ -455,37 +455,41 @@ public struct NewThreadView: View {
     private func restoreDraftAndLoadBranches() async {
         let requestedProjectID = projectID
         guard let project = selectedProject, !requestedProjectID.isEmpty else { return }
+        let baseline = composerDraft
         let key = FeatureComposerDraftStore.newTaskKey(project: project)
         let saved = try? await draftStore.draft(for: key)
         guard !Task.isCancelled, projectID == requestedProjectID else { return }
 
-        if let saved {
-            prompt = saved.text
-            attachments = saved.attachments
-            selection = saved.selection ?? initialSelection
-            if let workspace = saved.workspace {
-                workspaceMode = workspace.mode
-                selectedBranch = workspace.branch.map {
-                    FeatureWorkspaceBranch(
-                        name: $0,
-                        worktreePath: workspace.worktreePath
-                    )
-                }
-                startFromOrigin = workspace.startFromOrigin
-            } else {
-                workspaceMode = .local
-                selectedBranch = nil
-                startFromOrigin = true
+        let liveDraft = composerDraft
+        let restored = FeatureComposerDraftRestoration.merge(
+            saved: saved,
+            baseline: baseline,
+            current: liveDraft,
+            fallbackSelection: initialSelection,
+            fallbackWorkspace: FeatureComposerWorkspaceDraft(
+                mode: .local,
+                branch: nil,
+                worktreePath: nil,
+                startFromOrigin: true
+            )
+        )
+        prompt = restored.text
+        attachments = restored.attachments
+        selection = restored.selection
+        if let workspace = restored.workspace {
+            workspaceMode = workspace.mode
+            selectedBranch = workspace.branch.map {
+                FeatureWorkspaceBranch(
+                    name: $0,
+                    worktreePath: workspace.worktreePath
+                )
             }
-        } else {
-            prompt = ""
-            attachments = []
-            selection = initialSelection
-            workspaceMode = .local
-            selectedBranch = nil
-            startFromOrigin = true
+            startFromOrigin = workspace.startFromOrigin
         }
         restoredDraftProjectID = requestedProjectID
+        if liveDraft != baseline {
+            scheduleDraftSave()
+        }
         await loadBranches()
     }
 

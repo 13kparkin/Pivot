@@ -65,9 +65,11 @@ public struct ThreadDetailView: View {
             }
         }
         .task(id: thread.id) {
+            let restoreBaseline = composerDraft
+            let restoreKey = draftKey
             isLoading = true
             _ = await model.detail(for: thread.id, force: true)
-            await restoreDraft()
+            await restoreDraft(from: restoreBaseline, key: restoreKey)
             isLoading = false
         }
         .onChange(of: draft) { scheduleDraftSave() }
@@ -452,16 +454,27 @@ public struct ThreadDetailView: View {
     }
 
     @MainActor
-    private func restoreDraft() async {
-        let saved = try? await draftStore.draft(for: draftKey)
-        if let saved {
-            draft = saved.text
-            attachments = saved.attachments
-            selection = saved.selection ?? currentSelection
-        } else {
-            selection = currentSelection
-        }
+    private func restoreDraft(from baseline: FeatureComposerDraft, key: String) async {
+        let saved = try? await draftStore.draft(for: key)
+        guard !Task.isCancelled else { return }
+
+        let liveDraft = composerDraft
+        let restored = FeatureComposerDraftRestoration.merge(
+            saved: saved,
+            baseline: baseline,
+            current: liveDraft,
+            fallbackSelection: currentSelection
+        )
+        draft = restored.text
+        attachments = restored.attachments
+        selection = restored.selection
         didRestoreDraft = true
+
+        // Changes made while the file read or thread refresh was in flight did
+        // not pass the didRestoreDraft gate, so enqueue their first save now.
+        if liveDraft != baseline {
+            scheduleDraftSave()
+        }
     }
 
     private func scheduleDraftSave() {
@@ -522,6 +535,59 @@ private enum FeatureThreadToolSurface: String, Identifiable {
     case terminal
 
     var id: String { rawValue }
+}
+
+/// Merges a stored draft with edits made while that draft was loading. Each
+/// field is restored only if its live value still matches the value captured
+/// before the asynchronous read began.
+enum FeatureComposerDraftRestoration {
+    static func merge(
+        saved: FeatureComposerDraft?,
+        baseline: FeatureComposerDraft,
+        current: FeatureComposerDraft,
+        fallbackSelection: FeatureSelection? = nil,
+        fallbackWorkspace: FeatureComposerWorkspaceDraft? = nil
+    ) -> FeatureComposerDraft {
+        FeatureComposerDraft(
+            text: current.text == baseline.text
+                ? saved?.text ?? ""
+                : current.text,
+            attachments: current.attachments == baseline.attachments
+                ? saved?.attachments ?? []
+                : current.attachments,
+            selection: current.selection == baseline.selection
+                ? saved?.selection ?? fallbackSelection
+                : current.selection,
+            workspace: mergeWorkspace(
+                saved: saved?.workspace ?? fallbackWorkspace,
+                baseline: baseline.workspace,
+                current: current.workspace
+            )
+        )
+    }
+
+    private static func mergeWorkspace(
+        saved: FeatureComposerWorkspaceDraft?,
+        baseline: FeatureComposerWorkspaceDraft?,
+        current: FeatureComposerWorkspaceDraft?
+    ) -> FeatureComposerWorkspaceDraft? {
+        guard let saved else {
+            return current == baseline ? nil : current
+        }
+        guard let baseline, let current else {
+            return current == baseline ? saved : current
+        }
+        return FeatureComposerWorkspaceDraft(
+            mode: current.mode == baseline.mode ? saved.mode : current.mode,
+            branch: current.branch == baseline.branch ? saved.branch : current.branch,
+            worktreePath: current.worktreePath == baseline.worktreePath
+                ? saved.worktreePath
+                : current.worktreePath,
+            startFromOrigin: current.startFromOrigin == baseline.startFromOrigin
+                ? saved.startFromOrigin
+                : current.startFromOrigin
+        )
+    }
 }
 
 /// A recycled transcript surface. SwiftUI still owns each message's rendering,
