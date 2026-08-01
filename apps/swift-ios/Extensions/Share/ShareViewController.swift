@@ -15,7 +15,8 @@ final class T3ShareViewController: UIViewController {
                 return try await Task.detached {
                     try T3IncomingShareStore.write(
                         textFragments: payload.textFragments,
-                        images: payload.images
+                        images: payload.images,
+                        warnings: payload.warnings
                     )
                 }.value
             },

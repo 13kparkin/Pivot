@@ -88,7 +88,7 @@ final class T3ConnectDPoPTests: XCTestCase {
             return XCTFail("Expected available T3 Connect configuration")
         }
         XCTAssertEqual(configuration.clerkJWTTemplate, "relay-template")
-        XCTAssertEqual(configuration.relayHTTPURL.absoluteString, "https://relay.example/")
+        XCTAssertEqual(configuration.relayHTTPURL.absoluteString, "https://relay.example")
     }
 
     private func jsonObject(_ encoded: String) throws -> [String: Any] {

@@ -97,7 +97,9 @@ entry point without duplicating the simulator-selection or signing policy.
 ## Install on a physical device
 
 Enable Developer Mode on the device, connect and trust the Mac, then find its
-identifier with `xcrun devicectl list devices`. Xcode must be signed into an Apple
+CoreDevice identifier or hardware UDID with
+`xcrun devicectl list devices --columns UDID`. The script resolves either form to
+the destination UDID expected by Xcode. Xcode must be signed into an Apple
 Developer account for the requested team.
 
 ```sh
@@ -108,9 +110,11 @@ T3_SWIFT_DEVELOPMENT_TEAM="TEAMID1234" \
 
 The script builds, provisions, installs, and launches the app. It accepts the T3
 Connect build settings above as environment variables. Optional overrides are
-`T3_SWIFT_BUNDLE_IDENTIFIER`, `T3_SWIFT_CONFIGURATION`,
-`T3_SWIFT_DERIVED_DATA_PATH`, `T3_SWIFT_VERSION`, and
-`T3_SWIFT_BUILD_NUMBER`.
+`T3_SWIFT_CONFIGURATION`, `T3_SWIFT_DERIVED_DATA_PATH`, `T3_SWIFT_VERSION`, and
+`T3_SWIFT_BUILD_NUMBER`. The app and extension bundle identifiers stay fixed so
+automatic signing provisions their shared App Group consistently. Run with
+`T3_SWIFT_VERIFY_BUNDLE_IDENTIFIERS_ONLY=1` to verify those settings without a
+device build.
 
 ## Release checklist
 

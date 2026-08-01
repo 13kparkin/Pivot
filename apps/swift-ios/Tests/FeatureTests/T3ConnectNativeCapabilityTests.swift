@@ -154,6 +154,46 @@ final class T3ConnectNativeCapabilityTests: XCTestCase {
         }
     }
 
+    func testInjectedManagedRuntimeRequiresItsMatchingController() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("t3-connect-controller-mismatch-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let signer = try testSigner()
+        let transport = T3ConnectNativeHTTPTransport(descriptorEnvironmentID: "managed-1")
+        let runtimeController = T3ConnectController(
+            resolution: .unavailable(reason: "Authentication is injected by this test."),
+            transport: transport,
+            signer: signer
+        )
+        let runtime = EnvironmentRuntime(
+            environmentStore: EnvironmentStore(
+                fileURL: directory.appendingPathComponent("environments.json")
+            ),
+            credentialStore: InMemoryCredentialStore(),
+            httpTransport: transport,
+            webSocketConnector: T3ConnectBlockingConnector(),
+            managedAuthorization: T3ConnectRuntimeAuthorization(controller: runtimeController)
+        )
+        let client = NativeFeatureClient(runtime: runtime)
+
+        XCTAssertEqual(
+            client.t3ConnectController.unavailableReason,
+            "This client runtime requires its matching T3 Connect controller."
+        )
+        do {
+            try await client.connectT3Environment(
+                try await bootstrapCredential(signer: signer)
+            )
+            XCTFail("A managed runtime accepted an unrelated controller")
+        } catch let error as T3ConnectRelayError {
+            guard case .invalidConfiguration = error else {
+                return XCTFail("Unexpected T3 Connect error: \(error)")
+            }
+        }
+        let requests = await transport.requests
+        XCTAssertTrue(requests.isEmpty)
+    }
+
     private func testSigner() throws -> T3ConnectDPoPSigner {
         var scalar = Data(repeating: 0, count: 32)
         scalar[31] = 11

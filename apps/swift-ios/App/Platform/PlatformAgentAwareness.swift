@@ -163,8 +163,18 @@ final class PlatformAgentAwarenessCoordinator {
         let enabled: Bool
     }
 
+    private struct Synchronization {
+        let signature: Signature
+        let aggregate: T3RelayAgentActivityAggregateState
+        let enabled: Bool
+        let now: Date
+    }
+
     private var activityUpdateTask: Task<Void, Never>?
     private var lastSignature: Signature?
+    private var inFlightSignature: Signature?
+    private var latestSynchronization: Synchronization?
+    private var synchronizationGeneration = 0
 
     func synchronize(snapshot: FeatureSnapshot, liveActivitiesEnabled: Bool) {
         let now = Date.now
@@ -178,8 +188,14 @@ final class PlatformAgentAwarenessCoordinator {
             rows: aggregate.activities,
             enabled: liveActivitiesEnabled
         )
-        guard signature != lastSignature else { return }
-        lastSignature = signature
+        let synchronization = Synchronization(
+            signature: signature,
+            aggregate: aggregate,
+            enabled: liveActivitiesEnabled,
+            now: now
+        )
+        latestSynchronization = synchronization
+        guard signature != lastSignature, signature != inFlightSignature else { return }
 
         let widgetSnapshot = T3TaskWidgetSnapshot(
             updatedAt: aggregate.updatedAt,
@@ -190,13 +206,65 @@ final class PlatformAgentAwarenessCoordinator {
             WidgetCenter.shared.reloadTimelines(ofKind: "T3RecentTasksWidget")
         }
 
+        schedule(synchronization)
+    }
+
+    /// Account sign-out removes any activity that may contain account-scoped
+    /// content, then restores the latest local projection without waiting for
+    /// an unrelated thread update.
+    func resetAndResynchronizeLiveActivity() {
+        lastSignature = nil
+        guard let latestSynchronization else {
+            activityUpdateTask?.cancel()
+            synchronizationGeneration &+= 1
+            inFlightSignature = nil
+            activityUpdateTask = Task { @MainActor in
+                for activity in Activity<LiveActivityAttributes>.activities {
+                    await activity.end(nil, dismissalPolicy: .immediate)
+                }
+                notifyActivityChanged()
+            }
+            return
+        }
+        schedule(latestSynchronization, endingExistingActivitiesFirst: true)
+    }
+
+    private func schedule(
+        _ synchronization: Synchronization,
+        endingExistingActivitiesFirst: Bool = false
+    ) {
         activityUpdateTask?.cancel()
-        activityUpdateTask = Task { @MainActor in
-            await synchronizeLiveActivity(
-                aggregate: aggregate,
-                enabled: liveActivitiesEnabled,
-                now: now
-            )
+        synchronizationGeneration &+= 1
+        let generation = synchronizationGeneration
+        inFlightSignature = synchronization.signature
+        activityUpdateTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            do {
+                if endingExistingActivitiesFirst {
+                    for activity in Activity<LiveActivityAttributes>.activities {
+                        await activity.end(nil, dismissalPolicy: .immediate)
+                    }
+                    try Task.checkCancellation()
+                }
+                try await synchronizeLiveActivity(
+                    aggregate: synchronization.aggregate,
+                    enabled: synchronization.enabled,
+                    now: synchronization.now
+                )
+                try Task.checkCancellation()
+                guard synchronizationGeneration == generation,
+                      inFlightSignature == synchronization.signature else { return }
+                lastSignature = synchronization.signature
+                inFlightSignature = nil
+                activityUpdateTask = nil
+            } catch {
+                guard synchronizationGeneration == generation,
+                      inFlightSignature == synchronization.signature else { return }
+                // Keep the completed signature unchanged so the next identical
+                // snapshot retries a failed or cancelled ActivityKit operation.
+                inFlightSignature = nil
+                activityUpdateTask = nil
+            }
         }
     }
 
@@ -204,21 +272,20 @@ final class PlatformAgentAwarenessCoordinator {
         aggregate: T3RelayAgentActivityAggregateState,
         enabled: Bool,
         now: Date
-    ) async {
-        guard !Task.isCancelled else { return }
+    ) async throws {
+        try Task.checkCancellation()
         let activities = Activity<LiveActivityAttributes>.activities
 
         guard enabled, ActivityAuthorizationInfo().areActivitiesEnabled else {
             for activity in activities {
                 await activity.end(nil, dismissalPolicy: .immediate)
             }
+            try Task.checkCancellation()
             notifyActivityChanged()
             return
         }
 
-        guard let state = try? LiveActivityAttributes.ContentState(aggregate: aggregate) else {
-            return
-        }
+        let state = try LiveActivityAttributes.ContentState(aggregate: aggregate)
         let content = ActivityContent(
             state: state,
             staleDate: now.addingTimeInterval(10 * 60)
@@ -231,6 +298,7 @@ final class PlatformAgentAwarenessCoordinator {
                     dismissalPolicy: .after(now.addingTimeInterval(5 * 60))
                 )
             }
+            try Task.checkCancellation()
             notifyActivityChanged()
             return
         }
@@ -241,12 +309,13 @@ final class PlatformAgentAwarenessCoordinator {
                 await duplicate.end(nil, dismissalPolicy: .immediate)
             }
         } else {
-            _ = try? Activity.request(
+            _ = try Activity.request(
                 attributes: LiveActivityAttributes(),
                 content: content,
                 pushType: .token
             )
         }
+        try Task.checkCancellation()
         notifyActivityChanged()
     }
 

@@ -105,13 +105,13 @@ enum PlatformDeepLinkParser {
             throw PlatformDeepLinkError.unsupportedURL
         }
 
+        guard let host = components.host?.lowercased(), trustedWebHosts.contains(host) else {
+            throw PlatformDeepLinkError.unsupportedURL
+        }
+
         let segments = pathSegments(components.percentEncodedPath)
         if isConnectionRoute(segments: segments, query: query) {
             return try connectionRoute(url)
-        }
-
-        guard let host = components.host?.lowercased(), trustedWebHosts.contains(host) else {
-            throw PlatformDeepLinkError.unsupportedURL
         }
 
         if let explicit = try? navigationRoute(segments: segments, query: query) {

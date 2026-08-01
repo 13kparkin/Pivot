@@ -26,7 +26,19 @@ if [[ -z "${SIMULATOR_ID}" ]]; then
   # the newest installed iOS runtime without coupling CI to a device model.
   SIMULATOR_ID="$(
     xcrun simctl list devices available \
-      | awk -F '[()]' '/^[[:space:]]+iPhone/ { candidate=$2 } END { print candidate }'
+      | awk '
+          /^[[:space:]]+iPhone/ {
+            line = $0
+            while (match(line, /\([[:xdigit:]-]+\)/)) {
+              value = substr(line, RSTART + 1, RLENGTH - 2)
+              if (value ~ /^[[:xdigit:]]{8}-[[:xdigit:]]{4}-[[:xdigit:]]{4}-[[:xdigit:]]{4}-[[:xdigit:]]{12}$/) {
+                candidate = value
+              }
+              line = substr(line, RSTART + RLENGTH)
+            }
+          }
+          END { print candidate }
+        '
   )"
 fi
 

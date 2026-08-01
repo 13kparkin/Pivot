@@ -150,7 +150,9 @@ final class PlatformCloudDeliveryCoordinator {
                 guard !Task.isCancelled, let self else { return }
                 if controller.account == nil {
                     clearSuccessfulRegistrationCache()
-                    endPrivateActivities()
+                    pendingActivityTokens.removeAll()
+                    PlatformAgentAwarenessCoordinator.shared
+                        .resetAndResynchronizeLiveActivity()
                 }
                 refreshActivityTokenObservers()
                 requestRegistration()
@@ -321,15 +323,6 @@ final class PlatformCloudDeliveryCoordinator {
         defaults.removeObject(forKey: deviceFingerprintKey)
         defaults.removeObject(forKey: deviceRegisteredAtKey)
         defaults.removeObject(forKey: activityFingerprintKey)
-    }
-
-    private func endPrivateActivities() {
-        pendingActivityTokens.removeAll()
-        Task { @MainActor in
-            for activity in Activity<LiveActivityAttributes>.activities {
-                await activity.end(nil, dismissalPolicy: .immediate)
-            }
-        }
     }
 
     private func currentRegistration(settings: FeatureSettings) -> T3ConnectDeviceRegistration {

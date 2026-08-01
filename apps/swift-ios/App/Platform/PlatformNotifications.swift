@@ -245,10 +245,6 @@ final class T3PlatformAppDelegate: NSObject, UIApplicationDelegate {
     ) -> Bool {
         PlatformBackgroundRefreshCoordinator.shared.register()
         PlatformNotificationService.shared.installDelegate()
-        if let payload = launchOptions?[.remoteNotification] as? [AnyHashable: Any],
-           let route = PlatformNotificationPayload.route(from: payload) {
-            PlatformRouteMailbox.shared.put(route)
-        }
         return true
     }
 
@@ -271,16 +267,8 @@ final class T3PlatformAppDelegate: NSObject, UIApplicationDelegate {
         didReceiveRemoteNotification userInfo: [AnyHashable: Any],
         fetchCompletionHandler completionHandler: @escaping (UIBackgroundFetchResult) -> Void
     ) {
-        guard let route = PlatformNotificationPayload.route(from: userInfo) else {
-            completionHandler(.noData)
-            return
-        }
-        PlatformRouteMailbox.shared.put(route)
-        NotificationCenter.default.post(
-            name: .platformRouteReceived,
-            object: nil,
-            userInfo: ["route": route]
+        completionHandler(
+            PlatformNotificationPayload.route(from: userInfo) == nil ? .noData : .newData
         )
-        completionHandler(.newData)
     }
 }

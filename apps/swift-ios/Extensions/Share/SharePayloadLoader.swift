@@ -4,12 +4,15 @@ import UniformTypeIdentifiers
 struct T3LoadedSharePayload: Sendable {
     var textFragments: [String]
     var images: [T3PendingShareImage]
+    var warnings: [String]
 }
 
 enum T3SharePayloadLoader {
     static func load(from inputItems: [Any]) async -> T3LoadedSharePayload {
         var textFragments: [String] = []
         var images: [T3PendingShareImage] = []
+        var skippedOversizedImage = false
+        var skippedExcessImage = false
 
         for case let item as NSExtensionItem in inputItems {
             if let attributedText = item.attributedContentText?.string {
@@ -17,19 +20,33 @@ enum T3SharePayloadLoader {
             }
 
             for provider in item.attachments ?? [] {
-                if images.count < T3IncomingShareStore.maximumImageCount,
-                   let imageType = provider.registeredTypeIdentifiers.first(where: {
-                       UTType($0)?.conforms(to: .image) == true
-                   }),
-                   let data = try? await loadData(from: provider, typeIdentifier: imageType)
-                {
-                    images.append(
-                        T3PendingShareImage(
-                            data: data,
-                            suggestedName: provider.suggestedName,
+                if let imageType = provider.registeredTypeIdentifiers.first(where: {
+                    UTType($0)?.conforms(to: .image) == true
+                }) {
+                    guard images.count < T3IncomingShareStore.maximumImageCount else {
+                        skippedExcessImage = true
+                        continue
+                    }
+                    do {
+                        let staged = try await loadStagedImage(
+                            from: provider,
                             typeIdentifier: imageType
                         )
-                    )
+                        images.append(
+                            T3PendingShareImage(
+                                stagedFileURL: staged.url,
+                                byteCount: staged.byteCount,
+                                suggestedName: provider.suggestedName,
+                                typeIdentifier: imageType
+                            )
+                        )
+                    } catch T3SharePayloadLoaderError.imageTooLarge {
+                        skippedOversizedImage = true
+                    } catch {
+                        // An image provider is terminal even if it also vends a
+                        // URL or text representation. Falling through would
+                        // silently turn a rejected attachment into other input.
+                    }
                     continue
                 }
 
@@ -56,21 +73,83 @@ enum T3SharePayloadLoader {
             }
         }
 
-        return T3LoadedSharePayload(textFragments: textFragments, images: images)
+        var warnings: [String] = []
+        if skippedOversizedImage {
+            warnings.append("One shared image exceeded the 10 MB attachment limit.")
+        }
+        if skippedExcessImage {
+            warnings.append(
+                "Only the first \(T3IncomingShareStore.maximumImageCount) shared images were attached."
+            )
+        }
+        return T3LoadedSharePayload(
+            textFragments: textFragments,
+            images: images,
+            warnings: warnings
+        )
     }
 
-    private static func loadData(
+    private static func loadStagedImage(
         from provider: NSItemProvider,
         typeIdentifier: String
-    ) async throws -> Data {
+    ) async throws -> (url: URL, byteCount: Int) {
         try await withCheckedThrowingContinuation { continuation in
-            provider.loadDataRepresentation(forTypeIdentifier: typeIdentifier) { data, error in
-                if let data {
-                    continuation.resume(returning: data)
-                } else {
-                    continuation.resume(throwing: error ?? CocoaError(.fileReadUnknown))
+            provider.loadFileRepresentation(forTypeIdentifier: typeIdentifier) { url, error in
+                do {
+                    guard let url else {
+                        throw error ?? CocoaError(.fileReadUnknown)
+                    }
+                    continuation.resume(returning: try stageImage(from: url))
+                } catch {
+                    continuation.resume(throwing: error)
                 }
             }
+        }
+    }
+
+    /// The provider-owned URL expires when its callback returns. Stream it to
+    /// an extension-owned temporary file while enforcing the byte limit, so a
+    /// malicious or enormous provider never has to be materialized in memory.
+    private static func stageImage(from sourceURL: URL) throws -> (url: URL, byteCount: Int) {
+        let fileManager = FileManager.default
+        let stagingDirectory = fileManager.temporaryDirectory.appending(
+            path: "T3CodeShareStaging",
+            directoryHint: .isDirectory
+        )
+        try fileManager.createDirectory(
+            at: stagingDirectory,
+            withIntermediateDirectories: true
+        )
+        let stagedURL = stagingDirectory.appending(
+            path: UUID().uuidString.lowercased(),
+            directoryHint: .notDirectory
+        )
+        guard fileManager.createFile(atPath: stagedURL.path, contents: nil) else {
+            throw CocoaError(.fileWriteUnknown)
+        }
+
+        do {
+            let source = try FileHandle(forReadingFrom: sourceURL)
+            let destination = try FileHandle(forWritingTo: stagedURL)
+            defer {
+                try? source.close()
+                try? destination.close()
+            }
+
+            var byteCount = 0
+            while let chunk = try source.read(upToCount: 64 * 1_024), !chunk.isEmpty {
+                try Task.checkCancellation()
+                byteCount += chunk.count
+                guard byteCount <= T3IncomingShareStore.maximumImageBytes else {
+                    throw T3SharePayloadLoaderError.imageTooLarge
+                }
+                try destination.write(contentsOf: chunk)
+            }
+            guard byteCount > 0 else { throw CocoaError(.fileReadCorruptFile) }
+            return (stagedURL, byteCount)
+        } catch {
+            try? fileManager.removeItem(at: stagedURL)
+            throw error
         }
     }
 
@@ -108,4 +187,8 @@ enum T3SharePayloadLoader {
         }
         return nil
     }
+}
+
+private enum T3SharePayloadLoaderError: Error {
+    case imageTooLarge
 }

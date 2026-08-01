@@ -18,6 +18,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
 {
     private let runtime: EnvironmentRuntime
     let t3ConnectController: T3ConnectController
+    private let hasMatchingT3ConnectController: Bool
     private let settingsStore: UserDefaults
     private let fallbackPollingInitialDelay: Duration
     private let fallbackPollingInterval: Duration
@@ -89,16 +90,19 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         let controller: T3ConnectController
         if let t3ConnectController {
             controller = t3ConnectController
-        } else if let runtime, !runtime.supportsManagedAuthorization {
+        } else if let runtime {
             controller = T3ConnectController(
                 resolution: .unavailable(
-                    reason: "This client runtime was created without T3 Connect authorization."
+                    reason: runtime.supportsManagedAuthorization
+                        ? "This client runtime requires its matching T3 Connect controller."
+                        : "This client runtime was created without T3 Connect authorization."
                 )
             )
         } else {
             controller = T3ConnectController()
         }
         self.t3ConnectController = controller
+        hasMatchingT3ConnectController = t3ConnectController != nil || runtime == nil
         self.runtime = runtime ?? EnvironmentRuntime(
             managedAuthorization: T3ConnectRuntimeAuthorization(controller: controller)
         )
@@ -157,7 +161,6 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             connectionDetail: activeIsReachable ? nil : "That server is currently unreachable."
         )
         latestSnapshot = snapshot
-        startAggregateRefresh(activeClient)
         return snapshot
     }
 
@@ -183,6 +186,11 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
     func connectT3Environment(
         _ credential: T3ConnectManagedEnvironmentCredential
     ) async throws {
+        guard hasMatchingT3ConnectController else {
+            throw T3ConnectRelayError.invalidConfiguration(
+                "This client runtime requires its matching T3 Connect controller."
+            )
+        }
         guard runtime.supportsManagedAuthorization else {
             throw T3ConnectRelayError.invalidConfiguration(
                 "This client runtime was created without T3 Connect authorization."
@@ -297,6 +305,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         if let previousClient, previousClient !== newClient {
             await previousClient.disconnect()
         }
+        startAggregateRefresh(newClient)
     }
 
     private func clearActiveEnvironment(disconnectClient: Bool = true) async {

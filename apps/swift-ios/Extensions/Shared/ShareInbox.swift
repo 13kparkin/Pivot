@@ -20,7 +20,8 @@ struct T3IncomingShareEnvelope: Codable, Hashable, Identifiable, Sendable {
 }
 
 struct T3PendingShareImage: Sendable {
-    var data: Data
+    var stagedFileURL: URL
+    var byteCount: Int
     var suggestedName: String?
     var typeIdentifier: String
 }
@@ -50,19 +51,26 @@ enum T3IncomingShareStore {
     static func write(
         textFragments: [String],
         images: [T3PendingShareImage],
+        warnings initialWarnings: [String] = [],
         now: Date = Date(),
         id: String = UUID().uuidString.lowercased()
     ) throws -> T3IncomingShareEnvelope {
         guard let containerURL = T3SharedContainer.rootURL else {
             throw T3IncomingShareStoreError.appGroupUnavailable
         }
+        defer {
+            for image in images {
+                try? FileManager.default.removeItem(at: image.stagedFileURL)
+            }
+        }
 
         let normalizedText = deduplicatedText(textFragments)
         let itemDirectory = containerURL
             .appending(path: inboxRelativePath, directoryHint: .isDirectory)
             .appending(path: id, directoryHint: .isDirectory)
-        var warnings: [String] = []
+        var warnings = initialWarnings
         var savedImages: [T3IncomingShareImage] = []
+        var validOverflowCount = 0
 
         do {
             try FileManager.default.createDirectory(
@@ -70,32 +78,44 @@ enum T3IncomingShareStore {
                 withIntermediateDirectories: true
             )
 
-            for (index, image) in images.prefix(maximumImageCount).enumerated() {
-                guard !image.data.isEmpty, image.data.count <= maximumImageBytes else {
+            for image in images {
+                let values = try? image.stagedFileURL.resourceValues(forKeys: [
+                    .fileSizeKey,
+                    .isRegularFileKey,
+                ])
+                guard values?.isRegularFile == true,
+                      let byteCount = values?.fileSize,
+                      byteCount > 0,
+                      byteCount <= maximumImageBytes,
+                      byteCount == image.byteCount else {
                     warnings.append("One shared image exceeded the 10 MB attachment limit.")
+                    continue
+                }
+                guard savedImages.count < maximumImageCount else {
+                    validOverflowCount += 1
                     continue
                 }
 
                 let attachmentID = UUID().uuidString.lowercased()
                 let fileName = safeFileName(
                     image.suggestedName,
-                    fallback: "shared-image-\(index + 1).\(fileExtension(for: image.typeIdentifier))"
+                    fallback: "shared-image-\(savedImages.count + 1).\(fileExtension(for: image.typeIdentifier))"
                 )
                 let storedName = "\(attachmentID)-\(fileName)"
                 let fileURL = itemDirectory.appending(path: storedName, directoryHint: .notDirectory)
-                try image.data.write(to: fileURL, options: .atomic)
+                try FileManager.default.copyItem(at: image.stagedFileURL, to: fileURL)
                 savedImages.append(
                     T3IncomingShareImage(
                         id: attachmentID,
                         fileName: fileName,
                         typeIdentifier: image.typeIdentifier,
                         relativePath: "\(inboxRelativePath)/\(id)/\(storedName)",
-                        byteCount: image.data.count
+                        byteCount: byteCount
                     )
                 )
             }
 
-            if images.count > maximumImageCount {
+            if validOverflowCount > 0 {
                 warnings.append("Only the first \(maximumImageCount) shared images were attached.")
             }
 

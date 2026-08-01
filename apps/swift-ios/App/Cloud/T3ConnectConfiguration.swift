@@ -70,13 +70,11 @@ public struct T3ConnectConfiguration: Equatable, Sendable {
         }
         components.query = nil
         components.fragment = nil
-        if components.path != "/" {
-            components.path = components.path.replacingOccurrences(
-                of: #"/+$"#,
-                with: "",
-                options: .regularExpression
-            )
-        }
+        components.path = components.path.replacingOccurrences(
+            of: #"/+$"#,
+            with: "",
+            options: .regularExpression
+        )
         return components.url ?? url
     }
 }

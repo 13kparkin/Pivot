@@ -310,19 +310,6 @@ public struct SettingsView: View {
     private func save() {
         isSaving = true
         Task {
-            if settings.notificationsEnabled,
-               !model.snapshot.settings.notificationsEnabled
-            {
-                let authorized = await PlatformNotificationService.shared.requestAuthorization()
-                if !authorized {
-                    settings.notificationsEnabled = false
-                    model.errorMessage = "Notifications are disabled in iOS Settings."
-                }
-            } else if !settings.notificationsEnabled,
-                      model.snapshot.settings.notificationsEnabled
-            {
-                _ = await PlatformNotificationService.shared.synchronize(enabled: false)
-            }
             await model.saveSettings(settings)
             isSaving = false
             if model.snapshot.settings == settings {

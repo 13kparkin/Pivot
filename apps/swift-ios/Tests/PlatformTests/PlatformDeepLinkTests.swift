@@ -55,6 +55,15 @@ struct PlatformDeepLinkTests {
     }
 
     @Test
+    func rejectsConnectionParametersFromUntrustedWebHosts() {
+        #expect(throws: PlatformDeepLinkError.unsupportedURL) {
+            try PlatformDeepLinkParser.parse(
+                "https://malicious.example/connect?endpoint=https%3A%2F%2Fattacker.example&token=x"
+            )
+        }
+    }
+
+    @Test
     func routeURLsRoundTrip() throws {
         let routes: [PlatformRoute] = [
             .environment(id: "environment 1"),
