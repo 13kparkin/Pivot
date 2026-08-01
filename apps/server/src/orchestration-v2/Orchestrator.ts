@@ -370,6 +370,29 @@ function providerThreadForRun(
     : projection.providerThreads.find((candidate) => candidate.id === run.providerThreadId);
 }
 
+export function providerSessionIdForSubagentStop(input: {
+  readonly runId: OrchestrationV2Subagent["runId"];
+  readonly activeProviderThreadId: OrchestrationV2AppThread["activeProviderThreadId"];
+  readonly runs: ReadonlyArray<Pick<OrchestrationV2Run, "id" | "providerThreadId">>;
+  readonly providerThreads: ReadonlyArray<
+    Pick<OrchestrationV2ProviderThread, "id" | "providerSessionId">
+  >;
+}) {
+  const run =
+    input.runId === null ? undefined : input.runs.find((candidate) => candidate.id === input.runId);
+  const runSessionId =
+    run?.providerThreadId === null || run?.providerThreadId === undefined
+      ? null
+      : (input.providerThreads.find((candidate) => candidate.id === run.providerThreadId)
+          ?.providerSessionId ?? null);
+  if (runSessionId !== null) return runSessionId;
+  if (input.activeProviderThreadId === null) return null;
+  return (
+    input.providerThreads.find((candidate) => candidate.id === input.activeProviderThreadId)
+      ?.providerSessionId ?? null
+  );
+}
+
 function providerTurnForRun(
   projection: OrchestrationV2ThreadProjection,
   run: OrchestrationV2Run,
@@ -6042,22 +6065,12 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           cause: `Subagent ${command.subagentId} has no native task reference to stop.`,
         });
       }
-      // The stop call goes through the session the subagent's run executes
-      // under; a workflow that outlived its launch run falls back to the
-      // thread's bound session, which owns background tasks between turns.
-      const run =
-        subagent.runId === null
-          ? undefined
-          : projection.runs.find((candidate) => candidate.id === subagent.runId);
-      const runProviderThread =
-        run?.providerThreadId === null
-          ? undefined
-          : projection.providerThreads.find((candidate) => candidate.id === run?.providerThreadId);
-      const providerSessionId =
-        runProviderThread?.providerSessionId ??
-        projection.providerThreads.find((candidate) => candidate.providerSessionId !== null)
-          ?.providerSessionId ??
-        null;
+      const providerSessionId = providerSessionIdForSubagentStop({
+        runId: subagent.runId,
+        activeProviderThreadId: projection.thread.activeProviderThreadId,
+        runs: projection.runs,
+        providerThreads: projection.providerThreads,
+      });
       if (providerSessionId === null) {
         return yield* new OrchestratorDispatchError({
           commandId: command.commandId,

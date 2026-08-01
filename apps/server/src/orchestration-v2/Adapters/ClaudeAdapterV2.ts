@@ -5227,10 +5227,11 @@ export function makeClaudeAdapterV2(
           }) {
             const existing = yield* Ref.get(queryContext);
             if (existing === null) {
-              return yield* new ProviderAdapterProtocolError({
-                driver: CLAUDE_PROVIDER,
-                detail: `Claude provider session ${input.providerSessionId} has no live query to stop task ${stopInput.nativeTaskId}.`,
+              yield* Effect.logWarning("orchestration-v2.claude-stop-task-without-live-query", {
+                providerSessionId: input.providerSessionId,
+                nativeTaskId: stopInput.nativeTaskId,
               });
+              return;
             }
             yield* existing.query.stopTask(stopInput.nativeTaskId).pipe(
               Effect.mapError(

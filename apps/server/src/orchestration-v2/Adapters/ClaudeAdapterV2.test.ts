@@ -1355,6 +1355,18 @@ describe("ClaudeAdapterV2 background wake turns", () => {
     });
   const makeWakeHarness = makeWakeHarnessWithOptions();
 
+  it.effect("treats a stop after query release as already complete", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const harness = yield* makeWakeHarness;
+        if (harness.runtime.stopTask === undefined) {
+          return yield* Effect.die("Claude adapter runtime must expose stopTask.");
+        }
+        yield* harness.runtime.stopTask({ nativeTaskId: WAKE_TASK_ID });
+      }).pipe(Effect.provide(Layer.merge(idAllocatorLayer, NodeServices.layer))),
+    ),
+  );
+
   it.effect("projects API retries and resolves the same item after recovery", () =>
     Effect.scoped(
       Effect.gen(function* () {
