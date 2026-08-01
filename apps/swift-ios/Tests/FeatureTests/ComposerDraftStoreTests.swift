@@ -72,6 +72,52 @@ struct ComposerDraftStoreTests {
         )
     }
 
+    @Test func migratesResolvedVersionOneNewTaskDefaultsBackToImplicit() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try FileManager.default.createDirectory(
+            at: directory,
+            withIntermediateDirectories: true
+        )
+        let fileURL = directory.appendingPathComponent("drafts.json")
+        try Data(
+            """
+            {
+              "version": 1,
+              "drafts": {
+                "environment:test:new-task:project": {
+                  "text": "Keep the prompt",
+                  "attachments": [],
+                  "selection": {
+                    "providerID": "codex",
+                    "modelID": "gpt-old",
+                    "options": []
+                  },
+                  "workspace": {
+                    "mode": "local",
+                    "startFromOrigin": true
+                  }
+                }
+              }
+            }
+            """.utf8
+        ).write(to: fileURL)
+
+        let store = FeatureComposerDraftStore(fileURL: fileURL)
+        let migrated = try await store.draft(
+            for: "environment:test:new-task:project"
+        )
+
+        #expect(migrated?.text == "Keep the prompt")
+        #expect(migrated?.selection == nil)
+        #expect(migrated?.workspace == nil)
+        let persisted = try JSONSerialization.jsonObject(
+            with: Data(contentsOf: fileURL)
+        ) as? [String: Any]
+        #expect(persisted?["version"] as? Int == 2)
+    }
+
     @Test func restorationPreservesLiveEditsAndRestoresUntouchedFields() {
         let baseline = FeatureComposerDraft(
             selection: FeatureSelection(providerID: "openai", modelID: "gpt-default"),

@@ -10,8 +10,10 @@ public struct NewThreadView: View {
     @State private var projectID = ""
     @State private var prompt = ""
     @State private var selection: FeatureSelection?
+    @State private var selectionIsExplicit = false
     @State private var attachments: [FeatureDraftAttachment] = []
     @State private var workspaceMode: FeatureWorkspaceMode = .local
+    @State private var workspaceSelectionIsExplicit = false
     @State private var branches: [FeatureWorkspaceBranch] = []
     @State private var selectedBranch: FeatureWorkspaceBranch?
     @State private var startFromOrigin = true
@@ -54,7 +56,7 @@ public struct NewThreadView: View {
 
                 FeatureComposerView(
                     text: $prompt,
-                    selection: $selection,
+                    selection: selectionBinding,
                     attachments: $attachments,
                     providers: creationProviders,
                     threadSelection: nil,
@@ -77,6 +79,7 @@ public struct NewThreadView: View {
         .onChange(of: projectID) {
             restoredDraftProjectID = nil
             selection = initialSelection
+            selectionIsExplicit = false
             resetWorkspaceSelection()
         }
         .onChange(of: prompt) { scheduleDraftSave() }
@@ -97,6 +100,7 @@ public struct NewThreadView: View {
                 isLoading: branchesLoading,
                 loadFailed: branchLoadFailed,
                 onSelect: { branch in
+                    workspaceSelectionIsExplicit = true
                     selectedBranch = branch
                     showingBranchPicker = false
                 },
@@ -230,6 +234,7 @@ public struct NewThreadView: View {
                 .accessibilityValue(selectedBranch?.name ?? "Not selected")
 
                 Button {
+                    workspaceSelectionIsExplicit = true
                     startFromOrigin.toggle()
                 } label: {
                     Label(
@@ -294,6 +299,23 @@ public struct NewThreadView: View {
         DailyUXCreationContext.initialSelection(
             for: selectedProject,
             in: model.snapshot
+        )
+    }
+
+    private var environmentPreferences: FeatureEnvironmentPreferences {
+        DailyUXCreationContext.environmentPreferences(
+            for: selectedProject,
+            in: model.snapshot
+        )
+    }
+
+    private var selectionBinding: Binding<FeatureSelection?> {
+        Binding(
+            get: { selection },
+            set: { value in
+                selectionIsExplicit = true
+                selection = value
+            }
         )
     }
 
@@ -401,6 +423,9 @@ public struct NewThreadView: View {
         branches = []
         selectedBranch = nil
         branchLoadFailed = false
+        workspaceMode = environmentPreferences.defaultWorkspaceMode
+        startFromOrigin = environmentPreferences.newWorktreesStartFromOrigin
+        workspaceSelectionIsExplicit = false
     }
 
     private func selectProject(_ id: String) {
@@ -410,6 +435,7 @@ public struct NewThreadView: View {
     }
 
     private func setWorkspaceMode(_ mode: FeatureWorkspaceMode) {
+        workspaceSelectionIsExplicit = true
         workspaceMode = mode
         selectedBranch = switch mode {
         case .local: NewTaskWorkspaceDefaults.localBranch(in: branches)
@@ -461,21 +487,24 @@ public struct NewThreadView: View {
         guard !Task.isCancelled, projectID == requestedProjectID else { return }
 
         let liveDraft = composerDraft
+        let liveSelectionIsExplicit = selectionIsExplicit
+        let liveWorkspaceSelectionIsExplicit = workspaceSelectionIsExplicit
         let restored = FeatureComposerDraftRestoration.merge(
             saved: saved,
             baseline: baseline,
             current: liveDraft,
             fallbackSelection: initialSelection,
             fallbackWorkspace: FeatureComposerWorkspaceDraft(
-                mode: .local,
+                mode: environmentPreferences.defaultWorkspaceMode,
                 branch: nil,
                 worktreePath: nil,
-                startFromOrigin: true
+                startFromOrigin: environmentPreferences.newWorktreesStartFromOrigin
             )
         )
         prompt = restored.text
         attachments = restored.attachments
         selection = restored.selection
+        selectionIsExplicit = liveSelectionIsExplicit || saved?.selection != nil
         if let workspace = restored.workspace {
             workspaceMode = workspace.mode
             selectedBranch = workspace.branch.map {
@@ -486,6 +515,8 @@ public struct NewThreadView: View {
             }
             startFromOrigin = workspace.startFromOrigin
         }
+        workspaceSelectionIsExplicit = liveWorkspaceSelectionIsExplicit
+            || saved?.workspace != nil
         restoredDraftProjectID = requestedProjectID
         if liveDraft != baseline {
             scheduleDraftSave()
@@ -502,18 +533,20 @@ public struct NewThreadView: View {
         FeatureComposerDraft(
             text: prompt,
             attachments: attachments,
-            selection: selection,
-            workspace: FeatureComposerWorkspaceDraft(
-                mode: workspaceMode,
-                branch: selectedBranch?.name,
-                worktreePath: workspaceMode == .local
-                    ? NewTaskWorkspaceDefaults.normalizedWorktreePath(
-                        for: selectedBranch,
-                        projectPath: selectedProject?.path ?? ""
-                    )
-                    : nil,
-                startFromOrigin: startFromOrigin
-            )
+            selection: selectionIsExplicit ? selection : nil,
+            workspace: workspaceSelectionIsExplicit
+                ? FeatureComposerWorkspaceDraft(
+                    mode: workspaceMode,
+                    branch: selectedBranch?.name,
+                    worktreePath: workspaceMode == .local
+                        ? NewTaskWorkspaceDefaults.normalizedWorktreePath(
+                            for: selectedBranch,
+                            projectPath: selectedProject?.path ?? ""
+                        )
+                        : nil,
+                    startFromOrigin: startFromOrigin
+                )
+                : nil
         )
     }
 

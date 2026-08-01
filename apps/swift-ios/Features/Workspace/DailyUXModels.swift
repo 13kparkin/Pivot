@@ -154,6 +154,17 @@ enum DailyUXCreationContext {
             providers: providers(for: project, in: snapshot)
         )
     }
+
+    static func environmentPreferences(
+        for project: FeatureProject?,
+        in snapshot: FeatureSnapshot
+    ) -> FeatureEnvironmentPreferences {
+        let environmentID = project?.environmentID
+            ?? snapshot.environments.first(where: \.isActive)?.id
+        guard let environmentID else { return FeatureEnvironmentPreferences() }
+        return snapshot.preferencesByEnvironment?[environmentID]
+            ?? FeatureEnvironmentPreferences()
+    }
 }
 
 struct DailyUXSidebarIndex {

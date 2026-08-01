@@ -47,6 +47,7 @@ public struct FeatureComposerWorkspaceDraft: Sendable, Equatable {
 /// this actor so image data is not repeatedly encoded for every keystroke.
 public actor FeatureComposerDraftStore {
     public static let shared = FeatureComposerDraftStore()
+    private static let documentVersion = 2
 
     private struct Document: Codable {
         let version: Int
@@ -192,11 +193,23 @@ public actor FeatureComposerDraftStore {
         }
         let data = try Data(contentsOf: fileURL)
         let document = try JSONDecoder.t3.decode(Document.self, from: data)
-        guard document.version == 1 else {
+        guard document.version == 1 || document.version == Self.documentVersion else {
             throw CocoaError(.fileReadCorruptFile)
         }
-        loadedDrafts = document.drafts
-        return document.drafts
+        var drafts = document.drafts
+        if document.version == 1 {
+            // Version 1 wrote resolved project/environment defaults into every
+            // new-task draft. They were not necessarily user choices, so drop
+            // only those derived fields while preserving text and attachments.
+            for key in Array(drafts.keys) where key.contains(":new-task:") {
+                drafts[key]?.selection = nil
+                drafts[key]?.workspace = nil
+            }
+            drafts = drafts.filter { !$0.value.featureValue.isEmpty }
+            try persist(drafts)
+        }
+        loadedDrafts = drafts
+        return drafts
     }
 
     private func persist(_ drafts: [String: PersistedDraft]) throws {
@@ -204,7 +217,7 @@ public actor FeatureComposerDraftStore {
             at: fileURL.deletingLastPathComponent(),
             withIntermediateDirectories: true
         )
-        let document = Document(version: 1, drafts: drafts)
+        let document = Document(version: Self.documentVersion, drafts: drafts)
         try JSONEncoder.t3.encode(document).write(to: fileURL, options: .atomic)
     }
 }

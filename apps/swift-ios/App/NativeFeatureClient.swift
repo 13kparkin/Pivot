@@ -1671,7 +1671,23 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging, FeaturePr
                         self.latestServerConfig = config
                         self.serverConfigsByEnvironmentID[activeClient.environment.id] = config
                     case let .providerStatuses(providers):
-                        let config = ServerConfigSnapshot(providers: providers)
+                        let settings = self.serverConfigsByEnvironmentID[
+                            activeClient.environment.id
+                        ]?.settings
+                        let config = ServerConfigSnapshot(
+                            providers: providers,
+                            settings: settings
+                        )
+                        self.latestServerConfig = config
+                        self.serverConfigsByEnvironmentID[activeClient.environment.id] = config
+                    case let .settingsUpdated(settings):
+                        let providers = self.serverConfigsByEnvironmentID[
+                            activeClient.environment.id
+                        ]?.providers ?? self.latestServerConfig?.providers ?? []
+                        let config = ServerConfigSnapshot(
+                            providers: providers,
+                            settings: settings
+                        )
                         self.latestServerConfig = config
                         self.serverConfigsByEnvironmentID[activeClient.environment.id] = config
                     case .unrelated:
@@ -2673,6 +2689,22 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging, FeaturePr
                 config: serverConfigsByEnvironmentID[environment.id]
             )
         }
+        let preferencesByEnvironment = environments.reduce(
+            into: [String: FeatureEnvironmentPreferences]()
+        ) { preferences, environment in
+            guard let serverSettings = serverConfigsByEnvironmentID[environment.id]?.settings else {
+                return
+            }
+            let defaultWorkspaceMode: FeatureWorkspaceMode =
+                switch serverSettings.defaultThreadEnvMode {
+                case .local: .local
+                case .worktree: .worktree
+                }
+            preferences[environment.id] = FeatureEnvironmentPreferences(
+                defaultWorkspaceMode: defaultWorkspaceMode,
+                newWorktreesStartFromOrigin: serverSettings.newWorktreesStartFromOrigin
+            )
+        }
         return FeatureSnapshot(
             connection: FeatureConnection(
                 state: connectionState,
@@ -2687,6 +2719,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging, FeaturePr
             threads: threads,
             providers: providersByEnvironment[activeEnvironment.id] ?? [],
             providersByEnvironment: providersByEnvironment,
+            preferencesByEnvironment: preferencesByEnvironment,
             settings: loadSettings()
         )
     }

@@ -693,6 +693,19 @@ public struct FeatureSettings: Sendable, Equatable, Codable {
     }
 }
 
+public struct FeatureEnvironmentPreferences: Sendable, Equatable, Codable {
+    public var defaultWorkspaceMode: FeatureWorkspaceMode
+    public var newWorktreesStartFromOrigin: Bool
+
+    public init(
+        defaultWorkspaceMode: FeatureWorkspaceMode = .local,
+        newWorktreesStartFromOrigin: Bool = true
+    ) {
+        self.defaultWorkspaceMode = defaultWorkspaceMode
+        self.newWorktreesStartFromOrigin = newWorktreesStartFromOrigin
+    }
+}
+
 public struct FeatureSnapshot: Sendable, Equatable, Codable {
     public var connection: FeatureConnection
     public var environments: [FeatureEnvironment]
@@ -702,6 +715,8 @@ public struct FeatureSnapshot: Sendable, Equatable, Codable {
     /// Provider catalogues are environment-scoped. `providers` remains the
     /// active environment's catalogue for source-compatible consumers.
     public var providersByEnvironment: [String: [FeatureProvider]]?
+    /// Server-authoritative new-thread defaults keyed by saved environment.
+    public var preferencesByEnvironment: [String: FeatureEnvironmentPreferences]?
     public var settings: FeatureSettings
 
     public init(
@@ -711,6 +726,7 @@ public struct FeatureSnapshot: Sendable, Equatable, Codable {
         threads: [FeatureThread] = [],
         providers: [FeatureProvider] = [],
         providersByEnvironment: [String: [FeatureProvider]]? = nil,
+        preferencesByEnvironment: [String: FeatureEnvironmentPreferences]? = nil,
         settings: FeatureSettings = .init()
     ) {
         self.connection = connection
@@ -719,6 +735,7 @@ public struct FeatureSnapshot: Sendable, Equatable, Codable {
         self.threads = threads
         self.providers = providers
         self.providersByEnvironment = providersByEnvironment
+        self.preferencesByEnvironment = preferencesByEnvironment
         self.settings = settings
     }
 }

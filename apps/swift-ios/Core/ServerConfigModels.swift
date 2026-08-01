@@ -126,18 +126,49 @@ public struct ServerProviderSnapshot: Codable, Identifiable, Equatable, Sendable
     public let skills: [ServerProviderSkillSnapshot]?
 }
 
+public enum ServerThreadEnvironmentMode: String, Codable, Equatable, Sendable {
+    case local
+    case worktree
+}
+
+/// New-thread preferences are server-authoritative, so every saved environment
+/// can resolve these differently even though they share one mobile client.
+public struct ServerSettingsSnapshot: Codable, Equatable, Sendable {
+    public let defaultThreadEnvMode: ServerThreadEnvironmentMode
+    public let newWorktreesStartFromOrigin: Bool
+
+    public init(
+        defaultThreadEnvMode: ServerThreadEnvironmentMode = .local,
+        newWorktreesStartFromOrigin: Bool = true
+    ) {
+        self.defaultThreadEnvMode = defaultThreadEnvMode
+        self.newWorktreesStartFromOrigin = newWorktreesStartFromOrigin
+    }
+}
+
 /// Narrow decode view of the much larger `ServerConfig` RPC result.
 public struct ServerConfigSnapshot: Codable, Equatable, Sendable {
     public let providers: [ServerProviderSnapshot]
+    public let settings: ServerSettingsSnapshot?
+
+    public init(
+        providers: [ServerProviderSnapshot],
+        settings: ServerSettingsSnapshot? = nil
+    ) {
+        self.providers = providers
+        self.settings = settings
+    }
 }
 
 public enum ServerConfigStreamEvent: Decodable, Sendable {
     case snapshot(ServerConfigSnapshot)
     case providerStatuses([ServerProviderSnapshot])
+    case settingsUpdated(ServerSettingsSnapshot)
     case unrelated(type: String)
 
     private enum CodingKeys: String, CodingKey { case type, config, payload }
     private struct ProviderPayload: Decodable { let providers: [ServerProviderSnapshot] }
+    private struct SettingsPayload: Decodable { let settings: ServerSettingsSnapshot }
 
     public init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -150,6 +181,10 @@ public enum ServerConfigStreamEvent: Decodable, Sendable {
         case "providerStatuses":
             self = .providerStatuses(
                 try container.decode(ProviderPayload.self, forKey: .payload).providers
+            )
+        case "settingsUpdated":
+            self = .settingsUpdated(
+                try container.decode(SettingsPayload.self, forKey: .payload).settings
             )
         default:
             self = .unrelated(type: type)

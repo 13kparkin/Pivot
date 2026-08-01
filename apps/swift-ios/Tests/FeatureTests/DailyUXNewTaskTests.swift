@@ -160,6 +160,16 @@ struct DailyUXNewTaskTests {
                         ]
                     ),
                 ],
+            ],
+            preferencesByEnvironment: [
+                "active": .init(
+                    defaultWorkspaceMode: .local,
+                    newWorktreesStartFromOrigin: true
+                ),
+                "passive": .init(
+                    defaultWorkspaceMode: .worktree,
+                    newWorktreesStartFromOrigin: false
+                ),
             ]
         )
 
@@ -179,6 +189,15 @@ struct DailyUXNewTaskTests {
         #expect(
             DailyUXCreationContext.initialSelection(for: passiveProject, in: snapshot)
                 == passiveDefault
+        )
+        #expect(
+            DailyUXCreationContext.environmentPreferences(
+                for: passiveProject,
+                in: snapshot
+            ) == FeatureEnvironmentPreferences(
+                defaultWorkspaceMode: .worktree,
+                newWorktreesStartFromOrigin: false
+            )
         )
     }
 

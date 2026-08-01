@@ -136,17 +136,17 @@ public struct SettingsView: View {
                                 .lineLimit(1)
                         }
                         Spacer()
-                        if environment.isActive {
-                            Image(systemName: "checkmark")
-                                .font(.subheadline.weight(.bold))
-                                .foregroundStyle(.green)
-                                .accessibilityLabel("Active")
-                        }
+                        let status = environmentStatus(for: environment)
+                        Label(status.title, systemImage: status.symbol)
+                            .font(T3Typography.supportingStrong)
+                            .foregroundStyle(status.color)
                     }
                 }
                 .swipeActions {
-                    Button("Remove", role: .destructive) {
+                    Button(role: .destructive) {
                         removalTarget = environment
+                    } label: {
+                        Label("Remove", systemImage: "trash")
                     }
                 }
                 .contextMenu {
@@ -241,6 +241,46 @@ public struct SettingsView: View {
         model.snapshot.connection.endpoint ?? "No active server"
     }
 
+    private func environmentStatus(
+        for environment: FeatureEnvironment
+    ) -> EnvironmentStatusPresentation {
+        let state = environment.isActive
+            ? model.snapshot.connection.state
+            : environment.connectionState
+        switch state {
+        case .connected where environment.isActive:
+            return EnvironmentStatusPresentation(
+                title: "Live",
+                symbol: "dot.radiowaves.left.and.right",
+                color: T3Colors.accent
+            )
+        case .connected:
+            return EnvironmentStatusPresentation(
+                title: "Available",
+                symbol: "network",
+                color: T3Colors.textSecondary
+            )
+        case .connecting, .reconnecting:
+            return EnvironmentStatusPresentation(
+                title: "Checking",
+                symbol: "arrow.triangle.2.circlepath",
+                color: T3Colors.warning
+            )
+        case .disconnected:
+            return EnvironmentStatusPresentation(
+                title: "Offline",
+                symbol: "network.slash",
+                color: T3Colors.danger
+            )
+        case nil:
+            return EnvironmentStatusPresentation(
+                title: "Saved",
+                symbol: "bookmark",
+                color: T3Colors.textTertiary
+            )
+        }
+    }
+
     @MainActor
     private func save() {
         isSaving = true
@@ -252,4 +292,10 @@ public struct SettingsView: View {
             }
         }
     }
+}
+
+private struct EnvironmentStatusPresentation {
+    let title: String
+    let symbol: String
+    let color: Color
 }

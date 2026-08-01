@@ -134,6 +134,10 @@ final class NativeContractExpansionTests: XCTestCase {
             from: Data(
                 """
                 {
+                  "settings": {
+                    "defaultThreadEnvMode": "worktree",
+                    "newWorktreesStartFromOrigin": false
+                  },
                   "providers": [{
                     "instanceId": "codex-work",
                     "driver": "codex",
@@ -214,6 +218,8 @@ final class NativeContractExpansionTests: XCTestCase {
         XCTAssertEqual(provider.slashCommands?.first?.name, "review")
         XCTAssertEqual(provider.slashCommands?.first?.input?.hint, "focus")
         XCTAssertEqual(provider.skills?.first?.displayName, "Fix CI")
+        XCTAssertEqual(config.settings?.defaultThreadEnvMode, .worktree)
+        XCTAssertEqual(config.settings?.newWorktreesStartFromOrigin, false)
         let model = try XCTUnwrap(provider.models.first)
         XCTAssertEqual(model.slug, "gpt-5.6-sol")
         let descriptors = try XCTUnwrap(model.capabilities?.optionDescriptors)
@@ -225,6 +231,32 @@ final class NativeContractExpansionTests: XCTestCase {
         XCTAssertEqual(effort.options.first?.label, "High")
         XCTAssertEqual(effort.currentValue, "high")
         XCTAssertEqual(fastMode.currentValue, true)
+    }
+
+    func testServerConfigSettingsUpdateDecodesEnvironmentPreferences() throws {
+        let event = try JSONDecoder.t3.decode(
+            ServerConfigStreamEvent.self,
+            from: Data(
+                """
+                {
+                  "version": 1,
+                  "type": "settingsUpdated",
+                  "payload": {
+                    "settings": {
+                      "defaultThreadEnvMode": "worktree",
+                      "newWorktreesStartFromOrigin": false
+                    }
+                  }
+                }
+                """.utf8
+            )
+        )
+
+        guard case let .settingsUpdated(settings) = event else {
+            return XCTFail("Expected a settings update")
+        }
+        XCTAssertEqual(settings.defaultThreadEnvMode, .worktree)
+        XCTAssertFalse(settings.newWorktreesStartFromOrigin)
     }
 }
 
