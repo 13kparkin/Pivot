@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleURLTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleTypeRole</key>
+            <string>Editor</string>
+            <key>CFBundleURLName</key>
+            <string>T3 Code SwiftUI Routes</string>
+            <key>CFBundleURLSchemes</key>
+            <array>
+                <string>t3code</string>
+                <string>t3</string>
+            </array>
+        </dict>
+    </array>
+    <key>T3ConnectClerkJWTTemplate</key>
+    <string>$(T3CODE_CLERK_JWT_TEMPLATE)</string>
+    <key>T3ConnectClerkPublishableKey</key>
+    <string>$(T3CODE_CLERK_PUBLISHABLE_KEY)</string>
+    <key>T3ConnectRelayHTTPURL</key>
+    <string>$(T3CODE_RELAY_URL)</string>
+</dict>
+</plist>
