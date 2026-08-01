@@ -96,6 +96,60 @@ final class T3ConnectRuntimeTests: XCTestCase {
         })
     }
 
+    func testManagedRoutesReplaceAdvertisedBasePath() async throws {
+        let signer = try testSigner()
+        let transport = T3ConnectScriptedHTTPTransport { request, ordinal in
+            switch ordinal {
+            case 1:
+                return (.descriptor, 200)
+            case 2:
+                return (
+                    .token(
+                        scopes: T3ConnectManagedEnvironmentAuthorizer.standardScopes
+                            .joined(separator: " ")
+                    ),
+                    200
+                )
+            case 3:
+                return (.webSocketTicket("canonical-ticket"), 200)
+            default:
+                throw T3ConnectTestError.unexpectedPath(request.url?.path)
+            }
+        }
+        let authorizer = T3ConnectManagedEnvironmentAuthorizer(
+            transport: transport,
+            signer: signer
+        )
+        let endpoint = T3ConnectManagedEndpoint(
+            httpBaseUrl: "https://managed.example/advertised/prefix?stale=true",
+            wsBaseUrl: "wss://managed.example/ws",
+            providerKind: .t3Relay
+        )
+        let bootstrap = T3ConnectManagedEnvironmentCredential(
+            environmentID: "managed-1",
+            label: "Managed Studio",
+            endpoint: endpoint,
+            bootstrapCredential: "one-use-bootstrap",
+            bootstrapExpiresAt: "2026-08-01T12:00:00.000Z",
+            proofKeyThumbprint: try await signer.thumbprint()
+        )
+
+        _ = try await authorizer.descriptor(at: try XCTUnwrap(endpoint.httpBaseURL))
+        let authorization = try await authorizer.exchange(bootstrap)
+        _ = try await authorizer.webSocketURL(using: authorization)
+
+        let requests = await transport.requests
+        XCTAssertEqual(
+            requests.map(\.url?.path),
+            [
+                "/.well-known/t3/environment",
+                "/oauth/token",
+                "/api/auth/websocket-ticket",
+            ]
+        )
+        XCTAssertTrue(requests.allSatisfy { $0.url?.query == nil })
+    }
+
     func testSixtySecondMarginRefreshesAndPersistsBeforeFirstRequest() async throws {
         let fixture = try await refreshFixture(
             savedThumbprint: nil,
@@ -136,6 +190,70 @@ final class T3ConnectRuntimeTests: XCTestCase {
         let paths = refreshRequests.map(\.url?.path)
         XCTAssertEqual(paths.filter { $0 == "/oauth/token" }.count, 1)
         XCTAssertEqual(paths.filter { $0 == "/api/auth/session" }.count, 2)
+    }
+
+    func testCancellingRefreshWaiterDoesNotBreakSingleFlight() async throws {
+        let signer = try testSigner()
+        let environment = managedEnvironment(descriptor: descriptor())
+        let replacing = EnvironmentCredential.managedDPoP(
+            accessToken: "expired-token",
+            expiresAt: Date().addingTimeInterval(-1),
+            scopes: T3ConnectManagedEnvironmentAuthorizer.standardScopes,
+            environmentID: environment.id,
+            proofKeyThumbprint: try await signer.thumbprint()
+        )
+        let source = BlockingT3ConnectBootstrapSource(
+            credential: try await bootstrapCredential(signer: signer)
+        )
+        let transport = T3ConnectScriptedHTTPTransport { request, _ in
+            switch request.url?.path {
+            case "/.well-known/t3/environment":
+                return (.descriptor, 200)
+            case "/oauth/token":
+                return (
+                    .token(
+                        scopes: T3ConnectManagedEnvironmentAuthorizer.standardScopes
+                            .joined(separator: " ")
+                    ),
+                    200
+                )
+            default:
+                throw T3ConnectTestError.unexpectedPath(request.url?.path)
+            }
+        }
+        let authorization = T3ConnectRuntimeAuthorization(
+            authorizer: T3ConnectManagedEnvironmentAuthorizer(
+                transport: transport,
+                signer: signer
+            ),
+            bootstrapProvider: { id in try await source.value(for: id) }
+        )
+
+        let first = Task {
+            try await authorization.refreshCredential(
+                for: environment,
+                replacing: replacing
+            )
+        }
+        await source.waitUntilCallCount(1)
+        first.cancel()
+        let secondStarted = AsyncTestMarker()
+        let second = Task {
+            await secondStarted.mark()
+            return try await authorization.refreshCredential(
+                for: environment,
+                replacing: replacing
+            )
+        }
+        await secondStarted.waitUntilMarked()
+        await Task.yield()
+        await source.release()
+
+        let firstCredential = try await first.value
+        let secondCredential = try await second.value
+        XCTAssertEqual(firstCredential, secondCredential)
+        let calls = await source.calls
+        XCTAssertEqual(calls, 1)
     }
 
     func testRotatedProofKeyRebindsFreshCredential() async throws {
@@ -642,6 +760,69 @@ private actor T3ConnectBootstrapSource {
         }
         calls += 1
         return credential
+    }
+}
+
+private actor BlockingT3ConnectBootstrapSource {
+    private let credential: T3ConnectManagedEnvironmentCredential
+    private var released = false
+    private var releaseWaiters: [CheckedContinuation<Void, Never>] = []
+    private var callWaiters: [(Int, CheckedContinuation<Void, Never>)] = []
+    private(set) var calls = 0
+
+    init(credential: T3ConnectManagedEnvironmentCredential) {
+        self.credential = credential
+    }
+
+    func value(for environmentID: String) async throws
+        -> T3ConnectManagedEnvironmentCredential
+    {
+        guard environmentID == credential.environmentID else {
+            throw T3ConnectTestError.unexpectedPath(environmentID)
+        }
+        calls += 1
+        let ready = callWaiters.filter { calls >= $0.0 }
+        callWaiters.removeAll { calls >= $0.0 }
+        ready.forEach { $0.1.resume() }
+        if !released {
+            await withCheckedContinuation { continuation in
+                releaseWaiters.append(continuation)
+            }
+        }
+        return credential
+    }
+
+    func waitUntilCallCount(_ count: Int) async {
+        guard calls < count else { return }
+        await withCheckedContinuation { continuation in
+            callWaiters.append((count, continuation))
+        }
+    }
+
+    func release() {
+        released = true
+        let waiters = releaseWaiters
+        releaseWaiters.removeAll()
+        waiters.forEach { $0.resume() }
+    }
+}
+
+private actor AsyncTestMarker {
+    private var marked = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    func mark() {
+        marked = true
+        let pending = waiters
+        waiters.removeAll()
+        pending.forEach { $0.resume() }
+    }
+
+    func waitUntilMarked() async {
+        guard !marked else { return }
+        await withCheckedContinuation { continuation in
+            waiters.append(continuation)
+        }
     }
 }
 

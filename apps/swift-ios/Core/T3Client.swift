@@ -1009,7 +1009,8 @@ public actor EnvironmentRuntime {
             throw HTTPError.incompatibleCredential
         }
 
-        let previousEnvironments = try await environmentStore.load()
+        let previousEnvironment = try await environmentStore.load()
+            .first(where: { $0.id == environment.id })
         let previousActiveID = try await environmentStore.activeEnvironmentID()
         let previousCredential = try await credentialStore.credential(for: environment.id)
         try await credentialStore.setCredential(credential, for: environment.id)
@@ -1025,8 +1026,18 @@ public actor EnvironmentRuntime {
             } else {
                 try? await credentialStore.removeCredential(for: environment.id)
             }
-            try? await environmentStore.save(previousEnvironments)
-            try? await environmentStore.setActiveEnvironment(id: previousActiveID)
+            // EnvironmentStore's individual mutations are actor-atomic. Undo
+            // only this record so a concurrent save for another environment
+            // cannot be lost while this actor is reentrant across awaits.
+            let activeIDAfterFailure = try? await environmentStore.activeEnvironmentID()
+            if let previousEnvironment {
+                _ = try? await environmentStore.upsert(previousEnvironment)
+            } else {
+                _ = try? await environmentStore.remove(id: environment.id)
+            }
+            if activeIDAfterFailure == environment.id {
+                try? await environmentStore.setActiveEnvironment(id: previousActiveID)
+            }
             throw error
         }
         return await client(for: environment)
@@ -1036,8 +1047,10 @@ public actor EnvironmentRuntime {
         if let client = clients.removeValue(forKey: id) {
             await client.disconnect()
         }
-        try await credentialStore.removeCredential(for: id)
+        // Never leave a catalog entry pointing at a credential that was
+        // already destroyed when the catalog write itself fails.
         try await environmentStore.remove(id: id)
+        try await credentialStore.removeCredential(for: id)
     }
 
     /// Returns the cached client for a saved environment without changing the

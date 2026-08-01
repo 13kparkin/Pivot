@@ -221,7 +221,12 @@ public actor T3ConnectManagedEnvironmentAuthorizer {
     }
 
     private func endpoint(_ baseURL: URL, path: [String]) -> URL {
-        path.reduce(baseURL) { partial, component in
+        var components = URLComponents(url: baseURL, resolvingAgainstBaseURL: false)
+        components?.path = ""
+        components?.query = nil
+        components?.fragment = nil
+        let origin = components?.url ?? baseURL
+        return path.reduce(origin) { partial, component in
             partial.appendingPathComponent(component)
         }
     }
@@ -262,9 +267,14 @@ public actor T3ConnectRuntimeAuthorization: ManagedEnvironmentAuthorizing {
     public typealias BootstrapProvider = @Sendable (String) async throws
         -> T3ConnectManagedEnvironmentCredential
 
+    private struct InFlightRefresh: Sendable {
+        let id: UUID
+        let task: Task<EnvironmentCredential, Error>
+    }
+
     private let authorizer: T3ConnectManagedEnvironmentAuthorizer
     private let bootstrapProvider: BootstrapProvider
-    private var refreshTasks: [String: Task<EnvironmentCredential, Error>] = [:]
+    private var refreshTasks: [String: InFlightRefresh] = [:]
 
     @MainActor
     public init(controller: T3ConnectController) {
@@ -307,8 +317,8 @@ public actor T3ConnectRuntimeAuthorization: ManagedEnvironmentAuthorizing {
         replacing credential: EnvironmentCredential
     ) async throws -> EnvironmentCredential {
         _ = try Self.authorization(environment: environment, credential: credential)
-        if let task = refreshTasks[environment.id] {
-            return try await task.value
+        if let refresh = refreshTasks[environment.id] {
+            return try await refresh.task.value
         }
 
         let authorizer = self.authorizer
@@ -332,15 +342,18 @@ public actor T3ConnectRuntimeAuthorization: ManagedEnvironmentAuthorizing {
                 environment: environment
             )
         }
-        refreshTasks[environment.id] = task
-        do {
-            let refreshed = try await task.value
-            refreshTasks.removeValue(forKey: environment.id)
-            return refreshed
-        } catch {
-            refreshTasks.removeValue(forKey: environment.id)
-            throw error
+        let refreshID = UUID()
+        refreshTasks[environment.id] = InFlightRefresh(id: refreshID, task: task)
+        Task.detached { [weak self] in
+            _ = await task.result
+            await self?.finishRefresh(environmentID: environment.id, id: refreshID)
         }
+        return try await task.value
+    }
+
+    private func finishRefresh(environmentID: String, id: UUID) {
+        guard refreshTasks[environmentID]?.id == id else { return }
+        refreshTasks.removeValue(forKey: environmentID)
     }
 
     private static func authorization(

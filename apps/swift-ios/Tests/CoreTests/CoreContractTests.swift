@@ -3,6 +3,18 @@ import XCTest
 
 @MainActor
 final class CoreContractTests: XCTestCase {
+    func testJSONValueRoundTripsLargeIntegersWithoutDoubleRounding() throws {
+        let signedData = Data("9007199254740993".utf8)
+        let signed = try JSONDecoder.t3.decode(JSONValue.self, from: signedData)
+        XCTAssertEqual(signed, .integer(9_007_199_254_740_993))
+        XCTAssertEqual(try JSONEncoder.t3.encode(signed), signedData)
+
+        let unsignedData = Data("18446744073709551615".utf8)
+        let unsigned = try JSONDecoder.t3.decode(JSONValue.self, from: unsignedData)
+        XCTAssertEqual(unsigned, .unsignedInteger(UInt64.max))
+        XCTAssertEqual(try JSONEncoder.t3.encode(unsigned), unsignedData)
+    }
+
     func testDirectAndHostedPairingURLsResolveLikeExistingClients() throws {
         let direct = try PairingURL.resolve("https://studio.example/pair#token=secret")
         XCTAssertEqual(direct.credential, "secret")
@@ -194,5 +206,75 @@ final class CoreContractTests: XCTestCase {
         XCTAssertFalse(firstClient === movedClient)
         XCTAssertEqual(movedEnvironment.httpBaseURL, moved.httpBaseURL)
         XCTAssertEqual(movedEnvironment.webSocketBaseURL, moved.webSocketBaseURL)
+    }
+
+    func testRuntimeRemovesCatalogEntryBeforeDestroyingCredential() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("t3-swift-removal-\(UUID().uuidString)", isDirectory: true)
+        let file = directory.appendingPathComponent("environments.json")
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let environment = Environment(
+            id: "removable",
+            label: "Removable",
+            httpBaseURL: URL(string: "https://remove.example")!,
+            webSocketBaseURL: URL(string: "wss://remove.example")!
+        )
+        let store = EnvironmentStore(fileURL: file)
+        try await store.save([environment])
+        let credentials = RemovalOrderCredentialStore(
+            environmentStore: store,
+            environmentID: environment.id,
+            credential: EnvironmentCredential(accessToken: "secret")
+        )
+        let runtime = EnvironmentRuntime(
+            environmentStore: store,
+            credentialStore: credentials
+        )
+
+        try await runtime.remove(id: environment.id)
+
+        let catalogContainedEnvironment = await credentials.catalogContainedEnvironmentOnRemoval
+        XCTAssertEqual(catalogContainedEnvironment, false)
+        let remaining = try await store.load()
+        XCTAssertTrue(remaining.isEmpty)
+        let credential = await credentials.credential(for: environment.id)
+        XCTAssertNil(credential)
+    }
+}
+
+private actor RemovalOrderCredentialStore: CredentialStore {
+    let environmentStore: EnvironmentStore
+    let environmentID: String
+    var storedCredential: EnvironmentCredential?
+    private(set) var catalogContainedEnvironmentOnRemoval: Bool?
+
+    init(
+        environmentStore: EnvironmentStore,
+        environmentID: String,
+        credential: EnvironmentCredential
+    ) {
+        self.environmentStore = environmentStore
+        self.environmentID = environmentID
+        storedCredential = credential
+    }
+
+    func credential(for environmentID: String) -> EnvironmentCredential? {
+        environmentID == self.environmentID ? storedCredential : nil
+    }
+
+    func setCredential(
+        _ credential: EnvironmentCredential,
+        for environmentID: String
+    ) {
+        guard environmentID == self.environmentID else { return }
+        storedCredential = credential
+    }
+
+    func removeCredential(for environmentID: String) async throws {
+        guard environmentID == self.environmentID else { return }
+        catalogContainedEnvironmentOnRemoval = try await environmentStore.load()
+            .contains(where: { $0.id == environmentID })
+        storedCredential = nil
     }
 }

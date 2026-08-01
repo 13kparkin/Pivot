@@ -3,6 +3,93 @@ import XCTest
 
 @MainActor
 final class WebSocketRPCRaceTests: XCTestCase {
+    func testResponseDeadlineStartsAfterConnectionAndSend() async throws {
+        let connection = AutoReplyConnection()
+        let connector = GatedConnector(connection: connection)
+        let client = WebSocketRPCClient(
+            connector: connector,
+            connectionWaitTimeout: .seconds(1),
+            responseTimeout: .milliseconds(40),
+            endpointProvider: { URL(string: "wss://studio.example/ws")! }
+        )
+
+        let request = Task {
+            try await client.request("server.repliesAfterConnect", as: JSONValue.self)
+        }
+        await connector.waitUntilConnectStarted()
+        try await Task.sleep(for: .milliseconds(80))
+        await connector.release()
+
+        let response = try await request.value
+        XCTAssertEqual(response, .object([:]))
+        await client.stop()
+    }
+
+    func testSendFailureDropsDeadSocketAndReconnects() async throws {
+        let failed = SendFailingConnection()
+        let recovered = AutoReplyConnection()
+        let connector = SequencedConnector(connections: [failed, recovered])
+        let client = WebSocketRPCClient(
+            connector: connector,
+            connectionWaitTimeout: .seconds(2),
+            endpointProvider: { URL(string: "wss://studio.example/ws")! }
+        )
+
+        do {
+            _ = try await client.request("server.firstSendFails", as: JSONValue.self)
+            XCTFail("A failed socket send must fail its unary request.")
+        } catch let error as RPCError {
+            guard case .disconnected = error else {
+                await client.stop()
+                return XCTFail("Unexpected RPC error: \(error)")
+            }
+        }
+
+        await connector.waitUntilConnectionCount(2)
+        let discardedReceiveCount = await failed.receiveCallCount()
+        XCTAssertEqual(
+            discardedReceiveCount,
+            0,
+            "Setup must not start receiving on a socket discarded by a queued send."
+        )
+        let isConnected = await client.isConnected()
+        XCTAssertTrue(isConnected)
+        let response = try await client.request("server.afterReconnect", as: JSONValue.self)
+        XCTAssertEqual(response, .object([:]))
+        await client.stop()
+    }
+
+    func testHungSendTimesOutAndReconnectsWithAFreshResponseWindow() async throws {
+        let hung = HungSendConnection()
+        let recovered = AutoReplyConnection()
+        let connector = SequencedConnector(connections: [hung, recovered])
+        let client = WebSocketRPCClient(
+            connector: connector,
+            connectionWaitTimeout: .seconds(2),
+            responseTimeout: .milliseconds(40),
+            endpointProvider: { URL(string: "wss://studio.example/ws")! }
+        )
+
+        let first = Task {
+            try await client.request("server.sendNeverReturns", as: JSONValue.self)
+        }
+        await hung.waitUntilSending()
+        do {
+            _ = try await first.value
+            XCTFail("A send that never completes must have an in-flight deadline.")
+        } catch let error as RPCError {
+            guard case .responseTimedOut = error else {
+                await client.stop()
+                return XCTFail("Unexpected RPC error: \(error)")
+            }
+        }
+
+        await connector.waitUntilConnectionCount(2)
+        let response = try await client.request("server.afterHungSend", as: JSONValue.self)
+        XCTAssertEqual(response, .object([:]))
+        await client.stop()
+    }
+
     func testSentUnaryTimesOutAndLateTrafficCannotCompleteItTwice() async throws {
         let connection = DeadlineWebSocketConnection()
         let client = WebSocketRPCClient(
@@ -238,6 +325,104 @@ private actor SequencedConnector: WebSocketConnecting {
         guard nextIndex < count else { return }
         await withCheckedContinuation { continuation in
             countWaiters.append((count, continuation))
+        }
+    }
+}
+
+private actor GatedConnector: WebSocketConnecting {
+    private let connection: any WebSocketConnection
+    private var releaseContinuation: CheckedContinuation<Void, Never>?
+    private var connectWaiters: [CheckedContinuation<Void, Never>] = []
+    private var connectStarted = false
+    private var released = false
+
+    init(connection: any WebSocketConnection) {
+        self.connection = connection
+    }
+
+    func connect(to _: URL) async -> any WebSocketConnection {
+        connectStarted = true
+        let waiters = connectWaiters
+        connectWaiters.removeAll()
+        waiters.forEach { $0.resume() }
+        if !released {
+            await withCheckedContinuation { continuation in
+                releaseContinuation = continuation
+            }
+        }
+        return connection
+    }
+
+    func waitUntilConnectStarted() async {
+        guard !connectStarted else { return }
+        await withCheckedContinuation { continuation in
+            connectWaiters.append(continuation)
+        }
+    }
+
+    func release() {
+        released = true
+        releaseContinuation?.resume()
+        releaseContinuation = nil
+    }
+}
+
+private actor SendFailingConnection: WebSocketConnection {
+    private var closed = false
+    private var receives = 0
+    private var receiver: CheckedContinuation<Data, Error>?
+
+    func send(_: Data) throws {
+        throw URLError(.networkConnectionLost)
+    }
+
+    func receive() async throws -> Data {
+        receives += 1
+        if closed { throw URLError(.networkConnectionLost) }
+        return try await withCheckedThrowingContinuation { continuation in
+            receiver = continuation
+        }
+    }
+
+    func close() {
+        closed = true
+        receiver?.resume(throwing: URLError(.networkConnectionLost))
+        receiver = nil
+    }
+
+    func receiveCallCount() -> Int {
+        receives
+    }
+}
+
+private actor HungSendConnection: WebSocketConnection {
+    private var closed = false
+    private var sendContinuation: CheckedContinuation<Void, Error>?
+    private var sendWaiters: [CheckedContinuation<Void, Never>] = []
+
+    func send(_: Data) async throws {
+        let waiters = sendWaiters
+        sendWaiters.removeAll()
+        waiters.forEach { $0.resume() }
+        try await withCheckedThrowingContinuation { continuation in
+            sendContinuation = continuation
+        }
+    }
+
+    func receive() throws -> Data {
+        throw URLError(closed ? .networkConnectionLost : .cannotLoadFromNetwork)
+    }
+
+    func close() {
+        closed = true
+        sendContinuation?.resume(throwing: URLError(.networkConnectionLost))
+        sendContinuation = nil
+    }
+
+    func waitUntilSending() async {
+        guard sendContinuation == nil else { return }
+        await withCheckedContinuation { continuation in
+            sendWaiters.append(continuation)
         }
     }
 }

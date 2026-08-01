@@ -5,6 +5,8 @@ import Foundation
 public enum JSONValue: Codable, Equatable, Sendable {
     case null
     case bool(Bool)
+    case integer(Int64)
+    case unsignedInteger(UInt64)
     case number(Double)
     case string(String)
     case array([JSONValue])
@@ -16,6 +18,14 @@ public enum JSONValue: Codable, Equatable, Sendable {
             self = .null
         } else if let value = try? container.decode(Bool.self) {
             self = .bool(value)
+        } else if let value = try? container.decode(Int64.self) {
+            let double = Double(value)
+            self = Int64(exactly: double) == value ? .number(double) : .integer(value)
+        } else if let value = try? container.decode(UInt64.self) {
+            let double = Double(value)
+            self = UInt64(exactly: double) == value
+                ? .number(double)
+                : .unsignedInteger(value)
         } else if let value = try? container.decode(Double.self) {
             self = .number(value)
         } else if let value = try? container.decode(String.self) {
@@ -33,6 +43,10 @@ public enum JSONValue: Codable, Equatable, Sendable {
         case .null:
             try container.encodeNil()
         case let .bool(value):
+            try container.encode(value)
+        case let .integer(value):
+            try container.encode(value)
+        case let .unsignedInteger(value):
             try container.encode(value)
         case let .number(value):
             try container.encode(value)

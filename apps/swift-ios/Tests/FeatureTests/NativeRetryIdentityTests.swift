@@ -82,6 +82,7 @@ final class NativeRetryIdentityTests: XCTestCase {
         try await store.setActiveEnvironment(id: environment.id)
 
         let connection = AmbiguousDispatchWebSocketConnection()
+        let transport = RetryIdentityHTTPTransport(shell: retryShellSnapshot())
         let runtime = EnvironmentRuntime(
             environmentStore: store,
             credentialStore: InMemoryCredentialStore(
@@ -89,7 +90,7 @@ final class NativeRetryIdentityTests: XCTestCase {
                     environment.id: EnvironmentCredential(accessToken: "token"),
                 ]
             ),
-            httpTransport: RetryIdentityHTTPTransport(shell: retryShellSnapshot()),
+            httpTransport: transport,
             webSocketConnector: RetryIdentityWebSocketConnector(connection: connection)
         )
         let settings = UserDefaults(
@@ -135,19 +136,32 @@ final class NativeRetryIdentityTests: XCTestCase {
         }
 
         let commands = await connection.dispatchCommands()
+            + transport.dispatchCommands()
         XCTAssertEqual(commands.count, 4)
-        assertStableIdentity(commands[0], commands[1], includesThreadID: false)
-        XCTAssertEqual(commands[0]["commandId"]?.stringValue, turnIdentity.commandID)
+        let turnCommands = commands.filter {
+            $0["message"]?["text"]?.stringValue == "Retry without duplicating"
+        }
+        XCTAssertEqual(turnCommands.count, 2)
+        let initialTurn = try XCTUnwrap(turnCommands.first)
+        let retriedTurn = try XCTUnwrap(turnCommands.dropFirst().first)
+        assertStableIdentity(initialTurn, retriedTurn, includesThreadID: false)
+        XCTAssertEqual(initialTurn["commandId"]?.stringValue, turnIdentity.commandID)
         XCTAssertEqual(
-            commands[0]["message"]?["messageId"]?.stringValue,
+            initialTurn["message"]?["messageId"]?.stringValue,
             turnIdentity.messageID
         )
-        XCTAssertNotEqual(commands[2]["commandId"], commands[3]["commandId"])
+        let bootstrapCommands = commands.filter {
+            $0["message"]?["text"]?.stringValue == "Create exactly one task"
+        }
+        XCTAssertEqual(bootstrapCommands.count, 2)
+        let initialBootstrap = try XCTUnwrap(bootstrapCommands.first)
+        let retriedBootstrap = try XCTUnwrap(bootstrapCommands.dropFirst().first)
+        XCTAssertNotEqual(initialBootstrap["commandId"], retriedBootstrap["commandId"])
         XCTAssertNotEqual(
-            commands[2]["message"]?["messageId"],
-            commands[3]["message"]?["messageId"]
+            initialBootstrap["message"]?["messageId"],
+            retriedBootstrap["message"]?["messageId"]
         )
-        XCTAssertNotEqual(commands[2]["threadId"], commands[3]["threadId"])
+        XCTAssertNotEqual(initialBootstrap["threadId"], retriedBootstrap["threadId"])
         for command in commands {
             XCTAssertEqual(command["runtimeMode"]?.stringValue, "full-access")
             XCTAssertEqual(command["interactionMode"]?.stringValue, "default")
@@ -173,6 +187,7 @@ final class NativeRetryIdentityTests: XCTestCase {
         try await store.setActiveEnvironment(id: environment.id)
 
         let connection = PartialBootstrapWebSocketConnection()
+        let transport = PartialBootstrapHTTPTransport(shell: retryShellSnapshot())
         let runtime = EnvironmentRuntime(
             environmentStore: store,
             credentialStore: InMemoryCredentialStore(
@@ -180,7 +195,7 @@ final class NativeRetryIdentityTests: XCTestCase {
                     environment.id: EnvironmentCredential(accessToken: "token"),
                 ]
             ),
-            httpTransport: PartialBootstrapHTTPTransport(shell: retryShellSnapshot()),
+            httpTransport: transport,
             webSocketConnector: PartialBootstrapWebSocketConnector(connection: connection)
         )
         let settings = UserDefaults(
@@ -211,17 +226,18 @@ final class NativeRetryIdentityTests: XCTestCase {
         )
 
         let commands = await connection.dispatchCommands()
+            + transport.dispatchCommands()
         XCTAssertEqual(commands.count, 2)
-        XCTAssertNotNil(commands[0]["bootstrap"])
-        XCTAssertNil(commands[1]["bootstrap"])
-        assertStableIdentity(commands[0], commands[1], includesThreadID: true)
-        XCTAssertEqual(commands[0]["threadId"]?.stringValue, identity.threadID)
-        XCTAssertEqual(commands[0]["commandId"]?.stringValue, identity.commandID)
+        let bootstrap = try XCTUnwrap(commands.first { $0["bootstrap"] != nil })
+        let finalTurn = try XCTUnwrap(commands.first { $0["bootstrap"] == nil })
+        assertStableIdentity(bootstrap, finalTurn, includesThreadID: true)
+        XCTAssertEqual(bootstrap["threadId"]?.stringValue, identity.threadID)
+        XCTAssertEqual(bootstrap["commandId"]?.stringValue, identity.commandID)
         XCTAssertEqual(
-            commands[0]["message"]?["messageId"]?.stringValue,
+            bootstrap["message"]?["messageId"]?.stringValue,
             identity.messageID
         )
-        let wireID = try XCTUnwrap(commands[0]["threadId"]?.stringValue)
+        let wireID = try XCTUnwrap(bootstrap["threadId"]?.stringValue)
         XCTAssertEqual(created.wireID, wireID)
         XCTAssertEqual(
             created.id,
@@ -427,6 +443,7 @@ private func retryShellSnapshot() -> OrchestrationShellSnapshot {
 
 private actor RetryIdentityHTTPTransport: HTTPTransport {
     private let shellData: Data
+    private var commands: [JSONValue] = []
 
     init(shell: OrchestrationShellSnapshot) {
         shellData = try! JSONEncoder.t3.encode(shell)
@@ -453,7 +470,15 @@ private actor RetryIdentityHTTPTransport: HTTPTransport {
         if path.hasPrefix("/api/orchestration/threads/") {
             throw URLError(.networkConnectionLost)
         }
+        if path == "/api/orchestration/dispatch" {
+            commands.append(try retryDispatchCommand(from: request))
+            throw URLError(.networkConnectionLost)
+        }
         throw URLError(.unsupportedURL)
+    }
+
+    func dispatchCommands() -> [JSONValue] {
+        commands
     }
 }
 
@@ -467,6 +492,7 @@ private struct RetryIdentityWebSocketConnector: WebSocketConnecting {
 
 private actor PartialBootstrapHTTPTransport: HTTPTransport {
     private let shellData: Data
+    private var commands: [JSONValue] = []
 
     init(shell: OrchestrationShellSnapshot) {
         shellData = try! JSONEncoder.t3.encode(shell)
@@ -495,7 +521,18 @@ private actor PartialBootstrapHTTPTransport: HTTPTransport {
             let snapshot = retryEmptyThreadDetail(id: threadID)
             return (try JSONEncoder.t3.encode(snapshot), retryHTTPResponse(request))
         }
+        if path == "/api/orchestration/dispatch" {
+            commands.append(try retryDispatchCommand(from: request))
+            return (
+                Data("{\"sequence\":42}".utf8),
+                retryHTTPResponse(request)
+            )
+        }
         throw URLError(.unsupportedURL)
+    }
+
+    func dispatchCommands() -> [JSONValue] {
+        commands
     }
 }
 
@@ -692,4 +729,11 @@ private func retryHTTPResponse(_ request: URLRequest) -> HTTPURLResponse {
         httpVersion: "HTTP/1.1",
         headerFields: ["Content-Type": "application/json"]
     )!
+}
+
+private func retryDispatchCommand(from request: URLRequest) throws -> JSONValue {
+    guard let body = request.httpBody else {
+        throw URLError(.cannotDecodeContentData)
+    }
+    return try JSONDecoder.t3.decode(JSONValue.self, from: body)
 }
