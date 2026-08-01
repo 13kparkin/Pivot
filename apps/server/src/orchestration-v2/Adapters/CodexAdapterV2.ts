@@ -2476,7 +2476,7 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
             const subagents = yield* Ref.get(subagentThreads);
             for (const [nativeThreadId, state] of Object.entries(input.item.agentsStates)) {
               const subagent = subagents.get(nativeThreadId);
-              if (subagent === undefined) {
+              if (subagent === undefined || subagent.task.currentActivationId === null) {
                 continue;
               }
               yield* emitSubagentTaskUpdate({
@@ -3488,19 +3488,21 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
             if (subagent === undefined || payload.tokenUsage.total.totalTokens <= 0) {
               return;
             }
-            const total = payload.tokenUsage.total;
-            const usage = {
-              totalTokens: total.totalTokens,
-              inputTokens: total.inputTokens,
-              cachedInputTokens: total.cachedInputTokens,
-              outputTokens: total.outputTokens,
-              reasoningOutputTokens: total.reasoningOutputTokens,
-            } satisfies OrchestrationV2SubagentUsage;
-            yield* emitSubagentTaskUpdate({
-              subagent,
-              status: subagent.task.status,
-              usage,
-            });
+            if (subagent.task.currentActivationId !== null) {
+              const total = payload.tokenUsage.total;
+              const usage = {
+                totalTokens: total.totalTokens,
+                inputTokens: total.inputTokens,
+                cachedInputTokens: total.cachedInputTokens,
+                outputTokens: total.outputTokens,
+                reasoningOutputTokens: total.reasoningOutputTokens,
+              } satisfies OrchestrationV2SubagentUsage;
+              yield* emitSubagentTaskUpdate({
+                subagent,
+                status: subagent.task.status,
+                usage,
+              });
+            }
 
             const activeContext = (yield* Ref.get(activeTurns)).get(payload.turnId);
             const activation =

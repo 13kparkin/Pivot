@@ -3577,7 +3577,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
         assert.equal(firstCompletion?.subagent.status, "idle");
         assert.equal(firstCompletion?.subagent.result, "CODEX_FIRST_DONE");
         assert.equal(firstCompletion?.subagent.activationCount, 1);
-        assert.equal(firstCompletion?.subagent.usage?.totalTokens, 100);
+        assert.isNull(firstCompletion?.subagent.usage);
         assert.isNull(firstCompletion?.subagent.currentActivationId);
         const firstActivationUpdates = harness
           .subagentActivationUpdates()
@@ -3627,7 +3627,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
         }, "resumed subagent completion");
         const finalSubagent = harness.subagentUpdates().at(-1)?.subagent;
         assert.equal(finalSubagent?.activationCount, 2);
-        assert.equal(finalSubagent?.usage?.totalTokens, 180);
+        assert.isNull(finalSubagent?.usage);
         assert.isNull(finalSubagent?.currentActivationId);
         const activations = harness.subagentActivationUpdates();
         assert.lengthOf(new Set(activations.map((event) => event.activation.id)), 2);
@@ -3777,6 +3777,91 @@ describe("CodexAdapterV2 post-settle continuation", () => {
     ],
   });
 
+  const restartSettledNoiseTranscript = makeCodexReplayTranscript({
+    scenario: `${RESTART_SCENARIO}-settled-noise`,
+    entries: [
+      ...codexReplayPreamble({
+        nativeThreadId: RESTART_NATIVE_THREAD,
+        nativeTurnId: RESTART_NATIVE_TURN,
+        prompt: RESTART_PROMPT,
+      }),
+      restartChildFrame({
+        label: "thread/tokenUsage/updated/settled-child",
+        method: "thread/tokenUsage/updated",
+        params: {
+          threadId: RESTART_CHILD_THREAD,
+          turnId: "native-codex-restart-settled-turn",
+          tokenUsage: {
+            total: {
+              totalTokens: 250,
+              inputTokens: 200,
+              cachedInputTokens: 0,
+              outputTokens: 50,
+              reasoningOutputTokens: 0,
+            },
+            last: {
+              totalTokens: 150,
+              inputTokens: 120,
+              cachedInputTokens: 0,
+              outputTokens: 30,
+              reasoningOutputTokens: 0,
+            },
+          },
+        },
+      }),
+      restartChildFrame({
+        label: "item/completed/settled-agent-state",
+        method: "item/completed",
+        params: {
+          item: {
+            type: "collabAgentToolCall",
+            id: "call-codex-restart-settled-state",
+            tool: "wait",
+            status: "completed",
+            senderThreadId: RESTART_NATIVE_THREAD,
+            receiverThreadIds: [RESTART_CHILD_THREAD],
+            prompt: null,
+            model: null,
+            reasoningEffort: null,
+            agentsStates: {
+              [RESTART_CHILD_THREAD]: {
+                status: "completed",
+                message: "TRAILING_SETTLED_RESULT",
+              },
+            },
+          },
+          threadId: RESTART_NATIVE_THREAD,
+          turnId: RESTART_NATIVE_TURN,
+          completedAtMs: 1782622482000,
+        },
+      }),
+      restartChildFrame({
+        label: "item/completed/root-answer",
+        method: "item/completed",
+        params: {
+          item: {
+            type: "agentMessage",
+            id: "root-answer-restart-settled-noise",
+            text: "NO_CHANGE",
+            phase: "final_answer",
+            memoryCitation: null,
+          },
+          threadId: RESTART_NATIVE_THREAD,
+          turnId: RESTART_NATIVE_TURN,
+          completedAtMs: 1782622483000,
+        },
+      }),
+      restartChildFrame({
+        label: "turn/completed/root",
+        method: "turn/completed",
+        params: {
+          threadId: RESTART_NATIVE_THREAD,
+          turn: makeCodexReplayTurn({ id: RESTART_NATIVE_TURN, status: "completed" }),
+        },
+      }),
+    ],
+  });
+
   /**
    * The subagent as the projection holds it after a restart: settled at idle,
    * still bound to its child thread and native item, one activation recorded.
@@ -3906,10 +3991,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
         assert.equal(latest?.childThreadId, existing.childThread.id);
         // Continues the prior activation rather than restarting the count.
         assert.equal(latest?.activationCount, 2);
-        // Usage carries across the restart instead of resetting: the seeded
-        // 100 is not lost, and the thread-cumulative 250 is not double-counted
-        // on top of it.
-        assert.equal(latest?.usage?.totalTokens, 250);
+        assert.equal(latest?.usage?.totalTokens, 100);
         // The new activation takes the next ordinal, not a colliding ordinal 1.
         const activations = harness.subagentActivationUpdates();
         assert.deepStrictEqual(
@@ -3920,6 +4002,36 @@ describe("CodexAdapterV2 post-settle continuation", () => {
           [...new Set(activations.map((event) => event.activation.subagentId))],
           [RESTART_SUBAGENT_ID],
         );
+        assert.equal(activations.at(-1)?.activation.usage?.totalTokens, 150);
+      }).pipe(Effect.provide(Layer.merge(idAllocatorLayer, NodeServices.layer))),
+    ),
+  );
+
+  it.effect("drops settled identity updates until a new activation starts", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const harness = yield* makeCodexReplayHarness(restartSettledNoiseTranscript);
+        const now = yield* DateTime.now;
+        const existing = makeRestartExistingSubagent({
+          parentThreadId: harness.threadId,
+          parentProviderThread: harness.providerThread,
+          now,
+        });
+
+        yield* harness.runtime.startTurn({
+          ...makeCodexTestTurnInput({
+            threadId: harness.threadId,
+            providerThread: harness.providerThread,
+            now,
+            attemptId: RunAttemptId.make("attempt-codex-restart-settled-noise"),
+            text: RESTART_PROMPT,
+          }),
+          existingSubagents: [existing],
+        });
+
+        yield* awaitUntil(() => harness.terminalEvents().length === 1, "root turn terminal");
+        assert.lengthOf(harness.subagentUpdates(), 0);
+        assert.lengthOf(harness.subagentActivationUpdates(), 0);
       }).pipe(Effect.provide(Layer.merge(idAllocatorLayer, NodeServices.layer))),
     ),
   );
