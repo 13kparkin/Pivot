@@ -92,6 +92,7 @@ private actor URLSessionWebSocketConnection: WebSocketConnection {
 public enum RPCError: LocalizedError, Sendable {
     case connectionUnavailable
     case disconnected
+    case responseTimedOut
     case remote(String)
     case protocolViolation(String)
 
@@ -100,6 +101,7 @@ public enum RPCError: LocalizedError, Sendable {
         case .connectionUnavailable:
             "The live command connection is unavailable."
         case .disconnected: "The environment disconnected."
+        case .responseTimedOut: "The environment did not answer the command in time."
         case let .remote(message): message
         case let .protocolViolation(message): message
         }
@@ -153,6 +155,8 @@ public actor WebSocketRPCClient {
     private struct UnaryRequest {
         let envelope: RPCRequestEnvelope
         var sent: Bool
+        var connectionWaitTask: Task<Void, Never>?
+        var responseDeadlineTask: Task<Void, Never>?
         let resume: @Sendable (Result<JSONValue, Error>) -> Void
     }
 
@@ -168,6 +172,7 @@ public actor WebSocketRPCClient {
     private let connector: any WebSocketConnecting
     private let endpointProvider: EndpointProvider
     private let connectionWaitTimeout: Duration
+    private let responseTimeout: Duration
     private var connection: (any WebSocketConnection)?
     private var loopTask: Task<Void, Never>?
     private var keepaliveTask: Task<Void, Never>?
@@ -180,10 +185,12 @@ public actor WebSocketRPCClient {
     public init(
         connector: any WebSocketConnecting = URLSessionWebSocketConnector(),
         connectionWaitTimeout: Duration = .seconds(4),
+        responseTimeout: Duration = .seconds(30),
         endpointProvider: @escaping EndpointProvider
     ) {
         self.connector = connector
         self.connectionWaitTimeout = connectionWaitTimeout
+        self.responseTimeout = responseTimeout
         self.endpointProvider = endpointProvider
     }
 
@@ -282,24 +289,22 @@ public actor WebSocketRPCClient {
             payload: payload,
             headers: []
         )
-        return try await withCheckedThrowingContinuation { continuation in
-            unary[id] = UnaryRequest(
-                envelope: envelope,
-                sent: false,
-                resume: { continuation.resume(with: $0) }
-            )
-            if connection != nil {
-                Task { await self.sendUnary(id) }
-            }
-            let timeout = connectionWaitTimeout
-            Task { [weak self] in
-                do {
-                    try await Task.sleep(for: timeout)
-                } catch {
-                    return
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                unary[id] = UnaryRequest(
+                    envelope: envelope,
+                    sent: false,
+                    connectionWaitTask: nil,
+                    responseDeadlineTask: nil,
+                    resume: { continuation.resume(with: $0) }
+                )
+                installUnaryDeadlines(id)
+                if connection != nil {
+                    Task { await self.sendUnary(id) }
                 }
-                await self?.failUnaryIfUnsent(id)
             }
+        } onCancel: {
+            Task { await self.cancelUnary(id) }
         }
     }
 
@@ -375,11 +380,11 @@ public actor WebSocketRPCClient {
             try await sendControl("Ack", requestID: requestID)
         case "Exit":
             guard let requestID = response.requestId, let exit = response.exit else { return }
-            if let request = unary.removeValue(forKey: requestID) {
+            if unary[requestID] != nil {
                 if exit._tag == "Success" {
-                    request.resume(.success(exit.value ?? .null))
+                    completeUnary(requestID, with: .success(exit.value ?? .null))
                 } else {
-                    request.resume(.failure(remoteError(exit)))
+                    completeUnary(requestID, with: .failure(remoteError(exit)))
                 }
                 return
             }
@@ -408,8 +413,7 @@ public actor WebSocketRPCClient {
         } catch {
             // A response, disconnect, or stop may have completed the request
             // while send was suspended. Only its current owner may resume it.
-            guard let failed = unary.removeValue(forKey: id) else { return }
-            failed.resume(.failure(error))
+            completeUnary(id, with: .failure(error))
         }
     }
 
@@ -457,17 +461,65 @@ public actor WebSocketRPCClient {
     }
 
     private func failUnary(_ error: Error, includingUnsent: Bool) {
-        let failed = unary.filter { includingUnsent || $0.value.sent }
-        for (id, request) in failed {
-            unary.removeValue(forKey: id)
-            request.resume(.failure(error))
+        let failedIDs = unary.compactMap { id, request in
+            includingUnsent || request.sent ? id : nil
+        }
+        for id in failedIDs {
+            completeUnary(id, with: .failure(error))
         }
     }
 
     private func failUnaryIfUnsent(_ id: Int) {
         guard let request = unary[id], !request.sent else { return }
-        unary.removeValue(forKey: id)
-        request.resume(.failure(RPCError.connectionUnavailable))
+        completeUnary(id, with: .failure(RPCError.connectionUnavailable))
+    }
+
+    private func installUnaryDeadlines(_ id: Int) {
+        guard var request = unary[id] else { return }
+        let connectionWaitTimeout = connectionWaitTimeout
+        let responseTimeout = responseTimeout
+        request.connectionWaitTask = Task { [weak self] in
+            do {
+                try await Task.sleep(for: connectionWaitTimeout)
+            } catch {
+                return
+            }
+            await self?.failUnaryIfUnsent(id)
+        }
+        request.responseDeadlineTask = Task { [weak self] in
+            do {
+                try await Task.sleep(for: responseTimeout)
+            } catch {
+                return
+            }
+            await self?.failUnaryOnResponseDeadline(id)
+        }
+        unary[id] = request
+    }
+
+    private func failUnaryOnResponseDeadline(_ id: Int) async {
+        guard let request = unary[id] else { return }
+        let sent = request.sent
+        completeUnary(id, with: .failure(RPCError.responseTimedOut))
+        if sent {
+            try? await sendControl("Interrupt", requestID: id)
+        }
+    }
+
+    private func cancelUnary(_ id: Int) async {
+        guard let request = unary[id] else { return }
+        let sent = request.sent
+        completeUnary(id, with: .failure(CancellationError()))
+        if sent {
+            try? await sendControl("Interrupt", requestID: id)
+        }
+    }
+
+    private func completeUnary(_ id: Int, with result: Result<JSONValue, Error>) {
+        guard let request = unary.removeValue(forKey: id) else { return }
+        request.connectionWaitTask?.cancel()
+        request.responseDeadlineTask?.cancel()
+        request.resume(result)
     }
 
     private func remoteError(_ exit: RPCResponseEnvelope.Exit) -> RPCError {

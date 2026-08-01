@@ -13,9 +13,13 @@ extension FeatureInputAnswer {
 
 /// Composes the transport-focused Core layer with the UI-focused Features layer.
 @MainActor
-final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging, FeatureProjectCreationClient {
+final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
+    FeatureProjectCreationClient, FeatureWorkspaceAssetResolving
+{
     private let runtime: EnvironmentRuntime
     private let settingsStore: UserDefaults
+    private let fallbackPollingInitialDelay: Duration
+    private let fallbackPollingInterval: Duration
     private let stream: AsyncStream<FeatureEvent>
     private let continuation: AsyncStream<FeatureEvent>.Continuation
 
@@ -25,6 +29,9 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging, FeaturePr
     private var environmentClients: [String: T3Client] = [:]
     private var shellsByEnvironmentID: [String: OrchestrationShellSnapshot] = [:]
     private var archivedThreadsByEnvironmentID: [String: [FeatureThread]] = [:]
+    private var archivedShellThreadsByEnvironmentID: [
+        String: [String: OrchestrationThreadShell]
+    ] = [:]
     private var projectEnvironmentIDs: [String: String] = [:]
     private var projectWireIDs: [String: String] = [:]
     private var threadEnvironmentIDs: [String: String] = [:]
@@ -40,7 +47,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging, FeaturePr
     private var latestDetails: [String: FeatureThreadDetail] = [:]
     private var detailRenderCaches: [String: NativeDetailRenderCache] = [:]
     private var attachmentURLs: [AttachmentCacheKey: CachedAttachmentURL] = [:]
-    private var pendingBootstrapSubmission: PendingBootstrapSubmission?
+    private var pendingBootstrapSubmissions: [PendingBootstrapSubmission] = []
     private var pendingTurnSubmissions: [String: PendingTurnSubmission] = [:]
     private var attachmentHydrationTasks: [
         String: (id: UUID, task: Task<Void, Never>)
@@ -73,10 +80,14 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging, FeaturePr
 
     init(
         runtime: EnvironmentRuntime = EnvironmentRuntime(),
-        settingsStore: UserDefaults = .standard
+        settingsStore: UserDefaults = .standard,
+        fallbackPollingInitialDelay: Duration = .seconds(3),
+        fallbackPollingInterval: Duration = .seconds(2)
     ) {
         self.runtime = runtime
         self.settingsStore = settingsStore
+        self.fallbackPollingInitialDelay = fallbackPollingInitialDelay
+        self.fallbackPollingInterval = fallbackPollingInterval
         let pair = AsyncStream<FeatureEvent>.makeStream()
         stream = pair.stream
         continuation = pair.continuation
@@ -242,6 +253,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging, FeaturePr
             shellsByEnvironmentID.removeAll()
             serverConfigsByEnvironmentID.removeAll()
             archivedThreadsByEnvironmentID.removeAll()
+            archivedShellThreadsByEnvironmentID.removeAll()
             projectEnvironmentIDs.removeAll()
             projectWireIDs.removeAll()
             threadEnvironmentIDs.removeAll()
@@ -258,7 +270,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging, FeaturePr
         latestDetails.removeAll()
         detailRenderCaches.removeAll()
         attachmentURLs.removeAll()
-        pendingBootstrapSubmission = nil
+        pendingBootstrapSubmissions.removeAll()
         pendingTurnSubmissions.removeAll()
         approvalRoutes.removeAll()
         inputRoutes.removeAll()
@@ -303,6 +315,13 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging, FeaturePr
         return try await client.browseFilesystem(partialPath: partialPath)
     }
 
+    func workspaceAssetURL(threadID: String, path: String) async throws -> URL {
+        let route = try threadRoute(for: threadID)
+        return try await route.client.resolvedAssetURL(
+            resource: .workspaceFile(threadID: route.wireID, path: path)
+        )
+    }
+
     func discoverProjectSources(
         environmentID: String
     ) async throws -> SourceControlDiscoveryResult {
@@ -335,7 +354,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging, FeaturePr
             )
         } catch let error as RPCError {
             switch error {
-            case .connectionUnavailable, .disconnected:
+            case .connectionUnavailable, .disconnected, .responseTimedOut:
                 // The clone RPC is not receipt-bearing, so a lost reply is
                 // ambiguous. Confirm the requested destination became a Git
                 // repository with a primary remote before moving on to the
@@ -559,6 +578,62 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging, FeaturePr
         startFromOrigin: Bool,
         attachments: [FeatureUploadAttachment]
     ) async throws -> FeatureThread {
+        try await createThreadAndSendResolved(
+            projectID: projectID,
+            prompt: prompt,
+            selection: selection,
+            runtimeMode: runtimeMode,
+            interactionMode: interactionMode,
+            workspaceMode: workspaceMode,
+            branch: branch,
+            worktreePath: worktreePath,
+            startFromOrigin: startFromOrigin,
+            attachments: attachments,
+            submissionIdentity: nil
+        )
+    }
+
+    func createThreadAndSend(
+        projectID: String,
+        prompt: String,
+        selection: FeatureSelection?,
+        runtimeMode: FeatureRuntimeMode,
+        interactionMode: FeatureInteractionMode,
+        workspaceMode: FeatureWorkspaceMode,
+        branch: String?,
+        worktreePath: String?,
+        startFromOrigin: Bool,
+        attachments: [FeatureUploadAttachment],
+        identity: FeatureSubmissionIdentity
+    ) async throws -> FeatureThread {
+        try await createThreadAndSendResolved(
+            projectID: projectID,
+            prompt: prompt,
+            selection: selection,
+            runtimeMode: runtimeMode,
+            interactionMode: interactionMode,
+            workspaceMode: workspaceMode,
+            branch: branch,
+            worktreePath: worktreePath,
+            startFromOrigin: startFromOrigin,
+            attachments: attachments,
+            submissionIdentity: identity
+        )
+    }
+
+    private func createThreadAndSendResolved(
+        projectID: String,
+        prompt: String,
+        selection: FeatureSelection?,
+        runtimeMode: FeatureRuntimeMode,
+        interactionMode: FeatureInteractionMode,
+        workspaceMode: FeatureWorkspaceMode,
+        branch: String?,
+        worktreePath: String?,
+        startFromOrigin: Bool,
+        attachments: [FeatureUploadAttachment],
+        submissionIdentity: FeatureSubmissionIdentity?
+    ) async throws -> FeatureThread {
         let route = try projectRoute(for: projectID)
         let client = route.client
         let environment = client.environment
@@ -592,19 +667,29 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging, FeaturePr
             attachments: attachments
         )
         let pending: PendingBootstrapSubmission
-        if let existing = pendingBootstrapSubmission,
-           existing.signature == signature {
+        let explicitIdentity = submissionIdentity.map { commandIdentity($0) }
+        if let explicitIdentity,
+           let existing = pendingBootstrapSubmissions.first(where: {
+               $0.identity == explicitIdentity
+           }) {
+            pending = existing
+        } else if explicitIdentity == nil,
+                  let existing = pendingBootstrapSubmissions.first(where: {
+                      $0.signature == signature
+                  }) {
             pending = existing
         } else {
             pending = PendingBootstrapSubmission(
                 signature: signature,
-                threadID: UUID().uuidString,
-                identity: CommandIdentity(),
+                threadID: submissionIdentity?.threadID ?? UUID().uuidString,
+                identity: explicitIdentity ?? CommandIdentity(),
                 worktreeBranchName: workspaceMode == .worktree
-                    ? Self.temporaryWorktreeBranchName()
+                    ? Self.temporaryWorktreeBranchName(
+                        seed: submissionIdentity?.threadID
+                    )
                     : nil
             )
-            pendingBootstrapSubmission = pending
+            pendingBootstrapSubmissions.append(pending)
         }
 
         do {
@@ -662,9 +747,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging, FeaturePr
         guard isKnownClient(client, environmentID: environment.id, generation: generation) else {
             throw CancellationError()
         }
-        if pendingBootstrapSubmission?.identity == pending.identity {
-            pendingBootstrapSubmission = nil
-        }
+        removePendingBootstrap(identity: pending.identity)
         // Dispatch acceptance is the commit point. A dropped refresh must not
         // turn a successful first turn into a retry that creates a duplicate.
         if let shell = try? await client.shellSnapshot() {
@@ -783,9 +866,11 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging, FeaturePr
             try? await client.removeWorktree(cwd: projectCwd, path: path)
         }
 
-        if pendingBootstrapSubmission?.identity == pending.identity {
-            pendingBootstrapSubmission = nil
-        }
+        removePendingBootstrap(identity: pending.identity)
+    }
+
+    private func removePendingBootstrap(identity: CommandIdentity) {
+        pendingBootstrapSubmissions.removeAll { $0.identity == identity }
     }
 
     func renameThread(id: String, title: String) async throws {
@@ -929,6 +1014,38 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging, FeaturePr
         selection: FeatureSelection?,
         attachments: [FeatureUploadAttachment]
     ) async throws {
+        try await sendMessageResolved(
+            threadID: threadID,
+            text: text,
+            selection: selection,
+            attachments: attachments,
+            submissionIdentity: nil
+        )
+    }
+
+    func sendMessage(
+        threadID: String,
+        text: String,
+        selection: FeatureSelection?,
+        attachments: [FeatureUploadAttachment],
+        identity: FeatureSubmissionIdentity
+    ) async throws {
+        try await sendMessageResolved(
+            threadID: threadID,
+            text: text,
+            selection: selection,
+            attachments: attachments,
+            submissionIdentity: identity
+        )
+    }
+
+    private func sendMessageResolved(
+        threadID: String,
+        text: String,
+        selection: FeatureSelection?,
+        attachments: [FeatureUploadAttachment],
+        submissionIdentity: FeatureSubmissionIdentity?
+    ) async throws {
         let route = try threadRoute(for: threadID)
         let client = route.client
         let environmentID = route.environmentID
@@ -949,20 +1066,26 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging, FeaturePr
             attachments: attachments
         )
         let pending: PendingTurnSubmission
-        if let existing = pendingTurnSubmissions[route.uiID],
-           existing.signature == signature {
+        let explicitIdentity = submissionIdentity.map { commandIdentity($0) }
+        if let explicitIdentity,
+           let existing = pendingTurnSubmissions[route.uiID],
+           existing.identity == explicitIdentity {
+            pending = existing
+        } else if explicitIdentity == nil,
+                  let existing = pendingTurnSubmissions[route.uiID],
+                  existing.signature == signature {
             pending = existing
         } else {
             pending = PendingTurnSubmission(
                 signature: signature,
-                identity: CommandIdentity()
+                identity: explicitIdentity ?? CommandIdentity()
             )
             pendingTurnSubmissions[route.uiID] = pending
         }
 
         do {
             _ = try await client.sendTurn(
-                threadID: route.wireID,
+                threadID: submissionIdentity?.threadID ?? route.wireID,
                 text: text,
                 runtimeMode: runtimeMode,
                 interactionMode: interactionMode,
@@ -978,7 +1101,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging, FeaturePr
             }
             guard await messageWasCommitted(
                 client: client,
-                threadID: route.wireID,
+                threadID: submissionIdentity?.threadID ?? route.wireID,
                 messageID: pending.identity.messageID
             ) else {
                 // Keep the stable identity. Retrying the same restored draft
@@ -1443,23 +1566,73 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging, FeaturePr
     ) {
         archivedThreadsByEnvironmentID[route.environmentID, default: []]
             .removeAll { $0.id == route.uiID }
-        if var thread {
+        var archivedShellThreads = archivedShellThreadsByEnvironmentID[
+            route.environmentID,
+            default: [:]
+        ]
+        let previouslyArchivedShell = archivedShellThreads.removeValue(
+            forKey: route.wireID
+        )
+
+        if archived, var thread {
             // Keep the accepted lifecycle transition visible until both live
             // and archived follow-up reads converge, including when the
             // owning passive device drops immediately after the command.
-            thread.isArchived = archived
+            thread.isArchived = true
             archivedThreadsByEnvironmentID[route.environmentID, default: []].append(thread)
         }
-        if archived {
-            if let shell = shellsByEnvironmentID[route.environmentID] {
+
+        if let shell = shellsByEnvironmentID[route.environmentID] {
+            if archived {
+                if let liveThread = shell.threads.first(where: { $0.id == route.wireID }) {
+                    archivedShellThreads[route.wireID] = liveThread
+                }
                 shellsByEnvironmentID[route.environmentID] = OrchestrationShellSnapshot(
                     snapshotSequence: shell.snapshotSequence,
                     projects: shell.projects,
                     threads: shell.threads.filter { $0.id != route.wireID },
                     updatedAt: shell.updatedAt
                 )
+            } else if let previouslyArchivedShell {
+                var threads = shell.threads.filter { $0.id != route.wireID }
+                threads.append(Self.unarchived(previouslyArchivedShell))
+                shellsByEnvironmentID[route.environmentID] = OrchestrationShellSnapshot(
+                    snapshotSequence: shell.snapshotSequence,
+                    projects: shell.projects,
+                    threads: threads,
+                    updatedAt: shell.updatedAt
+                )
             }
         }
+        archivedShellThreadsByEnvironmentID[route.environmentID] = archivedShellThreads
+    }
+
+    private static func unarchived(
+        _ thread: OrchestrationThreadShell
+    ) -> OrchestrationThreadShell {
+        OrchestrationThreadShell(
+            id: thread.id,
+            projectId: thread.projectId,
+            title: thread.title,
+            modelSelection: thread.modelSelection,
+            runtimeMode: thread.runtimeMode,
+            interactionMode: thread.interactionMode,
+            branch: thread.branch,
+            worktreePath: thread.worktreePath,
+            latestTurn: thread.latestTurn,
+            createdAt: thread.createdAt,
+            updatedAt: thread.updatedAt,
+            archivedAt: nil,
+            settledOverride: thread.settledOverride,
+            settledAt: thread.settledAt,
+            snoozedUntil: thread.snoozedUntil,
+            snoozedAt: thread.snoozedAt,
+            session: thread.session,
+            latestUserMessageAt: thread.latestUserMessageAt,
+            hasPendingApprovals: thread.hasPendingApprovals,
+            hasPendingUserInput: thread.hasPendingUserInput,
+            hasActionableProposedPlan: thread.hasActionableProposedPlan
+        )
     }
 
     private func emitCachedSnapshot(for environmentID: String) async {
@@ -1617,8 +1790,14 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging, FeaturePr
                 detail: "Live updates paused. Refreshing over HTTP."
             )
         }
+        let fallbackPollingInitialDelay = fallbackPollingInitialDelay
+        let fallbackPollingInterval = fallbackPollingInterval
         fallbackPollingTask = Task { [weak self] in
-            try? await Task.sleep(for: .seconds(3))
+            do {
+                try await Task.sleep(for: fallbackPollingInitialDelay)
+            } catch {
+                return
+            }
             while !Task.isCancelled {
                 guard let self,
                       self.isCurrentSession(
@@ -1637,22 +1816,39 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging, FeaturePr
                     )
                     do {
                         let shell = try await activeClient.shellSnapshot()
-                        guard !Task.isCancelled else { return }
-                        await self.consume(
+                        guard !Task.isCancelled,
+                              self.isCurrentSession(
+                                  client: activeClient,
+                                  generation: generation
+                              ) else {
+                            return
+                        }
+                        await self.consumeFallbackShell(
                             shell: shell,
                             client: activeClient,
-                            refreshActiveThread: true
+                            generation: generation
                         )
                     } catch is CancellationError {
                         return
                     } catch {
+                        guard !Task.isCancelled,
+                              self.isCurrentSession(
+                                  client: activeClient,
+                                  generation: generation
+                              ) else {
+                            return
+                        }
                         self.emitConnection(
                             .reconnecting,
                             detail: "Server unreachable. Retrying automatically."
                         )
                     }
                 }
-                try? await Task.sleep(for: .seconds(2))
+                do {
+                    try await Task.sleep(for: fallbackPollingInterval)
+                } catch {
+                    return
+                }
             }
         }
         configurationTask = Task { [weak self] in
@@ -1771,6 +1967,30 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging, FeaturePr
         if refreshActiveThread, let threadID = activeThreadID {
             scheduleDetailRefresh(threadID: threadID, client: client)
         }
+    }
+
+    /// HTTP fallback refreshes data while preserving the socket's reconnecting
+    /// state. The generation travels through the awaited snapshot publish so a
+    /// task from a previous environment session cannot publish late results.
+    private func consumeFallbackShell(
+        shell: OrchestrationShellSnapshot,
+        client: T3Client,
+        generation: Int
+    ) async {
+        guard isCurrentSession(client: client, generation: generation) else { return }
+        shellPublishTask?.cancel()
+        shellPublishTask = nil
+        latestShell = shell
+        await emitSnapshot(
+            shell,
+            markSourceConnected: false,
+            expectedGeneration: generation
+        )
+        guard isCurrentSession(client: client, generation: generation),
+              let threadID = activeThreadID else {
+            return
+        }
+        scheduleDetailRefresh(threadID: threadID, client: client)
     }
 
     private func consume(delta: ShellStreamItem, client: T3Client) async {
@@ -2198,6 +2418,9 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging, FeaturePr
         archivedThreadsByEnvironmentID = archivedThreadsByEnvironmentID.filter {
             savedIDs.contains($0.key)
         }
+        archivedShellThreadsByEnvironmentID = archivedShellThreadsByEnvironmentID.filter {
+            savedIDs.contains($0.key)
+        }
         environmentConnectionStates = environmentConnectionStates.filter {
             savedIDs.contains($0.key)
         }
@@ -2333,6 +2556,9 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging, FeaturePr
             archivedThreadsByEnvironmentID[environment.id] = archivedShell.threads.map {
                 mapThread($0, environment: environment)
             }
+            archivedShellThreadsByEnvironmentID[environment.id] = Dictionary(
+                uniqueKeysWithValues: archivedShell.threads.map { ($0.id, $0) }
+            )
             rebuildEntityIndexes((try? await runtime.environments()) ?? [environment])
         }
         await emitSnapshot(shell, environment: environment)
@@ -2351,6 +2577,9 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging, FeaturePr
             self.archivedThreadsByEnvironmentID[environment.id] = archivedShell.threads.map {
                 self.mapThread($0, environment: environment)
             }
+            self.archivedShellThreadsByEnvironmentID[environment.id] = Dictionary(
+                uniqueKeysWithValues: archivedShell.threads.map { ($0.id, $0) }
+            )
             self.rebuildEntityIndexes(
                 (try? await self.runtime.environments()) ?? [environment]
             )
@@ -2395,26 +2624,32 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging, FeaturePr
 
     private func emitSnapshot(
         _ shell: OrchestrationShellSnapshot,
-        environment sourceEnvironment: Environment? = nil
+        environment sourceEnvironment: Environment? = nil,
+        markSourceConnected: Bool = true,
+        expectedGeneration: Int? = nil
     ) async {
         guard let environment = activeEnvironment else { return }
         let sourceEnvironment = sourceEnvironment ?? environment
         let generation = environmentGeneration
+        guard expectedGeneration == nil || expectedGeneration == generation else { return }
         let environments = (try? await runtime.environments()) ?? [environment]
         guard generation == environmentGeneration,
+              expectedGeneration == nil || expectedGeneration == environmentGeneration,
               activeEnvironment?.id == environment.id else {
             return
         }
         shellsByEnvironmentID[sourceEnvironment.id] = shell
-        environmentConnectionStates[sourceEnvironment.id] = .connected
-        environmentConnectionDetails[sourceEnvironment.id] = nil
+        if markSourceConnected {
+            environmentConnectionStates[sourceEnvironment.id] = .connected
+            environmentConnectionDetails[sourceEnvironment.id] = nil
+        }
         if sourceEnvironment.id == environment.id {
             latestShell = shell
         }
         rebuildEntityIndexes(environments)
         let connectionState: FeatureConnection.State
         let connectionDetail: String?
-        if sourceEnvironment.id == environment.id {
+        if sourceEnvironment.id == environment.id, markSourceConnected {
             connectionState = .connected
             connectionDetail = nil
         } else {
@@ -3352,7 +3587,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging, FeaturePr
         config: ServerConfigSnapshot?
     ) -> [FeatureProvider] {
         if let providers = config?.providers, !providers.isEmpty {
-            return providers.map { provider in
+            return Self.normalizedProviders(providers.map { provider in
                 FeatureProvider(
                     id: provider.instanceId,
                     name: provider.displayName ?? providerDisplayName(provider.driver),
@@ -3401,7 +3636,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging, FeaturePr
                         )
                     }
                 )
-            }
+            })
         }
 
         var modelsByProvider: [String: Set<String>] = [:]
@@ -3422,6 +3657,32 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging, FeaturePr
                 }
             )
         }
+    }
+
+    static func normalizedProviders(
+        _ providers: [FeatureProvider]
+    ) -> [FeatureProvider] {
+        var normalized: [FeatureProvider] = []
+        var providerIndexByID: [String: Int] = [:]
+
+        for var provider in providers {
+            var seenModelIDs = Set<String>()
+            provider.models = provider.models.filter {
+                seenModelIDs.insert($0.id).inserted
+            }
+            if let index = providerIndexByID[provider.id] {
+                var existing = normalized[index]
+                var existingModelIDs = Set(existing.models.map(\.id))
+                existing.models.append(contentsOf: provider.models.filter {
+                    existingModelIDs.insert($0.id).inserted
+                })
+                normalized[index] = existing
+            } else {
+                providerIndexByID[provider.id] = normalized.count
+                normalized.append(provider)
+            }
+        }
+        return normalized
     }
 
     private func modelSelection(
@@ -3445,7 +3706,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging, FeaturePr
         )
     }
 
-    /// Automatic selection is resolved against the target environment. This
+    /// Fallback selection is resolved against the target environment. This
     /// matters when a passive machine exposes a different provider catalogue
     /// than the currently active one.
     private func fallbackModelSelection(
@@ -3846,8 +4107,19 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging, FeaturePr
         return "\(compact.prefix(69).trimmingCharacters(in: .whitespacesAndNewlines))..."
     }
 
-    private static func temporaryWorktreeBranchName() -> String {
-        "t3code/\(UUID().uuidString.prefix(8).lowercased())"
+    private func commandIdentity(
+        _ identity: FeatureSubmissionIdentity
+    ) -> CommandIdentity {
+        CommandIdentity(
+            commandID: identity.commandID,
+            messageID: identity.messageID,
+            createdAt: Self.fractionalDateFormatter.string(from: identity.createdAt)
+        )
+    }
+
+    private static func temporaryWorktreeBranchName(seed: String? = nil) -> String {
+        let suffix = seed ?? UUID().uuidString
+        return "t3code/\(suffix.prefix(8).lowercased())"
     }
 
     private func previewText(_ text: String?) -> String? {

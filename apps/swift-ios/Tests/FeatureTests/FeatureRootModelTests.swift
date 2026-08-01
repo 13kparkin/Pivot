@@ -41,12 +41,112 @@ struct FeatureRootModelTests {
     @Test
     func disconnectEndsConnectionManagement() async {
         let client = FeatureClientStub()
-        let model = FeatureRootModel(client: client)
+        client.snapshot = FeatureSnapshot(
+            connection: .init(state: .connected),
+            environments: [
+                .init(
+                    id: "studio",
+                    name: "Studio",
+                    endpoint: "https://studio.example",
+                    isActive: true,
+                    connectionState: .connected,
+                    connectionDetail: "Healthy"
+                ),
+            ]
+        )
+        let model = testRootModel(client: client)
+        await model.reload()
         model.setConnectionManagementPresented(true)
 
         await model.disconnect()
 
         #expect(!model.isManagingConnections)
+        #expect(model.snapshot.connection.state == .disconnected)
+        #expect(model.snapshot.environments.first?.connectionState == .disconnected)
+        #expect(model.snapshot.environments.first?.connectionDetail == nil)
+    }
+
+    @Test
+    func restoredFollowUpWaitsForItsQueuedThreadCreation() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("t3-root-dependent-outbox-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = FeatureOutboxStore(fileURL: directory.appendingPathComponent("outbox.json"))
+        let threadID = "environment-1::thread::queued-thread"
+        let creationIdentity = FeatureSubmissionIdentity(
+            threadID: "queued-thread",
+            commandID: "create-command",
+            messageID: "create-message",
+            createdAt: Date(timeIntervalSince1970: 1)
+        )
+        let creation = FeatureQueuedSubmission(
+            environmentID: "environment-1",
+            identity: creationIdentity,
+            threadID: threadID,
+            text: "Create the task",
+            selection: .init(providerID: "codex", modelID: "gpt-5.6-sol"),
+            runtimeMode: .fullAccess,
+            interactionMode: .standard,
+            attachments: [],
+            creation: .init(
+                projectID: "project-1",
+                projectName: "Native",
+                workspaceMode: .local,
+                branch: nil,
+                worktreePath: nil,
+                startFromOrigin: false
+            )
+        )
+        let followUp = FeatureQueuedSubmission(
+            environmentID: "environment-1",
+            identity: .init(
+                threadID: "queued-thread",
+                commandID: "follow-up-command",
+                messageID: "follow-up-message",
+                createdAt: Date(timeIntervalSince1970: 2)
+            ),
+            threadID: threadID,
+            text: "And add tests",
+            selection: .init(providerID: "codex", modelID: "gpt-5.6-sol"),
+            runtimeMode: .fullAccess,
+            interactionMode: .standard,
+            attachments: []
+        )
+        try await store.enqueue(creation)
+        try await store.enqueue(followUp)
+
+        let client = FeatureClientStub()
+        client.snapshot = FeatureSnapshot(
+            connection: .init(state: .connected),
+            environments: [
+                .init(
+                    id: "environment-1",
+                    name: "Studio",
+                    endpoint: "https://studio.example",
+                    isActive: true,
+                    connectionState: .connected
+                ),
+            ],
+            projects: [
+                .init(
+                    id: "project-1",
+                    environmentID: "environment-1",
+                    name: "Native",
+                    path: "/native"
+                ),
+            ]
+        )
+        client.startTaskError = URLError(.timedOut)
+        client.finishEvents()
+        let model = FeatureRootModel(client: client, outboxStore: store)
+
+        await model.start()
+        await model.disconnect()
+
+        let restoredIDs = try await store.submissions().map(\.id)
+        #expect(restoredIDs.count == 2)
+        #expect(Set(restoredIDs) == Set([creation.id, followUp.id]))
+        #expect(client.sendMessageCallCount == 0)
     }
 
     @Test
@@ -65,7 +165,7 @@ struct FeatureRootModelTests {
             thread: oldThread,
             messages: [FeatureMessage(id: "old-message", role: .assistant, text: "Old")]
         )
-        let model = FeatureRootModel(client: client)
+        let model = testRootModel(client: client)
         _ = await model.detail(for: oldThread.id)
 
         let result = await model.pair(endpoint: "https://studio.example", token: "pair-token")
@@ -88,7 +188,7 @@ struct FeatureRootModelTests {
             modelID: "gpt-5"
         )
         client.createdThread = created
-        let model = FeatureRootModel(client: client)
+        let model = testRootModel(client: client)
 
         let result = await model.createThread(
             projectID: "project-1",
@@ -103,9 +203,28 @@ struct FeatureRootModelTests {
     @Test
     func testSendAddsQueuedMessageBeforeServerEvent() async {
         let client = FeatureClientStub()
-        let thread = FeatureThread(id: "thread-1", projectID: "project-1", title: "Thread")
+        let thread = FeatureThread(
+            id: "thread-1",
+            projectID: "project-1",
+            environmentID: "environment-1",
+            title: "Thread"
+        )
+        client.snapshot = FeatureSnapshot(
+            connection: .init(state: .connected),
+            environments: [
+                .init(
+                    id: "environment-1",
+                    name: "Studio",
+                    endpoint: "https://studio.example",
+                    isActive: true,
+                    connectionState: .connected
+                ),
+            ],
+            threads: [thread]
+        )
         client.threadDetail = FeatureThreadDetail(thread: thread)
-        let model = FeatureRootModel(client: client)
+        let model = testRootModel(client: client)
+        await model.reload()
         _ = await model.detail(for: thread.id)
 
         let sent = await model.sendMessage(
@@ -117,7 +236,7 @@ struct FeatureRootModelTests {
         #expect(sent)
         #expect(client.sentText == "ship it")
         #expect(model.details[thread.id]?.messages.last?.text == "ship it")
-        #expect(model.details[thread.id]?.messages.last?.state == .queued)
+        #expect(model.details[thread.id]?.messages.last?.state == .complete)
     }
 
     @Test
@@ -131,7 +250,28 @@ struct FeatureRootModelTests {
             modelID: "gpt-5.6-sol"
         )
         client.createdThread = created
-        let model = FeatureRootModel(client: client)
+        client.snapshot = FeatureSnapshot(
+            connection: .init(state: .connected),
+            environments: [
+                .init(
+                    id: "environment-1",
+                    name: "Studio",
+                    endpoint: "https://studio.example",
+                    isActive: true,
+                    connectionState: .connected
+                ),
+            ],
+            projects: [
+                .init(
+                    id: "project-1",
+                    environmentID: "environment-1",
+                    name: "Native",
+                    path: "/native"
+                ),
+            ]
+        )
+        let model = testRootModel(client: client)
+        await model.reload()
         let attachment = FeatureDraftAttachment(
             data: Data([0xFF, 0xD8, 0xFF]),
             filename: "reference.jpg",
@@ -169,7 +309,7 @@ struct FeatureRootModelTests {
         let client = FeatureClientStub()
         let thread = FeatureThread(id: "thread-1", projectID: "project-1", title: "Thread")
         client.createdThread = thread
-        let model = FeatureRootModel(client: client)
+        let model = testRootModel(client: client)
         _ = await model.createThread(projectID: thread.projectID, title: nil, selection: nil)
 
         await model.setArchived(thread.id, archived: true)
@@ -190,7 +330,7 @@ struct FeatureRootModelTests {
             ]
         )
         client.threadDetail = detail
-        let model = FeatureRootModel(client: client)
+        let model = testRootModel(client: client)
         _ = await model.detail(for: thread.id)
         client.loadThreadError = CancellationError()
 
@@ -213,7 +353,7 @@ struct FeatureRootModelTests {
         thread.snoozedAt = oldSnooze
         thread.attentionAt = Date.now.addingTimeInterval(-300)
         client.createdThread = thread
-        let model = FeatureRootModel(client: client)
+        let model = testRootModel(client: client)
         _ = await model.createThread(projectID: thread.projectID, title: nil, selection: nil)
 
         await model.setSnoozed(
@@ -236,7 +376,7 @@ struct FeatureRootModelTests {
             questions: []
         )
         client.threadDetail = FeatureThreadDetail(thread: thread, userInputs: [request])
-        let model = FeatureRootModel(client: client)
+        let model = testRootModel(client: client)
         _ = await model.detail(for: thread.id)
 
         let answers: [String: FeatureInputAnswer] = [
@@ -260,7 +400,7 @@ struct FeatureRootModelTests {
             path: "/native"
         )
         client.snapshot = FeatureSnapshot(projects: [project])
-        let model = FeatureRootModel(client: client)
+        let model = testRootModel(client: client)
         let thread = FeatureThread(
             id: "thread-1",
             projectID: project.id,
@@ -303,7 +443,7 @@ struct FeatureRootModelTests {
                 FeatureMessage(id: "message-2", role: .user, text: "Ship it"),
             ]
         )
-        let model = FeatureRootModel(client: client)
+        let model = testRootModel(client: client)
 
         let run = Task { await model.start() }
         client.emit(.detail(first))
@@ -334,7 +474,7 @@ struct FeatureRootModelTests {
             messages: [completedMessage, appendedMessage]
         )
         client.snapshot = FeatureSnapshot(threads: [thread])
-        let model = FeatureRootModel(client: client)
+        let model = testRootModel(client: client)
 
         let run = Task { await model.start() }
         client.emit(.detail(first))
@@ -473,6 +613,17 @@ struct FeatureRootModelTests {
     }
 }
 
+@MainActor
+private func testRootModel(client: FeatureClientStub) -> FeatureRootModel {
+    FeatureRootModel(
+        client: client,
+        outboxStore: FeatureOutboxStore(
+            fileURL: FileManager.default.temporaryDirectory
+                .appendingPathComponent("t3-root-outbox-\(UUID().uuidString).json")
+        )
+    )
+}
+
 private func orchestrationEvent(
     type: String,
     sequence: Int,
@@ -534,6 +685,7 @@ private final class FeatureClientStub: FeatureClient {
     var startedFromOrigin = false
     var createThreadCallCount = 0
     var sendMessageCallCount = 0
+    var startTaskError: (any Error)?
     var loadThreadError: (any Error)?
     var resolvedInputID: String?
     var resolvedInputAnswers: [String: FeatureInputAnswer]?
@@ -585,6 +737,7 @@ private final class FeatureClientStub: FeatureClient {
         interactionMode: FeatureInteractionMode,
         attachments: [FeatureUploadAttachment]
     ) async throws -> FeatureThread {
+        if let startTaskError { throw startTaskError }
         startedPrompt = prompt
         startedAttachments = attachments
         return createdThread
@@ -602,6 +755,7 @@ private final class FeatureClientStub: FeatureClient {
         startFromOrigin: Bool,
         attachments: [FeatureUploadAttachment]
     ) async throws -> FeatureThread {
+        if let startTaskError { throw startTaskError }
         startedPrompt = prompt
         startedAttachments = attachments
         startedWorkspaceMode = workspaceMode

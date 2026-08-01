@@ -32,9 +32,19 @@ public final class FeatureRootModel {
     public var errorMessage: String?
 
     let client: any FeatureClient
+    private let outboxStore: FeatureOutboxStore
+    private var pendingSubmissionsByID: [String: FeatureQueuedSubmission] = [:]
+    private var pendingThreadsByID: [String: FeatureThread] = [:]
+    private var outboxDrainTask: Task<Void, Never>?
+    private var outboxRetryAttempt = 0
+    private var outboxGeneration: UInt64 = 0
 
-    public init(client: any FeatureClient) {
+    public init(
+        client: any FeatureClient,
+        outboxStore: FeatureOutboxStore = .shared
+    ) {
         self.client = client
+        self.outboxStore = outboxStore
     }
 
     public func start() async {
@@ -45,7 +55,9 @@ public final class FeatureRootModel {
                 errorMessage = error.localizedDescription
             }
         }
+        await restoreOutbox()
         isLoading = false
+        scheduleOutboxDrain()
 
         for await event in client.events() {
             apply(event)
@@ -79,18 +91,29 @@ public final class FeatureRootModel {
     }
 
     public func removeEnvironment(_ id: String) async {
+        await stopOutboxDrain()
         await perform {
             try await client.removeEnvironment(id: id)
+            try? await outboxStore.removeAll(environmentID: id)
+            removePendingSubmissions(environmentID: id)
             install(try await client.initialSnapshot())
             clearDetails()
         }
+        scheduleOutboxDrain()
     }
 
     public func disconnect() async {
+        await stopOutboxDrain()
         isManagingConnections = false
         await client.disconnect()
+        let disconnectedEnvironments = snapshot.environments.map { environment in
+            var environment = environment
+            environment.connectionState = .disconnected
+            environment.connectionDetail = nil
+            return environment
+        }
         install(FeatureSnapshot(
-            environments: snapshot.environments,
+            environments: disconnectedEnvironments,
             settings: snapshot.settings
         ))
         clearDetails()
@@ -134,9 +157,40 @@ public final class FeatureRootModel {
         guard !prompt.isEmpty || !request.attachments.isEmpty else { return nil }
         guard request.workspaceMode != .worktree || request.branch != nil else { return nil }
 
-        let environment = currentEnvironmentIdentity
-        var created: FeatureThread?
-        let succeeded = await perform(reportError: false) {
+        guard let project = snapshot.projects.first(where: { $0.id == request.projectID }) else {
+            errorMessage = "That project is no longer available."
+            return nil
+        }
+        let identity = FeatureSubmissionIdentity()
+        let threadID = FeatureScopedID.thread(
+            environmentID: project.environmentID,
+            wireID: identity.threadID
+        )
+        let uploads = request.attachments.map(\.upload)
+        let queued = FeatureQueuedSubmission(
+            environmentID: project.environmentID,
+            identity: identity,
+            threadID: threadID,
+            text: prompt,
+            selection: request.selection,
+            runtimeMode: request.runtimeMode,
+            interactionMode: request.interactionMode,
+            attachments: uploads,
+            creation: FeatureQueuedCreation(
+                projectID: request.projectID,
+                projectName: project.name,
+                workspaceMode: request.workspaceMode,
+                branch: request.branch,
+                worktreePath: request.worktreePath,
+                startFromOrigin: request.startFromOrigin
+            )
+        )
+        guard await enqueue(queued) else { return nil }
+        installPendingCreation(queued, project: project)
+
+        isPerformingAction = true
+        defer { isPerformingAction = false }
+        do {
             let thread = try await client.createThreadAndSend(
                 projectID: request.projectID,
                 prompt: prompt,
@@ -147,15 +201,29 @@ public final class FeatureRootModel {
                 branch: request.branch,
                 worktreePath: request.worktreePath,
                 startFromOrigin: request.startFromOrigin,
-                attachments: request.attachments.map(\.upload)
+                attachments: uploads,
+                identity: identity
             )
-            guard currentEnvironmentIdentity == environment else {
-                throw CancellationError()
+            await completeQueuedSubmission(queued)
+            if thread.id != queued.threadID {
+                removeThread(id: queued.threadID)
+                removeDetail(id: queued.threadID)
             }
             upsert(thread)
-            created = thread
+            return thread
+        } catch {
+            if Self.shouldQueue(error, environmentID: project.environmentID, snapshot: snapshot) {
+                if isEnvironmentConnected(project.environmentID) {
+                    scheduleOutboxRetry()
+                }
+                return pendingThreadsByID[threadID]
+            }
+            await discardQueuedSubmission(queued)
+            if !Self.isBenignCancellation(error) {
+                errorMessage = error.localizedDescription
+            }
+            return nil
         }
-        return succeeded ? created : nil
     }
 
     public func workspaceBranches(
@@ -280,12 +348,29 @@ public final class FeatureRootModel {
         let trimmed = submission.text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty || !submission.attachments.isEmpty else { return false }
 
-        let environment = currentEnvironmentIdentity
-        let optimisticID = "local-\(UUID().uuidString)"
+        guard let thread = snapshot.threads.first(where: { $0.id == submission.threadID }),
+              let environmentID = thread.environmentID else {
+            return false
+        }
+        let identity = FeatureSubmissionIdentity(threadID: thread.wireID ?? thread.id)
+        let uploads = submission.attachments.map(\.upload)
+        let queued = FeatureQueuedSubmission(
+            environmentID: environmentID,
+            identity: identity,
+            threadID: submission.threadID,
+            text: trimmed,
+            selection: submission.selection,
+            runtimeMode: thread.runtimeMode,
+            interactionMode: thread.interactionMode,
+            attachments: uploads
+        )
+        guard await enqueue(queued) else { return false }
+
         let optimistic = FeatureMessage(
-            id: optimisticID,
+            id: identity.messageID,
             role: .user,
             text: trimmed,
+            createdAt: identity.createdAt,
             state: .queued,
             attachments: submission.attachments.map {
                 FeatureMessageAttachment(
@@ -306,21 +391,34 @@ public final class FeatureRootModel {
             $0.messages.append(optimistic)
         }
 
-        let sent = await perform(reportError: false) {
+        isPerformingAction = true
+        defer { isPerformingAction = false }
+        do {
             try await client.sendMessage(
                 threadID: submission.threadID,
                 text: trimmed,
                 selection: submission.selection,
-                attachments: submission.attachments.map(\.upload)
+                attachments: uploads,
+                identity: identity
             )
-        }
-        if !sent {
-            guard currentEnvironmentIdentity == environment else { return false }
-            mutateDetail(id: submission.threadID) {
-                $0.messages.removeAll { $0.id == optimisticID }
+            await completeQueuedSubmission(queued)
+            return true
+        } catch {
+            if Self.shouldQueue(error, environmentID: environmentID, snapshot: snapshot) {
+                if isEnvironmentConnected(environmentID) {
+                    scheduleOutboxRetry()
+                }
+                return true
             }
+            await discardQueuedSubmission(queued)
+            mutateDetail(id: submission.threadID) {
+                $0.messages.removeAll { $0.id == identity.messageID }
+            }
+            if !Self.isBenignCancellation(error) {
+                errorMessage = error.localizedDescription
+            }
+            return false
         }
-        return sent
     }
 
     public func cancelTurn(threadID: String) async {
@@ -421,7 +519,11 @@ public final class FeatureRootModel {
             guard snapshot.connection != value else { return }
             snapshot.connection = value
             homePresentationRevision &+= 1
+            if value.state == .connected {
+                scheduleOutboxDrain()
+            }
         case let .thread(value):
+            acknowledgeAuthoritativeThread(value.id)
             upsert(value)
             mutateDetail(
                 id: value.id,
@@ -475,6 +577,18 @@ public final class FeatureRootModel {
     }
 
     private func install(_ value: FeatureSnapshot) {
+        var value = value
+        let authoritativeThreadIDs = Set(value.threads.map(\.id))
+        for id in authoritativeThreadIDs {
+            acknowledgeAuthoritativeThread(id)
+        }
+        for pending in pendingThreadsByID.values where !authoritativeThreadIDs.contains(pending.id) {
+            value.threads.append(pending)
+            if let index = value.projects.firstIndex(where: { $0.id == pending.projectID }) {
+                value.projects[index].threadCount += 1
+            }
+        }
+
         if snapshot.connection != value.connection
             || snapshot.environments != value.environments
             || snapshot.projects != value.projects
@@ -486,6 +600,10 @@ public final class FeatureRootModel {
             threadCollectionRevision &+= 1
         }
         snapshot = value
+        if value.connection.state == .connected
+            || value.environments.contains(where: { $0.connectionState == .connected }) {
+            scheduleOutboxDrain()
+        }
     }
 
     private func mutateThread(
@@ -510,6 +628,8 @@ public final class FeatureRootModel {
 
     private func store(_ incoming: FeatureThreadDetail) {
         let id = incoming.thread.id
+        acknowledgeDeliveredMessages(incoming.messages)
+        let incoming = addingPendingMessages(to: incoming)
         let next = details[id].map { current in
             FeatureThreadDetail(
                 thread: incoming.thread,
@@ -525,8 +645,15 @@ public final class FeatureRootModel {
 
     private func store(_ incoming: FeatureThreadDetail, delta: FeatureDetailDelta) {
         let id = incoming.thread.id
-        details[id] = incoming
-        bumpDetailRevision(id: id, change: .delta(delta))
+        acknowledgeDeliveredMessages(incoming.messages)
+        let next = addingPendingMessages(to: incoming)
+        details[id] = next
+        let appended = next.messages.dropFirst(incoming.messages.count).map(\.id)
+        let pendingDelta = FeatureDetailDelta(
+            changedMessages: delta.changedMessages + next.messages.dropFirst(incoming.messages.count),
+            appendedMessageIDs: delta.appendedMessageIDs + appended
+        )
+        bumpDetailRevision(id: id, change: .delta(pendingDelta))
     }
 
     private func mutateDetail(
@@ -577,6 +704,362 @@ public final class FeatureRootModel {
         var result = current
         result.replaceSubrange(prefixCount..., with: incoming.dropFirst(prefixCount))
         return result
+    }
+
+    private func restoreOutbox() async {
+        let submissions: [FeatureQueuedSubmission]
+        do {
+            submissions = try await outboxStore.submissions()
+        } catch {
+            errorMessage = "Could not restore queued messages: \(error.localizedDescription)"
+            return
+        }
+
+        for submission in submissions {
+            if let creation = submission.creation {
+                if snapshot.threads.contains(where: { $0.id == submission.threadID }) {
+                    try? await outboxStore.remove(id: submission.id)
+                    continue
+                }
+                guard let project = snapshot.projects.first(where: {
+                    $0.id == creation.projectID && $0.environmentID == submission.environmentID
+                }) else {
+                    if isEnvironmentConnected(submission.environmentID) {
+                        try? await outboxStore.remove(id: submission.id)
+                    } else {
+                        pendingSubmissionsByID[submission.id] = submission
+                    }
+                    continue
+                }
+                pendingSubmissionsByID[submission.id] = submission
+                installPendingCreation(submission, project: project)
+                continue
+            }
+
+            guard snapshot.threads.contains(where: { $0.id == submission.threadID }) else {
+                if pendingThreadsByID[submission.threadID] != nil {
+                    pendingSubmissionsByID[submission.id] = submission
+                } else if isEnvironmentConnected(submission.environmentID) {
+                    try? await outboxStore.remove(id: submission.id)
+                } else {
+                    pendingSubmissionsByID[submission.id] = submission
+                }
+                continue
+            }
+            pendingSubmissionsByID[submission.id] = submission
+            if let detail = details[submission.threadID] {
+                store(addingPendingMessages(to: detail))
+            }
+        }
+    }
+
+    private func enqueue(_ submission: FeatureQueuedSubmission) async -> Bool {
+        do {
+            try await outboxStore.enqueue(submission)
+            pendingSubmissionsByID[submission.id] = submission
+            return true
+        } catch {
+            errorMessage = "Could not safely queue this message: \(error.localizedDescription)"
+            return false
+        }
+    }
+
+    private func installPendingCreation(
+        _ submission: FeatureQueuedSubmission,
+        project: FeatureProject
+    ) {
+        guard let creation = submission.creation else { return }
+        let provider = provider(
+            id: submission.selection?.providerID,
+            environmentID: submission.environmentID
+        )
+        let environmentName = snapshot.environments.first {
+            $0.id == submission.environmentID
+        }?.name
+        let title = submission.text
+            .split(whereSeparator: \.isNewline)
+            .first
+            .map(String.init)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let thread = FeatureThread(
+            id: submission.threadID,
+            wireID: submission.identity.threadID,
+            projectID: project.id,
+            environmentID: submission.environmentID,
+            environmentName: environmentName,
+            title: title?.isEmpty == false ? title! : "New task",
+            preview: submission.text,
+            branch: creation.branch,
+            worktreePath: creation.worktreePath,
+            createdAt: submission.identity.createdAt,
+            updatedAt: submission.identity.createdAt,
+            state: .queued,
+            providerID: submission.selection?.providerID,
+            providerName: provider?.name,
+            modelID: submission.selection?.modelID,
+            runtimeMode: .fullAccess,
+            interactionMode: .standard
+        )
+        pendingThreadsByID[thread.id] = thread
+        upsert(thread)
+        store(FeatureThreadDetail(
+            thread: thread,
+            messages: [queuedMessage(for: submission)]
+        ))
+    }
+
+    private func provider(id: String?, environmentID: String) -> FeatureProvider? {
+        guard let id else { return nil }
+        let providers = snapshot.providersByEnvironment?[environmentID] ?? snapshot.providers
+        return providers.first { $0.id == id }
+    }
+
+    private func queuedMessage(for submission: FeatureQueuedSubmission) -> FeatureMessage {
+        FeatureMessage(
+            id: submission.identity.messageID,
+            role: .user,
+            text: submission.text,
+            createdAt: submission.identity.createdAt,
+            state: .queued,
+            attachments: submission.attachments.enumerated().map { index, attachment in
+                FeatureMessageAttachment(
+                    id: "\(submission.id)-attachment-\(index)",
+                    name: attachment.name,
+                    mimeType: attachment.mimeType,
+                    sizeBytes: attachment.data.count
+                )
+            }
+        )
+    }
+
+    private func addingPendingMessages(to incoming: FeatureThreadDetail) -> FeatureThreadDetail {
+        let queued = pendingSubmissionsByID.values
+            .filter { $0.threadID == incoming.thread.id }
+            .sorted { $0.identity.createdAt < $1.identity.createdAt }
+        guard !queued.isEmpty else { return incoming }
+        var result = incoming
+        let existing = Set(result.messages.map(\.id))
+        result.messages.append(contentsOf: queued.lazy
+            .filter { !existing.contains($0.identity.messageID) }
+            .map(queuedMessage(for:)))
+        return result
+    }
+
+    private func acknowledgeAuthoritativeThread(_ id: String) {
+        guard pendingThreadsByID.removeValue(forKey: id) != nil,
+              let submission = pendingSubmissionsByID.values.first(where: {
+                  $0.threadID == id && $0.creation != nil
+              }) else { return }
+        pendingSubmissionsByID.removeValue(forKey: submission.id)
+        markQueuedMessageDelivered(submission)
+        let store = outboxStore
+        Task { try? await store.remove(id: submission.id) }
+    }
+
+    private func acknowledgeDeliveredMessages(_ messages: [FeatureMessage]) {
+        let messageIDs = Set(messages.map(\.id))
+        let delivered = pendingSubmissionsByID.values.filter {
+            $0.creation == nil && messageIDs.contains($0.identity.messageID)
+        }
+        for submission in delivered {
+            pendingSubmissionsByID.removeValue(forKey: submission.id)
+            let store = outboxStore
+            Task { try? await store.remove(id: submission.id) }
+        }
+    }
+
+    private func completeQueuedSubmission(_ submission: FeatureQueuedSubmission) async {
+        try? await outboxStore.remove(id: submission.id)
+        pendingSubmissionsByID.removeValue(forKey: submission.id)
+        pendingThreadsByID.removeValue(forKey: submission.threadID)
+        markQueuedMessageDelivered(submission)
+        outboxRetryAttempt = 0
+    }
+
+    private func markQueuedMessageDelivered(_ submission: FeatureQueuedSubmission) {
+        mutateDetail(
+            id: submission.threadID,
+            change: .delta(FeatureDetailDelta(changedMessages: []))
+        ) { detail in
+            guard let index = detail.messages.firstIndex(where: {
+                $0.id == submission.identity.messageID
+            }) else { return }
+            detail.messages[index].state = .complete
+        }
+    }
+
+    private func discardQueuedSubmission(_ submission: FeatureQueuedSubmission) async {
+        try? await outboxStore.remove(id: submission.id)
+        pendingSubmissionsByID.removeValue(forKey: submission.id)
+        let wasPendingCreation = pendingThreadsByID.removeValue(forKey: submission.threadID) != nil
+        if wasPendingCreation {
+            removeThread(id: submission.threadID)
+            removeDetail(id: submission.threadID)
+        } else {
+            mutateDetail(id: submission.threadID) {
+                $0.messages.removeAll { $0.id == submission.identity.messageID }
+            }
+        }
+    }
+
+    private func removePendingSubmissions(environmentID: String) {
+        let removed = pendingSubmissionsByID.values.filter {
+            $0.environmentID == environmentID
+        }
+        for submission in removed {
+            pendingSubmissionsByID.removeValue(forKey: submission.id)
+            if pendingThreadsByID.removeValue(forKey: submission.threadID) != nil {
+                removeThread(id: submission.threadID)
+                removeDetail(id: submission.threadID)
+            } else {
+                mutateDetail(id: submission.threadID) {
+                    $0.messages.removeAll { $0.id == submission.identity.messageID }
+                }
+            }
+        }
+    }
+
+    private func scheduleOutboxDrain(after delay: Duration = .zero) {
+        guard outboxDrainTask == nil, !pendingSubmissionsByID.isEmpty else { return }
+        let generation = outboxGeneration
+        outboxDrainTask = Task { @MainActor [weak self] in
+            if delay > .zero {
+                try? await Task.sleep(for: delay)
+            }
+            guard !Task.isCancelled,
+                  let self,
+                  self.outboxGeneration == generation else { return }
+            let needsRetry = await self.drainOutbox(generation: generation)
+            self.outboxDrainTask = nil
+            if needsRetry,
+               !Task.isCancelled,
+               self.outboxGeneration == generation {
+                self.scheduleOutboxRetry()
+            }
+        }
+    }
+
+    private func stopOutboxDrain() async {
+        outboxGeneration &+= 1
+        guard let task = outboxDrainTask else { return }
+        task.cancel()
+        await task.value
+        outboxDrainTask = nil
+    }
+
+    private func scheduleOutboxRetry() {
+        guard outboxDrainTask == nil else { return }
+        let seconds = min(16, 1 << min(outboxRetryAttempt, 4))
+        outboxRetryAttempt += 1
+        scheduleOutboxDrain(after: .seconds(seconds))
+    }
+
+    private func drainOutbox(generation: UInt64) async -> Bool {
+        let submissions = pendingSubmissionsByID.values.sorted {
+            $0.identity.createdAt < $1.identity.createdAt
+        }
+        var needsRetry = false
+        for submission in submissions where pendingSubmissionsByID[submission.id] != nil {
+            guard !Task.isCancelled, outboxGeneration == generation else { return false }
+            var policySnapshot = snapshot
+            if pendingThreadsByID[submission.threadID] != nil {
+                policySnapshot.threads.removeAll { $0.id == submission.threadID }
+            }
+            switch FeatureOutboxPolicy.decision(
+                for: submission,
+                snapshot: policySnapshot,
+                pendingCreationThreadIDs: Set(pendingThreadsByID.keys)
+            ) {
+            case .discard:
+                await discardQueuedSubmission(submission)
+            case .wait:
+                // Connectivity and snapshot events wake the drain immediately.
+                // Avoid a permanent timer while the owning device is offline.
+                continue
+            case .send:
+                do {
+                    guard pendingSubmissionsByID[submission.id] != nil,
+                          snapshot.environments.contains(where: {
+                              $0.id == submission.environmentID
+                          }) else {
+                        continue
+                    }
+                    if let creation = submission.creation {
+                        let thread = try await client.createThreadAndSend(
+                            projectID: creation.projectID,
+                            prompt: submission.text,
+                            selection: submission.selection,
+                            runtimeMode: .fullAccess,
+                            interactionMode: .standard,
+                            workspaceMode: creation.workspaceMode,
+                            branch: creation.branch,
+                            worktreePath: creation.worktreePath,
+                            startFromOrigin: creation.startFromOrigin,
+                            attachments: submission.uploads,
+                            identity: submission.identity
+                        )
+                        guard !Task.isCancelled,
+                              outboxGeneration == generation else { return false }
+                        await completeQueuedSubmission(submission)
+                        if thread.id != submission.threadID {
+                            removeThread(id: submission.threadID)
+                            removeDetail(id: submission.threadID)
+                        }
+                        upsert(thread)
+                    } else {
+                        try await client.sendMessage(
+                            threadID: submission.threadID,
+                            text: submission.text,
+                            selection: submission.selection,
+                            attachments: submission.uploads,
+                            identity: submission.identity
+                        )
+                        guard !Task.isCancelled,
+                              outboxGeneration == generation else { return false }
+                        await completeQueuedSubmission(submission)
+                    }
+                } catch {
+                    if Self.shouldQueue(
+                        error,
+                        environmentID: submission.environmentID,
+                        snapshot: snapshot
+                    ) {
+                        needsRetry = true
+                    } else {
+                        await discardQueuedSubmission(submission)
+                        errorMessage = error.localizedDescription
+                    }
+                }
+            }
+        }
+        return needsRetry
+    }
+
+    private func isEnvironmentConnected(_ environmentID: String) -> Bool {
+        guard let environment = snapshot.environments.first(where: { $0.id == environmentID }) else {
+            return false
+        }
+        return environment.connectionState == .connected
+            || (environment.isActive && snapshot.connection.state == .connected)
+    }
+
+    private static func shouldQueue(
+        _ error: any Error,
+        environmentID: String,
+        snapshot: FeatureSnapshot
+    ) -> Bool {
+        if error is CancellationError || error is URLError { return true }
+        if let environment = snapshot.environments.first(where: { $0.id == environmentID }) {
+            let disconnected = environment.connectionState != .connected
+                && !(environment.isActive && snapshot.connection.state == .connected)
+            if disconnected { return true }
+        }
+        let message = error.localizedDescription.lowercased()
+        return [
+            "cancelled", "canceled", "connection", "network", "offline",
+            "socket", "timed out", "timeout", "transport", "not connected",
+            "request deadline",
+        ].contains { message.contains($0) }
     }
 }
 

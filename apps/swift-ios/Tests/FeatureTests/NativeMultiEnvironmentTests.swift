@@ -4,6 +4,78 @@ import XCTest
 
 @MainActor
 final class NativeMultiEnvironmentTests: XCTestCase {
+    func testProviderCatalogueUsesStableProviderAndModelIdentities() {
+        let normalized = NativeFeatureClient.normalizedProviders([
+            FeatureProvider(
+                id: "codex-work",
+                name: "Codex",
+                models: [
+                    FeatureModel(id: "gpt-5.6", name: "GPT-5.6"),
+                    FeatureModel(id: "gpt-5.6", name: "Duplicate GPT-5.6"),
+                ]
+            ),
+            FeatureProvider(
+                id: "codex-work",
+                name: "Duplicate provider",
+                models: [
+                    FeatureModel(id: "gpt-5.6", name: "Duplicate again"),
+                    FeatureModel(id: "gpt-5.6-mini", name: "GPT-5.6 mini"),
+                ]
+            ),
+        ])
+
+        XCTAssertEqual(normalized.map(\.id), ["codex-work"])
+        XCTAssertEqual(normalized[0].models.map(\.id), ["gpt-5.6", "gpt-5.6-mini"])
+    }
+
+    func testClientReplacementIsSharedWhileStaleClientDisconnects() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("t3-runtime-race-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let originalEnvironment = Environment(
+            id: "shared-environment",
+            label: "Old endpoint",
+            httpBaseURL: URL(string: "https://old.example")!,
+            webSocketBaseURL: URL(string: "wss://old.example")!
+        )
+        let updatedEnvironment = Environment(
+            id: originalEnvironment.id,
+            label: "New endpoint",
+            httpBaseURL: URL(string: "https://new.example")!,
+            webSocketBaseURL: URL(string: "wss://new.example")!
+        )
+        let store = EnvironmentStore(
+            fileURL: directory.appendingPathComponent("environments.json")
+        )
+        try await store.save([updatedEnvironment])
+        let staleConnection = BlockingRuntimeCloseConnection()
+        let connector = RuntimeReplacementConnector(connection: staleConnection)
+        let runtime = EnvironmentRuntime(
+            environmentStore: store,
+            credentialStore: InMemoryCredentialStore(
+                credentials: [
+                    originalEnvironment.id: EnvironmentCredential(accessToken: "token"),
+                ]
+            ),
+            httpTransport: RuntimeReplacementHTTPTransport(),
+            webSocketConnector: connector
+        )
+        let original = await runtime.client(for: originalEnvironment)
+        await original.connect()
+        await staleConnection.waitUntilReceiving()
+
+        let firstLookup = Task { await runtime.client(for: updatedEnvironment) }
+        await staleConnection.waitUntilCloseStarted()
+        let concurrentLookup = await runtime.client(for: updatedEnvironment)
+        await staleConnection.releaseClose()
+        let replacement = await firstLookup.value
+
+        XCTAssertTrue(
+            replacement === concurrentLookup,
+            "Concurrent lookups must share the replacement cached before stale disconnect."
+        )
+    }
+
     func testSnapshotMergesEnvironmentsAndRoutesThreadWorkToItsOwner() async throws {
         let fixture = try await makeFixture()
         defer { try? FileManager.default.removeItem(at: fixture.directory) }
@@ -132,7 +204,93 @@ final class NativeMultiEnvironmentTests: XCTestCase {
         await fixture.client.disconnect()
     }
 
-    private func makeFixture(duplicateIDs: Bool = false) async throws -> MultiEnvironmentFixture {
+    func testUnarchiveImmediatelyRestoresLiveThreadWhenRefreshIsUnavailable() async throws {
+        let fixture = try await makeFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+        let initial = try await fixture.client.initialSnapshot()
+        let thread = try XCTUnwrap(
+            initial.threads.first(where: { $0.environmentID == "one" })
+        )
+        let events = fixture.client.events()
+        var iterator = events.makeAsyncIterator()
+        await fixture.transport.setShellReadsEnabled(false, host: "one.example")
+
+        try await fixture.client.setThreadArchived(id: thread.id, archived: true)
+        while let event = await iterator.next() {
+            if case let .thread(candidate) = event,
+               candidate.id == thread.id,
+               candidate.isArchived {
+                break
+            }
+        }
+        try await fixture.client.setThreadArchived(id: thread.id, archived: false)
+        var restored: FeatureThread?
+        while let event = await iterator.next() {
+            if case let .thread(candidate) = event,
+               candidate.id == thread.id,
+               !candidate.isArchived {
+                restored = candidate
+                break
+            }
+        }
+
+        XCTAssertEqual(restored?.id, thread.id)
+        XCTAssertEqual(restored?.isArchived, false)
+        await fixture.client.disconnect()
+    }
+
+    func testHTTPFallbackKeepsLiveConnectionReconnecting() async throws {
+        let fixture = try await makeFixture(
+            fallbackPollingInitialDelay: .milliseconds(40),
+            fallbackPollingInterval: .seconds(2)
+        )
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+        _ = try await fixture.client.initialSnapshot()
+        let current = multiEnvironmentShell(
+            projectID: "project-one",
+            threadID: "thread-one",
+            title: "Local work"
+        )
+        let addedProject = OrchestrationProject(
+            id: "project-fallback",
+            title: "Fallback project",
+            workspaceRoot: "/work/fallback",
+            repositoryIdentity: nil,
+            defaultModelSelection: ModelSelection(instanceId: "codex", model: "gpt-5.4"),
+            scripts: [],
+            createdAt: current.updatedAt,
+            updatedAt: current.updatedAt,
+            deletedAt: nil
+        )
+        await fixture.transport.setShell(
+            OrchestrationShellSnapshot(
+                snapshotSequence: current.snapshotSequence + 1,
+                projects: current.projects + [addedProject],
+                threads: current.threads,
+                updatedAt: current.updatedAt
+            ),
+            host: "one.example"
+        )
+        let events = fixture.client.events()
+        var iterator = events.makeAsyncIterator()
+        var refreshed: FeatureSnapshot?
+        while let event = await iterator.next() {
+            if case let .snapshot(snapshot) = event,
+               snapshot.projects.contains(where: { $0.wireID == addedProject.id }) {
+                refreshed = snapshot
+                break
+            }
+        }
+
+        XCTAssertEqual(refreshed?.connection.state, .reconnecting)
+        await fixture.client.disconnect()
+    }
+
+    private func makeFixture(
+        duplicateIDs: Bool = false,
+        fallbackPollingInitialDelay: Duration = .seconds(3),
+        fallbackPollingInterval: Duration = .seconds(2)
+    ) async throws -> MultiEnvironmentFixture {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("t3-native-multi-\(UUID().uuidString)", isDirectory: true)
         let environments = [
@@ -187,7 +345,84 @@ final class NativeMultiEnvironmentTests: XCTestCase {
         return MultiEnvironmentFixture(
             directory: directory,
             transport: transport,
-            client: NativeFeatureClient(runtime: runtime, settingsStore: settings)
+            client: NativeFeatureClient(
+                runtime: runtime,
+                settingsStore: settings,
+                fallbackPollingInitialDelay: fallbackPollingInitialDelay,
+                fallbackPollingInterval: fallbackPollingInterval
+            )
+        )
+    }
+}
+
+private actor RuntimeReplacementConnector: WebSocketConnecting {
+    let connection: BlockingRuntimeCloseConnection
+
+    init(connection: BlockingRuntimeCloseConnection) {
+        self.connection = connection
+    }
+
+    func connect(to _: URL) -> any WebSocketConnection {
+        connection
+    }
+}
+
+private actor BlockingRuntimeCloseConnection: WebSocketConnection {
+    private var receiveContinuation: CheckedContinuation<Data, Error>?
+    private var receiveWaiters: [CheckedContinuation<Void, Never>] = []
+    private var closeContinuation: CheckedContinuation<Void, Never>?
+    private var closeWaiters: [CheckedContinuation<Void, Never>] = []
+
+    func send(_: Data) {}
+
+    func receive() async throws -> Data {
+        let waiters = receiveWaiters
+        receiveWaiters.removeAll()
+        waiters.forEach { $0.resume() }
+        return try await withCheckedThrowingContinuation { continuation in
+            receiveContinuation = continuation
+        }
+    }
+
+    func close() async {
+        receiveContinuation?.resume(throwing: CancellationError())
+        receiveContinuation = nil
+        let waiters = closeWaiters
+        closeWaiters.removeAll()
+        waiters.forEach { $0.resume() }
+        await withCheckedContinuation { continuation in
+            closeContinuation = continuation
+        }
+    }
+
+    func waitUntilReceiving() async {
+        guard receiveContinuation == nil else { return }
+        await withCheckedContinuation { continuation in
+            receiveWaiters.append(continuation)
+        }
+    }
+
+    func waitUntilCloseStarted() async {
+        guard closeContinuation == nil else { return }
+        await withCheckedContinuation { continuation in
+            closeWaiters.append(continuation)
+        }
+    }
+
+    func releaseClose() {
+        closeContinuation?.resume()
+        closeContinuation = nil
+    }
+}
+
+private actor RuntimeReplacementHTTPTransport: HTTPTransport {
+    func data(for request: URLRequest) throws -> (Data, HTTPURLResponse) {
+        guard request.url?.path == "/api/auth/websocket-ticket" else {
+            throw URLError(.unsupportedURL)
+        }
+        return (
+            Data("{\"ticket\":\"ticket\",\"expiresAt\":\"2026-08-01T12:05:00.000Z\"}".utf8),
+            multiEnvironmentResponse(request)
         )
     }
 }
@@ -200,14 +435,16 @@ private struct MultiEnvironmentFixture {
 
 private actor MultiEnvironmentHTTPTransport: HTTPTransport {
     private let shells: [String: OrchestrationShellSnapshot]
-    private let shellData: [String: Data]
+    private var shellData: [String: Data]
     private var reachableHosts: Set<String>
+    private var shellReadsEnabledHosts: Set<String>
     private var dispatched: [MultiEnvironmentDispatchRecord] = []
 
     init(shells: [String: OrchestrationShellSnapshot]) {
         self.shells = shells
         shellData = shells.mapValues { try! JSONEncoder.t3.encode($0) }
         reachableHosts = Set(shells.keys)
+        shellReadsEnabledHosts = Set(shells.keys)
     }
 
     func setReachable(_ reachable: Bool, host: String) {
@@ -216,6 +453,18 @@ private actor MultiEnvironmentHTTPTransport: HTTPTransport {
         } else {
             reachableHosts.remove(host)
         }
+    }
+
+    func setShellReadsEnabled(_ enabled: Bool, host: String) {
+        if enabled {
+            shellReadsEnabledHosts.insert(host)
+        } else {
+            shellReadsEnabledHosts.remove(host)
+        }
+    }
+
+    func setShell(_ shell: OrchestrationShellSnapshot, host: String) {
+        shellData[host] = try! JSONEncoder.t3.encode(shell)
     }
 
     func dispatchHosts() -> [String] {
@@ -232,7 +481,9 @@ private actor MultiEnvironmentHTTPTransport: HTTPTransport {
             throw URLError(.cannotConnectToHost)
         }
         let path = request.url?.path ?? ""
-        if path == "/api/orchestration/shell", let data = shellData[host] {
+        if path == "/api/orchestration/shell",
+           shellReadsEnabledHosts.contains(host),
+           let data = shellData[host] {
             return (data, multiEnvironmentResponse(request))
         }
         if path.hasPrefix("/api/orchestration/threads/") {

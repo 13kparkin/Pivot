@@ -993,8 +993,18 @@ public actor EnvironmentRuntime {
             if existing.environment == environment {
                 return existing
             }
-            clients.removeValue(forKey: environment.id)
-            await existing.disconnect()
+            // Publish the replacement before disconnecting the stale client.
+            // Actor methods are reentrant across that await; removing first
+            // allowed a concurrent caller to construct a second replacement.
+            let replacement = T3Client(
+                environment: environment,
+                credentialStore: credentialStore,
+                httpTransport: httpTransport,
+                webSocketConnector: webSocketConnector
+            )
+            clients[environment.id] = replacement
+            Task { await existing.disconnect() }
+            return replacement
         }
         let client = T3Client(
             environment: environment,

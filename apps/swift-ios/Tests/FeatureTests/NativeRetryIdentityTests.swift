@@ -4,7 +4,67 @@ import XCTest
 
 @MainActor
 final class NativeRetryIdentityTests: XCTestCase {
-    func testAmbiguousFailuresReuseStableTurnAndBootstrapIdentities() async throws {
+    func testConcurrentBootstrapRetriesKeepIndependentStableIdentities() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("t3-native-concurrent-retry-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let environment = Environment(
+            id: "environment-concurrent-retry",
+            label: "Concurrent retry",
+            httpBaseURL: URL(string: "https://concurrent-retry.example")!,
+            webSocketBaseURL: URL(string: "wss://concurrent-retry.example")!
+        )
+        let store = EnvironmentStore(
+            fileURL: directory.appendingPathComponent("environments.json")
+        )
+        try await store.save([environment])
+        try await store.setActiveEnvironment(id: environment.id)
+        let transport = ConcurrentBootstrapHTTPTransport(shell: retryShellSnapshot())
+        let connection = ConcurrentBootstrapWebSocketConnection()
+        let runtime = EnvironmentRuntime(
+            environmentStore: store,
+            credentialStore: InMemoryCredentialStore(
+                credentials: [environment.id: EnvironmentCredential(accessToken: "token")]
+            ),
+            httpTransport: transport,
+            webSocketConnector: ConcurrentBootstrapWebSocketConnector(connection: connection)
+        )
+        let client = NativeFeatureClient(
+            runtime: runtime,
+            settingsStore: UserDefaults(
+                suiteName: "t3-native-concurrent-retry-\(UUID().uuidString)"
+            )!
+        )
+        _ = try await client.initialSnapshot()
+        await connection.waitUntilConnected()
+        await transport.rejectShellReads()
+
+        async let firstAttempt = failedBootstrap(client: client, prompt: "First task")
+        async let secondAttempt = failedBootstrap(client: client, prompt: "Second task")
+        _ = await (firstAttempt, secondAttempt)
+        await connection.waitUntilDispatchCount(2)
+
+        await failedBootstrap(client: client, prompt: "First task")
+        await failedBootstrap(client: client, prompt: "Second task")
+
+        let commands = await connection.dispatchCommands()
+        XCTAssertEqual(commands.count, 4)
+        for prompt in ["First task", "Second task"] {
+            let matching = commands.filter {
+                $0["message"]?["text"]?.stringValue == prompt
+            }
+            XCTAssertEqual(matching.count, 2, "Expected an initial attempt and one retry.")
+            XCTAssertEqual(matching.first?["threadId"], matching.last?["threadId"])
+            XCTAssertEqual(matching.first?["commandId"], matching.last?["commandId"])
+            XCTAssertEqual(
+                matching.first?["message"]?["messageId"],
+                matching.last?["message"]?["messageId"]
+            )
+        }
+        await client.disconnect()
+    }
+
+    func testTurnRetriesStayStableAndConfirmedBootstrapFailureResetsIdentity() async throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("t3-native-retry-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -41,12 +101,20 @@ final class NativeRetryIdentityTests: XCTestCase {
         XCTAssertEqual(initial.threads.first?.interactionMode, .standard)
         await connection.waitUntilConnected()
 
+        let turnIdentity = FeatureSubmissionIdentity(
+            threadID: "thread-existing",
+            commandID: "persisted-turn-command",
+            messageID: "persisted-turn-message",
+            createdAt: Date(timeIntervalSince1970: 1_750_000_000)
+        )
         for _ in 0..<2 {
             do {
                 try await client.sendMessage(
                     threadID: "thread-existing",
                     text: "Retry without duplicating",
-                    selection: nil
+                    selection: nil,
+                    attachments: [],
+                    identity: turnIdentity
                 )
                 XCTFail("The synthetic dispatch should fail ambiguously.")
             } catch {}
@@ -69,9 +137,19 @@ final class NativeRetryIdentityTests: XCTestCase {
         let commands = await connection.dispatchCommands()
         XCTAssertEqual(commands.count, 4)
         assertStableIdentity(commands[0], commands[1], includesThreadID: false)
-        assertStableIdentity(commands[2], commands[3], includesThreadID: true)
+        XCTAssertEqual(commands[0]["commandId"]?.stringValue, turnIdentity.commandID)
+        XCTAssertEqual(
+            commands[0]["message"]?["messageId"]?.stringValue,
+            turnIdentity.messageID
+        )
+        XCTAssertNotEqual(commands[2]["commandId"], commands[3]["commandId"])
+        XCTAssertNotEqual(
+            commands[2]["message"]?["messageId"],
+            commands[3]["message"]?["messageId"]
+        )
+        XCTAssertNotEqual(commands[2]["threadId"], commands[3]["threadId"])
         for command in commands {
-            XCTAssertEqual(command["runtimeMode"]?.stringValue, "auto")
+            XCTAssertEqual(command["runtimeMode"]?.stringValue, "full-access")
             XCTAssertEqual(command["interactionMode"]?.stringValue, "default")
         }
         await client.disconnect()
@@ -112,13 +190,24 @@ final class NativeRetryIdentityTests: XCTestCase {
         _ = try await client.initialSnapshot()
         await connection.waitUntilConnected()
 
+        let identity = FeatureSubmissionIdentity(
+            threadID: "persisted-bootstrap-thread",
+            commandID: "persisted-bootstrap-command",
+            messageID: "persisted-bootstrap-message",
+            createdAt: Date(timeIntervalSince1970: 1_750_000_000)
+        )
         let created = try await client.createThreadAndSend(
             projectID: "project-1",
             prompt: "Recover the first turn",
             selection: FeatureSelection(providerID: "codex", modelID: "gpt-5.4"),
             runtimeMode: .fullAccess,
             interactionMode: .standard,
-            attachments: []
+            workspaceMode: .local,
+            branch: nil,
+            worktreePath: nil,
+            startFromOrigin: false,
+            attachments: [],
+            identity: identity
         )
 
         let commands = await connection.dispatchCommands()
@@ -126,6 +215,12 @@ final class NativeRetryIdentityTests: XCTestCase {
         XCTAssertNotNil(commands[0]["bootstrap"])
         XCTAssertNil(commands[1]["bootstrap"])
         assertStableIdentity(commands[0], commands[1], includesThreadID: true)
+        XCTAssertEqual(commands[0]["threadId"]?.stringValue, identity.threadID)
+        XCTAssertEqual(commands[0]["commandId"]?.stringValue, identity.commandID)
+        XCTAssertEqual(
+            commands[0]["message"]?["messageId"]?.stringValue,
+            identity.messageID
+        )
         let wireID = try XCTUnwrap(commands[0]["threadId"]?.stringValue)
         XCTAssertEqual(created.wireID, wireID)
         XCTAssertEqual(
@@ -145,6 +240,140 @@ final class NativeRetryIdentityTests: XCTestCase {
         XCTAssertEqual(first["createdAt"], second["createdAt"])
         if includesThreadID {
             XCTAssertEqual(first["threadId"], second["threadId"])
+        }
+    }
+
+    private func failedBootstrap(client: NativeFeatureClient, prompt: String) async {
+        do {
+            _ = try await client.createThreadAndSend(
+                projectID: "project-1",
+                prompt: prompt,
+                selection: FeatureSelection(providerID: "codex", modelID: "gpt-5.4"),
+                runtimeMode: .fullAccess,
+                interactionMode: .standard,
+                attachments: []
+            )
+            XCTFail("The synthetic dispatch should fail ambiguously.")
+        } catch {}
+    }
+}
+
+private struct ConcurrentBootstrapWebSocketConnector: WebSocketConnecting {
+    let connection: ConcurrentBootstrapWebSocketConnection
+
+    func connect(to _: URL) -> any WebSocketConnection {
+        connection
+    }
+}
+
+private actor ConcurrentBootstrapWebSocketConnection: WebSocketConnection {
+    private var commands: [JSONValue] = []
+    private var initialFailures: [CheckedContinuation<Void, Error>] = []
+    private var dispatchWaiters: [(Int, CheckedContinuation<Void, Never>)] = []
+    private var didConnect = false
+    private var connectionWaiters: [CheckedContinuation<Void, Never>] = []
+    private var queuedResponses: [Data] = []
+    private var receiver: CheckedContinuation<Data, Error>?
+
+    func send(_ data: Data) async throws {
+        let request = try JSONDecoder.t3.decode(JSONValue.self, from: data)
+        if !didConnect {
+            didConnect = true
+            connectionWaiters.forEach { $0.resume() }
+            connectionWaiters.removeAll()
+        }
+        if request["tag"]?.stringValue == RPCMethod.serverGetConfig.rawValue,
+           let response = try retryConfigResponse(for: request) {
+            enqueue(response)
+            return
+        }
+        guard request["tag"]?.stringValue == RPCMethod.dispatchCommand.rawValue,
+              let payload = request["payload"] else {
+            return
+        }
+        commands.append(payload)
+        let ready = dispatchWaiters.filter { commands.count >= $0.0 }
+        dispatchWaiters.removeAll { commands.count >= $0.0 }
+        ready.forEach { $0.1.resume() }
+        guard commands.count <= 2 else {
+            throw URLError(.networkConnectionLost)
+        }
+        return try await withCheckedThrowingContinuation { continuation in
+            initialFailures.append(continuation)
+            guard initialFailures.count == 2 else { return }
+            let failures = initialFailures
+            initialFailures.removeAll()
+            failures.forEach { $0.resume(throwing: URLError(.networkConnectionLost)) }
+        }
+    }
+
+    func receive() async throws -> Data {
+        if !queuedResponses.isEmpty {
+            return queuedResponses.removeFirst()
+        }
+        return try await withCheckedThrowingContinuation { continuation in
+            receiver = continuation
+        }
+    }
+
+    func close() {
+        receiver?.resume(throwing: CancellationError())
+        receiver = nil
+    }
+
+    func waitUntilConnected() async {
+        guard !didConnect else { return }
+        await withCheckedContinuation { continuation in
+            connectionWaiters.append(continuation)
+        }
+    }
+
+    func waitUntilDispatchCount(_ count: Int) async {
+        guard commands.count < count else { return }
+        await withCheckedContinuation { continuation in
+            dispatchWaiters.append((count, continuation))
+        }
+    }
+
+    func dispatchCommands() -> [JSONValue] {
+        commands
+    }
+
+    private func enqueue(_ data: Data) {
+        if let receiver {
+            self.receiver = nil
+            receiver.resume(returning: data)
+        } else {
+            queuedResponses.append(data)
+        }
+    }
+}
+
+private actor ConcurrentBootstrapHTTPTransport: HTTPTransport {
+    private let shellData: Data
+    private var acceptsShellReads = true
+
+    init(shell: OrchestrationShellSnapshot) {
+        shellData = try! JSONEncoder.t3.encode(shell)
+    }
+
+    func rejectShellReads() {
+        acceptsShellReads = false
+    }
+
+    func data(for request: URLRequest) throws -> (Data, HTTPURLResponse) {
+        switch request.url?.path {
+        case "/api/orchestration/shell" where acceptsShellReads:
+            (shellData, retryHTTPResponse(request))
+        case "/api/auth/websocket-ticket":
+            (
+                Data(
+                    "{\"ticket\":\"ticket\",\"expiresAt\":\"2026-08-01T12:05:00.000Z\"}".utf8
+                ),
+                retryHTTPResponse(request)
+            )
+        default:
+            throw URLError(.networkConnectionLost)
         }
     }
 }
@@ -280,6 +509,7 @@ private struct PartialBootstrapWebSocketConnector: WebSocketConnecting {
 
 private actor AmbiguousDispatchWebSocketConnection: WebSocketConnection {
     private var commands: [JSONValue] = []
+    private var queuedResponses: [Data] = []
     private var didConnect = false
     private var connectionWaiters: [CheckedContinuation<Void, Never>] = []
     private var receiver: CheckedContinuation<Data, Error>?
@@ -291,6 +521,11 @@ private actor AmbiguousDispatchWebSocketConnection: WebSocketConnection {
             connectionWaiters.forEach { $0.resume() }
             connectionWaiters.removeAll()
         }
+        if request["tag"]?.stringValue == RPCMethod.serverGetConfig.rawValue,
+           let response = try retryConfigResponse(for: request) {
+            enqueue(response)
+            return
+        }
         if request["tag"]?.stringValue == RPCMethod.dispatchCommand.rawValue,
            let payload = request["payload"] {
             commands.append(payload)
@@ -299,7 +534,10 @@ private actor AmbiguousDispatchWebSocketConnection: WebSocketConnection {
     }
 
     func receive() async throws -> Data {
-        try await withCheckedThrowingContinuation { continuation in
+        if !queuedResponses.isEmpty {
+            return queuedResponses.removeFirst()
+        }
+        return try await withCheckedThrowingContinuation { continuation in
             receiver = continuation
         }
     }
@@ -319,6 +557,15 @@ private actor AmbiguousDispatchWebSocketConnection: WebSocketConnection {
     func dispatchCommands() -> [JSONValue] {
         commands
     }
+
+    private func enqueue(_ data: Data) {
+        if let receiver {
+            self.receiver = nil
+            receiver.resume(returning: data)
+        } else {
+            queuedResponses.append(data)
+        }
+    }
 }
 
 private actor PartialBootstrapWebSocketConnection: WebSocketConnection {
@@ -337,6 +584,10 @@ private actor PartialBootstrapWebSocketConnection: WebSocketConnection {
         }
         guard request["tag"]?.stringValue == RPCMethod.dispatchCommand.rawValue,
               let payload = request["payload"] else {
+            if request["tag"]?.stringValue == RPCMethod.serverGetConfig.rawValue,
+               let response = try retryConfigResponse(for: request) {
+                enqueue(response)
+            }
             return
         }
         commands.append(payload)
@@ -388,6 +639,20 @@ private actor PartialBootstrapWebSocketConnection: WebSocketConnection {
             queuedResponses.append(data)
         }
     }
+}
+
+private func retryConfigResponse(for request: JSONValue) throws -> Data? {
+    guard case let .number(requestID)? = request["id"] else { return nil }
+    return try JSONEncoder.t3.encode(
+        JSONValue.object([
+            "_tag": .string("Exit"),
+            "requestId": .number(requestID),
+            "exit": .object([
+                "_tag": .string("Success"),
+                "value": .object(["providers": .array([])]),
+            ]),
+        ])
+    )
 }
 
 private func retryEmptyThreadDetail(id: String) -> OrchestrationThreadDetailSnapshot {

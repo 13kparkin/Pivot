@@ -3,6 +3,66 @@ import XCTest
 
 @MainActor
 final class WebSocketRPCRaceTests: XCTestCase {
+    func testSentUnaryTimesOutAndLateTrafficCannotCompleteItTwice() async throws {
+        let connection = DeadlineWebSocketConnection()
+        let client = WebSocketRPCClient(
+            connector: SequencedConnector(connections: [connection]),
+            connectionWaitTimeout: .seconds(2),
+            responseTimeout: .milliseconds(40),
+            endpointProvider: { URL(string: "wss://studio.example/ws")! }
+        )
+
+        let first = Task {
+            try await client.request("server.neverReplies", as: JSONValue.self)
+        }
+        await connection.waitUntilRequestCount(1)
+
+        do {
+            _ = try await first.value
+            XCTFail("A sent unary request must have a response deadline.")
+        } catch let error as RPCError {
+            guard case .responseTimedOut = error else {
+                await client.stop()
+                return XCTFail("Unexpected RPC error: \(error)")
+            }
+        }
+        await connection.waitUntilInterruptCount(1)
+
+        // A response for the expired request is harmless, and the same socket
+        // remains able to serve a subsequent unary call.
+        try await connection.replyToRequest(at: 0)
+        let second = try await client.request("server.replies", as: JSONValue.self)
+        XCTAssertEqual(second, .object(["ok": .bool(true)]))
+        await client.stop()
+    }
+
+    func testCancellingUnaryRemovesItAndInterruptsSentWork() async throws {
+        let connection = DeadlineWebSocketConnection()
+        let client = WebSocketRPCClient(
+            connector: SequencedConnector(connections: [connection]),
+            connectionWaitTimeout: .seconds(2),
+            responseTimeout: .seconds(2),
+            endpointProvider: { URL(string: "wss://studio.example/ws")! }
+        )
+
+        let request = Task {
+            try await client.request("server.cancelled", as: JSONValue.self)
+        }
+        await connection.waitUntilRequestCount(1)
+        request.cancel()
+
+        do {
+            _ = try await request.value
+            XCTFail("Cancelling the caller must cancel its unary continuation.")
+        } catch is CancellationError {}
+        await connection.waitUntilInterruptCount(1)
+
+        try await connection.replyToRequest(at: 0)
+        let next = try await client.request("server.stillHealthy", as: JSONValue.self)
+        XCTAssertEqual(next, .object(["ok": .bool(true)]))
+        await client.stop()
+    }
+
     func testDisconnectWhileUnarySendIsSuspendedFailsWithoutReplay() async throws {
         let first = SuspendedSendConnection()
         let second = AutoReplyConnection()
@@ -50,6 +110,106 @@ final class WebSocketRPCRaceTests: XCTestCase {
 
         await client.stop()
         await first.releaseSend()
+    }
+}
+
+private actor DeadlineWebSocketConnection: WebSocketConnection {
+    private var requestIDs: [Int] = []
+    private var interruptIDs: [Int] = []
+    private var requestWaiters: [(Int, CheckedContinuation<Void, Never>)] = []
+    private var interruptWaiters: [(Int, CheckedContinuation<Void, Never>)] = []
+    private var queuedResponses: [Data] = []
+    private var receiver: CheckedContinuation<Data, Error>?
+
+    func send(_ data: Data) throws {
+        let envelope = try JSONDecoder.t3.decode(JSONValue.self, from: data)
+        switch envelope["_tag"]?.stringValue {
+        case "Request":
+            guard case let .number(rawID)? = envelope["id"],
+                  let requestID = Int(exactly: rawID) else {
+                return
+            }
+            requestIDs.append(requestID)
+            resumeRequestWaiters()
+            if requestIDs.count > 1 {
+                enqueue(try response(requestID: requestID))
+            }
+        case "Interrupt":
+            guard case let .number(rawID)? = envelope["requestId"],
+                  let requestID = Int(exactly: rawID) else {
+                return
+            }
+            interruptIDs.append(requestID)
+            resumeInterruptWaiters()
+        default:
+            break
+        }
+    }
+
+    func receive() async throws -> Data {
+        if !queuedResponses.isEmpty {
+            return queuedResponses.removeFirst()
+        }
+        return try await withCheckedThrowingContinuation { continuation in
+            receiver = continuation
+        }
+    }
+
+    func close() {
+        receiver?.resume(throwing: CancellationError())
+        receiver = nil
+    }
+
+    func waitUntilRequestCount(_ count: Int) async {
+        guard requestIDs.count < count else { return }
+        await withCheckedContinuation { continuation in
+            requestWaiters.append((count, continuation))
+        }
+    }
+
+    func waitUntilInterruptCount(_ count: Int) async {
+        guard interruptIDs.count < count else { return }
+        await withCheckedContinuation { continuation in
+            interruptWaiters.append((count, continuation))
+        }
+    }
+
+    func replyToRequest(at index: Int) throws {
+        enqueue(try response(requestID: requestIDs[index]))
+    }
+
+    private func response(requestID: Int) throws -> Data {
+        try JSONEncoder.t3.encode(
+            JSONValue.object([
+                "_tag": .string("Exit"),
+                "requestId": .number(Double(requestID)),
+                "exit": .object([
+                    "_tag": .string("Success"),
+                    "value": .object(["ok": .bool(true)]),
+                ]),
+            ])
+        )
+    }
+
+    private func enqueue(_ data: Data) {
+        if let receiver {
+            self.receiver = nil
+            receiver.resume(returning: data)
+        } else {
+            queuedResponses.append(data)
+        }
+    }
+
+    private func resumeRequestWaiters() {
+        let ready = requestWaiters.filter { requestIDs.count >= $0.0 }
+        requestWaiters.removeAll { requestIDs.count >= $0.0 }
+        ready.forEach { $0.1.resume() }
+    }
+
+    private func resumeInterruptWaiters() {
+        let ready = interruptWaiters.filter { interruptIDs.count >= $0.0 }
+        interruptWaiters.removeAll { interruptIDs.count >= $0.0 }
+        ready.forEach { $0.1.resume() }
     }
 }
 

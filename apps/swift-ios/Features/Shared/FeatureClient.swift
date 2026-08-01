@@ -34,6 +34,19 @@ public protocol FeatureClient: AnyObject {
         startFromOrigin: Bool,
         attachments: [FeatureUploadAttachment]
     ) async throws -> FeatureThread
+    func createThreadAndSend(
+        projectID: String,
+        prompt: String,
+        selection: FeatureSelection?,
+        runtimeMode: FeatureRuntimeMode,
+        interactionMode: FeatureInteractionMode,
+        workspaceMode: FeatureWorkspaceMode,
+        branch: String?,
+        worktreePath: String?,
+        startFromOrigin: Bool,
+        attachments: [FeatureUploadAttachment],
+        identity: FeatureSubmissionIdentity
+    ) async throws -> FeatureThread
     func listWorkspaceBranches(
         projectID: String,
         refresh: Bool
@@ -54,6 +67,13 @@ public protocol FeatureClient: AnyObject {
         text: String,
         selection: FeatureSelection?,
         attachments: [FeatureUploadAttachment]
+    ) async throws
+    func sendMessage(
+        threadID: String,
+        text: String,
+        selection: FeatureSelection?,
+        attachments: [FeatureUploadAttachment],
+        identity: FeatureSubmissionIdentity
     ) async throws
     func cancelTurn(threadID: String) async throws
     func resolveApproval(id: String, decision: FeatureApprovalDecision) async throws
@@ -168,6 +188,36 @@ public extension FeatureClient {
         return thread
     }
 
+    /// Clients that understand stable command identities override this method.
+    /// The compatibility path remains functional but cannot guarantee
+    /// idempotence across a process death after an ambiguous network failure.
+    func createThreadAndSend(
+        projectID: String,
+        prompt: String,
+        selection: FeatureSelection?,
+        runtimeMode: FeatureRuntimeMode,
+        interactionMode: FeatureInteractionMode,
+        workspaceMode: FeatureWorkspaceMode,
+        branch: String?,
+        worktreePath: String?,
+        startFromOrigin: Bool,
+        attachments: [FeatureUploadAttachment],
+        identity: FeatureSubmissionIdentity
+    ) async throws -> FeatureThread {
+        try await createThreadAndSend(
+            projectID: projectID,
+            prompt: prompt,
+            selection: selection,
+            runtimeMode: runtimeMode,
+            interactionMode: interactionMode,
+            workspaceMode: workspaceMode,
+            branch: branch,
+            worktreePath: worktreePath,
+            startFromOrigin: startFromOrigin,
+            attachments: attachments
+        )
+    }
+
     func sendMessage(
         threadID: String,
         text: String,
@@ -178,6 +228,21 @@ public extension FeatureClient {
             throw FeatureCapabilityUnavailable("Image attachments")
         }
         try await sendMessage(threadID: threadID, text: text, selection: selection)
+    }
+
+    func sendMessage(
+        threadID: String,
+        text: String,
+        selection: FeatureSelection?,
+        attachments: [FeatureUploadAttachment],
+        identity: FeatureSubmissionIdentity
+    ) async throws {
+        try await sendMessage(
+            threadID: threadID,
+            text: text,
+            selection: selection,
+            attachments: attachments
+        )
     }
 
     func listFiles(threadID: String, path: String?) async throws -> [FeatureFileEntry] {
