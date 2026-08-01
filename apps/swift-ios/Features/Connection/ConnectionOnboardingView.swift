@@ -70,9 +70,7 @@ public struct ConnectionOnboardingView: View {
             } else if stage == .checking {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") {
-                        connectionTask?.cancel()
-                        connectionTask = nil
-                        connectionAttemptID = nil
+                        cancelConnectionAttempt()
                         model.errorMessage = nil
                         stage = .details
                     }
@@ -109,9 +107,7 @@ public struct ConnectionOnboardingView: View {
         }
         .interactiveDismissDisabled(stage == .connecting)
         .onDisappear {
-            connectionTask?.cancel()
-            connectionTask = nil
-            connectionAttemptID = nil
+            cancelConnectionAttempt()
         }
     }
 
@@ -481,12 +477,11 @@ public struct ConnectionOnboardingView: View {
         heading: String,
         connectAutomatically: Bool = false
     ) {
+        cancelConnectionAttempt()
         do {
             let details = try ConnectionDetailsParser.parse(value)
             endpoint = details.endpoint
-            if let code = details.pairingCode {
-                pairingCode = code
-            }
+            pairingCode = details.pairingCode ?? ""
             entryHeading = heading
             errorMessage = details.pairingCode == nil
                 ? "The link did not include a pairing code. Enter it below."
@@ -509,13 +504,7 @@ public struct ConnectionOnboardingView: View {
 
     @MainActor
     private func autofillIfPairingLink(_ value: String) {
-        let lowered = value.lowercased()
-        guard lowered.contains("token=")
-                || lowered.hasPrefix("t3:")
-                || lowered.hasPrefix("t3code:")
-                || lowered.contains("pairingurl=")
-                || lowered.contains("pairing_url="),
-              let details = try? ConnectionDetailsParser.parse(value),
+        guard let details = try? ConnectionDetailsParser.parse(value),
               let code = details.pairingCode
         else {
             return
@@ -528,7 +517,7 @@ public struct ConnectionOnboardingView: View {
 
     @MainActor
     private func connect(_ action: ConnectionAction) {
-        connectionTask?.cancel()
+        cancelConnectionAttempt()
         let attemptID = UUID()
         connectionAttemptID = attemptID
         endpoint = action.endpoint
@@ -578,6 +567,13 @@ public struct ConnectionOnboardingView: View {
                 stage = .details
             }
         }
+    }
+
+    @MainActor
+    private func cancelConnectionAttempt() {
+        connectionTask?.cancel()
+        connectionTask = nil
+        connectionAttemptID = nil
     }
 }
 

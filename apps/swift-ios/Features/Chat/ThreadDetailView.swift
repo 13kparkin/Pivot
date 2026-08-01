@@ -227,19 +227,6 @@ public struct ThreadDetailView: View {
                     Label("Terminal", systemImage: "terminal")
                 }
             }
-            Section("Access") {
-                ForEach(FeatureRuntimeMode.allCases, id: \.self) { mode in
-                    Button {
-                        Task { await model.setRuntimeMode(thread.id, mode: mode) }
-                    } label: {
-                        if currentThread.runtimeMode == mode {
-                            Label(runtimeModeLabel(mode), systemImage: "checkmark")
-                        } else {
-                            Text(runtimeModeLabel(mode))
-                        }
-                    }
-                }
-            }
             Section {
                 Button {
                     Task { _ = await model.detail(for: thread.id, force: true) }
@@ -518,14 +505,6 @@ public struct ThreadDetailView: View {
         )
     }
 
-    private func runtimeModeLabel(_ mode: FeatureRuntimeMode) -> String {
-        switch mode {
-        case .approvalRequired: "Ask before changes"
-        case .autoAcceptEdits: "Auto-accept edits"
-        case .automatic: "Automatic"
-        case .fullAccess: "Full access"
-        }
-    }
 }
 
 private enum FeatureThreadToolSurface: String, Identifiable {

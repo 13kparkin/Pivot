@@ -22,7 +22,7 @@ struct DailyUXNewTaskTests {
         )
 
         #expect(request.trimmedPrompt == "Build it")
-        #expect(request.runtimeMode == .automatic)
+        #expect(request.runtimeMode == .fullAccess)
         #expect(request.interactionMode == .standard)
         #expect(request.workspaceMode == .local)
         #expect(request.branch == nil)
@@ -86,8 +86,33 @@ struct DailyUXNewTaskTests {
 
     @Test
     func mobileModeChoicesOnlyExposeSupportedValues() {
-        #expect(FeatureRuntimeMode.allCases == [.automatic, .fullAccess])
+        #expect(FeatureRuntimeMode.allCases == [.fullAccess])
         #expect(FeatureInteractionMode.allCases == [.standard])
+    }
+
+    @Test
+    func projectDraftRestoreNeverOverwritesTypingMadeWhileLoading() {
+        let savedAttachment = FeatureDraftAttachment(
+            data: Data([0x01]),
+            filename: "saved.png",
+            mimeType: "image/png"
+        )
+        let context = NewTaskDraftRestoreContext(
+            projectID: "second-project",
+            baseline: FeatureComposerDraft()
+        )
+
+        let merged = context.merging(
+            saved: FeatureComposerDraft(
+                text: "Old saved prompt",
+                attachments: [savedAttachment]
+            ),
+            current: FeatureComposerDraft(text: "Typed while loading")
+        )
+
+        #expect(context.projectID == "second-project")
+        #expect(merged.text == "Typed while loading")
+        #expect(merged.attachments == [savedAttachment])
     }
 
     @Test

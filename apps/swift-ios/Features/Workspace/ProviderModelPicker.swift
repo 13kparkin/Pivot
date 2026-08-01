@@ -58,12 +58,6 @@ public struct ProviderModelPicker: View {
                     Text(compactModelName)
                         .lineLimit(1)
                         .truncationMode(.middle)
-                    if let compactReasoningLabel {
-                        Text("· \(compactReasoningLabel)")
-                            .lineLimit(1)
-                            .fixedSize(horizontal: true, vertical: false)
-                            .layoutPriority(2)
-                    }
                     Image(systemName: "chevron.up.chevron.down")
                         .font(.system(size: 8, weight: .bold))
                         .fixedSize()
@@ -78,17 +72,22 @@ public struct ProviderModelPicker: View {
         .accessibilityValue(selectionLabel)
         .sheet(isPresented: $isPresented) {
             ModelPickerSheet(
-                providers: providers,
+                providers: normalizedProviders,
                 selection: $selection,
                 isLoading: isLoading,
                 threadSelection: threadSelection
             )
         }
+        .onAppear(perform: materializeSelection)
+        .onChange(of: providers) { materializeSelection() }
+        .onChange(of: selection) { materializeSelection() }
     }
 
     private var selectedOption: DailyUXModelOption? {
         guard let resolvedSelection,
-              let provider = providers.first(where: { $0.id == resolvedSelection.providerID }),
+              let provider = normalizedProviders.first(where: {
+                  $0.id == resolvedSelection.providerID
+              }),
               let model = provider.models.first(where: { $0.id == resolvedSelection.modelID }) else {
             return nil
         }
@@ -96,8 +95,20 @@ public struct ProviderModelPicker: View {
     }
 
     private var resolvedSelection: FeatureSelection? {
-        DailyUXModelOptions.validated(selection, in: providers)
-            ?? DailyUXModelOptions.preferredSelection(in: providers)
+        ProviderModelSelectionResolver.materialized(selection, in: normalizedProviders)
+    }
+
+    private func materializeSelection() {
+        let resolved = ProviderModelSelectionResolver.materialized(
+            selection,
+            in: normalizedProviders
+        )
+        guard selection != resolved else { return }
+        selection = resolved
+    }
+
+    private var normalizedProviders: [FeatureProvider] {
+        ProviderModelCatalogNormalizer.normalized(providers)
     }
 
     private var selectionLabel: String {
@@ -120,14 +131,6 @@ public struct ProviderModelPicker: View {
             return "Choose model"
         }
         return selectedOption.model.name
-    }
-
-    private var compactReasoningLabel: String? {
-        guard let selectedOption, let resolvedSelection else { return nil }
-        return DailyUXModelOptions.reasoningSummary(
-            for: selectedOption.model,
-            selections: resolvedSelection.options
-        )
     }
 
     @ViewBuilder
@@ -159,6 +162,7 @@ private struct ModelPickerSheet: View {
     @AppStorage("swift-ios.model-picker.recents") private var recentStorage = ""
     @State private var query = ""
     @State private var configuring: DailyUXModelOption?
+    @State private var legacyModelsExpanded = false
 
     var body: some View {
         NavigationStack {
@@ -220,26 +224,45 @@ private struct ModelPickerSheet: View {
                 }
             }
 
-            if !catalog.favorites.isEmpty {
+            if !displaySections.favorites.isEmpty {
                 Section("Favorites") {
-                    ForEach(catalog.favorites) { option in
+                    ForEach(displaySections.favorites) { option in
                         modelRow(option)
                     }
                 }
             }
 
-            if !catalog.recents.isEmpty {
+            if !displaySections.recents.isEmpty {
                 Section("Recent") {
-                    ForEach(catalog.recents) { option in
+                    ForEach(displaySections.recents) { option in
                         modelRow(option)
                     }
                 }
             }
 
-            ForEach(catalog.providerGroups, id: \.provider.id) { group in
+            ForEach(displaySections.currentProviderGroups, id: \.provider.id) { group in
                 Section(group.provider.name) {
                     ForEach(group.models) { option in
                         modelRow(option)
+                    }
+                }
+            }
+
+            if !displaySections.legacy.isEmpty {
+                Section {
+                    DisclosureGroup(isExpanded: $legacyModelsExpanded) {
+                        ForEach(displaySections.legacy) { option in
+                            modelRow(option)
+                        }
+                    } label: {
+                        HStack {
+                            Text("Legacy models")
+                                .font(T3Typography.control.weight(.semibold))
+                            Spacer()
+                            Text("\(displaySections.legacy.count)")
+                                .font(T3Typography.supporting.monospacedDigit())
+                                .foregroundStyle(T3Colors.textTertiary)
+                        }
                     }
                 }
             }
@@ -252,6 +275,11 @@ private struct ModelPickerSheet: View {
         .listStyle(.plain)
         .scrollContentBackground(.hidden)
         .background(T3Colors.background)
+        .onChange(of: query) { _, value in
+            if !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                legacyModelsExpanded = true
+            }
+        }
     }
 
     private var availableModelCount: Int {
@@ -315,9 +343,12 @@ private struct ModelPickerSheet: View {
         )
     }
 
+    private var displaySections: ProviderModelDisplaySections {
+        ProviderModelDisplaySections(catalog: catalog)
+    }
+
     private var resolvedSelection: FeatureSelection? {
-        DailyUXModelOptions.validated(selection, in: providers)
-            ?? DailyUXModelOptions.preferredSelection(in: providers)
+        ProviderModelSelectionResolver.materialized(selection, in: providers)
     }
 
     private func select(_ option: DailyUXModelOption) {
@@ -359,6 +390,136 @@ private struct ModelPickerSheet: View {
             next.insert(id)
         }
         favoriteStorage = next.sorted().joined(separator: "\n")
+    }
+}
+
+/// The picker never represents an implicit "automatic" model. A missing or stale
+/// selection becomes the environment's concrete preferred model as soon as the
+/// catalog is available.
+enum ProviderModelSelectionResolver {
+    static func materialized(
+        _ selection: FeatureSelection?,
+        in providers: [FeatureProvider]
+    ) -> FeatureSelection? {
+        if let validated = DailyUXModelOptions.validated(selection, in: providers) {
+            return validated
+        }
+        let currentProviders = providers.compactMap { provider -> FeatureProvider? in
+            var current = provider
+            current.models = provider.models.filter {
+                ProviderModelFamilyClassifier.isCurrent($0, provider: provider)
+            }
+            return current.models.isEmpty ? nil : current
+        }
+        return DailyUXModelOptions.preferredSelection(in: currentProviders)
+            ?? DailyUXModelOptions.preferredSelection(in: providers)
+    }
+}
+
+enum ProviderModelCatalogNormalizer {
+    static func normalized(_ providers: [FeatureProvider]) -> [FeatureProvider] {
+        var order: [String] = []
+        var providersByID: [String: FeatureProvider] = [:]
+        var modelIDsByProvider: [String: Set<String>] = [:]
+
+        for provider in providers {
+            let visibleModels = provider.models.filter { !isImplicitModel($0) }
+            if var existing = providersByID[provider.id] {
+                existing.isAvailable = existing.isAvailable || provider.isAvailable
+                existing.requiresNewThreadForModelChange =
+                    existing.requiresNewThreadForModelChange
+                    || provider.requiresNewThreadForModelChange
+                providersByID[provider.id] = existing
+            } else {
+                var normalized = provider
+                normalized.models = []
+                providersByID[provider.id] = normalized
+                modelIDsByProvider[provider.id] = []
+                order.append(provider.id)
+            }
+
+            for model in visibleModels {
+                let wasInserted = modelIDsByProvider[provider.id, default: []]
+                    .insert(model.id)
+                    .inserted
+                if wasInserted {
+                    providersByID[provider.id]?.models.append(model)
+                }
+            }
+        }
+
+        return order.compactMap { providersByID[$0] }
+    }
+
+    private static func isImplicitModel(_ model: FeatureModel) -> Bool {
+        let tokens = [model.id, model.name].flatMap {
+            $0.lowercased()
+                .split { !$0.isLetter && !$0.isNumber }
+                .map(String.init)
+        }
+        return tokens.contains("automatic") || tokens.contains("auto")
+    }
+}
+
+struct ProviderModelDisplaySections {
+    let favorites: [DailyUXModelOption]
+    let recents: [DailyUXModelOption]
+    let currentProviderGroups: [(
+        provider: FeatureProvider,
+        models: [DailyUXModelOption]
+    )]
+    let legacy: [DailyUXModelOption]
+
+    init(catalog: DailyUXModelCatalog) {
+        let currentIDs = Set(catalog.all.compactMap { option in
+            ProviderModelFamilyClassifier.isCurrent(
+                option.model,
+                provider: option.provider
+            ) ? option.id : nil
+        })
+        favorites = catalog.favorites.filter { currentIDs.contains($0.id) }
+        recents = catalog.recents.filter { currentIDs.contains($0.id) }
+        let promoted = Set((favorites + recents).map(\.id))
+        currentProviderGroups = catalog.providerGroups.compactMap { group in
+            let models = group.models.filter {
+                currentIDs.contains($0.id) && !promoted.contains($0.id)
+            }
+            return models.isEmpty ? nil : (group.provider, models)
+        }
+        legacy = catalog.all.filter { !currentIDs.contains($0.id) }
+    }
+}
+
+enum ProviderModelFamilyClassifier {
+    static func isCurrent(_ model: FeatureModel, provider: FeatureProvider) -> Bool {
+        let providerTokens = tokens(
+            [provider.id, provider.name, provider.driver].joined(separator: " ")
+        )
+        let modelTokens = tokens([model.id, model.name].joined(separator: " "))
+        let combined = providerTokens.union(modelTokens)
+
+        let isCodex = !providerTokens.isDisjoint(with: ["codex", "openai"])
+            || modelTokens.contains("gpt")
+        if isCodex,
+           combined.contains("5"),
+           combined.contains("6"),
+           !combined.isDisjoint(with: ["luna", "terra", "sol"]) {
+            return true
+        }
+
+        let isClaude = !providerTokens.isDisjoint(with: ["claude", "anthropic", "claudeagent"])
+            || modelTokens.contains("claude")
+        return isClaude
+            && combined.contains("5")
+            && !combined.isDisjoint(with: ["fable", "opus", "sonnet"])
+    }
+
+    private static func tokens(_ value: String) -> Set<String> {
+        Set(
+            value.lowercased()
+                .split { !$0.isLetter && !$0.isNumber }
+                .map(String.init)
+        )
     }
 }
 

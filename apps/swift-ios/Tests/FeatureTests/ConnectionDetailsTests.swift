@@ -44,6 +44,43 @@ struct ConnectionDetailsTests {
         #expect(details.pairingCode == "ABC123")
     }
 
+    @Test(arguments: [
+        "token",
+        "pairing_token",
+        "pairingToken",
+        "pairing_code",
+        "pairingCode",
+        "code",
+    ])
+    func acceptsEveryPairingCodeQueryAlias(_ alias: String) throws {
+        let details = try ConnectionDetailsParser.parse(
+            "https://remote.example.com/pair?\(alias)=ABC123"
+        )
+
+        #expect(details.endpoint == "https://remote.example.com")
+        #expect(details.pairingCode == "ABC123")
+    }
+
+    @Test
+    func removesPunctuationCopiedWithAProseLink() throws {
+        let details = try ConnectionDetailsParser.parse(
+            "Connect with (https://remote.example.com/pair?code=ABC123). Then return."
+        )
+
+        #expect(details.endpoint == "https://remote.example.com")
+        #expect(details.pairingCode == "ABC123")
+    }
+
+    @Test
+    func keepsBalancedIPv6BracketsWhileTrimmingProse() throws {
+        let details = try ConnectionDetailsParser.parse(
+            "Use http://[fe80::1]:3773/pair?code=ABC123!"
+        )
+
+        #expect(details.endpoint == "http://[fe80::1]:3773")
+        #expect(details.pairingCode == "ABC123")
+    }
+
     @Test
     func splitsManualAddressAndCode() throws {
         let details = try ConnectionDetailsParser.parse("192.168.20.2:3773 ABC123")

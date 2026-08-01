@@ -189,10 +189,8 @@ struct FeatureComposerView: View {
                 .font(T3Typography.composer)
                 .lineLimit(1...7)
                 .focused(focused)
-                .submitLabel(.send)
-                .onSubmit {
-                    if canSend { onSend() }
-                }
+                // Return is always editing input. Sending is deliberately button-only.
+                .submitLabel(.return)
                 .padding(.horizontal, 16)
                 .padding(.top, 14)
                 .padding(.bottom, 7)
@@ -413,7 +411,8 @@ struct FeatureComposerView: View {
     private func performPrimaryAction() {
         if showsStop {
             onStop()
-        } else if canSend {
+        } else if FeatureComposerSubmissionPolicy.allowsSend(for: .explicitButton),
+                  canSend {
             onSend()
         }
     }
@@ -439,6 +438,17 @@ enum FeatureComposerSubmissionEligibility {
             && !preparationState.isPreparing
             && (hasText || hasAttachments)
             && (!hasAttachments || imagesAllowed)
+    }
+}
+
+enum FeatureComposerSubmissionIntent: Equatable {
+    case explicitButton
+    case returnKey
+}
+
+enum FeatureComposerSubmissionPolicy {
+    static func allowsSend(for intent: FeatureComposerSubmissionIntent) -> Bool {
+        intent == .explicitButton
     }
 }
 

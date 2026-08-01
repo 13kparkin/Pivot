@@ -24,7 +24,14 @@ enum ConnectionDetailsError: LocalizedError, Equatable {
 
 /// Parses the pairing links emitted by local, shared, and hosted T3 environments.
 enum ConnectionDetailsParser {
-    private static let tokenNames = ["token", "pairing_token", "pairingToken", "code"]
+    private static let tokenNames = [
+        "token",
+        "pairing_token",
+        "pairingToken",
+        "pairing_code",
+        "pairingCode",
+        "code",
+    ]
     private static let endpointNames = ["host", "endpoint", "server", "url"]
     private static let wrappedPairingURLNames = ["pairingUrl", "pairing_url"]
 
@@ -32,9 +39,10 @@ enum ConnectionDetailsParser {
         let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { throw ConnectionDetailsError.empty }
 
-        let candidate = trimmed.lowercased().hasPrefix("t3code:")
+        let extracted = trimmed.lowercased().hasPrefix("t3code:")
             ? trimmed
             : (firstURL(in: trimmed) ?? trimmed)
+        let candidate = trimmingTrailingProsePunctuation(extracted)
         let loweredCandidate = candidate.lowercased()
         if candidate.contains("://")
             || loweredCandidate.hasPrefix("t3code:")
@@ -161,7 +169,33 @@ enum ConnectionDetailsParser {
         else {
             return nil
         }
-        return String(input[swiftRange])
+        return trimmingTrailingProsePunctuation(String(input[swiftRange]))
+    }
+
+    /// Pairing links are commonly copied from sentences and terminal output.
+    /// Remove punctuation belonging to that prose while retaining balanced URL
+    /// delimiters such as the closing bracket around an IPv6 host.
+    static func trimmingTrailingProsePunctuation(_ input: String) -> String {
+        var value = input
+        while let last = value.last {
+            let shouldTrim = switch last {
+            case ".", ",", ";", "!":
+                true
+            case "?":
+                value.dropLast().contains("?")
+            case ")":
+                value.filter { $0 == ")" }.count > value.filter { $0 == "(" }.count
+            case "]":
+                value.filter { $0 == "]" }.count > value.filter { $0 == "[" }.count
+            case "}":
+                value.filter { $0 == "}" }.count > value.filter { $0 == "{" }.count
+            default:
+                false
+            }
+            guard shouldTrim else { break }
+            value.removeLast()
+        }
+        return value
     }
 
     private static func bracketBareIPv6(_ value: String) -> String {

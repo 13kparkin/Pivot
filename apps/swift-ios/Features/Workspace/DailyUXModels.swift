@@ -503,7 +503,6 @@ struct DailyUXModelCatalog {
                     option.model.id,
                     option.model.detail ?? "",
                     option.model.supportsImages ? "images vision" : "",
-                    option.model.supportsReasoning ? "reasoning thinking" : "",
                 ].contains { $0.localizedCaseInsensitiveContains(normalizedQuery) }
             }
 

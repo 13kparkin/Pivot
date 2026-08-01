@@ -144,124 +144,147 @@ struct FeatureComposerUserInputPanel: View {
     @State private var questionIndex = 0
 
     var body: some View {
-        if let question = activeQuestion {
-            VStack(spacing: 0) {
-                VStack(alignment: .leading, spacing: 0) {
+        Group {
+            if let question = activeQuestion {
+                VStack(spacing: 0) {
+                    VStack(alignment: .leading, spacing: 0) {
+                        HStack(spacing: 8) {
+                            Text(question.header)
+                                .font(T3Typography.eyebrow)
+                                .tracking(1.3)
+                                .textCase(.uppercase)
+                                .foregroundStyle(T3Colors.accent)
+
+                            Spacer()
+
+                            if input.questions.count > 1 {
+                                Text("\(questionIndex + 1)/\(input.questions.count)")
+                                    .font(T3Typography.supportingStrong.monospacedDigit())
+                                    .foregroundStyle(T3Colors.textTertiary)
+                            }
+                        }
+
+                        Text(question.question)
+                            .font(T3Typography.navigationTitle)
+                            .foregroundStyle(T3Colors.textPrimary)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .padding(.top, 5)
+
+                        if question.allowsMultiple {
+                            Text("Select one or more options")
+                                .font(T3Typography.supporting)
+                                .foregroundStyle(T3Colors.textTertiary)
+                                .padding(.top, 4)
+                        }
+                    }
+                    .padding(.horizontal, 15)
+                    .padding(.vertical, 12)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Color.white.opacity(0.024))
+
+                    Divider().overlay(T3Colors.separator)
+
+                    ScrollView {
+                        VStack(spacing: 6) {
+                            ForEach(
+                                Array(question.options.enumerated()),
+                                id: \.element.label
+                            ) { index, option in
+                                optionButton(option, number: index + 1, question: question)
+                            }
+                        }
+                        .padding(.horizontal, 10)
+                        .padding(.top, 10)
+                    }
+                    .frame(maxHeight: 320)
+                    .scrollIndicators(.hidden)
+
                     HStack(spacing: 8) {
-                        Text(question.header)
-                            .font(T3Typography.eyebrow)
-                            .tracking(1.3)
-                            .textCase(.uppercase)
-                            .foregroundStyle(T3Colors.accent)
+                        Image(systemName: "pencil")
+                            .font(T3Typography.supporting)
+                            .foregroundStyle(T3Colors.textTertiary)
+
+                        TextField(
+                            "Write custom answer",
+                            text: answerBinding(for: question.id),
+                            axis: .vertical
+                        )
+                        .font(T3Typography.composer)
+                        .lineLimit(1...4)
+                        .submitLabel(.return)
+                    }
+                    .padding(.horizontal, 12)
+                    .frame(minHeight: T3Metrics.minimumTapTarget)
+                    .background(
+                        Color.white.opacity(0.025),
+                        in: RoundedRectangle(cornerRadius: 11)
+                    )
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 11)
+                            .stroke(Color.white.opacity(0.09), lineWidth: 1)
+                    }
+                    .padding(.horizontal, 10)
+                    .padding(.top, 7)
+
+                    HStack(spacing: 8) {
+                        if questionIndex > 0 {
+                            Button("Back") {
+                                questionIndex -= 1
+                            }
+                            .font(T3Typography.control.weight(.semibold))
+                            .foregroundStyle(T3Colors.textSecondary)
+                            .frame(
+                                minWidth: T3Metrics.minimumTapTarget,
+                                minHeight: T3Metrics.minimumTapTarget
+                            )
+                        }
 
                         Spacer()
 
-                        if input.questions.count > 1 {
-                            Text("\(questionIndex + 1)/\(input.questions.count)")
-                                .font(T3Typography.supportingStrong.monospacedDigit())
-                                .foregroundStyle(T3Colors.textTertiary)
+                        Button(action: advanceOrSubmit) {
+                            Text(isLastQuestion ? "Submit" : "Next question")
+                                .font(T3Typography.control.weight(.semibold))
+                                .foregroundStyle(.white)
+                                .padding(.horizontal, 18)
+                                .frame(height: T3Metrics.minimumTapTarget)
+                                .background(T3Colors.accent, in: Capsule())
                         }
-                    }
-
-                    Text(question.question)
-                        .font(T3Typography.navigationTitle)
-                        .foregroundStyle(T3Colors.textPrimary)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .padding(.top, 5)
-
-                    if question.allowsMultiple {
-                        Text("Select one or more options")
-                            .font(T3Typography.supporting)
-                            .foregroundStyle(T3Colors.textTertiary)
-                            .padding(.top, 4)
-                    }
-
-                }
-                .padding(.horizontal, 15)
-                .padding(.vertical, 12)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(Color.white.opacity(0.024))
-
-                Divider().overlay(T3Colors.separator)
-
-                ScrollView {
-                    VStack(spacing: 6) {
-                        ForEach(Array(question.options.enumerated()), id: \.element.label) { index, option in
-                            optionButton(option, number: index + 1, question: question)
-                        }
+                        .buttonStyle(.plain)
+                        .disabled(!canAdvance)
+                        .opacity(canAdvance ? 1 : 0.3)
                     }
                     .padding(.horizontal, 10)
-                    .padding(.top, 10)
+                    .padding(.top, 9)
+                    .padding(.bottom, 11)
                 }
-                .frame(maxHeight: 320)
-                .scrollIndicators(.hidden)
-
-                HStack(spacing: 8) {
-                    Image(systemName: "pencil")
-                        .font(T3Typography.supporting)
-                        .foregroundStyle(T3Colors.textTertiary)
-
-                    TextField(
-                        "Write custom answer",
-                        text: answerBinding(for: question.id)
-                    )
-                    .font(T3Typography.composer)
-                    .submitLabel(.next)
-                    .onSubmit(advanceOrSubmit)
-                }
-                .padding(.horizontal, 12)
-                .frame(minHeight: T3Metrics.minimumTapTarget)
-                .background(Color.white.opacity(0.025), in: RoundedRectangle(cornerRadius: 11))
-                .overlay {
-                    RoundedRectangle(cornerRadius: 11)
-                        .stroke(Color.white.opacity(0.09), lineWidth: 1)
-                }
-                .padding(.horizontal, 10)
-                .padding(.top, 7)
-
-                HStack(spacing: 8) {
-                    if questionIndex > 0 {
-                        Button("Back") {
-                            questionIndex -= 1
-                        }
-                        .font(T3Typography.control.weight(.semibold))
-                        .foregroundStyle(T3Colors.textSecondary)
-                        .frame(
-                            minWidth: T3Metrics.minimumTapTarget,
-                            minHeight: T3Metrics.minimumTapTarget
-                        )
-                    }
-
-                    Spacer()
-
-                    Button(action: advanceOrSubmit) {
-                        Text(isLastQuestion ? "Submit" : "Next question")
-                            .font(T3Typography.control.weight(.semibold))
-                            .foregroundStyle(.white)
-                            .padding(.horizontal, 18)
-                            .frame(height: T3Metrics.minimumTapTarget)
-                            .background(T3Colors.accent, in: Capsule())
-                    }
-                    .buttonStyle(.plain)
-                    .disabled(!canAdvance)
-                    .opacity(canAdvance ? 1 : 0.3)
-                }
-                .padding(.horizontal, 10)
-                .padding(.top, 9)
-                .padding(.bottom, 11)
+                .disabled(isResponding)
+                .opacity(isResponding ? 0.56 : 1)
             }
-            .disabled(isResponding)
-            .opacity(isResponding ? 0.56 : 1)
-            .onChange(of: input.id) {
-                answers = [:]
-                questionIndex = 0
-            }
+        }
+        .onChange(of: input.id) {
+            answers = [:]
+            questionIndex = 0
+        }
+        .onChange(of: questionIDs) { previousIDs, currentIDs in
+            questionIndex = FeatureComposerQuestionReconciliation.index(
+                current: questionIndex,
+                previousQuestionIDs: previousIDs,
+                currentQuestionIDs: currentIDs
+            )
+            answers = FeatureComposerQuestionReconciliation.answers(
+                answers,
+                currentQuestionIDs: currentIDs
+            )
         }
     }
 
     private var activeQuestion: FeatureInputQuestion? {
         guard input.questions.indices.contains(questionIndex) else { return nil }
         return input.questions[questionIndex]
+    }
+
+    private var questionIDs: [String] {
+        input.questions.map(\.id)
     }
 
     private var isLastQuestion: Bool {
@@ -358,8 +381,13 @@ struct FeatureComposerUserInputPanel: View {
             return
         }
         guard !isLastQuestion else { return }
+        let selectedQuestionID = question.id
         Task { @MainActor in
             await Task.yield()
+            guard activeQuestion?.id == selectedQuestionID,
+                  !isLastQuestion else {
+                return
+            }
             questionIndex += 1
         }
     }
@@ -390,5 +418,30 @@ struct FeatureComposerUserInputPanel: View {
         case nil:
             return false
         }
+    }
+}
+
+enum FeatureComposerQuestionReconciliation {
+    static func index(
+        current: Int,
+        previousQuestionIDs: [String],
+        currentQuestionIDs: [String]
+    ) -> Int {
+        guard !currentQuestionIDs.isEmpty else { return 0 }
+        if previousQuestionIDs.indices.contains(current),
+           let retained = currentQuestionIDs.firstIndex(
+               of: previousQuestionIDs[current]
+           ) {
+            return retained
+        }
+        return min(max(0, current), currentQuestionIDs.count - 1)
+    }
+
+    static func answers(
+        _ answers: [String: FeatureInputAnswer],
+        currentQuestionIDs: [String]
+    ) -> [String: FeatureInputAnswer] {
+        let liveIDs = Set(currentQuestionIDs)
+        return answers.filter { liveIDs.contains($0.key) }
     }
 }

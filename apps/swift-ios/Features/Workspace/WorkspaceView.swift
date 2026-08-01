@@ -87,10 +87,15 @@ public struct WorkspaceView: View {
         }
         .navigationSplitViewStyle(.balanced)
         .sheet(isPresented: $showingNewTask) {
-            NewThreadView(model: model, submit: submitNewTask) { thread in
-                openThread(thread.id)
-                showingNewTask = false
-            }
+            NewThreadView(
+                model: model,
+                submit: submitNewTask,
+                onCreated: { thread in
+                    openThread(thread.id)
+                    showingNewTask = false
+                },
+                onCreateProject: openProjectCreation
+            )
         }
         .sheet(isPresented: $showingAddProject) {
             AddProjectView(model: model)
@@ -224,11 +229,10 @@ public struct WorkspaceView: View {
                 Text("Choose a thread or compose something new.")
                     .font(.subheadline)
                     .foregroundStyle(T3Colors.textSecondary)
-                Button("New task") { showingNewTask = true }
+                Button("New task", action: openNewTaskOrProjectCreation)
                     .buttonStyle(.borderedProminent)
                     .tint(.white)
                     .foregroundStyle(.black)
-                    .disabled(activeProjects.isEmpty)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(T3Colors.background)
@@ -406,7 +410,7 @@ public struct WorkspaceView: View {
     private var composeButton: some View {
         Button {
             isSearchFocused = false
-            showingNewTask = true
+            openNewTaskOrProjectCreation()
         } label: {
             Image(systemName: "square.and.pencil")
                 .font(.system(size: 20, weight: .medium))
@@ -416,10 +420,12 @@ public struct WorkspaceView: View {
                 .shadow(color: .black.opacity(0.7), radius: 16, y: 8)
         }
         .buttonStyle(.plain)
-        .disabled(activeProjects.isEmpty)
-        .opacity(activeProjects.isEmpty ? 0.35 : 1)
         .accessibilityLabel("New task")
-        .accessibilityHint("Compose a message and start a thread")
+        .accessibilityHint(
+            creationProjects.isEmpty
+                ? "Create a project to start a task"
+                : "Compose a message and start a thread"
+        )
         .accessibilityIdentifier("sidebar-new-task-button")
     }
 
@@ -485,11 +491,8 @@ public struct WorkspaceView: View {
         model.snapshot.projects.first { $0.id == selectedProjectID }
     }
 
-    private var activeProjects: [FeatureProject] {
-        guard let activeID = model.snapshot.environments.first(where: \.isActive)?.id else {
-            return model.snapshot.projects
-        }
-        return model.snapshot.projects.filter { $0.environmentID == activeID }
+    private var creationProjects: [FeatureProject] {
+        DailyUXCreationContext.projects(in: model.snapshot)
     }
 
     private var connectionEnvironmentName: String {
@@ -541,6 +544,20 @@ public struct WorkspaceView: View {
     private func closeSelectedThread() {
         selectedThreadID = nil
         preferredCompactColumn = .sidebar
+    }
+
+    @MainActor
+    private func openProjectCreation() {
+        showingNewTask = false
+        showingAddProject = true
+    }
+
+    private func openNewTaskOrProjectCreation() {
+        if creationProjects.isEmpty {
+            showingAddProject = true
+        } else {
+            showingNewTask = true
+        }
     }
 
     private func projectMenuTitle(_ project: FeatureProject) -> String {

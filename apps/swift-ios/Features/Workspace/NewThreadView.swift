@@ -5,6 +5,7 @@ public struct NewThreadView: View {
     @Bindable var model: FeatureRootModel
     let submit: (NewTaskRequest) async -> FeatureThread?
     let onCreated: (FeatureThread) -> Void
+    let onCreateProject: @MainActor () -> Void
     private let draftStore: FeatureComposerDraftStore
 
     @State private var projectID = ""
@@ -23,6 +24,7 @@ public struct NewThreadView: View {
     @State private var isSubmitting = false
     @State private var submissionFailed = false
     @State private var restoredDraftProjectID: String?
+    @State private var draftRestoreContext: NewTaskDraftRestoreContext?
     @State private var draftSaveTask: Task<Void, Never>?
     @State private var submittedSuccessfully = false
     @FocusState private var promptFocused: Bool
@@ -31,11 +33,13 @@ public struct NewThreadView: View {
         model: FeatureRootModel,
         submit: @escaping (NewTaskRequest) async -> FeatureThread?,
         onCreated: @escaping (FeatureThread) -> Void,
+        onCreateProject: @escaping @MainActor () -> Void = {},
         draftStore: FeatureComposerDraftStore = .shared
     ) {
         self.model = model
         self.submit = submit
         self.onCreated = onCreated
+        self.onCreateProject = onCreateProject
         self.draftStore = draftStore
     }
 
@@ -45,42 +49,49 @@ public struct NewThreadView: View {
 
             VStack(spacing: 0) {
                 topBar
-                hero
-                    .padding(.top, 82)
+                if creationProjects.isEmpty {
+                    noProjects
+                        .padding(.top, 82)
+                } else {
+                    hero
+                        .padding(.top, 82)
+                }
                 Spacer(minLength: 140)
             }
         }
         .safeAreaInset(edge: .bottom, spacing: 0) {
-            VStack(spacing: 0) {
-                workspaceControls
+            if !creationProjects.isEmpty {
+                VStack(spacing: 0) {
+                    workspaceControls
 
-                FeatureComposerView(
-                    text: $prompt,
-                    selection: selectionBinding,
-                    attachments: $attachments,
-                    providers: creationProviders,
-                    threadSelection: nil,
-                    isSending: isSubmitting,
-                    isWorking: false,
-                    focused: $promptFocused,
-                    onSend: startTask,
-                    onStop: {},
-                    forceExpanded: true,
-                    powerFeatures: composerPowerFeatures
-                )
+                    FeatureComposerView(
+                        text: $prompt,
+                        selection: selectionBinding,
+                        attachments: $attachments,
+                        providers: creationProviders,
+                        threadSelection: nil,
+                        isSending: isSubmitting,
+                        isWorking: false,
+                        focused: $promptFocused,
+                        onSend: startTask,
+                        onStop: {},
+                        forceExpanded: true,
+                        powerFeatures: composerPowerFeatures
+                    )
+                }
+                .background(T3Colors.background)
             }
-            .background(T3Colors.background)
         }
         .onAppear {
             if projectID.isEmpty {
-                projectID = creationProjects.first?.id ?? ""
+                selectInitialProject(creationProjects.first?.id ?? "")
             }
         }
-        .onChange(of: projectID) {
-            restoredDraftProjectID = nil
-            selection = initialSelection
-            selectionIsExplicit = false
-            resetWorkspaceSelection()
+        .onChange(of: projectID) { prepareProjectIfNeeded(projectID) }
+        .onChange(of: creationProjectIDs) { _, ids in
+            guard !ids.contains(projectID) else { return }
+            persistCurrentDraftImmediately()
+            selectInitialProject(ids.first ?? "")
         }
         .onChange(of: prompt) { scheduleDraftSave() }
         .onChange(of: selection) { scheduleDraftSave() }
@@ -161,6 +172,7 @@ public struct NewThreadView: View {
                         }
                 }
                 .buttonStyle(.plain)
+                .disabled(isSubmitting)
                 .padding(.leading, 5)
                 Text("?")
             }
@@ -181,6 +193,34 @@ public struct NewThreadView: View {
             .offset(y: 31)
         }
         .accessibilityElement(children: .contain)
+    }
+
+    private var noProjects: some View {
+        VStack(spacing: 14) {
+            Image(systemName: "folder.badge.plus")
+                .font(.system(size: 28, weight: .regular))
+                .foregroundStyle(T3Colors.textSecondary)
+            Text("Create a project first")
+                .font(T3Typography.threadHeading1.weight(.regular))
+                .foregroundStyle(T3Colors.textPrimary)
+            Text("Tasks need a workspace on one of your connected environments.")
+                .font(T3Typography.threadBody)
+                .foregroundStyle(T3Colors.textSecondary)
+                .multilineTextAlignment(.center)
+            Button("Create project") {
+                dismiss()
+                Task { @MainActor in
+                    await Task.yield()
+                    onCreateProject()
+                }
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(.white)
+            .foregroundStyle(.black)
+            .padding(.top, 6)
+        }
+        .padding(.horizontal, 28)
+        .frame(maxWidth: .infinity)
     }
 
     private var selectedProject: FeatureProject? {
@@ -287,6 +327,10 @@ public struct NewThreadView: View {
         DailyUXCreationContext.projects(in: model.snapshot)
     }
 
+    private var creationProjectIDs: [String] {
+        creationProjects.map(\.id)
+    }
+
     private var environmentName: String {
         if let environmentID = selectedProject?.environmentID,
            let environment = model.snapshot.environments.first(where: { $0.id == environmentID }) {
@@ -296,9 +340,12 @@ public struct NewThreadView: View {
     }
 
     private var initialSelection: FeatureSelection? {
-        DailyUXCreationContext.initialSelection(
-            for: selectedProject,
-            in: model.snapshot
+        ProviderModelSelectionResolver.materialized(
+            DailyUXCreationContext.initialSelection(
+                for: selectedProject,
+                in: model.snapshot
+            ),
+            in: creationProviders
         )
     }
 
@@ -322,7 +369,12 @@ public struct NewThreadView: View {
     /// Model and provider capabilities belong to the project's environment,
     /// which may not be the connection currently selected in Settings.
     private var creationProviders: [FeatureProvider] {
-        DailyUXCreationContext.providers(for: selectedProject, in: model.snapshot)
+        ProviderModelCatalogNormalizer.normalized(
+            DailyUXCreationContext.providers(
+                for: selectedProject,
+                in: model.snapshot
+            )
+        )
     }
 
     private var composerPowerFeatures: FeatureComposerPowerFeatures {
@@ -358,7 +410,9 @@ public struct NewThreadView: View {
 
     private var canSubmit: Bool {
         !isSubmitting
-            && !projectID.isEmpty
+            && selectedProject != nil
+            && restoredDraftProjectID == projectID
+            && concreteSelection != nil
             && (!trimmedPrompt.isEmpty || !attachments.isEmpty)
             && (attachments.isEmpty || imagesAllowed)
             && (workspaceMode != .worktree || selectedBranch != nil)
@@ -370,22 +424,30 @@ public struct NewThreadView: View {
 
     private var imagesAllowed: Bool {
         DailyUXModelOptions.supportsImages(
-            selection: selection,
+            selection: concreteSelection,
             providers: creationProviders
         )
     }
 
+    private var concreteSelection: FeatureSelection? {
+        ProviderModelSelectionResolver.materialized(selection, in: creationProviders)
+    }
+
     private func startTask() {
-        guard canSubmit else { return }
+        guard canSubmit,
+              let project = selectedProject,
+              let concreteSelection else {
+            return
+        }
         promptFocused = false
         isSubmitting = true
         draftSaveTask?.cancel()
         let draftKey = currentDraftKey
         let draftSnapshot = composerDraft
         let request = NewTaskRequest(
-            projectID: projectID,
+            projectID: project.id,
             prompt: trimmedPrompt,
-            selection: selection,
+            selection: concreteSelection,
             runtimeMode: .fullAccess,
             interactionMode: .standard,
             workspaceMode: workspaceMode,
@@ -393,7 +455,7 @@ public struct NewThreadView: View {
             worktreePath: workspaceMode == .local
                 ? NewTaskWorkspaceDefaults.normalizedWorktreePath(
                     for: selectedBranch,
-                    projectPath: selectedProject?.path ?? ""
+                    projectPath: project.path
                 )
                 : nil,
             startFromOrigin: startFromOrigin,
@@ -419,19 +481,58 @@ public struct NewThreadView: View {
         }
     }
 
-    private func resetWorkspaceSelection() {
-        branches = []
-        selectedBranch = nil
-        branchLoadFailed = false
-        workspaceMode = environmentPreferences.defaultWorkspaceMode
-        startFromOrigin = environmentPreferences.newWorktreesStartFromOrigin
-        workspaceSelectionIsExplicit = false
-    }
-
     private func selectProject(_ id: String) {
         guard id != projectID else { return }
         persistCurrentDraftImmediately()
         projectID = id
+        prepareProjectIfNeeded(id)
+    }
+
+    private func selectInitialProject(_ id: String) {
+        projectID = id
+        prepareProjectIfNeeded(id)
+    }
+
+    private func prepareProjectIfNeeded(_ id: String) {
+        guard draftRestoreContext?.projectID != id else { return }
+
+        restoredDraftProjectID = nil
+        draftSaveTask?.cancel()
+        draftSaveTask = nil
+        prompt = ""
+        attachments = []
+        selectionIsExplicit = false
+        workspaceSelectionIsExplicit = false
+        branches = []
+        selectedBranch = nil
+        branchLoadFailed = false
+        branchesLoading = false
+
+        guard let project = creationProjects.first(where: { $0.id == id }) else {
+            selection = nil
+            workspaceMode = .local
+            startFromOrigin = true
+            draftRestoreContext = nil
+            return
+        }
+
+        let providers = ProviderModelCatalogNormalizer.normalized(
+            DailyUXCreationContext.providers(for: project, in: model.snapshot)
+        )
+        selection = ProviderModelSelectionResolver.materialized(
+            DailyUXCreationContext.initialSelection(for: project, in: model.snapshot),
+            in: providers
+        )
+        let preferences = DailyUXCreationContext.environmentPreferences(
+            for: project,
+            in: model.snapshot
+        )
+        workspaceMode = preferences.defaultWorkspaceMode
+        startFromOrigin = preferences.newWorktreesStartFromOrigin
+        draftRestoreContext = NewTaskDraftRestoreContext(
+            projectID: id,
+            baseline: FeatureComposerDraft()
+        )
     }
 
     private func setWorkspaceMode(_ mode: FeatureWorkspaceMode) {
@@ -480,18 +581,25 @@ public struct NewThreadView: View {
     @MainActor
     private func restoreDraftAndLoadBranches() async {
         let requestedProjectID = projectID
-        guard let project = selectedProject, !requestedProjectID.isEmpty else { return }
-        let baseline = composerDraft
+        guard let project = selectedProject,
+              let context = draftRestoreContext,
+              context.projectID == requestedProjectID,
+              !requestedProjectID.isEmpty else {
+            return
+        }
         let key = FeatureComposerDraftStore.newTaskKey(project: project)
         let saved = try? await draftStore.draft(for: key)
-        guard !Task.isCancelled, projectID == requestedProjectID else { return }
+        guard !Task.isCancelled,
+              projectID == requestedProjectID,
+              draftRestoreContext?.projectID == requestedProjectID else {
+            return
+        }
 
         let liveDraft = composerDraft
         let liveSelectionIsExplicit = selectionIsExplicit
         let liveWorkspaceSelectionIsExplicit = workspaceSelectionIsExplicit
-        let restored = FeatureComposerDraftRestoration.merge(
+        let restored = context.merging(
             saved: saved,
-            baseline: baseline,
             current: liveDraft,
             fallbackSelection: initialSelection,
             fallbackWorkspace: FeatureComposerWorkspaceDraft(
@@ -518,7 +626,7 @@ public struct NewThreadView: View {
         workspaceSelectionIsExplicit = liveWorkspaceSelectionIsExplicit
             || saved?.workspace != nil
         restoredDraftProjectID = requestedProjectID
-        if liveDraft != baseline {
+        if liveDraft != context.baseline {
             scheduleDraftSave()
         }
         await loadBranches()
@@ -572,16 +680,26 @@ public struct NewThreadView: View {
     }
 
     private func persistCurrentDraftImmediately() {
-        guard restoredDraftProjectID == projectID,
-              !submittedSuccessfully,
+        guard !submittedSuccessfully,
               let key = currentDraftKey else {
             return
         }
         draftSaveTask?.cancel()
         let snapshot = composerDraft
+        let restoreContext = draftRestoreContext
+        let draftProjectID = projectID
+        let needsRestoreMerge = restoredDraftProjectID != draftProjectID
         draftSaveTask = nil
         Task {
-            try? await draftStore.setDraft(snapshot, for: key)
+            if needsRestoreMerge,
+               let restoreContext,
+               restoreContext.projectID == draftProjectID {
+                let saved = try? await draftStore.draft(for: key)
+                let merged = restoreContext.merging(saved: saved, current: snapshot)
+                try? await draftStore.setDraft(merged, for: key)
+            } else {
+                try? await draftStore.setDraft(snapshot, for: key)
+            }
         }
     }
 
@@ -593,6 +711,29 @@ public struct NewThreadView: View {
         let rhsRank = rhs.isCurrent ? 0 : rhs.isDefault ? 1 : rhs.isRemote ? 3 : 2
         if lhsRank != rhsRank { return lhsRank < rhsRank }
         return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
+    }
+}
+
+/// Captures the clean target-project state before its persisted draft is read.
+/// Async restore results can then merge live typing without ever borrowing state
+/// from the project that was previously selected.
+struct NewTaskDraftRestoreContext: Equatable {
+    let projectID: String
+    let baseline: FeatureComposerDraft
+
+    func merging(
+        saved: FeatureComposerDraft?,
+        current: FeatureComposerDraft,
+        fallbackSelection: FeatureSelection? = nil,
+        fallbackWorkspace: FeatureComposerWorkspaceDraft? = nil
+    ) -> FeatureComposerDraft {
+        FeatureComposerDraftRestoration.merge(
+            saved: saved,
+            baseline: baseline,
+            current: current,
+            fallbackSelection: fallbackSelection,
+            fallbackWorkspace: fallbackWorkspace
+        )
     }
 }
 

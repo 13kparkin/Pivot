@@ -159,4 +159,41 @@ struct FeatureComposerPowerTests {
             Issue.record("Expected a model menu item")
         }
     }
+
+    @Test
+    func changingInputQuestionsKeepsAValidActiveQuestionAndDropsStaleAnswers() {
+        #expect(
+            FeatureComposerQuestionReconciliation.index(
+                current: 2,
+                previousQuestionIDs: ["one", "two", "three"],
+                currentQuestionIDs: ["one"]
+            ) == 0
+        )
+        #expect(
+            FeatureComposerQuestionReconciliation.index(
+                current: 1,
+                previousQuestionIDs: ["one", "two", "three"],
+                currentQuestionIDs: ["three", "two"]
+            ) == 1
+        )
+
+        let reconciled = FeatureComposerQuestionReconciliation.answers(
+            [
+                "one": .text("keep"),
+                "removed": .text("drop"),
+            ],
+            currentQuestionIDs: ["one"]
+        )
+        #expect(reconciled == ["one": .text("keep")])
+    }
+
+    @Test
+    func onlyTheExplicitComposerButtonCanSend() {
+        #expect(
+            FeatureComposerSubmissionPolicy.allowsSend(for: .explicitButton)
+        )
+        #expect(
+            !FeatureComposerSubmissionPolicy.allowsSend(for: .returnKey)
+        )
+    }
 }

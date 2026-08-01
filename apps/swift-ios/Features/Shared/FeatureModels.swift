@@ -99,17 +99,12 @@ public enum FeatureRuntimeMode: String, CaseIterable, Sendable, Codable {
     case automatic
     case fullAccess
 
-    /// Mobile intentionally exposes the two modes that remain useful without
-    /// carrying the desktop's older approval-policy matrix into the composer.
-    public static let allCases: [FeatureRuntimeMode] = [.automatic, .fullAccess]
+    /// Mobile is a build surface. Legacy modes remain decodable for server
+    /// history, but every command originating here uses full access.
+    public static let allCases: [FeatureRuntimeMode] = [.fullAccess]
 
     public var mobileNormalized: FeatureRuntimeMode {
-        switch self {
-        case .approvalRequired, .autoAcceptEdits, .automatic:
-            .automatic
-        case .fullAccess:
-            .fullAccess
-        }
+        .fullAccess
     }
 }
 

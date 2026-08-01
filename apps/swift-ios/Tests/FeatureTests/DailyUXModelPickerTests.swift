@@ -238,4 +238,153 @@ struct DailyUXModelPickerTests {
 
         #expect(selection?.modelID == "project")
     }
+
+    @Test
+    func missingAndStaleSelectionsMaterializeTheConcretePreferredModel() {
+        let providers = [
+            FeatureProvider(
+                id: "claude",
+                name: "Claude",
+                models: [
+                    .init(id: "claude-sonnet-4", name: "Sonnet 4", isDefault: true),
+                    .init(id: "claude-opus-5", name: "Opus 5"),
+                ]
+            ),
+        ]
+
+        #expect(
+            ProviderModelSelectionResolver.materialized(nil, in: providers)?.modelID
+                == "claude-opus-5"
+        )
+        #expect(
+            ProviderModelSelectionResolver.materialized(
+                .init(providerID: "claude", modelID: "removed"),
+                in: providers
+            )?.modelID == "claude-opus-5"
+        )
+    }
+
+    @Test
+    func duplicateCatalogEntriesCollapseAndImplicitModelsDisappear() {
+        let normalized = ProviderModelCatalogNormalizer.normalized([
+            FeatureProvider(
+                id: "claude",
+                name: "Claude",
+                models: [
+                    .init(id: "environment-auto", name: "Automatic (recommended)"),
+                    .init(id: "opus", name: "Opus"),
+                ]
+            ),
+            FeatureProvider(
+                id: "claude",
+                name: "Claude duplicate",
+                models: [
+                    .init(id: "opus", name: "Opus duplicate"),
+                    .init(id: "sonnet", name: "Sonnet"),
+                ]
+            ),
+        ])
+
+        #expect(normalized.map(\.id) == ["claude"])
+        #expect(normalized[0].name == "Claude")
+        #expect(normalized[0].models.map(\.id) == ["opus", "sonnet"])
+        #expect(normalized[0].models.map(\.name) == ["Opus", "Sonnet"])
+    }
+
+    @Test
+    func favoritesAndRecentsDoNotRepeatInProviderSections() {
+        let providers = [
+            FeatureProvider(
+                id: "claude",
+                name: "Claude",
+                models: [
+                    .init(id: "claude-opus-5", name: "Opus 5"),
+                    .init(id: "claude-sonnet-5", name: "Sonnet 5"),
+                    .init(id: "claude-fable-5", name: "Fable 5"),
+                    .init(id: "claude-haiku-3", name: "Haiku 3"),
+                ]
+            ),
+        ]
+        let opus = DailyUXModelOption.key(
+            providerID: "claude",
+            modelID: "claude-opus-5"
+        )
+        let sonnet = DailyUXModelOption.key(
+            providerID: "claude",
+            modelID: "claude-sonnet-5"
+        )
+        let catalog = DailyUXModelCatalog(
+            providers: providers,
+            query: "",
+            favoriteIDs: [opus],
+            recentIDs: [sonnet]
+        )
+
+        let remaining = ProviderModelDisplaySections(catalog: catalog)
+
+        #expect(
+            remaining.currentProviderGroups.flatMap(\.models).map(\.model.id)
+                == ["claude-fable-5"]
+        )
+        #expect(remaining.legacy.map(\.model.id) == ["claude-haiku-3"])
+    }
+
+    @Test
+    func currentFamiliesAreClassifiedFromStableIDsAndNames() {
+        let codex = FeatureProvider(id: "work-openai", name: "Codex", driver: "codex")
+        let claude = FeatureProvider(
+            id: "work-claude",
+            name: "Anthropic",
+            driver: "claudeAgent"
+        )
+
+        #expect(
+            ProviderModelFamilyClassifier.isCurrent(
+                .init(id: "gpt-5.6-codex-luna", name: "Luna"),
+                provider: codex
+            )
+        )
+        #expect(
+            ProviderModelFamilyClassifier.isCurrent(
+                .init(id: "gpt_5_6_terra", name: "GPT 5.6 Terra"),
+                provider: codex
+            )
+        )
+        #expect(
+            ProviderModelFamilyClassifier.isCurrent(
+                .init(id: "gpt-5-6-sol", name: "Sol"),
+                provider: codex
+            )
+        )
+        #expect(
+            ProviderModelFamilyClassifier.isCurrent(
+                .init(id: "claude-fable-5-202607", name: "Fable 5"),
+                provider: claude
+            )
+        )
+        #expect(
+            ProviderModelFamilyClassifier.isCurrent(
+                .init(id: "claude-opus-5", name: "OPUS 5"),
+                provider: claude
+            )
+        )
+        #expect(
+            ProviderModelFamilyClassifier.isCurrent(
+                .init(id: "claude-sonnet-5", name: "Sonnet v5"),
+                provider: claude
+            )
+        )
+        #expect(
+            !ProviderModelFamilyClassifier.isCurrent(
+                .init(id: "claude-opus-4-1", name: "Opus 4.1"),
+                provider: claude
+            )
+        )
+        #expect(
+            !ProviderModelFamilyClassifier.isCurrent(
+                .init(id: "gpt-5.5-codex-sol", name: "GPT 5.5 Sol"),
+                provider: codex
+            )
+        )
+    }
 }
