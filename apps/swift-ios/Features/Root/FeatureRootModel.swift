@@ -140,8 +140,8 @@ public final class FeatureRootModel {
                 projectID: request.projectID,
                 prompt: prompt,
                 selection: request.selection,
-                runtimeMode: request.runtimeMode,
-                interactionMode: request.interactionMode,
+                runtimeMode: request.runtimeMode.mobileNormalized,
+                interactionMode: request.interactionMode.mobileNormalized,
                 attachments: request.attachments.map(\.upload)
             )
             guard currentEnvironmentIdentity == environment else {
@@ -199,6 +199,7 @@ public final class FeatureRootModel {
     }
 
     public func setRuntimeMode(_ id: String, mode: FeatureRuntimeMode) async {
+        let mode = mode.mobileNormalized
         let environment = currentEnvironmentIdentity
         await perform {
             try await client.setRuntimeMode(id: id, mode: mode)
@@ -208,6 +209,7 @@ public final class FeatureRootModel {
     }
 
     public func setInteractionMode(_ id: String, mode: FeatureInteractionMode) async {
+        let mode = mode.mobileNormalized
         let environment = currentEnvironmentIdentity
         await perform {
             try await client.setInteractionMode(id: id, mode: mode)

@@ -469,8 +469,8 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging {
             providerName: providerDisplayName(model.instanceId),
             modelID: model.model,
             modelOptions: mapOptionSelections(model.options),
-            runtimeMode: runtimeMode,
-            interactionMode: interactionMode
+            runtimeMode: runtimeMode.mobileNormalized,
+            interactionMode: interactionMode.mobileNormalized
         )
     }
 
@@ -673,11 +673,13 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging {
         }
         let model = selection.map(coreModelSelection)
         let uploads = try makeUploadAttachments(attachments)
+        let runtimeMode = coreRuntimeMode(mapRuntimeMode(shellThread.runtimeMode))
+        let interactionMode = InteractionMode.default
         let signature = TurnSubmissionSignature(
             text: text,
             model: model,
-            runtimeMode: shellThread.runtimeMode,
-            interactionMode: shellThread.interactionMode,
+            runtimeMode: runtimeMode,
+            interactionMode: interactionMode,
             attachments: attachments
         )
         let pending: PendingTurnSubmission
@@ -696,8 +698,8 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging {
             _ = try await client.sendTurn(
                 threadID: route.wireID,
                 text: text,
-                runtimeMode: shellThread.runtimeMode,
-                interactionMode: shellThread.interactionMode,
+                runtimeMode: runtimeMode,
+                interactionMode: interactionMode,
                 model: model,
                 attachments: uploads,
                 commandID: pending.identity.commandID,
@@ -2912,28 +2914,21 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging {
 
     private func mapRuntimeMode(_ mode: RuntimeMode) -> FeatureRuntimeMode {
         switch mode {
-        case .approvalRequired: .approvalRequired
-        case .autoAcceptEdits: .autoAcceptEdits
-        case .auto: .automatic
+        case .approvalRequired, .autoAcceptEdits, .auto: .automatic
         case .fullAccess: .fullAccess
         }
     }
 
     private func coreRuntimeMode(_ mode: FeatureRuntimeMode) -> RuntimeMode {
-        switch mode {
-        case .approvalRequired: .approvalRequired
-        case .autoAcceptEdits: .autoAcceptEdits
-        case .automatic: .auto
-        case .fullAccess: .fullAccess
-        }
+        mode.mobileNormalized == .fullAccess ? .fullAccess : .auto
     }
 
-    private func mapInteractionMode(_ mode: InteractionMode) -> FeatureInteractionMode {
-        mode == .plan ? .plan : .standard
+    private func mapInteractionMode(_: InteractionMode) -> FeatureInteractionMode {
+        .standard
     }
 
-    private func coreInteractionMode(_ mode: FeatureInteractionMode) -> InteractionMode {
-        mode == .plan ? .plan : .default
+    private func coreInteractionMode(_: FeatureInteractionMode) -> InteractionMode {
+        .default
     }
 
     private func mapProviders(_ shell: OrchestrationShellSnapshot) -> [FeatureProvider] {

@@ -13,8 +13,6 @@ struct FeatureComposerView: View {
     private let isSending: Bool
     private let isWorking: Bool
     private let focused: FocusState<Bool>.Binding
-    private let runtimeMode: FeatureRuntimeMode?
-    private let interactionMode: FeatureInteractionMode?
     private let contextUsage: Double?
     private let forceExpanded: Bool
     private let pendingApprovals: [FeatureApproval]
@@ -22,8 +20,6 @@ struct FeatureComposerView: View {
     private let isResolvingRequest: Bool
     private let onSend: () -> Void
     private let onStop: () -> Void
-    private let onRuntimeModeChange: ((FeatureRuntimeMode) -> Void)?
-    private let onInteractionModeChange: ((FeatureInteractionMode) -> Void)?
     private let onApprovalDecision: ((String, FeatureApprovalDecision) -> Void)?
     private let onUserInputSubmit: ((String, [String: FeatureInputAnswer]) -> Void)?
 
@@ -38,12 +34,8 @@ struct FeatureComposerView: View {
         focused: FocusState<Bool>.Binding,
         onSend: @escaping () -> Void,
         onStop: @escaping () -> Void,
-        runtimeMode: FeatureRuntimeMode? = nil,
-        interactionMode: FeatureInteractionMode? = nil,
         contextUsage: Double? = nil,
         forceExpanded: Bool = false,
-        onRuntimeModeChange: ((FeatureRuntimeMode) -> Void)? = nil,
-        onInteractionModeChange: ((FeatureInteractionMode) -> Void)? = nil,
         pendingApprovals: [FeatureApproval] = [],
         pendingUserInputs: [FeatureUserInput] = [],
         isResolvingRequest: Bool = false,
@@ -60,12 +52,8 @@ struct FeatureComposerView: View {
         self.focused = focused
         self.onSend = onSend
         self.onStop = onStop
-        self.runtimeMode = runtimeMode
-        self.interactionMode = interactionMode
         self.contextUsage = contextUsage
         self.forceExpanded = forceExpanded
-        self.onRuntimeModeChange = onRuntimeModeChange
-        self.onInteractionModeChange = onInteractionModeChange
         self.pendingApprovals = pendingApprovals
         self.pendingUserInputs = pendingUserInputs
         self.isResolvingRequest = isResolvingRequest
@@ -220,15 +208,8 @@ struct FeatureComposerView: View {
                 style: .compact,
                 threadSelection: threadSelection
             )
-            .frame(maxWidth: 156, alignment: .leading)
+            .frame(maxWidth: 220, alignment: .leading)
             .layoutPriority(2)
-
-            if runtimeMode != nil || interactionMode != nil {
-                modePicker(
-                    runtimeMode: runtimeMode,
-                    interactionMode: interactionMode
-                )
-            }
 
             Spacer(minLength: 0)
 
@@ -242,67 +223,6 @@ struct FeatureComposerView: View {
         .padding(.horizontal, 7)
         .padding(.top, 2)
         .padding(.bottom, 8)
-    }
-
-    private func modePicker(
-        runtimeMode: FeatureRuntimeMode?,
-        interactionMode: FeatureInteractionMode?
-    ) -> some View {
-        Menu {
-            if let interactionMode, let onInteractionModeChange {
-                Section("Interaction") {
-                    ForEach(FeatureInteractionMode.allCases, id: \.self) { mode in
-                        Button {
-                            onInteractionModeChange(mode)
-                        } label: {
-                            if mode == interactionMode {
-                                Label(interactionModeLabel(mode), systemImage: "checkmark")
-                            } else {
-                                Text(interactionModeLabel(mode))
-                            }
-                        }
-                    }
-                }
-            }
-            if let runtimeMode, let onRuntimeModeChange {
-                Section("Access") {
-                    ForEach(FeatureRuntimeMode.allCases, id: \.self) { mode in
-                        Button {
-                            onRuntimeModeChange(mode)
-                        } label: {
-                            if mode == runtimeMode {
-                                Label(runtimeModeLabel(mode), systemImage: "checkmark")
-                            } else {
-                                Text(runtimeModeLabel(mode))
-                            }
-                        }
-                    }
-                }
-            }
-        } label: {
-            ViewThatFits(in: .horizontal) {
-                HStack(spacing: 6) {
-                    Image(systemName: interactionMode == .plan ? "list.bullet.clipboard" : "lock")
-                    Text(modeControlLabel(runtimeMode: runtimeMode, interactionMode: interactionMode))
-                        .lineLimit(1)
-                    Image(systemName: "chevron.down")
-                        .font(.system(size: 8, weight: .bold))
-                }
-
-                Image(systemName: "lock")
-                    .frame(width: 30)
-            }
-            .font(T3Typography.supportingStrong)
-            .foregroundStyle(T3Colors.textSecondary)
-            .frame(minHeight: 30)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .frame(maxWidth: 116)
-        .accessibilityLabel("Interaction and access mode")
-        .accessibilityValue(
-            modeControlLabel(runtimeMode: runtimeMode, interactionMode: interactionMode)
-        )
     }
 
     private var submitButton: some View {
@@ -377,29 +297,6 @@ struct FeatureComposerView: View {
         }
     }
 
-    private func runtimeModeLabel(_ mode: FeatureRuntimeMode) -> String {
-        switch mode {
-        case .approvalRequired: "Supervised"
-        case .autoAcceptEdits: "Auto-accept edits"
-        case .automatic: "Auto"
-        case .fullAccess: "Full access"
-        }
-    }
-
-    private func interactionModeLabel(_ mode: FeatureInteractionMode) -> String {
-        switch mode {
-        case .standard: "Build"
-        case .plan: "Plan"
-        }
-    }
-
-    private func modeControlLabel(
-        runtimeMode: FeatureRuntimeMode?,
-        interactionMode: FeatureInteractionMode?
-    ) -> String {
-        if interactionMode == .plan { return "Plan" }
-        return runtimeMode.map(runtimeModeLabel) ?? "Mode"
-    }
 }
 
 enum FeatureComposerSubmissionEligibility {

@@ -98,11 +98,30 @@ public enum FeatureRuntimeMode: String, CaseIterable, Sendable, Codable {
     case autoAcceptEdits
     case automatic
     case fullAccess
+
+    /// Mobile intentionally exposes the two modes that remain useful without
+    /// carrying the desktop's older approval-policy matrix into the composer.
+    public static let allCases: [FeatureRuntimeMode] = [.automatic, .fullAccess]
+
+    public var mobileNormalized: FeatureRuntimeMode {
+        switch self {
+        case .approvalRequired, .autoAcceptEdits, .automatic:
+            .automatic
+        case .fullAccess:
+            .fullAccess
+        }
+    }
 }
 
 public enum FeatureInteractionMode: String, CaseIterable, Sendable, Codable {
     case standard
     case plan
+
+    /// Plan remains decodable for existing server state, but is no longer a
+    /// mobile prompt choice.
+    public static let allCases: [FeatureInteractionMode] = [.standard]
+
+    public var mobileNormalized: FeatureInteractionMode { .standard }
 }
 
 public struct FeatureThread: Identifiable, Sendable, Equatable, Hashable, Codable {

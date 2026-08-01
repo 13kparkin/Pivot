@@ -36,7 +36,9 @@ final class NativeRetryIdentityTests: XCTestCase {
             suiteName: "t3-native-retry-\(UUID().uuidString)"
         )!
         let client = NativeFeatureClient(runtime: runtime, settingsStore: settings)
-        _ = try await client.initialSnapshot()
+        let initial = try await client.initialSnapshot()
+        XCTAssertEqual(initial.threads.first?.runtimeMode, .automatic)
+        XCTAssertEqual(initial.threads.first?.interactionMode, .standard)
         await connection.waitUntilConnected()
 
         for _ in 0..<2 {
@@ -56,8 +58,8 @@ final class NativeRetryIdentityTests: XCTestCase {
                     projectID: "project-1",
                     prompt: "Create exactly one task",
                     selection: FeatureSelection(providerID: "codex", modelID: "gpt-5.4"),
-                    runtimeMode: .fullAccess,
-                    interactionMode: .standard,
+                    runtimeMode: .autoAcceptEdits,
+                    interactionMode: .plan,
                     attachments: []
                 )
                 XCTFail("The synthetic bootstrap should fail ambiguously.")
@@ -68,6 +70,10 @@ final class NativeRetryIdentityTests: XCTestCase {
         XCTAssertEqual(commands.count, 4)
         assertStableIdentity(commands[0], commands[1], includesThreadID: false)
         assertStableIdentity(commands[2], commands[3], includesThreadID: true)
+        for command in commands {
+            XCTAssertEqual(command["runtimeMode"]?.stringValue, "auto")
+            XCTAssertEqual(command["interactionMode"]?.stringValue, "default")
+        }
         await client.disconnect()
     }
 
@@ -167,8 +173,8 @@ private func retryShellSnapshot() -> OrchestrationShellSnapshot {
                 projectId: "project-1",
                 title: "Existing",
                 modelSelection: model,
-                runtimeMode: .fullAccess,
-                interactionMode: .default,
+                runtimeMode: .approvalRequired,
+                interactionMode: .plan,
                 branch: nil,
                 worktreePath: nil,
                 latestTurn: nil,

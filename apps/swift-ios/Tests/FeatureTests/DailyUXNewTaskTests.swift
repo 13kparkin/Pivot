@@ -6,7 +6,7 @@ import UIKit
 @Suite("Message-first task creation")
 struct DailyUXNewTaskTests {
     @Test
-    func requestKeepsPromptModesAndImageBytesTogether() {
+    func requestNormalizesLegacyModesAndKeepsImageBytes() {
         let image = FeatureDraftAttachment(
             data: Data([1, 2, 3]),
             filename: "Image 1.jpg",
@@ -16,14 +16,21 @@ struct DailyUXNewTaskTests {
             projectID: "project",
             prompt: "  Build it  \n",
             selection: FeatureSelection(providerID: "codex", modelID: "gpt-5"),
-            runtimeMode: .fullAccess,
+            runtimeMode: .approvalRequired,
             interactionMode: .plan,
             attachments: [image]
         )
 
         #expect(request.trimmedPrompt == "Build it")
-        #expect(request.interactionMode == .plan)
+        #expect(request.runtimeMode == .automatic)
+        #expect(request.interactionMode == .standard)
         #expect(request.attachments.first?.byteCount == 3)
+    }
+
+    @Test
+    func mobileModeChoicesOnlyExposeSupportedValues() {
+        #expect(FeatureRuntimeMode.allCases == [.automatic, .fullAccess])
+        #expect(FeatureInteractionMode.allCases == [.standard])
     }
 
     @Test

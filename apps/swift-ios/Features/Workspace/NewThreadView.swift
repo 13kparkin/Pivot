@@ -9,8 +9,6 @@ public struct NewThreadView: View {
     @State private var projectID = ""
     @State private var prompt = ""
     @State private var selection: FeatureSelection?
-    @State private var runtimeMode: FeatureRuntimeMode = .fullAccess
-    @State private var interactionMode: FeatureInteractionMode = .standard
     @State private var attachments: [FeatureDraftAttachment] = []
     @State private var isSubmitting = false
     @State private var submissionFailed = false
@@ -49,11 +47,7 @@ public struct NewThreadView: View {
                 focused: $promptFocused,
                 onSend: startTask,
                 onStop: {},
-                runtimeMode: runtimeMode,
-                interactionMode: interactionMode,
-                forceExpanded: true,
-                onRuntimeModeChange: { runtimeMode = $0 },
-                onInteractionModeChange: { interactionMode = $0 }
+                forceExpanded: true
             )
         }
         .onAppear {
@@ -198,8 +192,8 @@ public struct NewThreadView: View {
             projectID: projectID,
             prompt: trimmedPrompt,
             selection: selection,
-            runtimeMode: runtimeMode,
-            interactionMode: interactionMode,
+            runtimeMode: .fullAccess,
+            interactionMode: .standard,
             attachments: attachments
         )
 

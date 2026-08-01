@@ -53,12 +53,20 @@ public struct ProviderModelPicker: View {
                 }
                 .contentShape(Rectangle())
             case .compact:
-                HStack(spacing: 6) {
+                HStack(spacing: 5) {
                     selectionMark(size: 14)
-                    Text(compactSelectionLabel)
+                    Text(compactModelName)
                         .lineLimit(1)
+                        .truncationMode(.middle)
+                    if let compactReasoningLabel {
+                        Text("· \(compactReasoningLabel)")
+                            .lineLimit(1)
+                            .fixedSize(horizontal: true, vertical: false)
+                            .layoutPriority(2)
+                    }
                     Image(systemName: "chevron.up.chevron.down")
                         .font(.system(size: 8, weight: .bold))
+                        .fixedSize()
                 }
                 .font(T3Typography.supportingStrong)
                 .foregroundStyle(T3Colors.textSecondary)
@@ -102,18 +110,19 @@ public struct ProviderModelPicker: View {
         return "\(base) · \(summary)"
     }
 
-    private var compactSelectionLabel: String {
+    private var compactModelName: String {
         guard let selectedOption else {
             return selection == nil ? "Automatic" : "Choose model"
         }
-        guard let selection,
-              let summary = DailyUXModelOptions.summary(
-                for: selectedOption.model,
-                selections: selection.options
-              ) else {
-            return selectedOption.model.name
-        }
-        return "\(selectedOption.model.name) · \(summary)"
+        return selectedOption.model.name
+    }
+
+    private var compactReasoningLabel: String? {
+        guard let selectedOption, let selection else { return nil }
+        return DailyUXModelOptions.reasoningSummary(
+            for: selectedOption.model,
+            selections: selection.options
+        )
     }
 
     @ViewBuilder

@@ -45,8 +45,8 @@ public struct NewTaskRequest: Sendable, Equatable {
         self.projectID = projectID
         self.prompt = prompt
         self.selection = selection
-        self.runtimeMode = runtimeMode
-        self.interactionMode = interactionMode
+        self.runtimeMode = runtimeMode.mobileNormalized
+        self.interactionMode = interactionMode.mobileNormalized
         self.attachments = attachments
     }
 
@@ -587,6 +587,30 @@ enum DailyUXModelOptions {
             }
         }
         return labels.isEmpty ? nil : labels.joined(separator: " · ")
+    }
+
+    /// The compact composer gives reasoning its own non-compressible label so
+    /// a long model name cannot hide the setting users change most often.
+    static func reasoningSummary(
+        for model: FeatureModel,
+        selections: [FeatureModelOptionSelection]
+    ) -> String? {
+        guard let descriptor = model.options.first(where: { descriptor in
+            let searchable = "\(descriptor.id) \(descriptor.label)".lowercased()
+            return searchable.contains("reason")
+                || searchable.contains("effort")
+                || searchable.contains("thinking")
+                || searchable.contains("thought")
+        }), let value = value(for: descriptor, in: selections) else {
+            return nil
+        }
+
+        switch value {
+        case let .string(choiceID):
+            return descriptor.choices.first(where: { $0.id == choiceID })?.label
+        case let .boolean(isEnabled):
+            return isEnabled ? descriptor.label : nil
+        }
     }
 
     static func supportsImages(
