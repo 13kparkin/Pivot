@@ -6,9 +6,6 @@ struct FeatureComposerView: View {
     @State private var pathEntries: [FeatureComposerPathEntry] = []
     @State private var isPathSearchLoading = false
     @State private var pathSearchError: String?
-    @State private var cursorOffset: Int?
-    @State private var cursorPlacement: FeatureComposerCursorPlacement?
-
     @Binding private var text: String
     @Binding private var selection: FeatureSelection?
     @Binding private var attachments: [FeatureDraftAttachment]
@@ -184,9 +181,14 @@ struct FeatureComposerView: View {
                     .padding(.horizontal, 13)
             }
 
-            composerEditor
+            TextField(
+                isWorking ? "Message to queue…" : "Ask anything…",
+                text: $text,
+                axis: .vertical
+            )
                 .font(T3Typography.composer)
                 .lineLimit(1...7)
+                .focused(focused)
                 .submitLabel(.send)
                 .onSubmit {
                     if canSend { onSend() }
@@ -315,34 +317,8 @@ struct FeatureComposerView: View {
         DailyUXModelOptions.supportsImages(selection: selection, providers: providers)
     }
 
-    @ViewBuilder
-    private var composerEditor: some View {
-        if #available(iOS 18.0, *) {
-            FeatureComposerCursorAwareTextField(
-                prompt: isWorking ? "Message to queue…" : "Ask anything…",
-                text: $text,
-                cursorOffset: $cursorOffset,
-                cursorPlacement: cursorPlacement,
-                focused: focused
-            )
-        } else {
-            // SwiftUI does not expose a TextField selection binding before iOS 18.
-            // Keep the native field on iOS 17 instead of replacing it with a brittle
-            // UITextView bridge; its command completion remains end-of-text aware.
-            TextField(
-                isWorking ? "Message to queue…" : "Ask anything…",
-                text: $text,
-                axis: .vertical
-            )
-            .focused(focused)
-        }
-    }
-
     private var composerTrigger: FeatureComposerTrigger? {
-        if #available(iOS 18.0, *) {
-            return FeatureComposerTriggerParser.detect(in: text, cursorOffset: cursorOffset)
-        }
-        return FeatureComposerTriggerParser.detect(in: text)
+        FeatureComposerTriggerParser.detect(in: text)
     }
 
     private var commandMenuItems: [FeatureComposerMenuItem] {
@@ -421,16 +397,10 @@ struct FeatureComposerView: View {
         case let .path(entry):
             replacement = FeatureComposerFileLinkSerializer.markdownLink(for: entry.path) + " "
         }
-        let replacementCursorOffset = trigger.range.lowerBound + replacement.count
         text = FeatureComposerTriggerParser.replacing(
             trigger.range,
             in: text,
             with: replacement
-        )
-        cursorOffset = replacementCursorOffset
-        cursorPlacement = FeatureComposerCursorPlacement(
-            offset: replacementCursorOffset,
-            revision: (cursorPlacement?.revision ?? 0) + 1
         )
         pathEntries = []
         pathSearchError = nil
@@ -448,69 +418,6 @@ struct FeatureComposerView: View {
         }
     }
 
-}
-
-private struct FeatureComposerCursorPlacement: Equatable {
-    let offset: Int
-    let revision: Int
-}
-
-@available(iOS 18.0, *)
-private struct FeatureComposerCursorAwareTextField: View {
-    let prompt: String
-    @Binding var text: String
-    @Binding var cursorOffset: Int?
-    let cursorPlacement: FeatureComposerCursorPlacement?
-    let focused: FocusState<Bool>.Binding
-
-    @State private var textSelection: TextSelection?
-
-    var body: some View {
-        TextField(
-            prompt,
-            text: $text,
-            selection: $textSelection,
-            axis: .vertical
-        )
-        .focused(focused)
-        .onAppear {
-            if let cursorOffset {
-                placeCursor(at: cursorOffset)
-            }
-        }
-        .onChange(of: textSelection) { _, nextSelection in
-            updateCursorOffset(from: nextSelection)
-        }
-        .onChange(of: cursorPlacement) { _, placement in
-            guard let placement else { return }
-            placeCursor(at: placement.offset)
-        }
-    }
-
-    private func placeCursor(at requestedOffset: Int) {
-        let offset = min(max(requestedOffset, 0), text.count)
-        let index = text.index(text.startIndex, offsetBy: offset)
-        textSelection = TextSelection(insertionPoint: index)
-        cursorOffset = offset
-    }
-
-    private func updateCursorOffset(from selection: TextSelection?) {
-        guard let selection else {
-            cursorOffset = nil
-            return
-        }
-
-        let cursorIndex: String.Index
-        switch selection.indices {
-        case let .selection(range):
-            cursorIndex = range.upperBound
-        case let .multiSelection(ranges):
-            cursorIndex = ranges.ranges.last?.upperBound ?? text.endIndex
-        @unknown default:
-            cursorIndex = text.endIndex
-        }
-        cursorOffset = text.distance(from: text.startIndex, to: cursorIndex)
-    }
 }
 
 private struct FeatureComposerPathSearchRequest: Hashable {

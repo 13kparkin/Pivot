@@ -87,23 +87,28 @@ public struct ProviderModelPicker: View {
     }
 
     private var selectedOption: DailyUXModelOption? {
-        guard let selection,
-              let provider = providers.first(where: { $0.id == selection.providerID }),
-              let model = provider.models.first(where: { $0.id == selection.modelID }) else {
+        guard let resolvedSelection,
+              let provider = providers.first(where: { $0.id == resolvedSelection.providerID }),
+              let model = provider.models.first(where: { $0.id == resolvedSelection.modelID }) else {
             return nil
         }
         return DailyUXModelOption(provider: provider, model: model)
     }
 
+    private var resolvedSelection: FeatureSelection? {
+        DailyUXModelOptions.validated(selection, in: providers)
+            ?? DailyUXModelOptions.preferredSelection(in: providers)
+    }
+
     private var selectionLabel: String {
         guard let selectedOption else {
-            return selection == nil ? "Automatic" : "Model unavailable"
+            return "Choose model"
         }
         let base = "\(selectedOption.provider.name) · \(selectedOption.model.name)"
-        guard let selection,
+        guard let resolvedSelection,
               let summary = DailyUXModelOptions.summary(
                 for: selectedOption.model,
-                selections: selection.options
+                selections: resolvedSelection.options
               ) else {
             return base
         }
@@ -112,16 +117,16 @@ public struct ProviderModelPicker: View {
 
     private var compactModelName: String {
         guard let selectedOption else {
-            return selection == nil ? "Automatic" : "Choose model"
+            return "Choose model"
         }
         return selectedOption.model.name
     }
 
     private var compactReasoningLabel: String? {
-        guard let selectedOption, let selection else { return nil }
+        guard let selectedOption, let resolvedSelection else { return nil }
         return DailyUXModelOptions.reasoningSummary(
             for: selectedOption.model,
-            selections: selection.options
+            selections: resolvedSelection.options
         )
     }
 
@@ -135,7 +140,7 @@ public struct ProviderModelPicker: View {
                 size: size
             )
         } else {
-            Image(systemName: selection == nil ? "wand.and.stars" : "cpu")
+            Image(systemName: "cpu")
                 .font(.system(size: size * 0.72, weight: .semibold))
                 .foregroundStyle(T3Colors.textSecondary)
                 .frame(width: size, height: size)
@@ -204,20 +209,6 @@ private struct ModelPickerSheet: View {
 
     private var modelList: some View {
         List {
-            if query.isEmpty {
-                Section {
-                    Button {
-                        selection = nil
-                        dismiss()
-                    } label: {
-                        ModelAutomaticRow(isSelected: selection == nil)
-                    }
-                    .buttonStyle(.plain)
-                    .disabled(modelChangesAreLocked)
-                    .opacity(modelChangesAreLocked ? 0.36 : 1)
-                }
-            }
-
             if modelChangesAreLocked {
                 Section {
                     Label(
@@ -278,8 +269,8 @@ private struct ModelPickerSheet: View {
             } label: {
                 ModelOptionLabel(
                     option: option,
-                    isSelected: selection?.providerID == option.provider.id
-                        && selection?.modelID == option.model.id
+                    isSelected: resolvedSelection?.providerID == option.provider.id
+                        && resolvedSelection?.modelID == option.model.id
                 )
                 .contentShape(Rectangle())
             }
@@ -322,6 +313,11 @@ private struct ModelPickerSheet: View {
             favoriteIDs: favoriteIDs,
             recentIDs: recentIDs
         )
+    }
+
+    private var resolvedSelection: FeatureSelection? {
+        DailyUXModelOptions.validated(selection, in: providers)
+            ?? DailyUXModelOptions.preferredSelection(in: providers)
     }
 
     private func select(_ option: DailyUXModelOption) {
@@ -491,33 +487,6 @@ private struct ModelConfigurationView: View {
     }
 }
 
-private struct ModelAutomaticRow: View {
-    let isSelected: Bool
-
-    var body: some View {
-        HStack(spacing: 12) {
-            Image(systemName: "wand.and.stars")
-                .foregroundStyle(T3Colors.textSecondary)
-                .frame(width: 24)
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Automatic")
-                    .font(T3Typography.homeTitle)
-                    .foregroundStyle(T3Colors.textPrimary)
-                Text("Use the environment default")
-                    .font(T3Typography.supporting)
-                    .foregroundStyle(T3Colors.textSecondary)
-            }
-            Spacer()
-            if isSelected {
-                Image(systemName: "checkmark")
-                    .font(.subheadline.weight(.bold))
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.vertical, 4)
-    }
-}
-
 private struct ModelOptionLabel: View {
     let option: DailyUXModelOption
     let isSelected: Bool
@@ -531,9 +500,6 @@ private struct ModelOptionLabel: View {
                         .font(T3Typography.homeTitle)
                         .foregroundStyle(T3Colors.textPrimary)
                         .lineLimit(1)
-                    if option.model.supportsReasoning {
-                        capability("Reasoning", icon: "brain")
-                    }
                     if option.model.supportsImages {
                         capability("Images", icon: "photo")
                     }

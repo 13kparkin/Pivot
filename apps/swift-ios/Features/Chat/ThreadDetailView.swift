@@ -345,7 +345,7 @@ public struct ThreadDetailView: View {
                     Task { await model.resolveUserInput(id, answers: answers) }
                 }
             )
-            .highPriorityGesture(composerKeyboardDismissGesture)
+            .simultaneousGesture(composerKeyboardDismissGesture)
         }
     }
 
