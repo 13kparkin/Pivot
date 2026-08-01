@@ -333,7 +333,7 @@ public struct ThreadDetailView: View {
                     Task { await model.resolveUserInput(id, answers: answers) }
                 }
             )
-            .simultaneousGesture(composerKeyboardDismissGesture)
+            .highPriorityGesture(composerKeyboardDismissGesture)
         }
     }
 
@@ -442,7 +442,7 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
         )
         collectionView.backgroundColor = .black
         collectionView.alwaysBounceVertical = true
-        collectionView.keyboardDismissMode = .interactive
+        collectionView.keyboardDismissMode = .onDrag
         collectionView.delaysContentTouches = false
         collectionView.contentInsetAdjustmentBehavior = .never
         collectionView.isPrefetchingEnabled = true
