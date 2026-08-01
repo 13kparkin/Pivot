@@ -289,6 +289,7 @@ struct HomeThreadCollectionView: UIViewRepresentable {
             context: HomeThreadRowContext
         ) -> String {
             var values = [thread.homeStatusLabel ?? "Ready", "Project \(context.projectName)"]
+            values.append("Harness \(context.providerName)")
             if let duration = thread.homeWorkingDuration(at: .now) {
                 values.append("for \(duration)")
             }

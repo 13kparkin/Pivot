@@ -7,16 +7,23 @@ enum ProviderBrand: String {
     case grok = "ProviderGrok"
     case openCode = "ProviderOpenCode"
 
-    static func resolve(driver: String, providerID: String) -> ProviderBrand? {
-        for value in [driver, providerID] {
-            switch value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
-            case "codex", "openai":
+    static func resolve(
+        driver: String,
+        providerID: String,
+        providerName: String = ""
+    ) -> ProviderBrand? {
+        for value in [driver, providerID, providerName] {
+            let normalized = value
+                .lowercased()
+                .filter(\.isLetter)
+            switch normalized {
+            case "codex", "codexcli", "openai", "openaicodex":
                 return .openAI
-            case "claudeagent", "claude":
+            case "anthropic", "anthropicclaude", "claudeagent", "claude", "claudecode":
                 return .claude
-            case "cursor":
+            case "cursor", "cursoragent":
                 return .cursor
-            case "grok":
+            case "grok", "xai", "xaigrok":
                 return .grok
             case "opencode":
                 return .openCode
@@ -38,7 +45,11 @@ struct ProviderIcon: View {
 
     var body: some View {
         Group {
-            if let brand = ProviderBrand.resolve(driver: driver, providerID: providerID) {
+            if let brand = ProviderBrand.resolve(
+                driver: driver,
+                providerID: providerID,
+                providerName: fallbackName
+            ) {
                 Image(brand.rawValue)
                     .resizable()
                     .renderingMode(.original)

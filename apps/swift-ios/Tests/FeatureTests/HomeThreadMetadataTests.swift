@@ -127,4 +127,61 @@ struct HomeThreadMetadataTests {
         #expect(thread.homeEnvironmentLabel(in: snapshot) == "steambox")
         #expect(thread.homeProviderLabel(in: snapshot) == "Claude")
     }
+
+    @Test
+    func rowContextCarriesHarnessIdentityAndCustomProviderFallback() throws {
+        let knownThread = FeatureThread(
+            id: "known",
+            projectID: "project",
+            title: "Use Claude",
+            providerID: "work-claude"
+        )
+        let customThread = FeatureThread(
+            id: "custom",
+            projectID: "project",
+            title: "Use a custom harness",
+            providerID: "acme-agent",
+            providerName: "Acme Agent"
+        )
+        let snapshot = FeatureSnapshot(
+            projects: [
+                FeatureProject(
+                    id: "project",
+                    environmentID: "device",
+                    name: "t3code",
+                    path: "/work/t3code"
+                ),
+            ],
+            threads: [knownThread, customThread],
+            providers: [
+                FeatureProvider(id: "work-claude", name: "Claude Code", driver: "custom"),
+                FeatureProvider(id: "acme-agent", name: "Acme Agent", driver: "custom"),
+            ]
+        )
+
+        let contexts = HomeThreadRowContext.index(snapshot: snapshot)
+        let known = try #require(contexts[knownThread.id])
+        let custom = try #require(contexts[customThread.id])
+
+        #expect(known.providerID == "work-claude")
+        #expect(known.providerDriver == "custom")
+        #expect(known.providerName == "Claude Code")
+        #expect(
+            ProviderBrand.resolve(
+                driver: known.providerDriver,
+                providerID: known.providerID,
+                providerName: known.providerName
+            ) == .claude
+        )
+        #expect(custom.providerID == "acme-agent")
+        #expect(custom.providerDriver == "custom")
+        #expect(custom.providerName == "Acme Agent")
+        #expect(
+            ProviderBrand.resolve(
+                driver: custom.providerDriver,
+                providerID: custom.providerID,
+                providerName: custom.providerName
+            ) == nil
+        )
+    }
 }

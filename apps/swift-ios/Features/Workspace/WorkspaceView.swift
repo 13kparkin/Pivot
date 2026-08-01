@@ -665,15 +665,28 @@ struct HomeShelfHeader: View {
 struct HomeThreadRowContext: Equatable {
     let projectName: String
     let environmentLabel: String?
-    let providerLooksTerminal: Bool
+    let providerID: String
+    let providerDriver: String
+    let providerName: String
     let connectionState: FeatureConnection.State?
 
     static let fallback = HomeThreadRowContext(
         projectName: "Project",
         environmentLabel: nil,
-        providerLooksTerminal: false,
+        providerID: "agent",
+        providerDriver: "",
+        providerName: "Agent",
         connectionState: nil
     )
+
+    var providerLooksTerminal: Bool {
+        let normalized = [providerDriver, providerID, providerName]
+            .joined(separator: " ")
+            .lowercased()
+        return normalized.contains("codex")
+            || normalized.contains("cursor")
+            || normalized.contains("open")
+    }
 
     static func index(snapshot: FeatureSnapshot) -> [String: HomeThreadRowContext] {
         let projectByID = snapshot.projects.reduce(into: [String: FeatureProject]()) {
@@ -695,10 +708,13 @@ struct HomeThreadRowContext: Equatable {
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             let explicitProvider = thread.providerName?
                 .trimmingCharacters(in: .whitespacesAndNewlines)
-            let provider = (explicitProvider?.isEmpty == false ? explicitProvider : nil)
-                ?? thread.providerID.flatMap { providerByID[$0]?.name }
+            let configuredProvider = thread.providerID.flatMap { providerByID[$0] }
+            let providerName = (explicitProvider?.isEmpty == false ? explicitProvider : nil)
+                ?? configuredProvider?.name
                 ?? thread.providerID
-                ?? ""
+                ?? "Agent"
+            let providerID = thread.providerID ?? providerName
+            let providerDriver = configuredProvider?.driver ?? thread.providerID ?? ""
 
             let connectionState: FeatureConnection.State?
             if environment?.isActive == true
@@ -713,12 +729,9 @@ struct HomeThreadRowContext: Equatable {
             result[thread.id] = HomeThreadRowContext(
                 projectName: project?.name ?? "Project",
                 environmentLabel: environmentLabel?.isEmpty == false ? environmentLabel : nil,
-                providerLooksTerminal: {
-                    let normalized = provider.lowercased()
-                    return normalized.contains("codex")
-                        || normalized.contains("cursor")
-                        || normalized.contains("open")
-                }(),
+                providerID: providerID,
+                providerDriver: providerDriver,
+                providerName: providerName,
                 connectionState: connectionState
             )
         }
@@ -815,9 +828,7 @@ struct FeatureThreadRow: View, Equatable {
                     }
                     .foregroundStyle(environmentColor)
                 }
-                Image(systemName: "sparkles")
-                    .font(.system(size: 9))
-                    .opacity(0.48)
+                providerIcon(size: 16)
             }
             .font(T3Typography.homeMetadata)
             .foregroundStyle(T3Colors.textTertiary)
@@ -844,6 +855,7 @@ struct FeatureThreadRow: View, Equatable {
                 .foregroundStyle(T3Colors.textSecondary)
                 .lineLimit(allowsMultilineTitle ? 2 : 1)
             Spacer(minLength: 8)
+            providerIcon(size: 15)
             Text(SidebarRelativeAge.compact(since: thread.updatedAt, now: now))
                 .font(T3Typography.homeMetadata.monospacedDigit())
                 .foregroundStyle(T3Colors.textTertiary)
@@ -941,8 +953,18 @@ struct FeatureThreadRow: View, Equatable {
         context.environmentLabel
     }
 
+    private func providerIcon(size: CGFloat) -> some View {
+        ProviderIcon(
+            driver: context.providerDriver,
+            providerID: context.providerID,
+            fallbackName: context.providerName,
+            size: size
+        )
+    }
+
     private func accessibilityValue(at now: Date) -> String {
         var values = [thread.homeStatusLabel ?? "Ready", "Project \(context.projectName)"]
+        values.append("Harness \(context.providerName)")
         if let duration = thread.homeWorkingDuration(at: now) {
             values.append("for \(duration)")
         }
