@@ -857,7 +857,12 @@ public final class FeatureRootModel {
     }
 
     private func acknowledgeDeliveredMessages(_ messages: [FeatureMessage]) {
-        let messageIDs = Set(messages.map(\.id))
+        // Local optimistic rows reuse the final message ID but are not proof
+        // that the server accepted the turn. Only authoritative, non-queued
+        // rows can retire a durable outbox entry.
+        let messageIDs = Set(messages.lazy
+            .filter { $0.state != .queued }
+            .map(\.id))
         let delivered = pendingSubmissionsByID.values.filter {
             $0.creation == nil && messageIDs.contains($0.identity.messageID)
         }
