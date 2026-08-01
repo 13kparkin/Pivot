@@ -1,6 +1,10 @@
 import Foundation
 import Observation
 
+public extension Notification.Name {
+    static let t3ConnectSessionChanged = Notification.Name("T3ConnectSessionChanged")
+}
+
 @MainActor
 public protocol T3ConnectCapable: AnyObject {
     var t3ConnectController: T3ConnectController { get }
@@ -37,7 +41,12 @@ public final class T3ConnectController {
     public let resolution: T3ConnectConfigurationResolution
     public let managedAuthorizer: T3ConnectManagedEnvironmentAuthorizer
 
-    public private(set) var account: T3ConnectAccount?
+    public private(set) var account: T3ConnectAccount? {
+        didSet {
+            guard oldValue != account else { return }
+            NotificationCenter.default.post(name: .t3ConnectSessionChanged, object: self)
+        }
+    }
     public private(set) var environments: [T3ConnectCloudEnvironment] = []
     public private(set) var isRefreshing = false
     public private(set) var busyEnvironmentID: String?
@@ -45,6 +54,7 @@ public final class T3ConnectController {
 
     private let auth: T3ConnectClerkSession?
     private let relay: T3ConnectRelayClient?
+    private var registeredDeviceID: String?
 
     public init(
         resolution: T3ConnectConfigurationResolution = T3ConnectConfiguration.resolve(),
@@ -137,8 +147,19 @@ public final class T3ConnectController {
         isRefreshing = true
         defer { isRefreshing = false }
         do {
+            if let registeredDeviceID,
+               let token = try? await loadedRelayToken(auth) {
+                // Remote delivery must not outlive the signed-in session on this
+                // install. A failed best-effort unregister must not trap the user
+                // in an account they are trying to leave.
+                try? await relay.unregisterDevice(
+                    deviceID: registeredDeviceID,
+                    clerkToken: token
+                )
+            }
             try await auth.signOut()
             await relay.clearTokenCache()
+            registeredDeviceID = nil
             account = nil
             environments = []
         } catch {
@@ -157,11 +178,39 @@ public final class T3ConnectController {
         }
         busyEnvironmentID = environment.environmentId
         defer { busyEnvironmentID = nil }
-        let token = try await auth.relayToken()
+        let token = try await loadedRelayToken(auth)
         return try await relay.connect(
             to: environment,
             clerkToken: token,
-            deviceID: deviceID
+            deviceID: deviceID ?? registeredDeviceID
+        )
+    }
+
+    /// Reacquires the one-use bootstrap credential needed to refresh a saved
+    /// managed environment. The current relay record is fetched again so an
+    /// expired access token never falls back to a manual bearer credential.
+    public func credential(
+        forEnvironmentID environmentID: String,
+        deviceID: String? = nil
+    ) async throws -> T3ConnectManagedEnvironmentCredential {
+        guard let auth, let relay else {
+            throw T3ConnectRelayError.invalidConfiguration(
+                unavailableReason ?? "T3 Connect is unavailable in this build."
+            )
+        }
+        busyEnvironmentID = environmentID
+        defer { busyEnvironmentID = nil }
+        let token = try await loadedRelayToken(auth)
+        let records = try await relay.listEnvironments(clerkToken: token)
+        guard let environment = records.first(where: { $0.environmentId == environmentID }) else {
+            throw T3ConnectRelayError.invalidConfiguration(
+                "This environment is no longer linked to your T3 account."
+            )
+        }
+        return try await relay.connect(
+            to: environment,
+            clerkToken: token,
+            deviceID: deviceID ?? registeredDeviceID
         )
     }
 
@@ -170,7 +219,7 @@ public final class T3ConnectController {
         busyEnvironmentID = environment.environmentId
         defer { busyEnvironmentID = nil }
         do {
-            let token = try await auth.relayToken()
+            let token = try await loadedRelayToken(auth)
             try await relay.unlinkEnvironment(
                 environmentID: environment.environmentId,
                 clerkToken: token
@@ -187,7 +236,32 @@ public final class T3ConnectController {
                 unavailableReason ?? "T3 Connect is unavailable in this build."
             )
         }
-        let token = try await auth.relayToken()
+        let token = try await loadedRelayToken(auth)
         try await relay.registerDevice(registration, clerkToken: token)
+        registeredDeviceID = registration.deviceId
+    }
+
+    func rememberRegisteredDevice(id: String) {
+        registeredDeviceID = id
+    }
+
+    public func registerLiveActivity(
+        _ registration: T3ConnectLiveActivityRegistration
+    ) async throws {
+        guard let auth, let relay else {
+            throw T3ConnectRelayError.invalidConfiguration(
+                unavailableReason ?? "T3 Connect is unavailable in this build."
+            )
+        }
+        let token = try await loadedRelayToken(auth)
+        try await relay.registerLiveActivity(registration, clerkToken: token)
+    }
+
+    private func loadedRelayToken(_ auth: T3ConnectClerkSession) async throws -> String {
+        if !auth.isLoaded {
+            try await auth.refresh()
+        }
+        account = auth.account
+        return try await auth.relayToken()
     }
 }

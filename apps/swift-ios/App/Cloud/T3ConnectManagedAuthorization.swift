@@ -110,7 +110,22 @@ public actor T3ConnectManagedEnvironmentAuthorizer {
         request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
         request.setValue(proof.value, forHTTPHeaderField: "DPoP")
         let response = try await send(request, as: AccessTokenResponse.self)
-        guard response.tokenType == "DPoP" else { throw T3ConnectRelayError.invalidResponse }
+        let grantedScopes = Set(response.scope.split(separator: " ").map(String.init))
+        guard response.tokenType == "DPoP",
+              response.issuedTokenType
+                == "urn:ietf:params:oauth:token-type:access_token",
+              response.accessToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false,
+              response.expiresIn.isFinite,
+              response.expiresIn > 0,
+              grantedScopes == Set(scopes) else {
+            if grantedScopes != Set(scopes) {
+                throw T3ConnectRelayError.unexpectedScope(
+                    requested: scopes,
+                    granted: response.scope
+                )
+            }
+            throw T3ConnectRelayError.invalidResponse
+        }
         let thumbprint = try await signer.thumbprint()
         guard thumbprint == credential.proofKeyThumbprint else {
             throw T3ConnectRelayError.invalidConfiguration(
@@ -152,6 +167,22 @@ public actor T3ConnectManagedEnvironmentAuthorizer {
         )
         authorized.setValue(proof.value, forHTTPHeaderField: "DPoP")
         return authorized
+    }
+
+    public func proofKeyThumbprint() async throws -> String {
+        try await signer.thumbprint()
+    }
+
+    public func descriptor(at httpBaseURL: URL) async throws -> EnvironmentDescriptor {
+        try await send(
+            URLRequest(
+                url: endpoint(
+                    httpBaseURL,
+                    path: [".well-known", "t3", "environment"]
+                )
+            ),
+            as: EnvironmentDescriptor.self
+        )
     }
 
     public func webSocketURL(
@@ -221,5 +252,162 @@ public actor T3ConnectManagedEnvironmentAuthorizer {
             URLQueryItem(name: $0, value: fields[$0])
         }
         return Data((components.percentEncodedQuery ?? "").utf8)
+    }
+}
+
+/// Adapts the T3 Connect token lifecycle to Core's environment transport.
+/// Refresh work is coalesced per environment because shell, detail, and socket
+/// reconnect requests can all discover expiration at the same time.
+public actor T3ConnectRuntimeAuthorization: ManagedEnvironmentAuthorizing {
+    public typealias BootstrapProvider = @Sendable (String) async throws
+        -> T3ConnectManagedEnvironmentCredential
+
+    private let authorizer: T3ConnectManagedEnvironmentAuthorizer
+    private let bootstrapProvider: BootstrapProvider
+    private var refreshTasks: [String: Task<EnvironmentCredential, Error>] = [:]
+
+    @MainActor
+    public init(controller: T3ConnectController) {
+        authorizer = controller.managedAuthorizer
+        bootstrapProvider = { environmentID in
+            try await controller.credential(forEnvironmentID: environmentID)
+        }
+    }
+
+    public init(
+        authorizer: T3ConnectManagedEnvironmentAuthorizer,
+        bootstrapProvider: @escaping BootstrapProvider
+    ) {
+        self.authorizer = authorizer
+        self.bootstrapProvider = bootstrapProvider
+    }
+
+    public func credentialRequiresRefresh(
+        _ credential: EnvironmentCredential,
+        environment: Environment
+    ) async throws -> Bool {
+        _ = try Self.authorization(environment: environment, credential: credential)
+        return try await authorizer.proofKeyThumbprint() != credential.proofKeyThumbprint
+    }
+
+    public func authorize(
+        _ request: URLRequest,
+        environment: Environment,
+        credential: EnvironmentCredential
+    ) async throws -> URLRequest {
+        let authorization = try Self.authorization(
+            environment: environment,
+            credential: credential
+        )
+        return try await authorizer.authorize(request, using: authorization)
+    }
+
+    public func refreshCredential(
+        for environment: Environment,
+        replacing credential: EnvironmentCredential
+    ) async throws -> EnvironmentCredential {
+        _ = try Self.authorization(environment: environment, credential: credential)
+        if let task = refreshTasks[environment.id] {
+            return try await task.value
+        }
+
+        let authorizer = self.authorizer
+        let bootstrapProvider = self.bootstrapProvider
+        let task = Task<EnvironmentCredential, Error> {
+            let bootstrap = try await bootstrapProvider(environment.id)
+            try Self.validate(
+                bootstrap: bootstrap,
+                environment: environment
+            )
+            guard let httpBaseURL = bootstrap.endpoint.httpBaseURL else {
+                throw T3ConnectRelayError.environmentMismatch
+            }
+            let descriptor = try await authorizer.descriptor(at: httpBaseURL)
+            guard descriptor.environmentId == environment.id else {
+                throw T3ConnectRelayError.environmentMismatch
+            }
+            let authorization = try await authorizer.exchange(bootstrap)
+            return try Self.credential(
+                authorization: authorization,
+                environment: environment
+            )
+        }
+        refreshTasks[environment.id] = task
+        do {
+            let refreshed = try await task.value
+            refreshTasks.removeValue(forKey: environment.id)
+            return refreshed
+        } catch {
+            refreshTasks.removeValue(forKey: environment.id)
+            throw error
+        }
+    }
+
+    private static func authorization(
+        environment: Environment,
+        credential: EnvironmentCredential
+    ) throws -> T3ConnectEnvironmentAccessToken {
+        guard environment.kind == .managedDPoP,
+              credential.authorizationMethod == .dpop,
+              credential.managedEnvironmentID == environment.id,
+              let expiresAt = credential.expiresAt,
+              let proofKeyThumbprint = credential.proofKeyThumbprint,
+              let endpoint = managedEndpoint(for: environment) else {
+            throw HTTPError.incompatibleCredential
+        }
+        return T3ConnectEnvironmentAccessToken(
+            environmentID: environment.id,
+            label: environment.label,
+            endpoint: endpoint,
+            accessToken: credential.accessToken,
+            expiresAt: expiresAt,
+            scopes: credential.scopes,
+            proofKeyThumbprint: proofKeyThumbprint
+        )
+    }
+
+    private static func credential(
+        authorization: T3ConnectEnvironmentAccessToken,
+        environment: Environment
+    ) throws -> EnvironmentCredential {
+        guard authorization.environmentID == environment.id,
+              authorization.proofKeyThumbprint.isEmpty == false,
+              authorization.endpoint.httpBaseURL == environment.httpBaseURL,
+              authorization.endpoint.webSocketBaseURL == environment.webSocketBaseURL else {
+            throw T3ConnectRelayError.environmentMismatch
+        }
+        return .managedDPoP(
+            accessToken: authorization.accessToken,
+            expiresAt: authorization.expiresAt,
+            scopes: authorization.scopes,
+            environmentID: authorization.environmentID,
+            proofKeyThumbprint: authorization.proofKeyThumbprint
+        )
+    }
+
+    private static func validate(
+        bootstrap: T3ConnectManagedEnvironmentCredential,
+        environment: Environment
+    ) throws {
+        guard bootstrap.environmentID == environment.id,
+              bootstrap.proofKeyThumbprint.isEmpty == false,
+              bootstrap.endpoint.httpBaseURL == environment.httpBaseURL,
+              bootstrap.endpoint.webSocketBaseURL == environment.webSocketBaseURL else {
+            throw T3ConnectRelayError.environmentMismatch
+        }
+    }
+
+    private static func managedEndpoint(
+        for environment: Environment
+    ) -> T3ConnectManagedEndpoint? {
+        guard environment.httpBaseURL.scheme?.lowercased() == "https",
+              environment.webSocketBaseURL.scheme?.lowercased() == "wss",
+              environment.httpBaseURL.host != nil,
+              environment.webSocketBaseURL.host != nil else { return nil }
+        return T3ConnectManagedEndpoint(
+            httpBaseUrl: environment.httpBaseURL.absoluteString,
+            wsBaseUrl: environment.webSocketBaseURL.absoluteString,
+            providerKind: .t3Relay
+        )
     }
 }

@@ -4,6 +4,27 @@ public protocol HTTPTransport: Sendable {
     func data(for request: URLRequest) async throws -> (Data, HTTPURLResponse)
 }
 
+/// The Core transport deliberately knows nothing about Clerk or the relay.
+/// A managed-environment adapter supplies request-bound DPoP proofs and can
+/// reacquire a bound access token when the current one expires or is rejected.
+public protocol ManagedEnvironmentAuthorizing: Sendable {
+    func credentialRequiresRefresh(
+        _ credential: EnvironmentCredential,
+        environment: Environment
+    ) async throws -> Bool
+
+    func authorize(
+        _ request: URLRequest,
+        environment: Environment,
+        credential: EnvironmentCredential
+    ) async throws -> URLRequest
+
+    func refreshCredential(
+        for environment: Environment,
+        replacing credential: EnvironmentCredential
+    ) async throws -> EnvironmentCredential
+}
+
 public struct URLSessionHTTPTransport: HTTPTransport {
     private let session: URLSession
 
@@ -55,6 +76,8 @@ public enum HTTPError: LocalizedError, Sendable {
     case invalidResponse
     case status(Int, message: String, traceID: String?)
     case missingCredential
+    case incompatibleCredential
+    case managedAuthorizationUnavailable
 
     public var errorDescription: String? {
         switch self {
@@ -64,6 +87,10 @@ public enum HTTPError: LocalizedError, Sendable {
             traceID.map { "\(message) (trace \($0))" } ?? "\(message) (HTTP \(status))"
         case .missingCredential:
             "This environment has no saved credential."
+        case .incompatibleCredential:
+            "This environment's saved authentication method is invalid. Connect it again."
+        case .managedAuthorizationUnavailable:
+            "This build cannot authorize a managed T3 Connect environment."
         }
     }
 }
@@ -75,15 +102,20 @@ private struct ErrorBody: Decodable {
 }
 
 public actor EnvironmentAPI {
+    private static let managedRefreshMargin: TimeInterval = 60
+
     private let transport: any HTTPTransport
     private let credentials: any CredentialStore
+    private let managedAuthorization: (any ManagedEnvironmentAuthorizing)?
 
     public init(
         transport: any HTTPTransport = URLSessionHTTPTransport(),
-        credentials: any CredentialStore
+        credentials: any CredentialStore,
+        managedAuthorization: (any ManagedEnvironmentAuthorizing)? = nil
     ) {
         self.transport = transport
         self.credentials = credentials
+        self.managedAuthorization = managedAuthorization
     }
 
     public func descriptor(at httpBaseURL: URL) async throws -> EnvironmentDescriptor {
@@ -202,14 +234,144 @@ public actor EnvironmentAPI {
         guard let credential = try await credentials.credential(for: environment.id) else {
             throw HTTPError.missingCredential
         }
+
+        switch environment.kind {
+        case .bearer, .local:
+            guard credential.authorizationMethod == .bearer else {
+                throw HTTPError.incompatibleCredential
+            }
+            var request = makeRequest(
+                environment: environment,
+                path: path,
+                method: method,
+                body: body
+            )
+            request.setValue(
+                "Bearer \(credential.accessToken)",
+                forHTTPHeaderField: "Authorization"
+            )
+            return try await send(request, as: type)
+
+        case .managedDPoP:
+            guard credential.authorizationMethod == .dpop,
+                  credential.managedEnvironmentID == environment.id else {
+                throw HTTPError.incompatibleCredential
+            }
+            guard let managedAuthorization else {
+                throw HTTPError.managedAuthorizationUnavailable
+            }
+
+            var current = credential
+            let bindingRequiresRefresh = try await managedAuthorization
+                .credentialRequiresRefresh(current, environment: environment)
+            if current.expiresAt?.timeIntervalSinceNow ?? 0 <= Self.managedRefreshMargin
+                || bindingRequiresRefresh {
+                current = try await refreshManagedCredential(
+                    current,
+                    environment: environment,
+                    using: managedAuthorization
+                )
+            }
+            let request = try await managedAuthorization.authorize(
+                makeRequest(
+                    environment: environment,
+                    path: path,
+                    method: method,
+                    body: body
+                ),
+                environment: environment,
+                credential: current
+            )
+            do {
+                return try await send(request, as: type)
+            } catch let error as HTTPError where error.isRejectedAuthorization {
+                if let saved = try await newestUsableManagedCredential(
+                    replacing: current,
+                    environment: environment,
+                    using: managedAuthorization
+                ) {
+                    current = saved
+                } else {
+                    current = try await refreshManagedCredential(
+                        current,
+                        environment: environment,
+                        using: managedAuthorization
+                    )
+                }
+                let retry = try await managedAuthorization.authorize(
+                    makeRequest(
+                        environment: environment,
+                        path: path,
+                        method: method,
+                        body: body
+                    ),
+                    environment: environment,
+                    credential: current
+                )
+                return try await send(retry, as: type)
+            }
+        }
+    }
+
+    private func makeRequest(
+        environment: Environment,
+        path: String,
+        method: String,
+        body: Data?
+    ) -> URLRequest {
         var request = URLRequest(url: endpoint(environment.httpBaseURL, path: path))
         request.httpMethod = method
         request.httpBody = body
-        request.setValue("Bearer \(credential.accessToken)", forHTTPHeaderField: "Authorization")
         if body != nil {
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         }
-        return try await send(request, as: type)
+        return request
+    }
+
+    private func refreshManagedCredential(
+        _ credential: EnvironmentCredential,
+        environment: Environment,
+        using managedAuthorization: any ManagedEnvironmentAuthorizing
+    ) async throws -> EnvironmentCredential {
+        if let current = try await newestUsableManagedCredential(
+            replacing: credential,
+            environment: environment,
+            using: managedAuthorization
+        ) {
+            return current
+        }
+        let refreshed = try await managedAuthorization.refreshCredential(
+            for: environment,
+            replacing: credential
+        )
+        guard refreshed.authorizationMethod == .dpop,
+              refreshed.managedEnvironmentID == environment.id,
+              refreshed.proofKeyThumbprint?.isEmpty == false else {
+            throw HTTPError.incompatibleCredential
+        }
+        try await credentials.setCredential(refreshed, for: environment.id)
+        return refreshed
+    }
+
+    private func newestUsableManagedCredential(
+        replacing credential: EnvironmentCredential,
+        environment: Environment,
+        using managedAuthorization: any ManagedEnvironmentAuthorizing
+    ) async throws -> EnvironmentCredential? {
+        guard let saved = try await credentials.credential(for: environment.id),
+              saved != credential,
+              saved.authorizationMethod == .dpop,
+              saved.managedEnvironmentID == environment.id,
+              saved.proofKeyThumbprint?.isEmpty == false,
+              saved.expiresAt?.timeIntervalSinceNow ?? 0 > Self.managedRefreshMargin else {
+            return nil
+        }
+        let requiresRefresh = try await managedAuthorization.credentialRequiresRefresh(
+            saved,
+            environment: environment
+        )
+        guard !requiresRefresh else { return nil }
+        return saved
     }
 
     private func send<Result: Decodable & Sendable>(
@@ -226,6 +388,13 @@ public actor EnvironmentAPI {
             )
         }
         return try JSONDecoder.t3.decode(type, from: data)
+    }
+}
+
+private extension HTTPError {
+    var isRejectedAuthorization: Bool {
+        guard case let .status(status, _, _) = self else { return false }
+        return status == 401
     }
 }
 

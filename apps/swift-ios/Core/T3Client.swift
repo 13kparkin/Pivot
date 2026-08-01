@@ -10,10 +10,15 @@ public actor T3Client {
         credentialStore: any CredentialStore,
         httpTransport: any HTTPTransport = URLSessionHTTPTransport(),
         webSocketConnector: any WebSocketConnecting = URLSessionWebSocketConnector(),
+        managedAuthorization: (any ManagedEnvironmentAuthorizing)? = nil,
         rpcConnectionWaitTimeout: Duration = .seconds(4)
     ) {
         self.environment = environment
-        let api = EnvironmentAPI(transport: httpTransport, credentials: credentialStore)
+        let api = EnvironmentAPI(
+            transport: httpTransport,
+            credentials: credentialStore,
+            managedAuthorization: managedAuthorization
+        )
         self.api = api
         self.rpc = WebSocketRPCClient(
             connector: webSocketConnector,
@@ -908,20 +913,25 @@ public actor T3Client {
 public actor EnvironmentRuntime {
     public let environmentStore: EnvironmentStore
     public let credentialStore: any CredentialStore
+    public nonisolated let supportsManagedAuthorization: Bool
     private let httpTransport: any HTTPTransport
     private let webSocketConnector: any WebSocketConnecting
+    private let managedAuthorization: (any ManagedEnvironmentAuthorizing)?
     private var clients: [String: T3Client] = [:]
 
     public init(
         environmentStore: EnvironmentStore = EnvironmentStore(),
         credentialStore: any CredentialStore = KeychainCredentialStore(),
         httpTransport: any HTTPTransport = URLSessionHTTPTransport(),
-        webSocketConnector: any WebSocketConnecting = URLSessionWebSocketConnector()
+        webSocketConnector: any WebSocketConnecting = URLSessionWebSocketConnector(),
+        managedAuthorization: (any ManagedEnvironmentAuthorizing)? = nil
     ) {
         self.environmentStore = environmentStore
         self.credentialStore = credentialStore
         self.httpTransport = httpTransport
         self.webSocketConnector = webSocketConnector
+        self.managedAuthorization = managedAuthorization
+        supportsManagedAuthorization = managedAuthorization != nil
     }
 
     public func environments() async throws -> [Environment] {
@@ -978,6 +988,50 @@ public actor EnvironmentRuntime {
         return await client(for: environment)
     }
 
+    public func descriptor(at httpBaseURL: URL) async throws -> EnvironmentDescriptor {
+        let api = EnvironmentAPI(transport: httpTransport, credentials: credentialStore)
+        return try await api.descriptor(at: httpBaseURL)
+    }
+
+    /// Persists a fully validated managed environment. Both the environment
+    /// metadata and the tagged DPoP credential must agree before either can
+    /// replace an existing manual connection with the same server identity.
+    @discardableResult
+    public func saveManagedEnvironment(
+        _ environment: Environment,
+        credential: EnvironmentCredential
+    ) async throws -> T3Client {
+        guard environment.kind == .managedDPoP,
+              environment.descriptor?.environmentId == environment.id,
+              credential.authorizationMethod == .dpop,
+              credential.managedEnvironmentID == environment.id,
+              credential.proofKeyThumbprint?.isEmpty == false else {
+            throw HTTPError.incompatibleCredential
+        }
+
+        let previousEnvironments = try await environmentStore.load()
+        let previousActiveID = try await environmentStore.activeEnvironmentID()
+        let previousCredential = try await credentialStore.credential(for: environment.id)
+        try await credentialStore.setCredential(credential, for: environment.id)
+        do {
+            try await environmentStore.upsert(environment)
+            try await environmentStore.setActiveEnvironment(id: environment.id)
+        } catch {
+            if let previousCredential {
+                try? await credentialStore.setCredential(
+                    previousCredential,
+                    for: environment.id
+                )
+            } else {
+                try? await credentialStore.removeCredential(for: environment.id)
+            }
+            try? await environmentStore.save(previousEnvironments)
+            try? await environmentStore.setActiveEnvironment(id: previousActiveID)
+            throw error
+        }
+        return await client(for: environment)
+    }
+
     public func remove(id: String) async throws {
         if let client = clients.removeValue(forKey: id) {
             await client.disconnect()
@@ -1000,7 +1054,8 @@ public actor EnvironmentRuntime {
                 environment: environment,
                 credentialStore: credentialStore,
                 httpTransport: httpTransport,
-                webSocketConnector: webSocketConnector
+                webSocketConnector: webSocketConnector,
+                managedAuthorization: managedAuthorization
             )
             clients[environment.id] = replacement
             Task { await existing.disconnect() }
@@ -1010,7 +1065,8 @@ public actor EnvironmentRuntime {
             environment: environment,
             credentialStore: credentialStore,
             httpTransport: httpTransport,
-            webSocketConnector: webSocketConnector
+            webSocketConnector: webSocketConnector,
+            managedAuthorization: managedAuthorization
         )
         clients[environment.id] = client
         return client
@@ -1024,7 +1080,8 @@ public actor EnvironmentRuntime {
             environment: environment,
             credentialStore: credentialStore,
             httpTransport: httpTransport,
-            webSocketConnector: webSocketConnector
+            webSocketConnector: webSocketConnector,
+            managedAuthorization: managedAuthorization
         )
     }
 }

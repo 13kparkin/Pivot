@@ -3,6 +3,7 @@ import Foundation
 public enum EnvironmentKind: String, Codable, Sendable {
     case bearer
     case local
+    case managedDPoP = "managed-dpop"
 }
 
 public struct Environment: Codable, Identifiable, Equatable, Sendable {
@@ -81,15 +82,117 @@ public struct EnvironmentDescriptor: Codable, Equatable, Sendable {
     public let capabilities: Capabilities
 }
 
-public struct EnvironmentCredential: Codable, Equatable, Sendable {
+public enum EnvironmentCredentialAuthorizationMethod: String, Codable, Sendable {
+    case bearer
+    case dpop
+}
+
+public struct EnvironmentCredential: Codable, Equatable, Sendable,
+    CustomStringConvertible, CustomDebugStringConvertible
+{
     public let accessToken: String
     public let expiresAt: Date?
     public let scopes: [String]
+    public let authorizationMethod: EnvironmentCredentialAuthorizationMethod
+    public let managedEnvironmentID: String?
+    public let proofKeyThumbprint: String?
 
     public init(accessToken: String, expiresAt: Date? = nil, scopes: [String] = []) {
         self.accessToken = accessToken
         self.expiresAt = expiresAt
         self.scopes = scopes
+        authorizationMethod = .bearer
+        managedEnvironmentID = nil
+        proofKeyThumbprint = nil
+    }
+
+    public static func managedDPoP(
+        accessToken: String,
+        expiresAt: Date,
+        scopes: [String],
+        environmentID: String,
+        proofKeyThumbprint: String
+    ) -> EnvironmentCredential {
+        EnvironmentCredential(
+            accessToken: accessToken,
+            expiresAt: expiresAt,
+            scopes: scopes,
+            authorizationMethod: .dpop,
+            managedEnvironmentID: environmentID,
+            proofKeyThumbprint: proofKeyThumbprint
+        )
+    }
+
+    public var description: String {
+        "EnvironmentCredential(method: \(authorizationMethod.rawValue), token: <redacted>)"
+    }
+
+    public var debugDescription: String { description }
+
+    private init(
+        accessToken: String,
+        expiresAt: Date?,
+        scopes: [String],
+        authorizationMethod: EnvironmentCredentialAuthorizationMethod,
+        managedEnvironmentID: String?,
+        proofKeyThumbprint: String?
+    ) {
+        self.accessToken = accessToken
+        self.expiresAt = expiresAt
+        self.scopes = scopes
+        self.authorizationMethod = authorizationMethod
+        self.managedEnvironmentID = managedEnvironmentID
+        self.proofKeyThumbprint = proofKeyThumbprint
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case accessToken
+        case expiresAt
+        case scopes
+        case authorizationMethod
+        case managedEnvironmentID
+        case proofKeyThumbprint
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        accessToken = try container.decode(String.self, forKey: .accessToken)
+        expiresAt = try container.decodeIfPresent(Date.self, forKey: .expiresAt)
+        scopes = try container.decodeIfPresent([String].self, forKey: .scopes) ?? []
+        authorizationMethod = try container.decodeIfPresent(
+            EnvironmentCredentialAuthorizationMethod.self,
+            forKey: .authorizationMethod
+        ) ?? .bearer
+        managedEnvironmentID = try container.decodeIfPresent(
+            String.self,
+            forKey: .managedEnvironmentID
+        )
+        proofKeyThumbprint = try container.decodeIfPresent(
+            String.self,
+            forKey: .proofKeyThumbprint
+        )
+
+        if authorizationMethod == .dpop {
+            guard expiresAt != nil,
+                  managedEnvironmentID?.isEmpty == false,
+                  proofKeyThumbprint?.isEmpty == false else {
+                throw DecodingError.dataCorruptedError(
+                    forKey: .authorizationMethod,
+                    in: container,
+                    debugDescription: "A DPoP credential is missing its binding metadata."
+                )
+            }
+        }
+    }
+
+    public func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(accessToken, forKey: .accessToken)
+        try container.encodeIfPresent(expiresAt, forKey: .expiresAt)
+        try container.encode(scopes, forKey: .scopes)
+        try container.encode(authorizationMethod, forKey: .authorizationMethod)
+        try container.encodeIfPresent(managedEnvironmentID, forKey: .managedEnvironmentID)
+        try container.encodeIfPresent(proofKeyThumbprint, forKey: .proofKeyThumbprint)
     }
 }
 

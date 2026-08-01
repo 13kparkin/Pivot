@@ -181,6 +181,16 @@ public struct T3ConnectDeviceRegistration: Codable, Equatable, Sendable {
     }
 }
 
+public struct T3ConnectLiveActivityRegistration: Codable, Equatable, Sendable {
+    public let deviceId: String
+    public let activityPushToken: String
+
+    public init(deviceID: String, activityPushToken: String) {
+        deviceId = deviceID
+        self.activityPushToken = activityPushToken
+    }
+}
+
 public struct T3ConnectRelayDevice: Codable, Identifiable, Equatable, Sendable {
     public struct Notifications: Codable, Equatable, Sendable {
         public let enabled: Bool

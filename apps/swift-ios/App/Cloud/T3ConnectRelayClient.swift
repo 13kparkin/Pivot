@@ -193,6 +193,30 @@ public actor T3ConnectRelayClient {
         )
     }
 
+    public func registerLiveActivity(
+        _ registration: T3ConnectLiveActivityRegistration,
+        clerkToken: String
+    ) async throws {
+        let body = try JSONEncoder.t3.encode(registration)
+        let _: OKResponse = try await sendDPoP(
+            path: ["v1", "mobile", "live-activities"],
+            method: "POST",
+            body: body,
+            clerkToken: clerkToken,
+            scopes: [.mobileRegistration]
+        )
+    }
+
+    public func unregisterDevice(deviceID: String, clerkToken: String) async throws {
+        let _: OKResponse = try await sendDPoP(
+            path: ["v1", "mobile", "devices", deviceID],
+            method: "DELETE",
+            body: nil,
+            clerkToken: clerkToken,
+            scopes: [.mobileRegistration]
+        )
+    }
+
     public func clearTokenCache() {
         cachedTokens.removeAll()
     }
@@ -225,7 +249,7 @@ public actor T3ConnectRelayClient {
         do {
             return try await send(request, as: Response.self)
         } catch let error as T3ConnectRelayError where error.isRejectedAuthorization {
-            cachedTokens.removeValue(forKey: scopeCacheKey(scopes))
+            cachedTokens.removeValue(forKey: tokenCacheKey(scopes, clerkToken: clerkToken))
             let refreshed = try await authorize(
                 clerkToken: clerkToken,
                 scopes: scopes,
@@ -245,7 +269,7 @@ public actor T3ConnectRelayClient {
         url: URL
     ) async throws -> (accessToken: String, proof: String) {
         let thumbprint = try await signer.thumbprint()
-        let cacheKey = scopeCacheKey(scopes)
+        let cacheKey = tokenCacheKey(scopes, clerkToken: clerkToken)
         let token: CachedToken
         if let cached = cachedTokens[cacheKey],
            cached.thumbprint == thumbprint,
@@ -352,8 +376,28 @@ public actor T3ConnectRelayClient {
         }
     }
 
-    private func scopeCacheKey(_ scopes: [T3ConnectRelayScope]) -> String {
-        scopes.map(\.rawValue).sorted().joined(separator: " ")
+    private func tokenCacheKey(
+        _ scopes: [T3ConnectRelayScope],
+        clerkToken: String
+    ) -> String {
+        let account = Self.clerkSubject(clerkToken)
+            ?? T3ConnectDPoPSigner.accessTokenHash(clerkToken)
+        return "\(account)|\(scopes.map(\.rawValue).sorted().joined(separator: " "))"
+    }
+
+    /// JWT claims are used only as a cache partition, never as authentication.
+    /// If Clerk changes token shape, the opaque token hash remains safe.
+    private static func clerkSubject(_ token: String) -> String? {
+        let parts = token.split(separator: ".", omittingEmptySubsequences: false)
+        guard parts.count == 3 else { return nil }
+        var base64 = String(parts[1])
+            .replacingOccurrences(of: "-", with: "+")
+            .replacingOccurrences(of: "_", with: "/")
+        base64 += String(repeating: "=", count: (4 - base64.count % 4) % 4)
+        guard let data = Data(base64Encoded: base64),
+              let claims = try? JSONDecoder().decode(ClerkCacheClaims.self, from: data),
+              claims.sub.isEmpty == false else { return nil }
+        return claims.sub
     }
 
     private static func formEncoded(_ fields: [String: String]) -> Data {
@@ -367,6 +411,10 @@ public actor T3ConnectRelayClient {
     private struct ConnectRequest: Encodable {
         let deviceId: String?
         let clientProofKeyThumbprint: String
+    }
+
+    private struct ClerkCacheClaims: Decodable {
+        let sub: String
     }
 }
 

@@ -14,9 +14,10 @@ extension FeatureInputAnswer {
 /// Composes the transport-focused Core layer with the UI-focused Features layer.
 @MainActor
 final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
-    FeatureProjectCreationClient, FeatureWorkspaceAssetResolving
+    FeatureProjectCreationClient, FeatureWorkspaceAssetResolving, T3ConnectCapable
 {
     private let runtime: EnvironmentRuntime
+    let t3ConnectController: T3ConnectController
     private let settingsStore: UserDefaults
     private let fallbackPollingInitialDelay: Duration
     private let fallbackPollingInterval: Duration
@@ -79,12 +80,28 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
     private var activeThreadSequence: Int?
 
     init(
-        runtime: EnvironmentRuntime = EnvironmentRuntime(),
+        runtime: EnvironmentRuntime? = nil,
+        t3ConnectController: T3ConnectController? = nil,
         settingsStore: UserDefaults = .standard,
         fallbackPollingInitialDelay: Duration = .seconds(3),
         fallbackPollingInterval: Duration = .seconds(2)
     ) {
-        self.runtime = runtime
+        let controller: T3ConnectController
+        if let t3ConnectController {
+            controller = t3ConnectController
+        } else if let runtime, !runtime.supportsManagedAuthorization {
+            controller = T3ConnectController(
+                resolution: .unavailable(
+                    reason: "This client runtime was created without T3 Connect authorization."
+                )
+            )
+        } else {
+            controller = T3ConnectController()
+        }
+        self.t3ConnectController = controller
+        self.runtime = runtime ?? EnvironmentRuntime(
+            managedAuthorization: T3ConnectRuntimeAuthorization(controller: controller)
+        )
         self.settingsStore = settingsStore
         self.fallbackPollingInitialDelay = fallbackPollingInitialDelay
         self.fallbackPollingInterval = fallbackPollingInterval
@@ -161,6 +178,75 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         }
         await adoptEnvironment(pairedClient.environment, client: pairedClient)
         startPolling(pairedClient)
+    }
+
+    func connectT3Environment(
+        _ credential: T3ConnectManagedEnvironmentCredential
+    ) async throws {
+        guard runtime.supportsManagedAuthorization else {
+            throw T3ConnectRelayError.invalidConfiguration(
+                "This client runtime was created without T3 Connect authorization."
+            )
+        }
+        guard credential.environmentID.isEmpty == false,
+              let httpBaseURL = credential.endpoint.httpBaseURL,
+              let webSocketBaseURL = credential.endpoint.webSocketBaseURL,
+              httpBaseURL.scheme?.lowercased() == "https",
+              webSocketBaseURL.scheme?.lowercased() == "wss",
+              httpBaseURL.host != nil,
+              webSocketBaseURL.host != nil else {
+            throw T3ConnectRelayError.invalidConfiguration(
+                "The managed environment endpoint is invalid."
+            )
+        }
+
+        let descriptor = try await runtime.descriptor(at: httpBaseURL)
+        guard descriptor.environmentId == credential.environmentID else {
+            throw T3ConnectRelayError.environmentMismatch
+        }
+        let authorization = try await t3ConnectController.managedAuthorizer.exchange(
+            credential,
+            clientLabel: "T3 Code SwiftUI"
+        )
+        guard authorization.environmentID == descriptor.environmentId,
+              authorization.endpoint == credential.endpoint,
+              authorization.proofKeyThumbprint == credential.proofKeyThumbprint else {
+            throw T3ConnectRelayError.environmentMismatch
+        }
+
+        let environment = Environment(
+            id: descriptor.environmentId,
+            label: descriptor.label,
+            httpBaseURL: httpBaseURL,
+            webSocketBaseURL: webSocketBaseURL,
+            kind: .managedDPoP,
+            descriptor: descriptor
+        )
+        let savedCredential = EnvironmentCredential.managedDPoP(
+            accessToken: authorization.accessToken,
+            expiresAt: authorization.expiresAt,
+            scopes: authorization.scopes,
+            environmentID: authorization.environmentID,
+            proofKeyThumbprint: authorization.proofKeyThumbprint
+        )
+        let managedClient = try await runtime.saveManagedEnvironment(
+            environment,
+            credential: savedCredential
+        )
+        await adoptEnvironment(environment, client: managedClient)
+        do {
+            try await refresh(client: managedClient)
+        } catch {
+            let environments = (try? await runtime.environments()) ?? [environment]
+            let snapshot = makeSnapshot(
+                environments: environments,
+                activeEnvironment: environment,
+                connectionState: .connecting,
+                connectionDetail: "Connected securely. Loading this environment."
+            )
+            publish(snapshot)
+        }
+        startPolling(managedClient)
     }
 
     func activateEnvironment(id: String) async throws {
