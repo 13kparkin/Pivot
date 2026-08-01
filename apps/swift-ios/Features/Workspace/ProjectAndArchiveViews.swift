@@ -1,6 +1,13 @@
 import SwiftUI
 
 public struct AddProjectView: View {
+    private struct PendingCloneRegistration: Equatable {
+        let environmentID: String
+        let remoteURL: String
+        let destinationPath: String
+        let clonedPath: String
+    }
+
     private enum ProjectMode: String, CaseIterable, Identifiable {
         case folder
         case repository
@@ -27,18 +34,22 @@ public struct AddProjectView: View {
     @State private var destinationPath = "~/"
     @State private var resolvedRepository: SourceControlRepositoryInfo?
     @State private var didEditDestination = false
+    @State private var pendingCloneRegistration: PendingCloneRegistration?
 
     @State private var browsePath = "~/"
     @State private var browseResult: FilesystemBrowseResult?
     @State private var isBrowsing = false
     @State private var browseError: String?
+    @State private var browseRequestID: UUID?
 
     @State private var discovery: SourceControlDiscoveryResult?
     @State private var isDiscovering = false
     @State private var discoveryError: String?
+    @State private var discoveryRequestID: UUID?
 
     @State private var isSubmitting = false
     @State private var errorMessage: String?
+    @State private var cloneRequestID: UUID?
     @FocusState private var focusedField: Field?
 
     public init(model: FeatureRootModel) {
@@ -98,11 +109,15 @@ public struct AddProjectView: View {
         }
         .onChange(of: source) {
             resolvedRepository = nil
+            pendingCloneRegistration = nil
+            cloneRequestID = nil
             updateSuggestedDestination()
             errorMessage = nil
         }
         .onChange(of: repositoryInput) {
             resolvedRepository = nil
+            pendingCloneRegistration = nil
+            cloneRequestID = nil
             updateSuggestedDestination()
             errorMessage = nil
         }
@@ -236,7 +251,12 @@ public struct AddProjectView: View {
                 text: $localPath,
                 field: .localPath,
                 browseAction: {
-                    Task { await loadDirectory(localPath, updateSelection: false) }
+                    Task {
+                        await loadDirectory(
+                            ProjectCreationPath.directoryBrowsePath(localPath),
+                            updateSelection: false
+                        )
+                    }
                 }
             )
             primaryAction(label: "Add project", icon: "plus") {
@@ -414,9 +434,7 @@ public struct AddProjectView: View {
                     .foregroundStyle(T3Colors.warning)
                     .padding(.vertical, 8)
             }
-            if let parentPath = browseResult?.parentPath,
-               ProjectCreationPath.normalizedForComparison(parentPath)
-                != ProjectCreationPath.normalizedForComparison(browsePath) {
+            if let parentPath = ProjectCreationPath.parentBrowsePath(of: browsePath) {
                 folderRow(name: "..", icon: "arrow.turn.left.up") {
                     await loadDirectory(parentPath, updateSelection: true)
                 }
@@ -425,7 +443,10 @@ public struct AddProjectView: View {
                 ForEach(entries, id: \.fullPath) { entry in
                     Divider().overlay(T3Colors.separator)
                     folderRow(name: entry.name, icon: "folder") {
-                        await loadDirectory(entry.fullPath, updateSelection: true)
+                        await loadDirectory(
+                            ProjectCreationPath.directoryBrowsePath(entry.fullPath),
+                            updateSelection: true
+                        )
                     }
                 }
             } else if !isBrowsing, browseError == nil {
@@ -464,6 +485,7 @@ public struct AddProjectView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .disabled(isBrowsing)
     }
 
     private func sectionTitle(_ title: String) -> some View {
@@ -543,6 +565,8 @@ public struct AddProjectView: View {
             set: { value in
                 didEditDestination = true
                 destinationPath = value
+                pendingCloneRegistration = nil
+                cloneRequestID = nil
             }
         )
     }
@@ -568,10 +592,14 @@ public struct AddProjectView: View {
         browsePath = "~/"
         browseResult = nil
         browseError = nil
+        browseRequestID = nil
         discovery = nil
         discoveryError = nil
+        discoveryRequestID = nil
         source = .url
         resolvedRepository = nil
+        pendingCloneRegistration = nil
+        cloneRequestID = nil
         didEditDestination = false
         localPath = "~/"
         destinationPath = repositoryInput.isEmpty
@@ -586,16 +614,31 @@ public struct AddProjectView: View {
             discoveryError = "Git URL cloning is available. Provider discovery is unavailable."
             return
         }
+        let requestID = UUID()
+        discoveryRequestID = requestID
         isDiscovering = true
-        defer { isDiscovering = false }
+        defer {
+            if discoveryRequestID == requestID {
+                isDiscovering = false
+            }
+        }
         do {
-            discovery = try await projectClient.discoverProjectSources(
+            let result = try await projectClient.discoverProjectSources(
                 environmentID: environmentID
             )
+            guard discoveryRequestID == requestID,
+                  selectedEnvironmentID == environmentID else {
+                return
+            }
+            discovery = result
             discoveryError = nil
         } catch is CancellationError {
             return
         } catch {
+            guard discoveryRequestID == requestID,
+                  selectedEnvironmentID == environmentID else {
+                return
+            }
             discovery = nil
             discoveryError = "Provider discovery unavailable. Git URL still works."
         }
@@ -609,26 +652,37 @@ public struct AddProjectView: View {
         }
         let requestedPath = path.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !requestedPath.isEmpty else { return }
+        let requestID = UUID()
+        browseRequestID = requestID
         isBrowsing = true
         browseError = nil
-        defer { isBrowsing = false }
+        defer {
+            if browseRequestID == requestID {
+                isBrowsing = false
+            }
+        }
         do {
             let result = try await projectClient.browseProjectFolders(
                 environmentID: environmentID,
                 partialPath: requestedPath
             )
-            guard selectedEnvironmentID == environmentID else { return }
-            browsePath = requestedPath
+            guard browseRequestID == requestID,
+                  selectedEnvironmentID == environmentID else {
+                return
+            }
+            let selectedDirectory = result.parentPath
+            browsePath = ProjectCreationPath.directoryBrowsePath(selectedDirectory)
             browseResult = result
             if updateSelection {
                 switch mode {
                 case .folder:
-                    localPath = requestedPath
+                    localPath = selectedDirectory
                 case .repository:
                     if !didEditDestination {
+                        pendingCloneRegistration = nil
                         destinationPath = ProjectCreationPath.appending(
                             repositoryName,
-                            to: requestedPath
+                            to: selectedDirectory
                         )
                     }
                 }
@@ -636,6 +690,10 @@ public struct AddProjectView: View {
         } catch is CancellationError {
             return
         } catch {
+            guard browseRequestID == requestID,
+                  selectedEnvironmentID == environmentID else {
+                return
+            }
             browseError = "Couldn’t browse that folder. Direct path entry still works."
         }
     }
@@ -647,6 +705,14 @@ public struct AddProjectView: View {
         case let .success(path): validated = path
         case let .failure(error):
             errorMessage = error.localizedDescription
+            return
+        }
+        if let serverPath = browseResult?.parentPath,
+           !ProjectCreationPath.isCompatibleWithServerPath(
+               validated,
+               serverPath: serverPath
+           ) {
+            errorMessage = "Use a path that matches \(environment.name)’s filesystem."
             return
         }
         if let existing = existingProject(environmentID: environment.id, path: validated) {
@@ -691,16 +757,29 @@ public struct AddProjectView: View {
         isSubmitting = true
         defer { isSubmitting = false }
         do {
-            resolvedRepository = try await projectClient.lookupProjectRepository(
+            let result = try await projectClient.lookupProjectRepository(
                 environmentID: environment.id,
                 provider: provider,
                 repository: repository
             )
+            guard selectedEnvironmentID == environment.id,
+                  source.provider == provider,
+                  repositoryInput.trimmingCharacters(in: .whitespacesAndNewlines)
+                    == repository else {
+                return
+            }
+            resolvedRepository = result
             updateSuggestedDestination()
             focusedField = .destination
         } catch is CancellationError {
             return
         } catch {
+            guard selectedEnvironmentID == environment.id,
+                  source.provider == provider,
+                  repositoryInput.trimmingCharacters(in: .whitespacesAndNewlines)
+                    == repository else {
+                return
+            }
             errorMessage = projectErrorMessage(error)
         }
     }
@@ -719,6 +798,14 @@ public struct AddProjectView: View {
             errorMessage = error.localizedDescription
             return
         }
+        if let serverPath = browseResult?.parentPath,
+           !ProjectCreationPath.isCompatibleWithServerPath(
+               validatedDestination,
+               serverPath: serverPath
+           ) {
+            errorMessage = "Use a path that matches \(environment.name)’s filesystem."
+            return
+        }
         if let existing = existingProject(
             environmentID: environment.id,
             path: validatedDestination
@@ -732,20 +819,98 @@ public struct AddProjectView: View {
         }
 
         errorMessage = nil
+        let requestID = UUID()
+        cloneRequestID = requestID
         isSubmitting = true
-        defer { isSubmitting = false }
+        defer {
+            isSubmitting = false
+            if cloneRequestID == requestID {
+                cloneRequestID = nil
+            }
+        }
         do {
-            _ = try await projectClient.cloneProjectRepository(
+            let clonedPath: String
+            if let pending = pendingCloneRegistration,
+               pending.environmentID == environment.id,
+               pending.remoteURL == remoteURL,
+               pending.destinationPath == validatedDestination {
+                clonedPath = pending.clonedPath
+            } else {
+                let result = try await projectClient.cloneProjectRepository(
+                    environmentID: environment.id,
+                    remoteURL: remoteURL,
+                    destinationPath: validatedDestination
+                )
+                guard cloneRequestIsCurrent(
+                    requestID,
+                    environmentID: environment.id,
+                    remoteURL: remoteURL,
+                    destinationPath: validatedDestination
+                ) else {
+                    return
+                }
+                clonedPath = result.cwd
+                pendingCloneRegistration = PendingCloneRegistration(
+                    environmentID: environment.id,
+                    remoteURL: remoteURL,
+                    destinationPath: validatedDestination,
+                    clonedPath: result.cwd
+                )
+            }
+            guard cloneRequestIsCurrent(
+                requestID,
                 environmentID: environment.id,
                 remoteURL: remoteURL,
                 destinationPath: validatedDestination
+            ) else {
+                return
+            }
+            try await projectClient.addProject(
+                environmentID: environment.id,
+                path: clonedPath
             )
+            guard cloneRequestIsCurrent(
+                requestID,
+                environmentID: environment.id,
+                remoteURL: remoteURL,
+                destinationPath: validatedDestination
+            ) else {
+                return
+            }
+            pendingCloneRegistration = nil
             dismiss()
         } catch is CancellationError {
             return
         } catch {
-            errorMessage = projectErrorMessage(error)
+            guard cloneRequestIsCurrent(
+                requestID,
+                environmentID: environment.id,
+                remoteURL: remoteURL,
+                destinationPath: validatedDestination
+            ) else {
+                return
+            }
+            if pendingCloneRegistration != nil {
+                errorMessage = "Repository cloned. Try again to finish adding the project."
+            } else {
+                errorMessage = projectErrorMessage(error)
+            }
         }
+    }
+
+    private func cloneRequestIsCurrent(
+        _ requestID: UUID,
+        environmentID: String,
+        remoteURL: String,
+        destinationPath: String
+    ) -> Bool {
+        let currentRemoteURL = resolvedRepository?.sshUrl
+            ?? repositoryInput.trimmingCharacters(in: .whitespacesAndNewlines)
+        return cloneRequestID == requestID
+            && selectedEnvironmentID == environmentID
+            && currentRemoteURL == remoteURL
+            && self.destinationPath.trimmingCharacters(in: .whitespacesAndNewlines)
+                == destinationPath
     }
 
     private func updateSuggestedDestination() {

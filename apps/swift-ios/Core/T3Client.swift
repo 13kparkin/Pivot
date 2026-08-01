@@ -1005,6 +1005,18 @@ public actor EnvironmentRuntime {
         clients[environment.id] = client
         return client
     }
+
+    /// Creates an uncached client for bounded one-shot WebSocket RPCs. Passive
+    /// environment probes must not stop or mutate the shared client if that
+    /// environment becomes active while the probe is in flight.
+    public func ephemeralClient(for environment: Environment) -> T3Client {
+        T3Client(
+            environment: environment,
+            credentialStore: credentialStore,
+            httpTransport: httpTransport,
+            webSocketConnector: webSocketConnector
+        )
+    }
 }
 
 public enum RPCMethod: String, Sendable {

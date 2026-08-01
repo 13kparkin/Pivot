@@ -328,12 +328,34 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging, FeaturePr
         destinationPath: String
     ) async throws -> SourceControlCloneResult {
         let client = try await projectCreationClient(environmentID: environmentID)
-        let result = try await client.cloneRepository(
-            remoteURL: remoteURL,
-            destinationPath: destinationPath
-        )
-        try await createProject(client: client, path: result.cwd)
-        return result
+        do {
+            return try await client.cloneRepository(
+                remoteURL: remoteURL,
+                destinationPath: destinationPath
+            )
+        } catch let error as RPCError {
+            switch error {
+            case .connectionUnavailable, .disconnected:
+                // The clone RPC is not receipt-bearing, so a lost reply is
+                // ambiguous. Confirm the requested destination became a Git
+                // repository with a primary remote before moving on to the
+                // independently retryable project-registration step.
+                if let refs = try? await client.listVCSRefs(
+                    cwd: destinationPath,
+                    refresh: true,
+                    limit: 1
+                ), refs.isRepo, refs.hasPrimaryRemote {
+                    return SourceControlCloneResult(
+                        cwd: destinationPath,
+                        remoteUrl: remoteURL,
+                        repository: nil
+                    )
+                }
+                throw error
+            case .remote, .protocolViolation:
+                throw error
+            }
+        }
     }
 
     private func createProject(client: T3Client, path: String) async throws {
@@ -341,15 +363,71 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging, FeaturePr
         guard !trimmed.isEmpty else {
             throw NativeFeatureClientError.invalidProjectPath
         }
-        let title = URL(fileURLWithPath: trimmed).lastPathComponent
-        _ = try await client.createProject(
-            title: title.isEmpty ? "Project" : title,
-            workspaceRoot: trimmed,
-            defaultModel: client.environment.id == activeEnvironment?.id
-                ? defaultModelSelection()
-                : nil
-        )
-        try await refresh(client: client)
+        let title = ProjectCreationPath.lastPathComponent(trimmed)
+        let projectID = UUID().uuidString
+        do {
+            _ = try await client.createProject(
+                projectID: projectID,
+                title: title.isEmpty ? "Project" : title,
+                workspaceRoot: trimmed,
+                defaultModel: client.environment.id == activeEnvironment?.id
+                    ? fallbackModelSelection(
+                        environmentID: client.environment.id,
+                        projectID: nil,
+                        shell: shellsByEnvironmentID[client.environment.id]
+                    )
+                    : nil
+            )
+        } catch {
+            // The dispatch reply may be lost after the server persisted the
+            // project. A fresh shell turns that ambiguous failure into success
+            // and also makes retrying clone registration idempotent.
+            guard await recoverCreatedProject(
+                client: client,
+                projectID: projectID,
+                path: trimmed
+            ) else {
+                throw error
+            }
+            return
+        }
+
+        do {
+            try await refresh(client: client)
+        } catch {
+            guard await recoverCreatedProject(
+                client: client,
+                projectID: projectID,
+                path: trimmed
+            ) else {
+                throw error
+            }
+        }
+    }
+
+    private func recoverCreatedProject(
+        client: T3Client,
+        projectID: String,
+        path: String
+    ) async -> Bool {
+        let environment = client.environment
+        let generation = environmentGeneration
+        guard let shell = try? await client.shellSnapshot(),
+              isKnownClient(client, environmentID: environment.id, generation: generation),
+              shell.projects.contains(where: {
+                  $0.id == projectID
+                    || ProjectCreationPath.normalizedForComparison($0.workspaceRoot)
+                        == ProjectCreationPath.normalizedForComparison(path)
+              }) else {
+            return false
+        }
+        shellsByEnvironmentID[environment.id] = shell
+        if activeEnvironment?.id == environment.id {
+            latestShell = shell
+        }
+        rebuildEntityIndexes((try? await runtime.environments()) ?? [environment])
+        await emitSnapshot(shell, environment: environment)
+        return true
     }
 
     func listWorkspaceBranches(
@@ -358,13 +436,26 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging, FeaturePr
     ) async throws -> [FeatureWorkspaceBranch] {
         let route = try projectRoute(for: projectID)
         let project = try project(for: route)
-        let result = try await route.client.listVCSRefs(
-            cwd: project.workspaceRoot,
-            refresh: refresh,
-            limit: 100
-        )
-        guard result.isRepo else { return [] }
-        return result.refs.map { ref in
+        var refs: [VCSRef] = []
+        var cursor: Int?
+        var seenCursors = Set<Int>()
+        repeat {
+            let result = try await route.client.listVCSRefs(
+                cwd: project.workspaceRoot,
+                cursor: cursor,
+                refresh: refresh && cursor == nil,
+                limit: 100
+            )
+            guard result.isRepo else { return [] }
+            refs.append(contentsOf: result.refs)
+            guard let nextCursor = result.nextCursor,
+                  seenCursors.insert(nextCursor).inserted else {
+                break
+            }
+            cursor = nextCursor
+        } while true
+
+        return refs.map { ref in
             FeatureWorkspaceBranch(
                 name: ref.name,
                 isRemote: ref.isRemote ?? false,
@@ -388,6 +479,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging, FeaturePr
         let model = modelSelection(
             selection,
             projectID: route.wireID,
+            environmentID: environment.id,
             shell: shellsByEnvironmentID[environment.id]
         )
         let resolvedTitle = title?.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -480,6 +572,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging, FeaturePr
         let model = modelSelection(
             selection,
             projectID: route.wireID,
+            environmentID: environment.id,
             shell: shellsByEnvironmentID[environment.id]
         )
         let title = Self.title(from: prompt, hasAttachments: !attachments.isEmpty)
@@ -545,7 +638,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging, FeaturePr
             // but before its reply reaches us. Bootstrap expansion creates the
             // thread before dispatching the stable final turn, so recover an
             // interrupted empty thread by sending only that original turn.
-            guard try await recoverBootstrap(
+            let recovered = try await recoverBootstrap(
                 client: client,
                 pending: pending,
                 projectID: route.wireID,
@@ -554,7 +647,13 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging, FeaturePr
                 runtimeMode: runtime,
                 interactionMode: interaction,
                 attachments: uploads
-            ) else {
+            )
+            guard recovered else {
+                await resetFailedBootstrapIfConfirmed(
+                    client: client,
+                    pending: pending,
+                    projectCwd: routedProject.workspaceRoot
+                )
                 throw error
             }
         }
@@ -652,6 +751,41 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging, FeaturePr
             }
         }
         return true
+    }
+
+    /// A failed bootstrap can leave its generated worktree behind after the
+    /// server rolls back the thread. Only reset the retry identity after a
+    /// fresh shell confirms the thread is absent; ambiguous network failures
+    /// keep the stable IDs so the normal recovery path remains idempotent.
+    private func resetFailedBootstrapIfConfirmed(
+        client: T3Client,
+        pending: PendingBootstrapSubmission,
+        projectCwd: String
+    ) async {
+        guard let shell = try? await client.shellSnapshot(),
+              !shell.threads.contains(where: { $0.id == pending.threadID }) else {
+            return
+        }
+
+        if let branch = pending.worktreeBranchName,
+           let refs = try? await client.listVCSRefs(
+               cwd: projectCwd,
+               query: branch,
+               refresh: true,
+               limit: 100
+           ),
+           let path = refs.refs.first(where: {
+               $0.name == branch && $0.isRemote != true
+           })?.worktreePath {
+            // Never force-remove: setup scripts may have left useful changes.
+            // A clean orphan is safe to reclaim; a dirty one remains visible
+            // through normal worktree management.
+            try? await client.removeWorktree(cwd: projectCwd, path: path)
+        }
+
+        if pendingBootstrapSubmission?.identity == pending.identity {
+            pendingBootstrapSubmission = nil
+        }
     }
 
     func renameThread(id: String, title: String) async throws {
@@ -1973,6 +2107,9 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging, FeaturePr
     private func loadEnvironmentShells(
         _ environments: [Environment]
     ) async -> [EnvironmentShellLoad] {
+        let activeEnvironmentID = activeEnvironment?.id
+        let environmentsWithCachedConfig = Set(serverConfigsByEnvironmentID.keys)
+        let runtime = runtime
         var clients: [(environment: Environment, client: T3Client)] = []
         clients.reserveCapacity(environments.count)
         for environment in environments {
@@ -1984,9 +2121,36 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging, FeaturePr
         return await withTaskGroup(of: EnvironmentShellLoad.self) { group in
             for pair in clients {
                 group.addTask {
-                    async let shell: OrchestrationShellSnapshot? = try? await pair.client.shellSnapshot()
-                    async let config: ServerConfigSnapshot? = try? await pair.client.serverConfig()
-                    return await EnvironmentShellLoad(
+                    let shell = try? await pair.client.shellSnapshot()
+                    guard shell != nil else {
+                        return EnvironmentShellLoad(
+                            environment: pair.environment,
+                            client: pair.client,
+                            shell: nil,
+                            config: nil
+                        )
+                    }
+
+                    let isActive = pair.environment.id == activeEnvironmentID
+                    let shouldFetchConfig = isActive
+                        || !environmentsWithCachedConfig.contains(pair.environment.id)
+                    var config: ServerConfigSnapshot?
+                    if shouldFetchConfig {
+                        if isActive {
+                            config = try? await pair.client.serverConfig()
+                        } else {
+                            // A passive catalogue is a bounded one-shot RPC on
+                            // an uncached client. Never disconnect the shared
+                            // client because the environment may become active
+                            // while this aggregate load is in flight.
+                            let probe = await runtime.ephemeralClient(
+                                for: pair.environment
+                            )
+                            config = try? await probe.serverConfig()
+                            await probe.disconnect()
+                        }
+                    }
+                    return EnvironmentShellLoad(
                         environment: pair.environment,
                         client: pair.client,
                         shell: shell,
@@ -3230,6 +3394,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging, FeaturePr
     private func modelSelection(
         _ selection: FeatureSelection?,
         projectID: String,
+        environmentID: String,
         shell: OrchestrationShellSnapshot?
     ) -> ModelSelection {
         if let selection {
@@ -3240,14 +3405,82 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging, FeaturePr
             .defaultModelSelection {
             return projectDefault
         }
-        return defaultModelSelection()
+        return fallbackModelSelection(
+            environmentID: environmentID,
+            projectID: projectID,
+            shell: shell
+        )
     }
 
-    private func defaultModelSelection() -> ModelSelection {
-        if let selection = loadSettings().defaultSelection {
+    /// Automatic selection is resolved against the target environment. This
+    /// matters when a passive machine exposes a different provider catalogue
+    /// than the currently active one.
+    private func fallbackModelSelection(
+        environmentID: String,
+        projectID: String?,
+        shell: OrchestrationShellSnapshot?
+    ) -> ModelSelection {
+        let config = serverConfigsByEnvironmentID[environmentID]
+        let appSelection = loadSettings().defaultSelection
+        if let selection = appSelection, let config {
+            if configSupports(selection, config: config) {
+                return coreModelSelection(selection)
+            }
+        }
+        if let configuredDefault = defaultModelSelection(in: config) {
+            return configuredDefault
+        }
+        if let projectID,
+           let recentProjectSelection = shell?.threads
+            .first(where: { $0.projectId == projectID })?
+            .modelSelection {
+            return recentProjectSelection
+        }
+        if let knownSelection = shell?.projects.compactMap(\.defaultModelSelection).first
+            ?? shell?.threads.first?.modelSelection {
+            return knownSelection
+        }
+        if let selection = appSelection {
             return coreModelSelection(selection)
         }
         return ModelSelection(instanceId: "codex", model: "gpt-5.6-sol")
+    }
+
+    private func configSupports(
+        _ selection: FeatureSelection,
+        config: ServerConfigSnapshot
+    ) -> Bool {
+        config.providers.contains { provider in
+            provider.instanceId == selection.providerID
+                && providerCanRun(provider)
+                && provider.models.contains { $0.slug == selection.modelID }
+        }
+    }
+
+    private func defaultModelSelection(
+        in config: ServerConfigSnapshot?
+    ) -> ModelSelection? {
+        guard let providers = config?.providers else { return nil }
+        for provider in providers where providerCanRun(provider) {
+            if let model = provider.models.first(where: { $0.isDefault == true }) {
+                return ModelSelection(instanceId: provider.instanceId, model: model.slug)
+            }
+        }
+        for provider in providers where providerCanRun(provider) {
+            if let model = provider.models.first {
+                return ModelSelection(instanceId: provider.instanceId, model: model.slug)
+            }
+        }
+        return nil
+    }
+
+    private func providerCanRun(_ provider: ServerProviderSnapshot) -> Bool {
+        provider.enabled
+            && provider.installed
+            && provider.status != "disabled"
+            && provider.status != "error"
+            && provider.auth.status != "unauthenticated"
+            && provider.availability != "unavailable"
     }
 
     private func coreModelSelection(_ selection: FeatureSelection) -> ModelSelection {

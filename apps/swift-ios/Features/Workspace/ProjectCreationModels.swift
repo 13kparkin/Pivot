@@ -155,14 +155,91 @@ enum ProjectCreationPath {
         return base + separator + component
     }
 
+    /// `filesystem.browse` interprets a path without a trailing separator as
+    /// a prefix search. Directory navigation always sends an explicit folder.
+    static func directoryBrowsePath(_ value: String) -> String {
+        let path = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !path.isEmpty,
+              !path.hasSuffix("/"),
+              !path.hasSuffix("\\") else {
+            return path
+        }
+        if isWindowsAbsolutePath(path) {
+            return path.replacingOccurrences(of: "/", with: "\\") + "\\"
+        }
+        return path + "/"
+    }
+
+    static func parentBrowsePath(of value: String) -> String? {
+        let path = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !path.isEmpty else { return nil }
+
+        if isWindowsAbsolutePath(path) {
+            let normalized = path.replacingOccurrences(of: "/", with: "\\")
+            if normalized.hasPrefix("\\\\") {
+                let components = normalized.dropFirst(2).split(separator: "\\")
+                guard components.count > 2 else { return nil }
+                return "\\\\"
+                    + components.dropLast().joined(separator: "\\")
+                    + "\\"
+            }
+
+            var trimmed = normalized
+            while trimmed.count > 3, trimmed.hasSuffix("\\") {
+                trimmed.removeLast()
+            }
+            guard trimmed.count > 3,
+                  let separator = trimmed.lastIndex(of: "\\") else {
+                return nil
+            }
+            let parent = String(trimmed[...separator])
+            return parent.count == 3 ? parent : directoryBrowsePath(parent)
+        }
+
+        var trimmed = path
+        while trimmed.count > 1, trimmed.hasSuffix("/") {
+            trimmed.removeLast()
+        }
+        guard trimmed != "/", trimmed != "~",
+              let separator = trimmed.lastIndex(of: "/") else {
+            return nil
+        }
+        let parent = String(trimmed[...separator])
+        guard parent != "~/" || trimmed != "~" else { return nil }
+        return directoryBrowsePath(parent)
+    }
+
+    static func lastPathComponent(_ value: String) -> String {
+        let path = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalized = isWindowsAbsolutePath(path)
+            ? path.replacingOccurrences(of: "\\", with: "/")
+            : path
+        return normalized
+            .split(separator: "/", omittingEmptySubsequences: true)
+            .last
+            .map(String.init) ?? path
+    }
+
+    static func isCompatibleWithServerPath(_ value: String, serverPath: String) -> Bool {
+        let path = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        let reference = serverPath.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !path.hasPrefix("~"),
+              isAbsoluteOrHomeRelative(reference) else {
+            return true
+        }
+        return isWindowsAbsolutePath(path) == isWindowsAbsolutePath(reference)
+    }
+
     static func normalizedForComparison(_ value: String) -> String {
-        var normalized = value
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .replacingOccurrences(of: "\\", with: "/")
+        let path = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        let isWindows = isWindowsAbsolutePath(path)
+        var normalized = isWindows
+            ? path.replacingOccurrences(of: "\\", with: "/")
+            : path
         while normalized.count > 1, normalized.hasSuffix("/") {
             normalized.removeLast()
         }
-        return normalized.lowercased()
+        return isWindows ? normalized.lowercased() : normalized
     }
 
     private static func isAbsoluteOrHomeRelative(_ path: String) -> Bool {
@@ -172,6 +249,11 @@ enum ProjectCreationPath {
         if path.hasPrefix("/") || path.hasPrefix("\\\\") {
             return true
         }
+        return isWindowsAbsolutePath(path)
+    }
+
+    private static func isWindowsAbsolutePath(_ path: String) -> Bool {
+        if path.hasPrefix("\\\\") || path.hasPrefix("//") { return true }
         let scalars = Array(path.unicodeScalars.prefix(3))
         return scalars.count == 3
             && CharacterSet.letters.contains(scalars[0])

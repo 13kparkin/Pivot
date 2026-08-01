@@ -40,6 +40,84 @@ struct ProjectCreationModelsTests {
             ProjectCreationPath.normalizedForComparison(#"C:\Work\T3Code\"#)
                 == "c:/work/t3code"
         )
+        #expect(ProjectCreationPath.normalizedForComparison("/srv/App") == "/srv/App")
+        #expect(ProjectCreationPath.normalizedForComparison(#"/srv/a\b"#) == #"/srv/a\b"#)
+    }
+
+    @Test
+    func folderBrowseQueriesNavigateDirectoriesInsteadOfPrefixSearching() {
+        #expect(ProjectCreationPath.directoryBrowsePath("~/work") == "~/work/")
+        #expect(ProjectCreationPath.directoryBrowsePath("/srv/t3code/") == "/srv/t3code/")
+        #expect(
+            ProjectCreationPath.directoryBrowsePath(#"C:\work\t3code"#)
+                == #"C:\work\t3code\"#
+        )
+
+        #expect(ProjectCreationPath.parentBrowsePath(of: "~/work/t3code/") == "~/work/")
+        #expect(ProjectCreationPath.parentBrowsePath(of: "~/") == nil)
+        #expect(ProjectCreationPath.parentBrowsePath(of: "/srv/t3code/") == "/srv/")
+        #expect(ProjectCreationPath.parentBrowsePath(of: "/") == nil)
+        #expect(
+            ProjectCreationPath.parentBrowsePath(of: #"C:\work\t3code\"#)
+                == #"C:\work\"#
+        )
+        #expect(ProjectCreationPath.parentBrowsePath(of: #"C:\"#) == nil)
+        #expect(
+            ProjectCreationPath.parentBrowsePath(of: #"\\server\share\folder\"#)
+                == #"\\server\share\"#
+        )
+        #expect(ProjectCreationPath.parentBrowsePath(of: #"\\server\share\"#) == nil)
+        #expect(
+            ProjectCreationPath.directoryBrowsePath("//server/share/folder")
+                == #"\\server\share\folder\"#
+        )
+    }
+
+    @Test
+    func projectTitlesHandleServerPathStyles() {
+        #expect(ProjectCreationPath.lastPathComponent("/srv/t3code/") == "t3code")
+        #expect(ProjectCreationPath.lastPathComponent(#"C:\work\t3code\"#) == "t3code")
+        #expect(ProjectCreationPath.lastPathComponent(#"\\server\share\t3code"#) == "t3code")
+    }
+
+    @Test
+    func explicitPathsMatchTheConnectedServerFilesystemStyle() {
+        #expect(
+            ProjectCreationPath.isCompatibleWithServerPath(
+                "/srv/t3code",
+                serverPath: "/srv"
+            )
+        )
+        #expect(
+            !ProjectCreationPath.isCompatibleWithServerPath(
+                #"C:\work\t3code"#,
+                serverPath: "/srv"
+            )
+        )
+        #expect(
+            ProjectCreationPath.isCompatibleWithServerPath(
+                #"C:\work\t3code"#,
+                serverPath: #"C:\work"#
+            )
+        )
+        #expect(
+            ProjectCreationPath.isCompatibleWithServerPath(
+                "//server/share/t3code",
+                serverPath: #"C:\work"#
+            )
+        )
+        #expect(
+            !ProjectCreationPath.isCompatibleWithServerPath(
+                "/srv/t3code",
+                serverPath: #"C:\work"#
+            )
+        )
+        #expect(
+            ProjectCreationPath.isCompatibleWithServerPath(
+                "~/work/t3code",
+                serverPath: #"C:\Users\theo"#
+            )
+        )
     }
 
     @Test
