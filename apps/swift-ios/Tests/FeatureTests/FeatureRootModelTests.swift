@@ -145,6 +145,9 @@ struct FeatureRootModelTests {
                 selection: .init(providerID: "codex", modelID: "gpt-5.6-sol"),
                 runtimeMode: .fullAccess,
                 interactionMode: .standard,
+                workspaceMode: .worktree,
+                branch: "main",
+                startFromOrigin: true,
                 attachments: [attachment]
             )
         )
@@ -152,6 +155,10 @@ struct FeatureRootModelTests {
         #expect(result == created)
         #expect(client.startedPrompt == "Ship the native app")
         #expect(client.startedAttachments.map(\.name) == ["reference.jpg"])
+        #expect(client.startedWorkspaceMode == .worktree)
+        #expect(client.startedBranch == "main")
+        #expect(client.startedWorktreePath == nil)
+        #expect(client.startedFromOrigin)
         #expect(client.createThreadCallCount == 0)
         #expect(client.sendMessageCallCount == 0)
         #expect(model.snapshot.threads == [created])
@@ -521,6 +528,10 @@ private final class FeatureClientStub: FeatureClient {
     var sentText: String?
     var startedPrompt: String?
     var startedAttachments: [FeatureUploadAttachment] = []
+    var startedWorkspaceMode: FeatureWorkspaceMode?
+    var startedBranch: String?
+    var startedWorktreePath: String?
+    var startedFromOrigin = false
     var createThreadCallCount = 0
     var sendMessageCallCount = 0
     var loadThreadError: (any Error)?
@@ -576,6 +587,27 @@ private final class FeatureClientStub: FeatureClient {
     ) async throws -> FeatureThread {
         startedPrompt = prompt
         startedAttachments = attachments
+        return createdThread
+    }
+
+    func createThreadAndSend(
+        projectID: String,
+        prompt: String,
+        selection: FeatureSelection?,
+        runtimeMode: FeatureRuntimeMode,
+        interactionMode: FeatureInteractionMode,
+        workspaceMode: FeatureWorkspaceMode,
+        branch: String?,
+        worktreePath: String?,
+        startFromOrigin: Bool,
+        attachments: [FeatureUploadAttachment]
+    ) async throws -> FeatureThread {
+        startedPrompt = prompt
+        startedAttachments = attachments
+        startedWorkspaceMode = workspaceMode
+        startedBranch = branch
+        startedWorktreePath = worktreePath
+        startedFromOrigin = startFromOrigin
         return createdThread
     }
 

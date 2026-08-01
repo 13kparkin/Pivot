@@ -39,6 +39,10 @@ public struct WorkspaceView: View {
                     selection: request.selection,
                     runtimeMode: request.runtimeMode,
                     interactionMode: request.interactionMode,
+                    workspaceMode: request.workspaceMode,
+                    branch: request.branch,
+                    worktreePath: request.worktreePath,
+                    startFromOrigin: request.startFromOrigin,
                     attachments: request.attachments.map(\.uploadValue)
                 )
                 await model.reload()

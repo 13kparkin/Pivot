@@ -10,6 +10,13 @@ public struct NewThreadView: View {
     @State private var prompt = ""
     @State private var selection: FeatureSelection?
     @State private var attachments: [FeatureDraftAttachment] = []
+    @State private var workspaceMode: FeatureWorkspaceMode = .local
+    @State private var branches: [FeatureWorkspaceBranch] = []
+    @State private var selectedBranch: FeatureWorkspaceBranch?
+    @State private var startFromOrigin = true
+    @State private var branchesLoading = false
+    @State private var branchLoadFailed = false
+    @State private var showingBranchPicker = false
     @State private var isSubmitting = false
     @State private var submissionFailed = false
     @FocusState private var promptFocused: Bool
@@ -36,19 +43,24 @@ public struct NewThreadView: View {
             }
         }
         .safeAreaInset(edge: .bottom, spacing: 0) {
-            FeatureComposerView(
-                text: $prompt,
-                selection: $selection,
-                attachments: $attachments,
-                providers: creationProviders,
-                threadSelection: nil,
-                isSending: isSubmitting,
-                isWorking: false,
-                focused: $promptFocused,
-                onSend: startTask,
-                onStop: {},
-                forceExpanded: true
-            )
+            VStack(spacing: 0) {
+                workspaceControls
+
+                FeatureComposerView(
+                    text: $prompt,
+                    selection: $selection,
+                    attachments: $attachments,
+                    providers: creationProviders,
+                    threadSelection: nil,
+                    isSending: isSubmitting,
+                    isWorking: false,
+                    focused: $promptFocused,
+                    onSend: startTask,
+                    onStop: {},
+                    forceExpanded: true
+                )
+            }
+            .background(T3Colors.background)
         }
         .onAppear {
             if projectID.isEmpty {
@@ -60,6 +72,21 @@ public struct NewThreadView: View {
         }
         .onChange(of: projectID) {
             selection = initialSelection
+            resetWorkspaceSelection()
+        }
+        .task(id: projectID) { await loadBranches() }
+        .sheet(isPresented: $showingBranchPicker) {
+            NewTaskBranchPicker(
+                branches: branches,
+                selection: selectedBranch,
+                isLoading: branchesLoading,
+                loadFailed: branchLoadFailed,
+                onSelect: { branch in
+                    selectedBranch = branch
+                    showingBranchPicker = false
+                },
+                onRefresh: { Task { await loadBranches(refresh: true) } }
+            )
         }
         .alert("Couldn’t start task", isPresented: $submissionFailed) {
             Button("OK") {}
@@ -141,6 +168,101 @@ public struct NewThreadView: View {
         creationProjects.first { $0.id == projectID }
     }
 
+    private var workspaceControls: some View {
+        HStack(spacing: 14) {
+            Menu {
+                Button {
+                    setWorkspaceMode(.local)
+                } label: {
+                    Label(
+                        FeatureWorkspaceMode.local.title,
+                        systemImage: workspaceMode == .local ? "checkmark" : "folder"
+                    )
+                }
+                Button {
+                    setWorkspaceMode(.worktree)
+                } label: {
+                    Label(
+                        FeatureWorkspaceMode.worktree.title,
+                        systemImage: workspaceMode == .worktree
+                            ? "checkmark"
+                            : "arrow.triangle.branch"
+                    )
+                }
+            } label: {
+                workspaceControlLabel(
+                    workspaceMode.title,
+                    systemImage: workspaceMode.systemImage,
+                    showsChevron: true
+                )
+            }
+            .disabled(isSubmitting)
+
+            if workspaceMode == .worktree {
+                Button {
+                    showingBranchPicker = true
+                } label: {
+                    workspaceControlLabel(
+                        selectedBranch?.name
+                            ?? (branchesLoading ? "Loading branches" : "Choose branch"),
+                        systemImage: "arrow.triangle.branch",
+                        showsChevron: true
+                    )
+                }
+                .buttonStyle(.plain)
+                .disabled(isSubmitting)
+                .accessibilityLabel("Base branch")
+                .accessibilityValue(selectedBranch?.name ?? "Not selected")
+
+                Button {
+                    startFromOrigin.toggle()
+                } label: {
+                    Label(
+                        "Latest origin",
+                        systemImage: startFromOrigin ? "checkmark.circle.fill" : "circle"
+                    )
+                    .lineLimit(1)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(
+                    startFromOrigin ? T3Colors.textSecondary : T3Colors.textTertiary
+                )
+                .disabled(isSubmitting)
+                .accessibilityValue(startFromOrigin ? "On" : "Off")
+            } else if let selectedBranch {
+                Label(selectedBranch.name, systemImage: "arrow.triangle.branch")
+                    .lineLimit(1)
+                    .foregroundStyle(T3Colors.textTertiary)
+                    .accessibilityLabel("Current branch, \(selectedBranch.name)")
+            }
+
+            Spacer(minLength: 0)
+        }
+        .font(T3Typography.supporting)
+        .padding(.horizontal, 18)
+        .frame(minHeight: 38)
+        .animation(.snappy(duration: 0.18), value: workspaceMode)
+    }
+
+    private func workspaceControlLabel(
+        _ title: String,
+        systemImage: String,
+        showsChevron: Bool
+    ) -> some View {
+        HStack(spacing: 5) {
+            Image(systemName: systemImage)
+                .font(.system(size: 12, weight: .medium))
+            Text(title)
+                .lineLimit(1)
+            if showsChevron {
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 8, weight: .bold))
+            }
+        }
+        .foregroundStyle(T3Colors.textSecondary)
+        .contentShape(Rectangle())
+    }
+
     private var creationProjects: [FeatureProject] {
         DailyUXCreationContext.projects(in: model.snapshot)
     }
@@ -171,6 +293,7 @@ public struct NewThreadView: View {
             && !projectID.isEmpty
             && (!trimmedPrompt.isEmpty || !attachments.isEmpty)
             && (attachments.isEmpty || imagesAllowed)
+            && (workspaceMode != .worktree || selectedBranch != nil)
     }
 
     private var trimmedPrompt: String {
@@ -194,6 +317,15 @@ public struct NewThreadView: View {
             selection: selection,
             runtimeMode: .fullAccess,
             interactionMode: .standard,
+            workspaceMode: workspaceMode,
+            branch: selectedBranch?.name,
+            worktreePath: workspaceMode == .local
+                ? NewTaskWorkspaceDefaults.normalizedWorktreePath(
+                    for: selectedBranch,
+                    projectPath: selectedProject?.path ?? ""
+                )
+                : nil,
+            startFromOrigin: startFromOrigin,
             attachments: attachments
         )
 
@@ -207,6 +339,64 @@ public struct NewThreadView: View {
             }
         }
     }
+
+    private func resetWorkspaceSelection() {
+        branches = []
+        selectedBranch = nil
+        branchLoadFailed = false
+    }
+
+    private func setWorkspaceMode(_ mode: FeatureWorkspaceMode) {
+        workspaceMode = mode
+        selectedBranch = switch mode {
+        case .local: NewTaskWorkspaceDefaults.localBranch(in: branches)
+        case .worktree: NewTaskWorkspaceDefaults.worktreeBase(in: branches)
+        }
+    }
+
+    @MainActor
+    private func loadBranches(refresh: Bool = false) async {
+        let requestedProjectID = projectID
+        guard !requestedProjectID.isEmpty else { return }
+
+        branchesLoading = true
+        branchLoadFailed = false
+        do {
+            let loaded = try await model.workspaceBranches(
+                projectID: requestedProjectID,
+                refresh: refresh
+            )
+            guard !Task.isCancelled, projectID == requestedProjectID else { return }
+            branches = loaded.sorted(by: Self.branchSort)
+
+            if let selectedBranch,
+               let updated = branches.first(where: { $0.id == selectedBranch.id }) {
+                self.selectedBranch = updated
+            } else {
+                self.selectedBranch = switch workspaceMode {
+                case .local: NewTaskWorkspaceDefaults.localBranch(in: branches)
+                case .worktree: NewTaskWorkspaceDefaults.worktreeBase(in: branches)
+                }
+            }
+        } catch is CancellationError {
+            return
+        } catch {
+            guard projectID == requestedProjectID else { return }
+            branchLoadFailed = true
+        }
+        guard projectID == requestedProjectID else { return }
+        branchesLoading = false
+    }
+
+    private static func branchSort(
+        _ lhs: FeatureWorkspaceBranch,
+        _ rhs: FeatureWorkspaceBranch
+    ) -> Bool {
+        let lhsRank = lhs.isCurrent ? 0 : lhs.isDefault ? 1 : lhs.isRemote ? 3 : 2
+        let rhsRank = rhs.isCurrent ? 0 : rhs.isDefault ? 1 : rhs.isRemote ? 3 : 2
+        if lhsRank != rhsRank { return lhsRank < rhsRank }
+        return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
+    }
 }
 
 private struct DottedUnderline: Shape {
@@ -215,5 +405,110 @@ private struct DottedUnderline: Shape {
         path.move(to: CGPoint(x: rect.minX, y: rect.midY))
         path.addLine(to: CGPoint(x: rect.maxX, y: rect.midY))
         return path
+    }
+}
+
+private struct NewTaskBranchPicker: View {
+    @SwiftUI.Environment(\.dismiss) private var dismiss
+
+    let branches: [FeatureWorkspaceBranch]
+    let selection: FeatureWorkspaceBranch?
+    let isLoading: Bool
+    let loadFailed: Bool
+    let onSelect: (FeatureWorkspaceBranch) -> Void
+    let onRefresh: () -> Void
+
+    @State private var query = ""
+
+    var body: some View {
+        NavigationStack {
+            Group {
+                if isLoading, branches.isEmpty {
+                    ProgressView("Loading branches")
+                        .foregroundStyle(T3Colors.textSecondary)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else if filteredBranches.isEmpty {
+                    ContentUnavailableView {
+                        Label(
+                            loadFailed ? "Branches unavailable" : "No branches found",
+                            systemImage: loadFailed
+                                ? "exclamationmark.triangle"
+                                : "arrow.triangle.branch"
+                        )
+                    } description: {
+                        Text(
+                            loadFailed
+                                ? "Check the connection and try again."
+                                : "Try a different search."
+                        )
+                    } actions: {
+                        if loadFailed {
+                            Button("Try again", action: onRefresh)
+                        }
+                    }
+                } else {
+                    List(filteredBranches) { branch in
+                        Button {
+                            onSelect(branch)
+                        } label: {
+                            HStack(spacing: 12) {
+                                Image(systemName: "arrow.triangle.branch")
+                                    .foregroundStyle(T3Colors.textTertiary)
+
+                                Text(branch.name)
+                                    .foregroundStyle(T3Colors.textPrimary)
+                                    .lineLimit(1)
+
+                                Spacer(minLength: 10)
+
+                                if let badge = branch.badge {
+                                    Text(badge)
+                                        .font(T3Typography.supporting)
+                                        .foregroundStyle(T3Colors.textTertiary)
+                                }
+
+                                if branch.id == selection?.id {
+                                    Image(systemName: "checkmark")
+                                        .font(.system(size: 13, weight: .semibold))
+                                        .foregroundStyle(T3Colors.accent)
+                                }
+                            }
+                            .frame(minHeight: 34)
+                        }
+                        .buttonStyle(.plain)
+                        .listRowBackground(T3Colors.background)
+                    }
+                    .listStyle(.plain)
+                    .refreshable { onRefresh() }
+                }
+            }
+            .background(T3Colors.background)
+            .navigationTitle("Base branch")
+            .navigationBarTitleDisplayMode(.inline)
+            .searchable(text: $query, prompt: "Search branches")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .primaryAction) {
+                    Button(action: onRefresh) {
+                        Image(systemName: "arrow.clockwise")
+                    }
+                    .disabled(isLoading)
+                    .accessibilityLabel("Refresh branches")
+                }
+            }
+        }
+        .presentationDetents([.medium, .large])
+        .presentationBackground(T3Colors.background)
+        .preferredColorScheme(.dark)
+    }
+
+    private var filteredBranches: [FeatureWorkspaceBranch] {
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return branches }
+        return branches.filter {
+            $0.name.localizedCaseInsensitiveContains(trimmed)
+        }
     }
 }

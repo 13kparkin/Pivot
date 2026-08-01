@@ -32,6 +32,10 @@ public struct NewTaskRequest: Sendable, Equatable {
     public var selection: FeatureSelection?
     public var runtimeMode: FeatureRuntimeMode
     public var interactionMode: FeatureInteractionMode
+    public var workspaceMode: FeatureWorkspaceMode
+    public var branch: String?
+    public var worktreePath: String?
+    public var startFromOrigin: Bool
     public var attachments: [FeatureDraftAttachment]
 
     public init(
@@ -40,6 +44,10 @@ public struct NewTaskRequest: Sendable, Equatable {
         selection: FeatureSelection?,
         runtimeMode: FeatureRuntimeMode,
         interactionMode: FeatureInteractionMode,
+        workspaceMode: FeatureWorkspaceMode = .local,
+        branch: String? = nil,
+        worktreePath: String? = nil,
+        startFromOrigin: Bool = true,
         attachments: [FeatureDraftAttachment] = []
     ) {
         self.projectID = projectID
@@ -47,11 +55,23 @@ public struct NewTaskRequest: Sendable, Equatable {
         self.selection = selection
         self.runtimeMode = runtimeMode.mobileNormalized
         self.interactionMode = interactionMode.mobileNormalized
+        self.workspaceMode = workspaceMode
+        self.branch = Self.nonEmpty(branch)
+        self.worktreePath = workspaceMode == .local ? Self.nonEmpty(worktreePath) : nil
+        self.startFromOrigin = workspaceMode == .worktree && startFromOrigin
         self.attachments = attachments
     }
 
     public var trimmedPrompt: String {
         prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private static func nonEmpty(_ value: String?) -> String? {
+        guard let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !trimmed.isEmpty else {
+            return nil
+        }
+        return trimmed
     }
 }
 

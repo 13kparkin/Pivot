@@ -22,6 +22,22 @@ public protocol FeatureClient: AnyObject {
         interactionMode: FeatureInteractionMode,
         attachments: [FeatureUploadAttachment]
     ) async throws -> FeatureThread
+    func createThreadAndSend(
+        projectID: String,
+        prompt: String,
+        selection: FeatureSelection?,
+        runtimeMode: FeatureRuntimeMode,
+        interactionMode: FeatureInteractionMode,
+        workspaceMode: FeatureWorkspaceMode,
+        branch: String?,
+        worktreePath: String?,
+        startFromOrigin: Bool,
+        attachments: [FeatureUploadAttachment]
+    ) async throws -> FeatureThread
+    func listWorkspaceBranches(
+        projectID: String,
+        refresh: Bool
+    ) async throws -> [FeatureWorkspaceBranch]
     func renameThread(id: String, title: String) async throws
     func setThreadArchived(id: String, archived: Bool) async throws
     func setThreadSettled(id: String, settled: Bool) async throws
@@ -88,6 +104,37 @@ public extension FeatureClient {
     func setThreadSnoozed(id: String, until: Date?) async throws {}
     func setRuntimeMode(id: String, mode: FeatureRuntimeMode) async throws {}
     func setInteractionMode(id: String, mode: FeatureInteractionMode) async throws {}
+
+    func listWorkspaceBranches(
+        projectID: String,
+        refresh: Bool
+    ) async throws -> [FeatureWorkspaceBranch] {
+        []
+    }
+
+    /// Legacy clients still create in the current checkout. Native clients
+    /// override this overload to prepare worktrees atomically with the first turn.
+    func createThreadAndSend(
+        projectID: String,
+        prompt: String,
+        selection: FeatureSelection?,
+        runtimeMode: FeatureRuntimeMode,
+        interactionMode: FeatureInteractionMode,
+        workspaceMode: FeatureWorkspaceMode,
+        branch: String?,
+        worktreePath: String?,
+        startFromOrigin: Bool,
+        attachments: [FeatureUploadAttachment]
+    ) async throws -> FeatureThread {
+        try await createThreadAndSend(
+            projectID: projectID,
+            prompt: prompt,
+            selection: selection,
+            runtimeMode: runtimeMode,
+            interactionMode: interactionMode,
+            attachments: attachments
+        )
+    }
 
     func createThreadAndSend(
         projectID: String,

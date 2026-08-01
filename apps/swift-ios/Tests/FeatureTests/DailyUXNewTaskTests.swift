@@ -24,7 +24,64 @@ struct DailyUXNewTaskTests {
         #expect(request.trimmedPrompt == "Build it")
         #expect(request.runtimeMode == .automatic)
         #expect(request.interactionMode == .standard)
+        #expect(request.workspaceMode == .local)
+        #expect(request.branch == nil)
+        #expect(request.worktreePath == nil)
+        #expect(!request.startFromOrigin)
         #expect(request.attachments.first?.byteCount == 3)
+    }
+
+    @Test
+    func worktreeRequestKeepsBaseBranchAndDropsExistingCheckoutPath() {
+        let request = NewTaskRequest(
+            projectID: "project",
+            prompt: "Build it",
+            selection: nil,
+            runtimeMode: .fullAccess,
+            interactionMode: .standard,
+            workspaceMode: .worktree,
+            branch: "  main ",
+            worktreePath: "/existing/worktree",
+            startFromOrigin: true
+        )
+
+        #expect(request.branch == "main")
+        #expect(request.worktreePath == nil)
+        #expect(request.startFromOrigin)
+    }
+
+    @Test
+    func workspaceDefaultsPreferCurrentCheckoutAndLocalDefaultBase() throws {
+        let branches = [
+            FeatureWorkspaceBranch(name: "origin/main", isRemote: true, isDefault: true),
+            FeatureWorkspaceBranch(name: "feature", isCurrent: true),
+            FeatureWorkspaceBranch(name: "main", isDefault: true),
+        ]
+
+        #expect(NewTaskWorkspaceDefaults.localBranch(in: branches)?.name == "feature")
+        #expect(NewTaskWorkspaceDefaults.worktreeBase(in: branches)?.name == "main")
+
+        let root = FeatureWorkspaceBranch(
+            name: "feature",
+            worktreePath: "/repo/./"
+        )
+        #expect(
+            NewTaskWorkspaceDefaults.normalizedWorktreePath(
+                for: root,
+                projectPath: "/repo"
+            ) == nil
+        )
+
+        let linked = FeatureWorkspaceBranch(
+            name: "linked",
+            worktreePath: "/worktrees/linked"
+        )
+        #expect(
+            NewTaskWorkspaceDefaults.normalizedWorktreePath(
+                for: linked,
+                projectPath: "/repo"
+            ) == "/worktrees/linked"
+        )
     }
 
     @Test

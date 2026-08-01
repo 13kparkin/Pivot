@@ -132,6 +132,7 @@ public final class FeatureRootModel {
     public func startTask(_ request: NewTaskRequest) async -> FeatureThread? {
         let prompt = request.trimmedPrompt
         guard !prompt.isEmpty || !request.attachments.isEmpty else { return nil }
+        guard request.workspaceMode != .worktree || request.branch != nil else { return nil }
 
         let environment = currentEnvironmentIdentity
         var created: FeatureThread?
@@ -142,6 +143,10 @@ public final class FeatureRootModel {
                 selection: request.selection,
                 runtimeMode: request.runtimeMode.mobileNormalized,
                 interactionMode: request.interactionMode.mobileNormalized,
+                workspaceMode: request.workspaceMode,
+                branch: request.branch,
+                worktreePath: request.worktreePath,
+                startFromOrigin: request.startFromOrigin,
                 attachments: request.attachments.map(\.upload)
             )
             guard currentEnvironmentIdentity == environment else {
@@ -151,6 +156,13 @@ public final class FeatureRootModel {
             created = thread
         }
         return succeeded ? created : nil
+    }
+
+    public func workspaceBranches(
+        projectID: String,
+        refresh: Bool = false
+    ) async throws -> [FeatureWorkspaceBranch] {
+        try await client.listWorkspaceBranches(projectID: projectID, refresh: refresh)
     }
 
     public func renameThread(_ id: String, title: String) async {
