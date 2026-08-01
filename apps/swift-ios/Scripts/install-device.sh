@@ -102,6 +102,7 @@ xcodebuild build \
   -destination "platform=iOS,id=${DESTINATION_ID}" \
   -derivedDataPath "${DERIVED_DATA_PATH}" \
   -allowProvisioningUpdates \
+  -allowProvisioningDeviceRegistration \
   "${build_settings[@]}"
 
 APP_PATH="${DERIVED_DATA_PATH}/Build/Products/${CONFIGURATION}-iphoneos/T3Code.app"
@@ -127,4 +128,16 @@ printf '[swift-ios-device] installing %s\n' "${APP_PATH}"
 xcrun devicectl device install app --device "${DESTINATION_ID}" "${APP_PATH}"
 
 printf '[swift-ios-device] launching %s\n' "${BUNDLE_IDENTIFIER}"
-xcrun devicectl device process launch --device "${DESTINATION_ID}" "${BUNDLE_IDENTIFIER}"
+if ! launch_output="$(
+  xcrun devicectl device process launch \
+    --device "${DESTINATION_ID}" \
+    "${BUNDLE_IDENTIFIER}" 2>&1
+)"; then
+  printf '%s\n' "${launch_output}" >&2
+  if [[ "${launch_output}" == *"BSErrorCodeDescription = Locked"* ]]; then
+    printf '[swift-ios-device] installed; unlock the device to launch the app\n'
+    exit 0
+  fi
+  exit 1
+fi
+printf '%s\n' "${launch_output}"
