@@ -5,6 +5,21 @@ import Testing
 @Suite("Model picker")
 struct DailyUXModelPickerTests {
     @Test
+    func providerBrandsResolveFromDriversAndFallbackIDs() {
+        #expect(
+            ProviderBrand.resolve(driver: "codex", providerID: "work-openai") == .openAI
+        )
+        #expect(
+            ProviderBrand.resolve(driver: "claudeAgent", providerID: "work-claude") == .claude
+        )
+        #expect(ProviderBrand.resolve(driver: "cursor", providerID: "cursor") == .cursor)
+        #expect(ProviderBrand.resolve(driver: "grok", providerID: "grok") == .grok)
+        #expect(ProviderBrand.resolve(driver: "opencode", providerID: "opencode") == .openCode)
+        #expect(ProviderBrand.resolve(driver: "", providerID: "claude") == .claude)
+        #expect(ProviderBrand.resolve(driver: "custom", providerID: "custom") == nil)
+    }
+
+    @Test
     func catalogPreservesFavoritesRecentsAndProviderGroups() {
         let providers = [
             FeatureProvider(

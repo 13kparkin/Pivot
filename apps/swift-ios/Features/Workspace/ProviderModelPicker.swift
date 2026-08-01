@@ -35,8 +35,8 @@ public struct ProviderModelPicker: View {
             switch style {
             case .row:
                 HStack(spacing: 12) {
-                    Image(systemName: "cpu")
-                        .foregroundStyle(T3Colors.textSecondary)
+                    selectionMark(size: 22)
+                        .frame(width: 24)
                     VStack(alignment: .leading, spacing: 2) {
                         Text("Model")
                             .font(T3Typography.supporting)
@@ -54,7 +54,7 @@ public struct ProviderModelPicker: View {
                 .contentShape(Rectangle())
             case .compact:
                 HStack(spacing: 6) {
-                    Image(systemName: "cpu")
+                    selectionMark(size: 14)
                     Text(compactSelectionLabel)
                         .lineLimit(1)
                     Image(systemName: "chevron.up.chevron.down")
@@ -114,6 +114,23 @@ public struct ProviderModelPicker: View {
             return selectedOption.model.name
         }
         return "\(selectedOption.model.name) · \(summary)"
+    }
+
+    @ViewBuilder
+    private func selectionMark(size: CGFloat) -> some View {
+        if let provider = selectedOption?.provider {
+            ProviderIcon(
+                driver: provider.driver,
+                providerID: provider.id,
+                fallbackName: provider.name,
+                size: size
+            )
+        } else {
+            Image(systemName: selection == nil ? "wand.and.stars" : "cpu")
+                .font(.system(size: size * 0.72, weight: .semibold))
+                .foregroundStyle(T3Colors.textSecondary)
+                .frame(width: size, height: size)
+        }
     }
 }
 
@@ -529,11 +546,12 @@ private struct ModelOptionLabel: View {
     }
 
     private var providerMark: some View {
-        Text(String(option.provider.name.prefix(1)).uppercased())
-            .font(.caption.weight(.bold))
-            .foregroundStyle(T3Colors.textPrimary)
-            .frame(width: 26, height: 26)
-            .background(T3Colors.surfaceRaised, in: RoundedRectangle(cornerRadius: 6))
+        ProviderIcon(
+            driver: option.provider.driver,
+            providerID: option.provider.id,
+            fallbackName: option.provider.name,
+            size: 26
+        )
     }
 
     private func capability(_ title: String, icon: String) -> some View {
