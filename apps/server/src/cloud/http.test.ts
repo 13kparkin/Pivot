@@ -31,8 +31,7 @@ import {
   isSupportedLinkProviderKind,
   linkProofScopes,
   managedEndpointOriginsEqual,
-  reconcileDesiredCloudLink,
-  reconcileManagedEndpointOrigin,
+  reconcileCloudLinkOnStartup,
   releaseManagedTunnelOnShutdown,
 } from "./http.ts";
 import * as ManagedEndpointRuntime from "./ManagedEndpointRuntime.ts";
@@ -192,20 +191,25 @@ describe("relay request tracing", () => {
   );
 });
 
-describe("reconcileDesiredCloudLink", () => {
-  it.effect("requires stored CLI authorization without exposing an HTTP endpoint", () =>
+describe("reconcileCloudLinkOnStartup", () => {
+  it.effect("restores a desired CLI link before attempting origin repair", () =>
     Effect.gen(function* () {
-      const error = yield* Effect.flip(reconcileDesiredCloudLink("http://127.0.0.1:3774"));
+      const error = yield* Effect.flip(reconcileCloudLinkOnStartup("http://127.0.0.1:3774"));
 
       expect(error).toMatchObject({
         _tag: "EnvironmentHttpUnauthorizedError",
         message: "Run `t3 connect link` to authorize this environment.",
       });
     }).pipe(
-      Effect.provideService(
-        ServerSecretStore.ServerSecretStore,
-        makeSecretStore(unusedSecretStoreOperation),
-      ),
+      Effect.provideService(ServerSecretStore.ServerSecretStore, {
+        ...makeSecretStore(unusedSecretStoreOperation),
+        get: (name) =>
+          Effect.succeed(
+            name === CLOUD_CLI_DESIRED_LINK_SECRET
+              ? Option.some(new TextEncoder().encode("managed"))
+              : Option.none(),
+          ),
+      }),
       Effect.provideService(
         ServerEnvironment.ServerEnvironment,
         ServerEnvironment.ServerEnvironment.of({
@@ -273,7 +277,7 @@ describe("reconcileManagedEndpointOrigin", () => {
     const applied: Array<unknown> = [];
 
     return Effect.gen(function* () {
-      expect(yield* reconcileManagedEndpointOrigin("http://127.0.0.1:4555")).toBe(true);
+      expect(yield* reconcileCloudLinkOnStartup("http://127.0.0.1:4555")).toBe(true);
 
       expect(requests).toHaveLength(1);
       expect(requests[0]?.url).toBe(

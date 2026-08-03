@@ -21,6 +21,7 @@ import {
   ensureTailscaleServe,
   readTailscaleStatus,
   TailscaleCommandExitError,
+  TailscaleStderrDiagnostic,
 } from "@t3tools/tailscale";
 import * as Config from "effect/Config";
 import * as Console from "effect/Console";
@@ -116,14 +117,37 @@ export class ServesOtherEnvironmentError extends Schema.TaggedErrorClass<ServesO
 
 export class TailscaleServeFailedError extends Schema.TaggedErrorClass<TailscaleServeFailedError>()(
   "TailscaleServeFailedError",
-  { servePort: Schema.Number, cause: Schema.Defect() },
+  {
+    servePort: Schema.Number,
+    exitCode: Schema.optional(Schema.Number),
+    stderrDiagnostic: Schema.optional(TailscaleStderrDiagnostic),
+    cause: Schema.Defect(),
+  },
 ) {
   override get message(): string {
-    if (Schema.is(TailscaleCommandExitError)(this.cause)) {
-      return `tailscale serve failed for HTTPS port ${String(this.servePort)}. ${this.cause.message}`;
+    if (this.stderrDiagnostic === "permission-denied") {
+      const exitDetail = this.exitCode === undefined ? "" : ` with code ${String(this.exitCode)}`;
+      return `tailscale serve failed${exitDetail} for HTTPS port ${String(this.servePort)}: access denied. Run \`sudo tailscale set --operator=$USER\`, then retry.`;
     }
     return `tailscale serve failed for HTTPS port ${String(this.servePort)}. Run \`tailscale serve --https=${String(this.servePort)} --bg <local-url>\` by hand to see why.`;
   }
+}
+
+const isTailscaleCommandExitError = Schema.is(TailscaleCommandExitError);
+
+export function tailscaleServeFailedError(
+  servePort: number,
+  cause: unknown,
+): TailscaleServeFailedError {
+  const exitDetails = isTailscaleCommandExitError(cause)
+    ? {
+        exitCode: cause.exitCode,
+        ...(cause.stderrDiagnostic === undefined
+          ? {}
+          : { stderrDiagnostic: cause.stderrDiagnostic }),
+      }
+    : {};
+  return new TailscaleServeFailedError({ servePort, cause, ...exitDetails });
 }
 
 export class ServePortOccupiedError extends Schema.TaggedErrorClass<ServePortOccupiedError>()(
@@ -414,11 +438,7 @@ const resolveTailscalePairingBase = Effect.fn("pair.resolveTailscalePairingBase"
       localPort: localTarget.localPort,
       servePort: input.servePort,
       ...(localTarget.localHost !== undefined ? { localHost: localTarget.localHost } : {}),
-    }).pipe(
-      Effect.mapError(
-        (cause) => new TailscaleServeFailedError({ servePort: input.servePort, cause }),
-      ),
-    );
+    }).pipe(Effect.mapError((cause) => tailscaleServeFailedError(input.servePort, cause)));
     notes.push(
       `Tailscale Serve now maps ${baseUrl} to this server and persists across restarts. Remove it with \`tailscale serve --https=${String(input.servePort)} off\`.`,
     );

@@ -725,6 +725,19 @@ export const reconcileManagedEndpointOrigin = Effect.fn(
   return yield* reconcileManagedEndpointOriginWith(yield* cloudHttpDependencies, localOrigin);
 });
 
+/** Restores CLI-desired links first, then repairs origin drift for links that
+    are owned by web or mobile and therefore have no CLI desired-link marker. */
+export const reconcileCloudLinkOnStartup = Effect.fn(
+  "environment.cloud.reconcileCloudLinkOnStartup",
+)(function* (localOrigin: string) {
+  const dependencies = yield* cloudHttpDependencies;
+  if (yield* readCliDesiredCloudLink) {
+    yield* reconcileDesiredCloudLinkWith(dependencies, localOrigin);
+    return true;
+  }
+  return yield* reconcileManagedEndpointOriginWith(dependencies, localOrigin);
+});
+
 // Cloudflare bills per provisioned tunnel, so an environment that goes offline
 // must not leave its tunnel behind. Releasing deletes only the tunnel — the
 // relay keeps the link and its hostname reservation, and the next startup's

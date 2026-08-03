@@ -83,7 +83,7 @@ import * as ServerSecretStore from "./auth/ServerSecretStore.ts";
 import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
 import {
   connectHttpApiLayer,
-  reconcileManagedEndpointOrigin,
+  reconcileCloudLinkOnStartup,
   releaseManagedTunnelOnShutdown,
 } from "./cloud/http.ts";
 import { serverRelayBrokerTracingLayer } from "./cloud/relayTracing.ts";
@@ -582,22 +582,24 @@ export const makeServerLayer = Layer.unwrap(
             const address = server.address;
             if (typeof address === "string" || !("port" in address)) return;
             yield* Effect.sleep("250 millis").pipe(
-              Effect.andThen(reconcileManagedEndpointOrigin(`http://127.0.0.1:${address.port}`)),
+              Effect.andThen(reconcileCloudLinkOnStartup(`http://127.0.0.1:${address.port}`)),
               Effect.retry({
-                while: (error) => error._tag !== "EnvironmentHttpBadRequestError",
+                while: (error) =>
+                  error._tag !== "EnvironmentHttpBadRequestError" &&
+                  error._tag !== "EnvironmentHttpUnauthorizedError" &&
+                  error._tag !== "EnvironmentHttpConflictError",
                 schedule: Schedule.exponential("1 second").pipe(
                   Schedule.modifyDelay(({ duration }) =>
                     Effect.succeed(Duration.min(duration, Duration.seconds(30))),
                   ),
+                  Schedule.upTo({ duration: "10 minutes" }),
                 ),
               }),
               Effect.tap((reconciled) =>
-                reconciled
-                  ? Effect.logInfo("T3 Connect managed endpoint origin reconciled on startup")
-                  : Effect.void,
+                reconciled ? Effect.logInfo("T3 Connect link reconciled on startup") : Effect.void,
               ),
               Effect.catch((cause) =>
-                Effect.logWarning("Failed to reconcile T3 Connect managed endpoint on startup", {
+                Effect.logWarning("Failed to reconcile T3 Connect link on startup", {
                   cause,
                 }),
               ),
