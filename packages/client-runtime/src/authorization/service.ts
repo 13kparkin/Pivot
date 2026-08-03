@@ -209,17 +209,24 @@ export const make = Effect.gen(function* () {
         yield* Effect.annotateCurrentSpan({
           "connection.remote_token_cache": "hit",
         });
+        const descriptor = yield* fetchDescriptor(cached.value.endpoint.httpBaseUrl).pipe(
+          Effect.provideService(HttpClient.HttpClient, httpClient),
+        );
+        if (descriptor.environmentId !== input.expectedEnvironmentId) {
+          return yield* environmentMismatchError({
+            expected: input.expectedEnvironmentId,
+            actual: descriptor.environmentId,
+          });
+        }
         const cachedSocket = yield* createDpopSocketUrl(
           cached.value,
           CACHED_ENDPOINT_SOCKET_TIMEOUT_MS,
         ).pipe(Effect.result);
         if (Result.isSuccess(cachedSocket)) {
           return {
-            environmentId: cached.value.environmentId,
-            label: cached.value.label,
-            ...(cached.value.serverVersion === undefined
-              ? {}
-              : { serverVersion: cached.value.serverVersion }),
+            environmentId: descriptor.environmentId,
+            label: descriptor.label,
+            serverVersion: descriptor.serverVersion,
             httpBaseUrl: cached.value.endpoint.httpBaseUrl,
             socketUrl: cachedSocket.success,
             httpAuthorization: {
@@ -279,7 +286,6 @@ export const make = Effect.gen(function* () {
       const token = new TokenStore.RemoteDpopAccessToken({
         environmentId: descriptor.environmentId,
         label: descriptor.label,
-        serverVersion: descriptor.serverVersion,
         endpoint: bootstrap.endpoint,
         accessToken: access.access_token,
         expiresAtEpochMs: issuedAt + access.expires_in * 1_000,
