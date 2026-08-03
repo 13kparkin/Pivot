@@ -220,9 +220,11 @@ export const offerServiceDuringOnboarding = Effect.gen(function* () {
     compareExactServiceVersions(status.installedVersion, packageJson.version) > 0
   ) {
     yield* Console.log(
-      `T3 Code is already running newer t3@${status.installedVersion}; leaving it unchanged.`,
+      `A newer t3@${status.installedVersion} background service is installed; leaving it unchanged.`,
     );
-    return true;
+    // This CLI cannot verify that the newer unit is healthy, so keep the
+    // manual `serve` fallback visible instead of claiming background readiness.
+    return false;
   }
   const wanted = yield* Prompt.run(
     Prompt.confirm({

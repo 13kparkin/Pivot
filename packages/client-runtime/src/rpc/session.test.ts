@@ -387,6 +387,27 @@ describe("RpcSessionFactory", () => {
     }),
   );
 
+  it.effect("treats malformed RPC transport messages as retryable", () =>
+    Effect.gen(function* () {
+      const { factory, sockets } = yield* makeFactory();
+
+      const error = yield* Effect.scoped(
+        Effect.gen(function* () {
+          const session = yield* factory.connect(PREPARED);
+          const readyFiber = yield* Effect.forkChild(Effect.flip(session.ready));
+          const socket = yield* awaitSocket(sockets);
+          socket.open();
+          yield* awaitRequest(socket);
+          socket.serverMessage("not-json");
+          return yield* Fiber.join(readyFiber);
+        }),
+      );
+
+      expect(error).toBeInstanceOf(ConnectionTransientError);
+      expect(error).toMatchObject({ reason: "transport" });
+    }),
+  );
+
   it.effect("fails readiness when the websocket never opens", () =>
     Effect.gen(function* () {
       const { factory, sockets } = yield* makeFactory();

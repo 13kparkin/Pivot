@@ -8,6 +8,7 @@ import type { EffectPgDatabase } from "drizzle-orm/effect-postgres";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import type { SqlError } from "effect/unstable/sql/SqlError";
 
 import { relayDatabaseMode } from "./dbConfig.ts";
 
@@ -18,10 +19,50 @@ export class RelayDb extends Context.Service<
   }
 >()("t3code-relay/db/RelayDb") {}
 
+function withEnvironmentLock<A, E, R>(
+  db: RelayDb["Service"],
+  input: { readonly userId: string; readonly environmentId: string },
+  effect: Effect.Effect<A, E, R>,
+): Effect.Effect<A, E | SqlError, R> {
+  return Effect.scoped(
+    Effect.gen(function* () {
+      const connection = yield* db.$client.reserve;
+      const lockParams = [input.userId, input.environmentId] as const;
+      yield* connection.executeUnprepared(
+        "SELECT pg_advisory_lock(hashtext($1), hashtext($2))",
+        lockParams,
+        undefined,
+      );
+      return yield* effect.pipe(
+        Effect.ensuring(
+          connection
+            .executeUnprepared(
+              "SELECT pg_advisory_unlock(hashtext($1), hashtext($2))",
+              lockParams,
+              undefined,
+            )
+            .pipe(
+              Effect.catch((error: SqlError) =>
+                Effect.logWarning("failed to release relay environment lock", {
+                  ...input,
+                  error,
+                }),
+              ),
+            ),
+        ),
+      );
+    }),
+  );
+}
+
 export class RelayTransactions extends Context.Service<
   RelayTransactions,
   {
     readonly withTransaction: RelayDb["Service"]["$client"]["withTransaction"];
+    readonly withEnvironmentLock: <A, E, R>(
+      input: { readonly userId: string; readonly environmentId: string },
+      effect: Effect.Effect<A, E, R>,
+    ) => Effect.Effect<A, E | SqlError, R>;
   }
 >()("t3code-relay/db/RelayTransactions") {
   static readonly layer = Layer.effect(
@@ -30,6 +71,7 @@ export class RelayTransactions extends Context.Service<
       const db = yield* RelayDb;
       return RelayTransactions.of({
         withTransaction: db.$client.withTransaction,
+        withEnvironmentLock: (input, effect) => withEnvironmentLock(db, input, effect),
       });
     }),
   );

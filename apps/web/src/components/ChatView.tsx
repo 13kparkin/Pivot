@@ -2027,7 +2027,10 @@ function ChatViewContent(props: ChatViewProps) {
       serverUpdateEnvironmentId &&
       !reconnectingThroughVersionSkew &&
       (serverUpdateState.status !== "idle" ||
-        (showVersionMismatchBanner && versionMismatch && versionMismatchDismissKey))
+        (compatibilityChannelMismatch === null &&
+          showVersionMismatchBanner &&
+          versionMismatch &&
+          versionMismatchDismissKey))
     ) {
       const updateInProgress = serverUpdateState.status === "running";
       const updateFailed = serverUpdateState.status === "failed";

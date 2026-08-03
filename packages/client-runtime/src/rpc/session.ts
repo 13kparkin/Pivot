@@ -56,10 +56,7 @@ function unsupportedProtocolError(serverVersion: string | undefined): Connection
   });
 }
 
-function mapSessionRpcError(
-  error: InitialConfigError | ProbeError,
-  serverVersion: string | undefined,
-): ConnectionAttemptError {
+function mapSessionRpcError(error: InitialConfigError | ProbeError): ConnectionAttemptError {
   switch (error._tag) {
     case "EnvironmentAuthorizationError":
       return new ConnectionBlockedError({
@@ -73,9 +70,6 @@ function mapSessionRpcError(
         detail: error.message,
       });
     case "RpcClientError":
-      if (error.reason._tag === "RpcClientDefect") {
-        return unsupportedProtocolError(serverVersion);
-      }
       return new ConnectionTransientErrorClass({
         reason: "transport",
         detail: error.message,
@@ -149,7 +143,7 @@ export const make = Effect.gen(function* () {
     const client = yield* makeWsRpcProtocolClient.pipe(Effect.provide(protocolContext));
     const initialConfig = yield* Effect.cached(
       client[WS_METHODS.serverGetConfig]({}).pipe(
-        Effect.mapError((error) => mapSessionRpcError(error, connection.serverVersion)),
+        Effect.mapError(mapSessionRpcError),
         (effect) => mapRpcSchemaDefect(effect, connection.serverVersion),
         Effect.withSpan("environment.initialSync"),
       ),
@@ -158,12 +152,12 @@ export const make = Effect.gen(function* () {
       Effect.flatMap((config) => {
         if (config.environment.capabilities.connectionProbe === true) {
           return client[WS_METHODS.serverProbe]({}).pipe(
-            Effect.mapError((error) => mapSessionRpcError(error, connection.serverVersion)),
+            Effect.mapError(mapSessionRpcError),
             (effect) => mapRpcSchemaDefect(effect, connection.serverVersion),
           );
         }
         return client[WS_METHODS.serverGetConfig]({}).pipe(
-          Effect.mapError((error) => mapSessionRpcError(error, connection.serverVersion)),
+          Effect.mapError(mapSessionRpcError),
           (effect) => mapRpcSchemaDefect(effect, connection.serverVersion),
         );
       }),

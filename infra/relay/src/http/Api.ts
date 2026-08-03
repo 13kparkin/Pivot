@@ -19,6 +19,7 @@ import * as HttpServerResponse from "effect/unstable/http/HttpServerResponse";
 import * as HttpTraceContext from "effect/unstable/http/HttpTraceContext";
 import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
 import * as HttpApiError from "effect/unstable/httpapi/HttpApiError";
+import * as SqlError from "effect/unstable/sql/SqlError";
 import { encodeOAuthScope } from "@t3tools/shared/oauthScope";
 import { httpHeaderRedactionLayer } from "@t3tools/shared/httpObservability";
 
@@ -47,6 +48,7 @@ import {
   RelayEnvironmentPrincipal,
   type RelayEnvironmentConnectRequest,
   type RelayDpopAccessTokenScope,
+  type RelayManagedEndpointOrigin,
   RelayInternalError,
 } from "@t3tools/contracts/relay";
 import { normalizeRelayIssuer } from "@t3tools/shared/relayJwt";
@@ -432,37 +434,63 @@ export const revokeEnvironmentLinkRecord = Effect.fn(
 
 export const unlinkEnvironmentRecord = Effect.fn("relay.api.client.unlinkEnvironmentRecord")(
   function* (input: { readonly userId: string; readonly environmentId: string }) {
+    const transactions = yield* RelayDb.RelayTransactions;
     const links = yield* EnvironmentLinks.EnvironmentLinks;
     const managedEndpointProvider = yield* ManagedEndpointProvider.ManagedEndpointProvider;
-    const deprovisionTarget = yield* managedEndpointProvider.prepareDeprovision({
-      userId: input.userId,
-      environmentId: input.environmentId,
-    });
-    const link = yield* links.getForUser({
-      userId: input.userId,
-      environmentId: input.environmentId,
-    });
-    const unlinked =
-      link === null
-        ? false
-        : yield* revokeEnvironmentLinkRecord({
-            userId: input.userId,
-            environmentId: link.environmentId,
-            environmentPublicKey: link.environmentPublicKey,
-          });
+    return yield* transactions.withEnvironmentLock(
+      input,
+      Effect.gen(function* () {
+        const deprovisionTarget = yield* managedEndpointProvider.prepareDeprovision(input);
+        const link = yield* links.getForUser(input);
+        const unlinked =
+          link === null
+            ? false
+            : yield* revokeEnvironmentLinkRecord({
+                userId: input.userId,
+                environmentId: link.environmentId,
+                environmentPublicKey: link.environmentPublicKey,
+              });
 
-    // External teardown cannot share the SQL transaction. Run it only after
-    // revocation commits so a database failure leaves a fully usable active
-    // link. Still run teardown when the link is already revoked, allowing a
-    // retry to finish cleanup after an earlier Cloudflare failure.
-    yield* managedEndpointProvider.deprovision({
-      userId: input.userId,
-      environmentId: input.environmentId,
-      target: deprovisionTarget,
-    });
-    return unlinked;
+        // External teardown cannot share the SQL transaction. Run it only after
+        // revocation commits so a database failure leaves a fully usable active
+        // link. Still run teardown when the link is already revoked, allowing a
+        // retry to finish cleanup after an earlier Cloudflare failure.
+        yield* managedEndpointProvider.deprovision({
+          ...input,
+          target: deprovisionTarget,
+        });
+        return unlinked;
+      }),
+    );
   },
 );
+
+export const reconcileManagedEndpointRecord = Effect.fn(
+  "relay.api.server.reconcileManagedEndpointRecord",
+)(function* (input: {
+  readonly userId: string;
+  readonly environmentId: string;
+  readonly environmentPublicKey: string;
+  readonly origin: RelayManagedEndpointOrigin;
+}) {
+  const transactions = yield* RelayDb.RelayTransactions;
+  const links = yield* EnvironmentLinks.EnvironmentLinks;
+  const managedEndpointProvider = yield* ManagedEndpointProvider.ManagedEndpointProvider;
+  return yield* transactions.withEnvironmentLock(
+    input,
+    Effect.gen(function* () {
+      const link = yield* links.getForUser(input);
+      if (
+        link === null ||
+        link.environmentPublicKey !== input.environmentPublicKey ||
+        link.endpoint.providerKind !== "cloudflare_tunnel"
+      ) {
+        return yield* new HttpApiError.Unauthorized({});
+      }
+      return yield* managedEndpointProvider.provision(input);
+    }),
+  );
+});
 
 export const mobileApi = HttpApiBuilder.group(
   RelayApi,
@@ -856,8 +884,6 @@ export const serverApi = HttpApiBuilder.group(
   Effect.fnUntraced(function* (handlers) {
     const publisher = yield* AgentActivityPublisher.AgentActivityPublisher;
     const publishSignatures = yield* EnvironmentPublishSignatures.EnvironmentPublishSignatures;
-    const links = yield* EnvironmentLinks.EnvironmentLinks;
-    const managedEndpointProvider = yield* ManagedEndpointProvider.ManagedEndpointProvider;
     const publishHandlers = handlers.handle(
       "publishAgentActivity",
       Effect.fn("relay.api.server.publishAgentActivity")(
@@ -994,20 +1020,10 @@ export const serverApi = HttpApiBuilder.group(
           if (principal.environmentId !== params.environmentId) {
             return yield* new HttpApiError.Unauthorized({});
           }
-          const link = yield* links.getForUser({
+          const result = yield* reconcileManagedEndpointRecord({
             userId: payload.cloudUserId,
             environmentId: params.environmentId,
-          });
-          if (
-            link === null ||
-            link.environmentPublicKey !== principal.environmentPublicKey ||
-            link.endpoint.providerKind !== "cloudflare_tunnel"
-          ) {
-            return yield* new HttpApiError.Unauthorized({});
-          }
-          const result = yield* managedEndpointProvider.provision({
-            userId: payload.cloudUserId,
-            environmentId: params.environmentId,
+            environmentPublicKey: principal.environmentPublicKey,
             origin: payload.origin,
           });
           return { endpointRuntime: result.runtime };
@@ -1082,6 +1098,7 @@ const RelayCommonPersistenceError = Schema.Union([
   AgentActivityRows.AgentActivityRowListPersistenceError,
   LiveActivities.LiveActivityDeliveryMarkPersistenceError,
   DeliveryAttempts.DeliveryAttemptRecordPersistenceError,
+  SqlError.SqlError,
 ]);
 type RelayCommonPersistenceError = typeof RelayCommonPersistenceError.Type;
 const isRelayCommonPersistenceError = Schema.is(RelayCommonPersistenceError);
