@@ -6,11 +6,15 @@ import * as Alchemy from "alchemy";
 import * as RemovalPolicy from "alchemy/RemovalPolicy";
 import type { EffectPgDatabase } from "drizzle-orm/effect-postgres";
 import * as Context from "effect/Context";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import type { SqlError } from "effect/unstable/sql/SqlError";
+import * as Random from "effect/Random";
+import * as Schema from "effect/Schema";
+import { and, eq, lte } from "drizzle-orm";
 
 import { relayDatabaseMode } from "./dbConfig.ts";
+import { relayEnvironmentLifecycleLeases } from "./persistence/schema.ts";
 
 export class RelayDb extends Context.Service<
   RelayDb,
@@ -19,38 +23,79 @@ export class RelayDb extends Context.Service<
   }
 >()("t3code-relay/db/RelayDb") {}
 
+export class EnvironmentLifecycleLeasePersistenceError extends Schema.TaggedErrorClass<EnvironmentLifecycleLeasePersistenceError>()(
+  "EnvironmentLifecycleLeasePersistenceError",
+  {
+    userId: Schema.String,
+    environmentId: Schema.String,
+    cause: Schema.Defect(),
+  },
+) {
+  override get message(): string {
+    return `Failed to acquire the lifecycle lease for user '${this.userId}', environment '${this.environmentId}'`;
+  }
+}
+
 function withEnvironmentLock<A, E, R>(
   db: RelayDb["Service"],
   input: { readonly userId: string; readonly environmentId: string },
   effect: Effect.Effect<A, E, R>,
-): Effect.Effect<A, E | SqlError, R> {
-  // A blocking advisory lock lets waiters occupy the whole pool. Each waiter
-  // instead tries inside a short transaction, releasing its connection before
-  // retrying. The winning transaction pins all protected database work to the
-  // lock-owning connection and releases the lock automatically on completion.
-  const attempt = db.$client.withTransaction(
-    Effect.gen(function* () {
-      const rows = yield* db.$client.unsafe<{ readonly locked: boolean }>(
-        "SELECT pg_try_advisory_xact_lock(hashtext($1), hashtext($2)) AS locked",
-        [input.userId, input.environmentId],
+): Effect.Effect<A, E | EnvironmentLifecycleLeasePersistenceError, R> {
+  return Effect.gen(function* () {
+    const ownerId = `${yield* Random.nextInt}:${yield* Random.nextInt}`;
+    const acquire = (): Effect.Effect<void, EnvironmentLifecycleLeasePersistenceError> =>
+      Effect.suspend(() =>
+        Effect.gen(function* () {
+          const now = yield* DateTime.now;
+          const nowIso = DateTime.formatIso(now);
+          const expiresAt = DateTime.formatIso(DateTime.add(now, { seconds: 30 }));
+          const rows = yield* db
+            .insert(relayEnvironmentLifecycleLeases)
+            .values({ ...input, ownerId, expiresAt })
+            .onConflictDoUpdate({
+              target: [
+                relayEnvironmentLifecycleLeases.userId,
+                relayEnvironmentLifecycleLeases.environmentId,
+              ],
+              set: { ownerId, expiresAt },
+              setWhere: lte(relayEnvironmentLifecycleLeases.expiresAt, nowIso),
+            })
+            .returning({ ownerId: relayEnvironmentLifecycleLeases.ownerId })
+            .pipe(
+              Effect.mapError(
+                (cause) => new EnvironmentLifecycleLeasePersistenceError({ ...input, cause }),
+              ),
+            );
+          if (rows[0]?.ownerId !== ownerId) {
+            yield* Effect.sleep("50 millis");
+            return yield* acquire();
+          }
+        }),
       );
-      if (rows[0]?.locked !== true) {
-        return { acquired: false } as const;
-      }
-      // Preserve provider checkpoints on domain failures by committing their
-      // Result. SQL failures still abort the transaction at the driver level.
-      return { acquired: true, result: yield* Effect.result(effect) } as const;
-    }),
-  );
-  const acquire = (): Effect.Effect<A, E | SqlError, R> =>
-    attempt.pipe(
-      Effect.flatMap((outcome) =>
-        outcome.acquired
-          ? Effect.fromResult(outcome.result)
-          : Effect.sleep("50 millis").pipe(Effect.andThen(Effect.suspend(acquire))),
-      ),
-    );
-  return Effect.suspend(acquire);
+    const release = db
+      .delete(relayEnvironmentLifecycleLeases)
+      .where(
+        and(
+          eq(relayEnvironmentLifecycleLeases.userId, input.userId),
+          eq(relayEnvironmentLifecycleLeases.environmentId, input.environmentId),
+          eq(relayEnvironmentLifecycleLeases.ownerId, ownerId),
+        ),
+      )
+      .pipe(
+        Effect.catch((error) =>
+          Effect.logWarning("failed to release relay environment lifecycle lease", {
+            ...input,
+            ownerId,
+            error,
+          }),
+        ),
+      );
+    // Public relay requests are capped at nine seconds. A 30-second lease keeps
+    // a live request fenced while guaranteeing crash recovery without manual
+    // connection cleanup or provider I/O inside a transaction.
+    yield* acquire();
+    return yield* effect.pipe(Effect.ensuring(release));
+  });
 }
 
 export class RelayTransactions extends Context.Service<
@@ -60,7 +105,7 @@ export class RelayTransactions extends Context.Service<
     readonly withEnvironmentLock: <A, E, R>(
       input: { readonly userId: string; readonly environmentId: string },
       effect: Effect.Effect<A, E, R>,
-    ) => Effect.Effect<A, E | SqlError, R>;
+    ) => Effect.Effect<A, E | EnvironmentLifecycleLeasePersistenceError, R>;
   }
 >()("t3code-relay/db/RelayTransactions") {
   static readonly layer = Layer.effect(
