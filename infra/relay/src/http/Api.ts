@@ -856,7 +856,9 @@ export const serverApi = HttpApiBuilder.group(
   Effect.fnUntraced(function* (handlers) {
     const publisher = yield* AgentActivityPublisher.AgentActivityPublisher;
     const publishSignatures = yield* EnvironmentPublishSignatures.EnvironmentPublishSignatures;
-    return handlers.handle(
+    const links = yield* EnvironmentLinks.EnvironmentLinks;
+    const managedEndpointProvider = yield* ManagedEndpointProvider.ManagedEndpointProvider;
+    const publishHandlers = handlers.handle(
       "publishAgentActivity",
       Effect.fn("relay.api.server.publishAgentActivity")(
         function* (args) {
@@ -978,6 +980,61 @@ export const serverApi = HttpApiBuilder.group(
             new RelayInternalError({
               code: "internal_error",
               reason: "upstream_unavailable",
+              traceId,
+            }),
+        }),
+        mapRelayCommonApiErrors("not_authorized"),
+      ),
+    );
+    return publishHandlers.handle(
+      "reconcileManagedEndpoint",
+      Effect.fn("relay.api.server.reconcileManagedEndpoint")(
+        function* ({ params, payload }) {
+          const principal = yield* RelayEnvironmentPrincipal;
+          if (principal.environmentId !== params.environmentId) {
+            return yield* new HttpApiError.Unauthorized({});
+          }
+          const link = yield* links.getForUser({
+            userId: payload.cloudUserId,
+            environmentId: params.environmentId,
+          });
+          if (
+            link === null ||
+            link.environmentPublicKey !== principal.environmentPublicKey ||
+            link.endpoint.providerKind !== "cloudflare_tunnel"
+          ) {
+            return yield* new HttpApiError.Unauthorized({});
+          }
+          const result = yield* managedEndpointProvider.provision({
+            userId: payload.cloudUserId,
+            environmentId: params.environmentId,
+            origin: payload.origin,
+          });
+          return { endpointRuntime: result.runtime };
+        },
+        mapErrorTags({
+          ManagedEndpointProvisioningNotConfigured: (_error, traceId) =>
+            new RelayEnvironmentLinkUnavailableError({
+              code: "environment_link_unavailable",
+              reason: "managed_endpoint_not_configured",
+              traceId,
+            }),
+          ManagedEndpointProvisioningFailed: (_error, traceId) =>
+            new RelayEnvironmentLinkUnavailableError({
+              code: "environment_link_unavailable",
+              reason: "managed_endpoint_provisioning_failed",
+              traceId,
+            }),
+          ManagedEndpointOriginNotAllowed: (_error, traceId) =>
+            new RelayEnvironmentLinkProofInvalidError({
+              code: "environment_link_proof_invalid",
+              reason: "origin_not_allowed",
+              traceId,
+            }),
+          ManagedTunnelLimitExceeded: (limitError, traceId) =>
+            new RelayEnvironmentLinkLimitExceededError({
+              code: "environment_link_limit_exceeded",
+              maxTunnels: limitError.maxTunnels,
               traceId,
             }),
         }),

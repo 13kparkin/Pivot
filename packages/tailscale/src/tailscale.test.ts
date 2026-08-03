@@ -314,6 +314,8 @@ describe("tailscale", () => {
       // The diagnostic classifies the failure without quoting stderr, so the
       // key cannot reach a log through it either.
       assert.equal(error.stderrDiagnostic, "permission-denied");
+      assert.include(error.message, "exited with code 1");
+      assert.include(error.message, "sudo tailscale set --operator=$USER");
       assertCarriesNoSecret(error, "tskey-auth-secret-token-value");
     });
   });

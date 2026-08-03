@@ -14,6 +14,7 @@ import * as TestClock from "effect/testing/TestClock";
 import * as Socket from "effect/unstable/socket/Socket";
 
 import {
+  ConnectionBlockedError,
   ConnectionTransientError,
   PrimaryConnectionTarget,
   type PreparedConnection,
@@ -358,6 +359,32 @@ describe("RpcSessionFactory", () => {
         ]);
       }),
     ),
+  );
+
+  it.effect("parks malformed or incompatible RPC responses as unsupported", () =>
+    Effect.gen(function* () {
+      const { factory, sockets } = yield* makeFactory();
+      const serverVersion = "0.0.32-nightly.20260803.4";
+
+      const error = yield* Effect.scoped(
+        Effect.gen(function* () {
+          const session = yield* factory.connect({ ...PREPARED, serverVersion });
+          const readyFiber = yield* Effect.forkChild(Effect.flip(session.ready));
+          const socket = yield* awaitSocket(sockets);
+          socket.open();
+          yield* completeInitialConfig(socket, {});
+          return yield* Fiber.join(readyFiber);
+        }),
+      );
+
+      expect(error).toBeInstanceOf(ConnectionBlockedError);
+      expect(error).toMatchObject({
+        reason: "unsupported",
+        serverVersion,
+        message:
+          "The client and server could not agree on the RPC protocol. Update the older side, then reconnect.",
+      });
+    }),
   );
 
   it.effect("fails readiness when the websocket never opens", () =>

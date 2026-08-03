@@ -33,6 +33,7 @@ export interface RelayEnvironmentAuthorization {
 export interface AuthorizedRemoteEnvironment {
   readonly environmentId: EnvironmentId;
   readonly label: string;
+  readonly serverVersion?: string;
   readonly httpBaseUrl: string;
   readonly socketUrl: string;
   readonly httpAuthorization: PreparedHttpAuthorization;
@@ -138,6 +139,7 @@ export const make = Effect.gen(function* () {
       return {
         environmentId: descriptor.environmentId,
         label: descriptor.label,
+        serverVersion: descriptor.serverVersion,
         httpBaseUrl: input.httpBaseUrl,
         socketUrl,
         httpAuthorization: {
@@ -215,6 +217,9 @@ export const make = Effect.gen(function* () {
           return {
             environmentId: cached.value.environmentId,
             label: cached.value.label,
+            ...(cached.value.serverVersion === undefined
+              ? {}
+              : { serverVersion: cached.value.serverVersion }),
             httpBaseUrl: cached.value.endpoint.httpBaseUrl,
             socketUrl: cachedSocket.success,
             httpAuthorization: {
@@ -274,6 +279,7 @@ export const make = Effect.gen(function* () {
       const token = new TokenStore.RemoteDpopAccessToken({
         environmentId: descriptor.environmentId,
         label: descriptor.label,
+        serverVersion: descriptor.serverVersion,
         endpoint: bootstrap.endpoint,
         accessToken: access.access_token,
         expiresAtEpochMs: issuedAt + access.expires_in * 1_000,
@@ -286,6 +292,7 @@ export const make = Effect.gen(function* () {
       return {
         environmentId: descriptor.environmentId,
         label: descriptor.label,
+        serverVersion: descriptor.serverVersion,
         httpBaseUrl: bootstrap.endpoint.httpBaseUrl,
         socketUrl,
         httpAuthorization: {

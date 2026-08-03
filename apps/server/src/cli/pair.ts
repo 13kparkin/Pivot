@@ -20,6 +20,7 @@ import {
   DEFAULT_TAILSCALE_SERVE_PORT,
   ensureTailscaleServe,
   readTailscaleStatus,
+  TailscaleCommandExitError,
 } from "@t3tools/tailscale";
 import * as Config from "effect/Config";
 import * as Console from "effect/Console";
@@ -76,9 +77,10 @@ export class NoRunningServerError extends Schema.TaggedErrorClass<NoRunningServe
 ) {
   override get message(): string {
     return [
-      "No running T3 Code server found.",
+      "No usable T3 Code server runtime state found.",
       ...this.checkedStatePaths.map((statePath) => `  checked ${statePath}`),
-      "Start one with `npx t3 serve`, or connect this machine with T3 Connect: `npx t3 connect`.",
+      "If a server is running, pass its T3 home with `--base-dir`; its runtime state may be missing or stale.",
+      "Otherwise start one with `npx t3 serve`, or connect this machine with T3 Connect: `npx t3 connect`.",
     ].join("\n");
   }
 }
@@ -117,6 +119,9 @@ export class TailscaleServeFailedError extends Schema.TaggedErrorClass<Tailscale
   { servePort: Schema.Number, cause: Schema.Defect() },
 ) {
   override get message(): string {
+    if (Schema.is(TailscaleCommandExitError)(this.cause)) {
+      return `tailscale serve failed for HTTPS port ${String(this.servePort)}. ${this.cause.message}`;
+    }
     return `tailscale serve failed for HTTPS port ${String(this.servePort)}. Run \`tailscale serve --https=${String(this.servePort)} --bg <local-url>\` by hand to see why.`;
   }
 }

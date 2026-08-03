@@ -10,6 +10,15 @@ export interface VersionMismatch {
   readonly hint: string;
 }
 
+export type CompatibilityChannel = "Stable" | "Nightly";
+
+export interface CompatibilityChannelMismatch {
+  readonly clientVersion: string;
+  readonly clientChannel: CompatibilityChannel;
+  readonly serverVersion: string;
+  readonly serverChannel: CompatibilityChannel;
+}
+
 export const VERSION_MISMATCH_DISMISSALS_STORAGE_KEY = "t3code:version-mismatch-dismissals:v1";
 
 const VersionMismatchDismissalsSchema = Schema.Struct({
@@ -21,6 +30,49 @@ type VersionMismatchDismissals = typeof VersionMismatchDismissalsSchema.Type;
 function normalizeVersion(version: string | null | undefined): string | null {
   const trimmed = version?.trim();
   return trimmed && trimmed.length > 0 ? trimmed : null;
+}
+
+function compatibilityChannel(
+  version: string,
+  stageLabel?: string | null,
+): CompatibilityChannel | null {
+  const normalizedStage = stageLabel?.trim().toLowerCase();
+  if (normalizedStage === "dev" || version === "0.0.0" || /-(?:dev|test)(?:\.|$)/i.test(version)) {
+    return null;
+  }
+  if (normalizedStage === "nightly" || /-nightly(?:\.|$)/i.test(version)) {
+    return "Nightly";
+  }
+  return "Stable";
+}
+
+export function resolveCompatibilityChannelMismatch({
+  clientVersion,
+  clientStageLabel,
+  serverVersion,
+}: {
+  readonly clientVersion: string | null | undefined;
+  readonly clientStageLabel: string | null | undefined;
+  readonly serverVersion: string | null | undefined;
+}): CompatibilityChannelMismatch | null {
+  const normalizedClientVersion = normalizeVersion(clientVersion);
+  const normalizedServerVersion = normalizeVersion(serverVersion);
+  if (!normalizedClientVersion || !normalizedServerVersion) {
+    return null;
+  }
+
+  const clientChannel = compatibilityChannel(normalizedClientVersion, clientStageLabel);
+  const serverChannel = compatibilityChannel(normalizedServerVersion);
+  if (!clientChannel || !serverChannel || clientChannel === serverChannel) {
+    return null;
+  }
+
+  return {
+    clientVersion: normalizedClientVersion,
+    clientChannel,
+    serverVersion: normalizedServerVersion,
+    serverChannel,
+  };
 }
 
 export function resolveVersionMismatch(

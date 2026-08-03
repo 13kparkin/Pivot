@@ -236,6 +236,7 @@ describe("RemoteEnvironmentAuthorization", () => {
       const cached = new TokenStore.RemoteDpopAccessToken({
         environmentId: ENVIRONMENT_ID,
         label: DESCRIPTOR.label,
+        serverVersion: DESCRIPTOR.serverVersion,
         endpoint: ENDPOINT,
         accessToken: "cached-access-token",
         expiresAtEpochMs: Number.MAX_SAFE_INTEGER,
@@ -255,6 +256,7 @@ describe("RemoteEnvironmentAuthorization", () => {
       }).pipe(Effect.provide(harness.layer));
 
       expect(authorized.socketUrl).toContain("wsTicket=cached-ticket");
+      expect(authorized.serverVersion).toBe(DESCRIPTOR.serverVersion);
       expect(yield* Ref.get(harness.bootstrapCalls)).toBe(0);
       expect(harness.fetch.calls).toHaveLength(1);
       expect(String(harness.fetch.calls[0]?.[0])).toBe(
@@ -291,11 +293,13 @@ describe("RemoteEnvironmentAuthorization", () => {
       }).pipe(Effect.provide(harness.layer));
 
       expect(authorized.socketUrl).toContain("wsTicket=fresh-ticket");
+      expect(authorized.serverVersion).toBe(DESCRIPTOR.serverVersion);
       expect(yield* Ref.get(harness.bootstrapCalls)).toBe(1);
       expect((yield* Ref.get(harness.tokens)).get(ENVIRONMENT_ID)).toEqual(
         expect.objectContaining({
           accessToken: "fresh-access-token",
           dpopThumbprint: "thumbprint-1",
+          serverVersion: DESCRIPTOR.serverVersion,
         }),
       );
       expect(harness.fetch.calls).toHaveLength(3);

@@ -295,6 +295,7 @@ const loadPrimaryConnectionRegistration = Effect.fn(
       label: descriptor.label,
       httpBaseUrl: resolved.target.httpBaseUrl,
       wsBaseUrl: resolved.target.wsBaseUrl,
+      serverVersion: descriptor.serverVersion,
     }),
   });
 });

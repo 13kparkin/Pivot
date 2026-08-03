@@ -105,7 +105,10 @@ it.layer(NodeServices.layer)("boot service install", (it) => {
         activeVersion: "1.2.3",
       });
       expect(yield* fs.readFileString(plan.launcherPath)).toBe("export {};\n");
-      expect((yield* service.status).current).toBe(true);
+      expect(yield* service.status).toMatchObject({
+        current: true,
+        installedVersion: "1.2.3",
+      });
       // @effect-diagnostics-next-line preferSchemaOverJson:off - fixed launcher-owned test document.
       const pendingState = JSON.stringify({
         protocol: SERVICE_LAUNCHER_PROTOCOL,
