@@ -50,6 +50,53 @@ type LogicalSidebarProject = SidebarProject & {
 
 export type ThreadTraversalDirection = "previous" | "next";
 
+export async function archiveSelectedThreadEntries<
+  TEntry extends { readonly threadKey: string },
+  TResult extends { readonly _tag: "Success" | "Failure" },
+>(input: {
+  entries: readonly TEntry[];
+  archive: (entry: TEntry, onArchived: () => void) => Promise<TResult>;
+}): Promise<{
+  archivedThreadKeys: readonly string[];
+  mutationFailure: Extract<TResult, { readonly _tag: "Failure" }> | null;
+  followupFailures: readonly Extract<TResult, { readonly _tag: "Failure" }>[];
+}> {
+  const archivedThreadKeys: string[] = [];
+  const followupFailures: Extract<TResult, { readonly _tag: "Failure" }>[] = [];
+
+  for (const entry of input.entries) {
+    let didArchive = false;
+    const result = await input.archive(entry, () => {
+      didArchive = true;
+    });
+    if (didArchive || result._tag === "Success") archivedThreadKeys.push(entry.threadKey);
+    if (result._tag === "Success") continue;
+    const failure = result as Extract<TResult, { readonly _tag: "Failure" }>;
+    if (didArchive) {
+      followupFailures.push(failure);
+      continue;
+    }
+    return { archivedThreadKeys, mutationFailure: failure, followupFailures };
+  }
+
+  return { archivedThreadKeys, mutationFailure: null, followupFailures };
+}
+
+export function buildMultiSelectThreadContextMenuItems(input: {
+  count: number;
+  hasRunningThread: boolean;
+}): readonly ContextMenuItem<"mark-unread" | "archive" | "delete">[] {
+  return [
+    { id: "mark-unread", label: `Mark unread (${input.count})` },
+    {
+      id: "archive",
+      label: `Archive (${input.count})`,
+      disabled: input.hasRunningThread,
+    },
+    { id: "delete", label: `Delete (${input.count})`, destructive: true },
+  ];
+}
+
 export function isSidebarSubagentThread(thread: Pick<SidebarThreadSummary, "lineage">): boolean {
   return thread.lineage.relationshipToParent === "subagent";
 }
@@ -78,6 +125,24 @@ export function getSidebarForkParentThreadId(
   return thread.forkedFrom?.type === "run"
     ? thread.forkedFrom.threadId
     : thread.lineage.parentThreadId;
+}
+
+export function buildBulkTitleRegenerationContextMenuItem(input: {
+  supportedCount: number;
+  actionableCount: number;
+}): ContextMenuItem<"regenerate-title"> | null {
+  if (input.supportedCount === 0) return null;
+  if (input.actionableCount === 0) {
+    return {
+      id: "regenerate-title",
+      label: `Regenerating… (${input.supportedCount})`,
+      disabled: true,
+    };
+  }
+  return {
+    id: "regenerate-title",
+    label: `Regenerate titles (${input.actionableCount})`,
+  };
 }
 
 export interface ThreadStatusPill {
@@ -455,7 +520,11 @@ export type SidebarThreadStatus =
 
 type SidebarThreadStatusInput = Pick<
   SidebarThreadSummary,
+<<<<<<< HEAD
   "hasPendingApprovals" | "hasPendingUserInput" | "session" | "backgroundLiveness"
+=======
+  "hasPendingApprovals" | "hasPendingUserInput" | "runtime"
+>>>>>>> 0c15987295 (fix: reconcile rebase with latest main)
 >;
 
 export function resolveSidebarThreadStatus(thread: SidebarThreadStatusInput): SidebarThreadStatus {
@@ -465,12 +534,19 @@ export function resolveSidebarThreadStatus(thread: SidebarThreadStatusInput): Si
   if (thread.hasPendingUserInput) {
     return "input";
   }
-  if (thread.session?.status === "running" || thread.session?.status === "starting") {
+  if (
+    thread.runtime !== null &&
+    ["preparing", "queued", "starting", "running", "waiting"].includes(thread.runtime.status)
+  ) {
     return "working";
   }
+<<<<<<< HEAD
   // A failed session outranks lingering background liveness: the user must
   // see the failure, not a stale Working (review finding).
   if (thread.session?.status === "error") {
+=======
+  if (thread.runtime?.status === "failed") {
+>>>>>>> 0c15987295 (fix: reconcile rebase with latest main)
     return "failed";
   }
   // Background work outlives the turn: fleets read as working; monitoring
@@ -556,13 +632,13 @@ export function searchSidebarThreadsByTitle<T extends { readonly title: string }
 
 type SettledTimestampInput = Pick<
   SidebarThreadSummary,
-  "settledAt" | "latestUserMessageAt" | "latestTurn" | "updatedAt"
+  "settledAt" | "latestUserMessageAt" | "latestRun" | "updatedAt"
 >;
 
 /** The timestamp a settled row sorts and labels by: settledAt when stamped
     (explicit settles), otherwise last activity — the same candidates
     threadLastActivityAt feeds the auto-settle window (user message plus all
-    latestTurn stamps), so a thread whose last activity was a turn completion
+    latestRun stamps), so a thread whose last activity was a run completion
     doesn't sort by an older message time. updatedAt is the final net. */
 export function resolveSettledTimestamp(thread: SettledTimestampInput): string | null {
   const settledAt = firstValidTimestamp(thread.settledAt);
@@ -571,9 +647,9 @@ export function resolveSettledTimestamp(thread: SettledTimestampInput): string |
   let latestMs = Number.NEGATIVE_INFINITY;
   for (const candidate of [
     thread.latestUserMessageAt,
-    thread.latestTurn?.requestedAt,
-    thread.latestTurn?.startedAt,
-    thread.latestTurn?.completedAt,
+    thread.latestRun?.requestedAt,
+    thread.latestRun?.startedAt,
+    thread.latestRun?.completedAt,
   ]) {
     if (candidate == null) continue;
     const parsed = Date.parse(candidate);
@@ -604,13 +680,13 @@ export function sortSettledThreadsForSidebar<
     last transition when the turn projection lags behind. Malformed
     timestamps fall through to the next candidate, not just missing ones. */
 export function resolveWorkingStartedAt(
-  thread: Pick<SidebarThreadSummary, "latestTurn" | "session">,
+  thread: Pick<SidebarThreadSummary, "latestRun" | "runtime">,
 ): string | null {
-  const turn = thread.latestTurn;
-  if (turn && turn.completedAt === null) {
-    return firstValidTimestamp(turn.startedAt, turn.requestedAt, thread.session?.updatedAt);
+  const run = thread.latestRun;
+  if (run && run.completedAt === null) {
+    return firstValidTimestamp(run.startedAt, run.requestedAt, thread.runtime?.updatedAt);
   }
-  return firstValidTimestamp(thread.session?.updatedAt);
+  return firstValidTimestamp(thread.runtime?.updatedAt);
 }
 
 export function formatWorkingDurationLabel(elapsedMs: number): string {

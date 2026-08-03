@@ -23,11 +23,15 @@ import {
   selectProjectGroupingSettings,
 } from "../logicalProject";
 <<<<<<< HEAD
+<<<<<<< HEAD
 import { resolveDefaultThreadEnvMode } from "@t3tools/shared/threadEnvMode";
 import { readThreadShell, useProjects, useThread } from "../state/entities";
 =======
 import { readThreadShell, useProjects, useServerConfigs, useThreadShell } from "../state/entities";
 >>>>>>> d849d1caf9 (Retire V1 client orchestration parity)
+=======
+import { readThreadShell, useProjects, useThreadShell } from "../state/entities";
+>>>>>>> 290392fac9 (fix: reconcile rebase with latest main)
 import { resolveNewDraftStartFromOrigin } from "../lib/chatThreadActions";
 import { readT3ProjectFileDefaultThreadEnvMode } from "../lib/t3ProjectFileDefaults";
 import { primaryServerSettingsAtom } from "../state/server";

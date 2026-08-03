@@ -137,7 +137,7 @@ export const ChangedFilesCard = memo(function ChangedFilesCard(props: {
                   size="xs"
                   variant="outline"
                   aria-label="Open diff"
-                  onClick={() => onOpenTurnDiff(turnId, files[0]?.path)}
+                  onClick={() => onOpenTurnDiff(runId, files[0]?.path)}
                 />
               }
             >
@@ -177,7 +177,7 @@ export const ChangedFilesCard = memo(function ChangedFilesCard(props: {
                 type="button"
                 title={file.path}
                 className="inline-flex max-w-48 items-center gap-1 rounded-md border border-border/70 bg-background/45 px-1.5 py-1 font-mono text-[10px] text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                onClick={() => onOpenTurnDiff(turnId, file.path)}
+                onClick={() => onOpenTurnDiff(runId, file.path)}
               >
                 <PierreEntryIcon
                   pathValue={file.path}

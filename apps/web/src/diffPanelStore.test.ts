@@ -35,23 +35,9 @@ describe("diffPanelStore", () => {
     expect(useDiffPanelStore.getState().diffRenderMode).toBe("split");
   });
 
-  it("defaults each thread to branch changes when the working tree is clean", () => {
+  it("defaults each thread to branch changes with automatic base selection", () => {
     expect(
       selectThreadDiffPanelSelection(useDiffPanelStore.getState().byThreadKey, THREAD_REF),
-    ).toEqual({ kind: "branch", baseRef: null });
-  });
-
-  it("defaults each thread to working changes when the working tree is dirty", () => {
-    expect(
-      selectThreadDiffPanelSelection(useDiffPanelStore.getState().byThreadKey, THREAD_REF, true),
-    ).toEqual({ kind: "unstaged" });
-  });
-
-  it("preserves an explicit scope selection when the working tree state changes", () => {
-    useDiffPanelStore.getState().selectGitScope(THREAD_REF, "branch");
-
-    expect(
-      selectThreadDiffPanelSelection(useDiffPanelStore.getState().byThreadKey, THREAD_REF, true),
     ).toEqual({ kind: "branch", baseRef: null });
   });
 

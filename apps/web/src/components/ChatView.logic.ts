@@ -115,23 +115,14 @@ export function buildLocalDraftThread(
     createdAt: timestamp,
     updatedAt: timestamp,
     archivedAt: null,
+    settledOverride: null,
+    settledAt: null,
     deletedAt: null,
   });
 }
 
-export function buildLoadingThreadFromShell(shell: ThreadShell): Thread {
-  return {
-    ...shell,
-    messages: [],
-    proposedPlans: [],
-    activities: [],
-    checkpoints: [],
-    deletedAt: null,
-  };
-}
-
 export function shouldWriteThreadErrorToCurrentServerThread(input: {
-  activeServerThread:
+  serverThread:
     | {
         environmentId: EnvironmentId;
         id: ThreadId;
@@ -142,22 +133,11 @@ export function shouldWriteThreadErrorToCurrentServerThread(input: {
   targetThreadId: ThreadId;
 }): boolean {
   return Boolean(
-    input.activeServerThread &&
+    input.serverThread &&
     input.targetThreadId === input.routeThreadRef.threadId &&
-    input.activeServerThread.environmentId === input.routeThreadRef.environmentId &&
-    input.activeServerThread.id === input.targetThreadId,
+    input.serverThread.environmentId === input.routeThreadRef.environmentId &&
+    input.serverThread.id === input.targetThreadId,
   );
-}
-
-export function buildThreadTurnInterruptInput(thread: Pick<Thread, "id" | "session">): {
-  threadId: ThreadId;
-  turnId?: TurnId;
-} {
-  const runningTurnId = thread.session?.status === "running" ? thread.session.activeTurnId : null;
-  return {
-    threadId: thread.id,
-    ...(runningTurnId !== null ? { turnId: runningTurnId } : {}),
-  };
 }
 
 export function reconcileMountedTerminalThreadIds(input: {
@@ -486,6 +466,7 @@ export async function waitForStartedServerThread(
 export interface LocalDispatchSnapshot {
   startedAt: string;
   preparingWorktree: boolean;
+  latestUserMessageId: ChatMessage["id"] | null;
   latestRunId: RunId | null;
   latestRunRequestedAt: string | null;
   latestRunStartedAt: string | null;
@@ -496,13 +477,14 @@ export interface LocalDispatchSnapshot {
 
 export function createLocalDispatchSnapshot(
   activeThread: Thread | undefined,
-  options?: { preparingWorktree?: boolean },
+  options?: { preparingWorktree?: boolean; latestUserMessageId?: ChatMessage["id"] | null },
 ): LocalDispatchSnapshot {
   const latestRun = activeThread?.latestRun ?? null;
   const runtime = activeThread?.runtime ?? null;
   return {
     startedAt: new Date().toISOString(),
     preparingWorktree: Boolean(options?.preparingWorktree),
+    latestUserMessageId: options?.latestUserMessageId ?? null,
     latestRunId: latestRun?.runId ?? null,
     latestRunRequestedAt: latestRun?.requestedAt ?? null,
     latestRunStartedAt: latestRun?.startedAt ?? null,
@@ -532,6 +514,7 @@ export function hasServerAcknowledgedLocalDispatch(input: {
   localDispatch: LocalDispatchSnapshot | null;
   phase: SessionPhase;
   latestRun: Thread["latestRun"] | null;
+  latestUserMessageId?: ChatMessage["id"] | null;
   runtime: Thread["runtime"] | null;
   hasPendingApproval: boolean;
   hasPendingUserInput: boolean;
@@ -546,6 +529,8 @@ export function hasServerAcknowledgedLocalDispatch(input: {
 
   const latestRun = input.latestRun ?? null;
   const runtime = input.runtime ?? null;
+  const latestUserMessageChanged =
+    input.localDispatch.latestUserMessageId !== (input.latestUserMessageId ?? null);
   const latestRunChanged =
     input.localDispatch.latestRunId !== (latestRun?.runId ?? null) ||
     input.localDispatch.latestRunRequestedAt !== (latestRun?.requestedAt ?? null) ||
@@ -553,6 +538,9 @@ export function hasServerAcknowledgedLocalDispatch(input: {
     input.localDispatch.latestRunCompletedAt !== (latestRun?.completedAt ?? null);
 
   if (input.phase === "running") {
+    if (latestUserMessageChanged) {
+      return true;
+    }
     if (!latestRunChanged) {
       return false;
     }
