@@ -285,8 +285,8 @@ describe("relay environment unlink", () => {
         "transaction",
         "link",
         "credential",
-        "deprovision",
         "unlock",
+        "deprovision",
       ]);
     }).pipe(
       Effect.provide(

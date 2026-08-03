@@ -24,35 +24,33 @@ function withEnvironmentLock<A, E, R>(
   input: { readonly userId: string; readonly environmentId: string },
   effect: Effect.Effect<A, E, R>,
 ): Effect.Effect<A, E | SqlError, R> {
-  return Effect.scoped(
+  // A blocking advisory lock lets waiters occupy the whole pool. Each waiter
+  // instead tries inside a short transaction, releasing its connection before
+  // retrying. The winning transaction pins all protected database work to the
+  // lock-owning connection and releases the lock automatically on completion.
+  const attempt = db.$client.withTransaction(
     Effect.gen(function* () {
-      const connection = yield* db.$client.reserve;
-      const lockParams = [input.userId, input.environmentId] as const;
-      yield* connection.executeUnprepared(
-        "SELECT pg_advisory_lock(hashtext($1), hashtext($2))",
-        lockParams,
-        undefined,
+      const rows = yield* db.$client.unsafe<{ readonly locked: boolean }>(
+        "SELECT pg_try_advisory_xact_lock(hashtext($1), hashtext($2)) AS locked",
+        [input.userId, input.environmentId],
       );
-      return yield* effect.pipe(
-        Effect.ensuring(
-          connection
-            .executeUnprepared(
-              "SELECT pg_advisory_unlock(hashtext($1), hashtext($2))",
-              lockParams,
-              undefined,
-            )
-            .pipe(
-              Effect.catch((error: SqlError) =>
-                Effect.logWarning("failed to release relay environment lock", {
-                  ...input,
-                  error,
-                }),
-              ),
-            ),
-        ),
-      );
+      if (rows[0]?.locked !== true) {
+        return { acquired: false } as const;
+      }
+      // Preserve provider checkpoints on domain failures by committing their
+      // Result. SQL failures still abort the transaction at the driver level.
+      return { acquired: true, result: yield* Effect.result(effect) } as const;
     }),
   );
+  const acquire = (): Effect.Effect<A, E | SqlError, R> =>
+    attempt.pipe(
+      Effect.flatMap((outcome) =>
+        outcome.acquired
+          ? Effect.fromResult(outcome.result)
+          : Effect.sleep("50 millis").pipe(Effect.andThen(Effect.suspend(acquire))),
+      ),
+    );
+  return Effect.suspend(acquire);
 }
 
 export class RelayTransactions extends Context.Service<

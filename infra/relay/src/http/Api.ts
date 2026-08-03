@@ -437,7 +437,7 @@ export const unlinkEnvironmentRecord = Effect.fn("relay.api.client.unlinkEnviron
     const transactions = yield* RelayDb.RelayTransactions;
     const links = yield* EnvironmentLinks.EnvironmentLinks;
     const managedEndpointProvider = yield* ManagedEndpointProvider.ManagedEndpointProvider;
-    return yield* transactions.withEnvironmentLock(
+    const { deprovisionTarget, unlinked } = yield* transactions.withEnvironmentLock(
       input,
       Effect.gen(function* () {
         const deprovisionTarget = yield* managedEndpointProvider.prepareDeprovision(input);
@@ -450,18 +450,17 @@ export const unlinkEnvironmentRecord = Effect.fn("relay.api.client.unlinkEnviron
                 environmentId: link.environmentId,
                 environmentPublicKey: link.environmentPublicKey,
               });
-
-        // External teardown cannot share the SQL transaction. Run it only after
-        // revocation commits so a database failure leaves a fully usable active
-        // link. Still run teardown when the link is already revoked, allowing a
-        // retry to finish cleanup after an earlier Cloudflare failure.
-        yield* managedEndpointProvider.deprovision({
-          ...input,
-          target: deprovisionTarget,
-        });
-        return unlinked;
+        return { deprovisionTarget, unlinked };
       }),
     );
+    // External teardown runs after revocation commits and releases the lock.
+    // Its captured allocation generation keeps a concurrent relink safe while
+    // still allowing a retry to finish an earlier incomplete cleanup.
+    yield* managedEndpointProvider.deprovision({
+      ...input,
+      target: deprovisionTarget,
+    });
+    return unlinked;
   },
 );
 
