@@ -209,33 +209,39 @@ export const make = Effect.gen(function* () {
         yield* Effect.annotateCurrentSpan({
           "connection.remote_token_cache": "hit",
         });
-        const descriptor = yield* fetchDescriptor(cached.value.endpoint.httpBaseUrl).pipe(
-          Effect.provideService(HttpClient.HttpClient, httpClient),
-        );
-        if (descriptor.environmentId !== input.expectedEnvironmentId) {
-          return yield* environmentMismatchError({
-            expected: input.expectedEnvironmentId,
-            actual: descriptor.environmentId,
-          });
-        }
         const cachedSocket = yield* createDpopSocketUrl(
           cached.value,
           CACHED_ENDPOINT_SOCKET_TIMEOUT_MS,
         ).pipe(Effect.result);
         if (Result.isSuccess(cachedSocket)) {
-          return {
-            environmentId: descriptor.environmentId,
-            label: descriptor.label,
-            serverVersion: descriptor.serverVersion,
-            httpBaseUrl: cached.value.endpoint.httpBaseUrl,
-            socketUrl: cachedSocket.success,
-            httpAuthorization: {
-              _tag: "Dpop" as const,
-              accessToken: cached.value.accessToken,
-            },
-          };
-        }
-        if (cachedSocket.failure._tag === "ConnectionBlockedError") {
+          const cachedDescriptor = yield* fetchDescriptor(cached.value.endpoint.httpBaseUrl).pipe(
+            Effect.provideService(HttpClient.HttpClient, httpClient),
+            Effect.result,
+          );
+          if (Result.isSuccess(cachedDescriptor)) {
+            const descriptor = cachedDescriptor.success;
+            if (descriptor.environmentId !== input.expectedEnvironmentId) {
+              return yield* environmentMismatchError({
+                expected: input.expectedEnvironmentId,
+                actual: descriptor.environmentId,
+              });
+            }
+            return {
+              environmentId: descriptor.environmentId,
+              label: descriptor.label,
+              serverVersion: descriptor.serverVersion,
+              httpBaseUrl: cached.value.endpoint.httpBaseUrl,
+              socketUrl: cachedSocket.success,
+              httpAuthorization: {
+                _tag: "Dpop" as const,
+                accessToken: cached.value.accessToken,
+              },
+            };
+          }
+          if (cachedDescriptor.failure._tag === "ConnectionBlockedError") {
+            return yield* cachedDescriptor.failure;
+          }
+        } else if (cachedSocket.failure._tag === "ConnectionBlockedError") {
           return yield* mapDpopSocketError(cachedSocket.failure);
         }
         yield* tokenStore
