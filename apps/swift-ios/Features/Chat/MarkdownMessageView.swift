@@ -189,7 +189,7 @@ private struct MarkdownTableView: View {
             // A horizontal ScrollView still proposes the viewport width to its child.
             // Preserve the grid's measured column widths so it overflows and scrolls
             // instead of compressing prose columns into unreadable slivers.
-            .fixedSize(horizontal: true, vertical: false)
+            .fixedSize(horizontal: true, vertical: true)
             .background(T3Colors.surface)
             .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
             .overlay {
@@ -206,7 +206,7 @@ private struct MarkdownTableView: View {
         _ cells: [MarkdownRenderedInline],
         isHeader: Bool
     ) -> some View {
-        GridRow {
+        GridRow(alignment: .top) {
             ForEach(cells.indices, id: \.self) { columnIndex in
                 MarkdownInlineText(cells[columnIndex])
                     .lineSpacing(3)
@@ -214,10 +214,9 @@ private struct MarkdownTableView: View {
                         width: columnWidths[columnIndex],
                         alignment: alignment(for: columnIndex)
                     )
-                    .frame(minHeight: 44, maxHeight: .infinity, alignment: alignment(for: columnIndex))
+                    .frame(minHeight: 44, alignment: alignment(for: columnIndex))
                     .padding(.horizontal, 11)
                     .padding(.vertical, 8)
-                    .background(isHeader ? T3Colors.surfaceRaised : T3Colors.surface)
                     .overlay(alignment: .trailing) {
                         if columnIndex < cells.count - 1 {
                             Rectangle()
@@ -225,13 +224,14 @@ private struct MarkdownTableView: View {
                                 .frame(width: 1)
                         }
                     }
-                    .overlay(alignment: .bottom) {
-                        Rectangle()
-                            .fill(T3Colors.separator)
-                            .frame(height: 1)
-                    }
                     .accessibilityElement(children: .combine)
             }
+        }
+        .background(isHeader ? T3Colors.surfaceRaised : T3Colors.surface)
+        .overlay(alignment: .bottom) {
+            Rectangle()
+                .fill(T3Colors.separator)
+                .frame(height: 1)
         }
     }
 
