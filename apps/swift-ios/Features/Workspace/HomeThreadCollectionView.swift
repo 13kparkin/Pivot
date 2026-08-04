@@ -194,15 +194,31 @@ struct HomeThreadCollectionView: UIViewRepresentable {
             }
             delete.image = UIImage(systemName: "trash")
 
-            let archive = UIContextualAction(style: .normal, title: isArchived ? "Restore" : "Archive") {
-                [weak self] _, _, finish in
-                self?.parent.onArchive(thread, !isArchived)
-                finish(true)
+            let primaryAction: UIContextualAction
+            if isArchived {
+                primaryAction = UIContextualAction(style: .normal, title: "Restore") {
+                    [weak self] _, _, finish in
+                    self?.parent.onArchive(thread, false)
+                    finish(true)
+                }
+                primaryAction.image = UIImage(systemName: "arrow.uturn.backward")
+                primaryAction.backgroundColor = .systemBlue
+            } else {
+                let isSettled = thread.isEffectivelySettled(at: .now)
+                primaryAction = UIContextualAction(
+                    style: .normal,
+                    title: isSettled ? "Reopen" : "Settle"
+                ) { [weak self] _, _, finish in
+                    self?.parent.onSettle(thread, !isSettled)
+                    finish(true)
+                }
+                primaryAction.image = UIImage(
+                    systemName: isSettled ? "arrow.counterclockwise" : "checkmark"
+                )
+                primaryAction.backgroundColor = isSettled ? .systemBlue : .systemGreen
             }
-            archive.image = UIImage(systemName: isArchived ? "arrow.uturn.backward" : "archivebox")
-            archive.backgroundColor = isArchived ? .systemBlue : .systemOrange
 
-            let configuration = UISwipeActionsConfiguration(actions: [delete, archive])
+            let configuration = UISwipeActionsConfiguration(actions: [delete, primaryAction])
             configuration.performsFirstActionWithFullSwipe = false
             return configuration
         }
@@ -354,7 +370,7 @@ struct HomeThreadCollectionView: UIViewRepresentable {
                 let isSettled = thread.isEffectivelySettled(at: .now)
                 actions.append(
                     UIAction(
-                        title: isSettled ? "Reopen" : "Mark done",
+                        title: isSettled ? "Reopen" : "Settle",
                         image: UIImage(systemName: isSettled ? "arrow.counterclockwise" : "checkmark")
                     ) { [weak self] _ in
                         self?.parent.onSettle(thread, !isSettled)
