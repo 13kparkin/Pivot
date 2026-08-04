@@ -1,4 +1,6 @@
 import { expect, it } from "@effect/vitest";
+import type { SQL } from "drizzle-orm";
+import { PgDialect } from "drizzle-orm/pg-core";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Result from "effect/Result";
@@ -9,6 +11,9 @@ import { relayEnvironmentLifecycleLeases } from "./persistence/schema.ts";
 it.effect("leases lifecycle work without changing its transaction boundary", () => {
   const calls: Array<string> = [];
   let ownerId = "";
+  let insertedExpiresAt: SQL | undefined;
+  let updatedExpiresAt: SQL | undefined;
+  let leaseExpiryCondition: SQL | undefined;
   const db = {
     $client: {
       withTransaction: <A, E, R>(effect: Effect.Effect<A, E, R>) =>
@@ -19,13 +24,21 @@ it.effect("leases lifecycle work without changing its transaction boundary", () 
     insert: (table: unknown) => {
       expect(table).toBe(relayEnvironmentLifecycleLeases);
       return {
-        values: (values: { readonly ownerId: string }) => {
+        values: (values: { readonly ownerId: string; readonly expiresAt: SQL }) => {
           ownerId = values.ownerId;
+          insertedExpiresAt = values.expiresAt;
           calls.push("acquire");
           return {
-            onConflictDoUpdate: () => ({
-              returning: () => Effect.succeed([{ ownerId }]),
-            }),
+            onConflictDoUpdate: (config: {
+              readonly set: { readonly expiresAt: SQL };
+              readonly setWhere: SQL;
+            }) => {
+              updatedExpiresAt = config.set.expiresAt;
+              leaseExpiryCondition = config.setWhere;
+              return {
+                returning: () => Effect.succeed([{ ownerId }]),
+              };
+            },
           };
         },
       };
@@ -58,5 +71,12 @@ it.effect("leases lifecycle work without changing its transaction boundary", () 
     expect(Result.isFailure(result)).toBe(true);
     expect(ownerId).not.toBe("");
     expect(calls).toEqual(["acquire", "work", "release"]);
+    const dialect = new PgDialect();
+    expect(dialect.sqlToQuery(insertedExpiresAt!).sql).toContain("now() + interval '30 seconds'");
+    expect(dialect.sqlToQuery(updatedExpiresAt!).sql).toContain("now() + interval '30 seconds'");
+    expect(dialect.sqlToQuery(leaseExpiryCondition!)).toEqual({
+      sql: '"relay_environment_lifecycle_leases"."expires_at"::timestamptz <= now()',
+      params: [],
+    });
   }).pipe(Effect.provide(layer));
 });

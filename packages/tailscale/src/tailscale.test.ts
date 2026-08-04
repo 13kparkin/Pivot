@@ -320,6 +320,20 @@ describe("tailscale", () => {
     });
   });
 
+  it("does not suggest a Unix permission command on Windows", () => {
+    const error = new TailscaleCommandExitError({
+      executable: "tailscale.exe",
+      subcommand: "serve",
+      argumentCount: 4,
+      exitCode: 1,
+      stderrLength: 24,
+      stderrDiagnostic: "permission-denied",
+    });
+
+    assert.include(error.message, "Grant this Windows user permission");
+    assert.notInclude(error.message, "sudo");
+  });
+
   it.effect("disables tailscale serve through the process spawner service", () => {
     const commands: {
       readonly command: string;

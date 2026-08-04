@@ -74,6 +74,23 @@ describe("pair tailscale local target", () => {
     );
   });
 
+  it("keeps Windows permission guidance free of Unix-only commands", () => {
+    const cause = new TailscaleCommandExitError({
+      executable: "tailscale.exe",
+      subcommand: "serve",
+      argumentCount: 4,
+      exitCode: 1,
+      stderrLength: 24,
+      stderrDiagnostic: "permission-denied",
+    });
+
+    const failure = tailscaleServeFailedError(443, cause);
+
+    expect(failure).toMatchObject({ executable: "tailscale.exe", cause });
+    expect(failure.message).toContain("Grant this Windows user permission");
+    expect(failure.message).not.toContain("sudo");
+  });
+
   it("proxies the dev web port for dev servers", () => {
     expect(resolveTailscaleLocalTarget({ ...baseState, devUrl: "http://localhost:5733/" })).toEqual(
       { localPort: 5_733 },

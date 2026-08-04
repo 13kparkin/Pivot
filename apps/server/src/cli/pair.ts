@@ -119,6 +119,7 @@ export class TailscaleServeFailedError extends Schema.TaggedErrorClass<Tailscale
   "TailscaleServeFailedError",
   {
     servePort: Schema.Number,
+    executable: Schema.optional(Schema.Literals(["tailscale", "tailscale.exe"])),
     exitCode: Schema.optional(Schema.Number),
     stderrDiagnostic: Schema.optional(TailscaleStderrDiagnostic),
     cause: Schema.Defect(),
@@ -127,6 +128,9 @@ export class TailscaleServeFailedError extends Schema.TaggedErrorClass<Tailscale
   override get message(): string {
     if (this.stderrDiagnostic === "permission-denied") {
       const exitDetail = this.exitCode === undefined ? "" : ` with code ${String(this.exitCode)}`;
+      if (this.executable === "tailscale.exe") {
+        return `tailscale serve failed${exitDetail} for HTTPS port ${String(this.servePort)}: access denied. Grant this Windows user permission to manage Tailscale, then retry.`;
+      }
       return `tailscale serve failed${exitDetail} for HTTPS port ${String(this.servePort)}: access denied. Run \`sudo tailscale set --operator=$USER\`, then retry.`;
     }
     return `tailscale serve failed for HTTPS port ${String(this.servePort)}. Run \`tailscale serve --https=${String(this.servePort)} --bg <local-url>\` by hand to see why.`;
@@ -141,6 +145,7 @@ export function tailscaleServeFailedError(
 ): TailscaleServeFailedError {
   const exitDetails = isTailscaleCommandExitError(cause)
     ? {
+        executable: cause.executable,
         exitCode: cause.exitCode,
         ...(cause.stderrDiagnostic === undefined
           ? {}

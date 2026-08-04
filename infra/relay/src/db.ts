@@ -6,12 +6,11 @@ import * as Alchemy from "alchemy";
 import * as RemovalPolicy from "alchemy/RemovalPolicy";
 import type { EffectPgDatabase } from "drizzle-orm/effect-postgres";
 import * as Context from "effect/Context";
-import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Random from "effect/Random";
 import * as Schema from "effect/Schema";
-import { and, eq, lte } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 
 import { relayDatabaseMode } from "./dbConfig.ts";
 import { relayEnvironmentLifecycleLeases } from "./persistence/schema.ts";
@@ -46,9 +45,7 @@ function withEnvironmentLock<A, E, R>(
     const acquire = (): Effect.Effect<void, EnvironmentLifecycleLeasePersistenceError> =>
       Effect.suspend(() =>
         Effect.gen(function* () {
-          const now = yield* DateTime.now;
-          const nowIso = DateTime.formatIso(now);
-          const expiresAt = DateTime.formatIso(DateTime.add(now, { seconds: 30 }));
+          const expiresAt = sql<string>`to_char((now() + interval '30 seconds') at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')`;
           const rows = yield* db
             .insert(relayEnvironmentLifecycleLeases)
             .values({ ...input, ownerId, expiresAt })
@@ -58,7 +55,7 @@ function withEnvironmentLock<A, E, R>(
                 relayEnvironmentLifecycleLeases.environmentId,
               ],
               set: { ownerId, expiresAt },
-              setWhere: lte(relayEnvironmentLifecycleLeases.expiresAt, nowIso),
+              setWhere: sql`${relayEnvironmentLifecycleLeases.expiresAt}::timestamptz <= now()`,
             })
             .returning({ ownerId: relayEnvironmentLifecycleLeases.ownerId })
             .pipe(
