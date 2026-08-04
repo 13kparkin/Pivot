@@ -153,6 +153,9 @@ private struct MarkdownBlockView: View {
                         .frame(width: 2)
                 }
 
+        case let .table(table):
+            MarkdownTableView(table: table)
+
         case let .codeBlock(language, code):
             MarkdownCodeBlockView(language: language, code: code)
 
@@ -162,6 +165,74 @@ private struct MarkdownBlockView: View {
                 .frame(height: 1)
                 .padding(.vertical, 2)
                 .accessibilityHidden(true)
+        }
+    }
+}
+
+private struct MarkdownTableView: View {
+    let table: MarkdownRenderedTable
+
+    var body: some View {
+        ScrollView(.horizontal) {
+            Grid(horizontalSpacing: 0, verticalSpacing: 0) {
+                tableRow(table.header, isHeader: true)
+                ForEach(table.rows.indices, id: \.self) { rowIndex in
+                    tableRow(table.rows[rowIndex], isHeader: false)
+                }
+            }
+            .background(T3Colors.surface)
+            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .stroke(T3Colors.border, lineWidth: 1)
+            }
+        }
+        .scrollIndicators(.hidden)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Table with \(table.header.count) columns and \(table.rows.count) rows")
+    }
+
+    private func tableRow(
+        _ cells: [MarkdownRenderedInline],
+        isHeader: Bool
+    ) -> some View {
+        GridRow {
+            ForEach(cells.indices, id: \.self) { columnIndex in
+                MarkdownInlineText(cells[columnIndex])
+                    .lineSpacing(3)
+                    .frame(
+                        minWidth: 104,
+                        idealWidth: 156,
+                        maxWidth: 240,
+                        minHeight: 44,
+                        alignment: alignment(for: columnIndex)
+                    )
+                    .padding(.horizontal, 11)
+                    .padding(.vertical, 8)
+                    .background(isHeader ? T3Colors.surfaceRaised : T3Colors.surface)
+                    .overlay(alignment: .trailing) {
+                        if columnIndex < cells.count - 1 {
+                            Rectangle()
+                                .fill(T3Colors.separator)
+                                .frame(width: 1)
+                        }
+                    }
+                    .overlay(alignment: .bottom) {
+                        Rectangle()
+                            .fill(T3Colors.separator)
+                            .frame(height: 1)
+                    }
+                    .accessibilityElement(children: .combine)
+            }
+        }
+    }
+
+    private func alignment(for columnIndex: Int) -> Alignment {
+        guard table.alignments.indices.contains(columnIndex) else { return .leading }
+        return switch table.alignments[columnIndex] {
+        case .natural, .leading: .leading
+        case .center: .center
+        case .trailing: .trailing
         }
     }
 }

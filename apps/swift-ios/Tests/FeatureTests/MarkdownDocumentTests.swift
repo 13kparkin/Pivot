@@ -89,6 +89,84 @@ struct MarkdownDocumentTests {
     }
 
     @Test
+    func parsesTablesWithAlignmentEscapesAndNormalizedRows() {
+        let document = MarkdownDocument(
+            parsing: """
+            | Name | Status | Notes |
+            | :--- | :---: | ---: |
+            | Parser | Ready | **Fast** |
+            | Escaped \\| pipe | ``a|b`` | [Docs](https://example.com) |
+            | Short | Row |
+            | Extra | cells | stay | ignored |
+            """
+        )
+
+        #expect(
+            document.blocks == [
+                .table(
+                    MarkdownTable(
+                        header: ["Name", "Status", "Notes"],
+                        alignments: [.leading, .center, .trailing],
+                        rows: [
+                            ["Parser", "Ready", "**Fast**"],
+                            ["Escaped \\| pipe", "``a|b``", "[Docs](https://example.com)"],
+                            ["Short", "Row", ""],
+                            ["Extra", "cells", "stay"],
+                        ]
+                    )
+                ),
+            ]
+        )
+    }
+
+    @Test
+    func rejectsTableDelimiterCellsWithFewerThanThreeDashes() {
+        let document = MarkdownDocument(
+            parsing: """
+            Name | Status
+            -- | ---
+            Parser | Ready
+            """
+        )
+
+        #expect(
+            document.blocks == [
+                .paragraph("Name | Status\n-- | ---\nParser | Ready"),
+            ]
+        )
+    }
+
+    @Test
+    func rendersTableCellsThroughTheInlineMarkdownCache() throws {
+        let source = """
+        Label | Value
+        --- | ---
+        **Build** | `green`
+        """
+        let revision = MarkdownContentRevision(source)
+        let rendered = try #require(
+            MarkdownRenderCache.shared.documentImmediately(for: revision)
+        )
+        guard case let .table(table) = rendered.blocks.first else {
+            Issue.record("Expected a rendered table")
+            return
+        }
+
+        #expect(String(table.header[0].attributedText.characters) == "Label")
+        #expect(String(table.rows[0][0].attributedText.characters) == "Build")
+        #expect(
+            table.rows[0][0].attributedText.runs.contains {
+                $0.inlinePresentationIntent?.contains(.stronglyEmphasized) == true
+            }
+        )
+        #expect(
+            table.rows[0][1].attributedText.runs.contains {
+                $0.inlinePresentationIntent?.contains(.code) == true
+            }
+        )
+    }
+
+    @Test
     func fencedCodeKeepsLanguageAndContentsLiteral() {
         let document = MarkdownDocument(
             parsing: """

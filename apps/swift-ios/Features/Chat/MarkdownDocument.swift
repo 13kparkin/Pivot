@@ -24,8 +24,22 @@ indirect enum MarkdownBlock: Equatable, Sendable {
     case unorderedList([MarkdownListItem])
     case orderedList(start: Int, items: [MarkdownListItem])
     case blockquote(MarkdownDocument)
+    case table(MarkdownTable)
     case codeBlock(language: String?, code: String)
     case thematicBreak
+}
+
+struct MarkdownTable: Equatable, Sendable {
+    let header: [String]
+    let alignments: [MarkdownTableAlignment]
+    let rows: [[String]]
+}
+
+enum MarkdownTableAlignment: Equatable, Sendable {
+    case natural
+    case leading
+    case center
+    case trailing
 }
 
 struct MarkdownListItem: Equatable, Sendable {
@@ -66,6 +80,11 @@ private struct MarkdownBlockParser {
             if let heading = atxHeading(in: lines[index]) {
                 blocks.append(.heading(level: heading.level, text: heading.text))
                 index += 1
+                continue
+            }
+
+            if let table = tableOpening(at: index) {
+                blocks.append(parseTable(opening: table))
                 continue
             }
 
@@ -124,6 +143,35 @@ private struct MarkdownBlockParser {
 
         var parser = MarkdownBlockParser(source: quotedLines.joined(separator: "\n"))
         return .blockquote(MarkdownDocument(blocks: parser.parse()))
+    }
+
+    private mutating func parseTable(opening: TableOpening) -> MarkdownBlock {
+        index += 2
+        var rows: [[String]] = []
+
+        while index < lines.count,
+              !lines[index].isMarkdownBlank,
+              let cells = tableCells(in: lines[index]) {
+            var normalized = Array(cells.prefix(opening.header.count))
+            if normalized.count < opening.header.count {
+                normalized.append(
+                    contentsOf: repeatElement(
+                        "",
+                        count: opening.header.count - normalized.count
+                    )
+                )
+            }
+            rows.append(normalized)
+            index += 1
+        }
+
+        return .table(
+            MarkdownTable(
+                header: opening.header,
+                alignments: opening.alignments,
+                rows: rows
+            )
+        )
     }
 
     private mutating func parseList(opening: ListMarker) -> MarkdownBlock {
@@ -213,7 +261,8 @@ private struct MarkdownBlockParser {
         var paragraphLines: [String] = []
 
         while index < lines.count, !lines[index].isMarkdownBlank {
-            if !paragraphLines.isEmpty, isBlockStarter(lines[index]) {
+            if !paragraphLines.isEmpty,
+               (isBlockStarter(lines[index]) || tableOpening(at: index) != nil) {
                 break
             }
             paragraphLines.append(lines[index].markdownTrimmedTrailing)
@@ -221,6 +270,92 @@ private struct MarkdownBlockParser {
         }
 
         return .paragraph(paragraphLines.joined(separator: "\n"))
+    }
+
+    private func tableOpening(at position: Int) -> TableOpening? {
+        guard position + 1 < lines.count,
+              let header = tableCells(in: lines[position]),
+              let delimiters = tableCells(in: lines[position + 1]),
+              header.count == delimiters.count,
+              !header.isEmpty else {
+            return nil
+        }
+
+        let alignments = delimiters.compactMap(tableAlignment(in:))
+        guard alignments.count == delimiters.count else { return nil }
+        return TableOpening(header: header, alignments: alignments)
+    }
+
+    private func tableAlignment(in source: String) -> MarkdownTableAlignment? {
+        var marker = source.markdownTrimmed
+        let hasLeadingColon = marker.first == ":"
+        let hasTrailingColon = marker.last == ":"
+        if hasLeadingColon { marker.removeFirst() }
+        if hasTrailingColon, !marker.isEmpty { marker.removeLast() }
+        guard marker.count >= 3, marker.allSatisfy({ $0 == "-" }) else { return nil }
+        return switch (hasLeadingColon, hasTrailingColon) {
+        case (true, true): .center
+        case (true, false): .leading
+        case (false, true): .trailing
+        case (false, false): .natural
+        }
+    }
+
+    /// Splits a GFM table row while preserving escapes for Foundation's inline parser.
+    /// Pipes inside code spans or escaped with a backslash remain cell content.
+    private func tableCells(in line: String) -> [String]? {
+        let source = line.markdownTrimmed
+        guard !source.isEmpty else { return nil }
+
+        var cells = [String]()
+        var cell = ""
+        var codeFenceLength: Int?
+        var foundSeparator = false
+
+        let characters = Array(source)
+        var cursor = 0
+        while cursor < characters.count {
+            let character = characters[cursor]
+            if character == "\\", cursor + 1 < characters.count {
+                cell.append(character)
+                cell.append(characters[cursor + 1])
+                cursor += 2
+                continue
+            }
+            if character == "`" {
+                var runEnd = cursor
+                while runEnd < characters.count, characters[runEnd] == "`" {
+                    runEnd += 1
+                }
+                let runLength = runEnd - cursor
+                for _ in cursor..<runEnd { cell.append("`") }
+                if codeFenceLength == nil {
+                    codeFenceLength = runLength
+                } else if codeFenceLength == runLength {
+                    codeFenceLength = nil
+                }
+                cursor = runEnd
+                continue
+            }
+            if character == "|", codeFenceLength == nil {
+                cells.append(cell.markdownTrimmed)
+                cell = ""
+                foundSeparator = true
+            } else {
+                cell.append(character)
+            }
+            cursor += 1
+        }
+        cells.append(cell.markdownTrimmed)
+
+        guard foundSeparator else { return nil }
+        if source.first == "|", cells.first?.isEmpty == true {
+            cells.removeFirst()
+        }
+        if source.last == "|", cells.last?.isEmpty == true {
+            cells.removeLast()
+        }
+        return cells
     }
 
     private func isBlockStarter(_ line: String) -> Bool {
@@ -432,6 +567,11 @@ private struct ListMarker {
     let contentIndent: Int
     let number: Int?
     let content: String
+}
+
+private struct TableOpening {
+    let header: [String]
+    let alignments: [MarkdownTableAlignment]
 }
 
 private extension String {

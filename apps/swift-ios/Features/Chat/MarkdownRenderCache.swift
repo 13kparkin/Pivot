@@ -38,6 +38,8 @@ enum MarkdownInlineStyle: String, Hashable, Sendable {
     case heading2
     case heading3
     case heading4
+    case tableHeader
+    case tableCell
 
     var font: Font {
         switch self {
@@ -46,6 +48,8 @@ enum MarkdownInlineStyle: String, Hashable, Sendable {
         case .heading2: T3Typography.threadHeading2
         case .heading3: T3Typography.threadHeading3
         case .heading4: T3Typography.threadHeading4
+        case .tableHeader: T3Typography.threadBody.weight(.semibold)
+        case .tableCell: T3Typography.threadBody
         }
     }
 
@@ -75,12 +79,19 @@ struct MarkdownRenderedListItem: @unchecked Sendable {
     let blocks: [MarkdownRenderedBlock]
 }
 
+struct MarkdownRenderedTable: @unchecked Sendable {
+    let header: [MarkdownRenderedInline]
+    let alignments: [MarkdownTableAlignment]
+    let rows: [[MarkdownRenderedInline]]
+}
+
 indirect enum MarkdownRenderedBlock: @unchecked Sendable {
     case paragraph(MarkdownRenderedInline)
     case heading(level: Int, inline: MarkdownRenderedInline)
     case unorderedList([MarkdownRenderedListItem])
     case orderedList(start: Int, items: [MarkdownRenderedListItem])
     case blockquote([MarkdownRenderedBlock])
+    case table(MarkdownRenderedTable)
     case codeBlock(language: String?, code: String)
     case thematicBreak
 }
@@ -270,6 +281,10 @@ final class MarkdownRenderCache: @unchecked Sendable {
                 guard let blocks = renderBlocks(document.blocks) else { return nil }
                 rendered = .blockquote(blocks)
 
+            case let .table(table):
+                guard let table = renderTable(table) else { return nil }
+                rendered = .table(table)
+
             case let .codeBlock(language, code):
                 rendered = .codeBlock(language: language, code: code)
 
@@ -279,6 +294,34 @@ final class MarkdownRenderCache: @unchecked Sendable {
             renderedBlocks.append(rendered)
         }
         return renderedBlocks
+    }
+
+    private func renderTable(_ table: MarkdownTable) -> MarkdownRenderedTable? {
+        var header: [MarkdownRenderedInline] = []
+        header.reserveCapacity(table.header.count)
+        for cell in table.header {
+            guard let inline = renderInline(cell, style: .tableHeader) else { return nil }
+            header.append(inline)
+        }
+
+        var rows: [[MarkdownRenderedInline]] = []
+        rows.reserveCapacity(table.rows.count)
+        for sourceRow in table.rows {
+            guard !Task.isCancelled else { return nil }
+            var row: [MarkdownRenderedInline] = []
+            row.reserveCapacity(sourceRow.count)
+            for cell in sourceRow {
+                guard let inline = renderInline(cell, style: .tableCell) else { return nil }
+                row.append(inline)
+            }
+            rows.append(row)
+        }
+
+        return MarkdownRenderedTable(
+            header: header,
+            alignments: table.alignments,
+            rows: rows
+        )
     }
 
     private func renderItems(_ items: [MarkdownListItem]) -> [MarkdownRenderedListItem]? {
