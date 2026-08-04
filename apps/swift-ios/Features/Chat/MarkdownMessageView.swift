@@ -171,6 +171,12 @@ private struct MarkdownBlockView: View {
 
 private struct MarkdownTableView: View {
     let table: MarkdownRenderedTable
+    private let columnWidths: [CGFloat]
+
+    init(table: MarkdownRenderedTable) {
+        self.table = table
+        columnWidths = Self.measureColumnWidths(table)
+    }
 
     var body: some View {
         ScrollView(.horizontal) {
@@ -180,6 +186,10 @@ private struct MarkdownTableView: View {
                     tableRow(table.rows[rowIndex], isHeader: false)
                 }
             }
+            // A horizontal ScrollView still proposes the viewport width to its child.
+            // Preserve the grid's measured column widths so it overflows and scrolls
+            // instead of compressing prose columns into unreadable slivers.
+            .fixedSize(horizontal: true, vertical: false)
             .background(T3Colors.surface)
             .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
             .overlay {
@@ -187,7 +197,7 @@ private struct MarkdownTableView: View {
                     .stroke(T3Colors.border, lineWidth: 1)
             }
         }
-        .scrollIndicators(.hidden)
+        .scrollIndicators(.visible)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Table with \(table.header.count) columns and \(table.rows.count) rows")
     }
@@ -201,12 +211,10 @@ private struct MarkdownTableView: View {
                 MarkdownInlineText(cells[columnIndex])
                     .lineSpacing(3)
                     .frame(
-                        minWidth: 104,
-                        idealWidth: 156,
-                        maxWidth: 240,
-                        minHeight: 44,
+                        width: columnWidths[columnIndex],
                         alignment: alignment(for: columnIndex)
                     )
+                    .frame(minHeight: 44, maxHeight: .infinity, alignment: alignment(for: columnIndex))
                     .padding(.horizontal, 11)
                     .padding(.vertical, 8)
                     .background(isHeader ? T3Colors.surfaceRaised : T3Colors.surface)
@@ -233,6 +241,25 @@ private struct MarkdownTableView: View {
         case .natural, .leading: .leading
         case .center: .center
         case .trailing: .trailing
+        }
+    }
+
+    private static func measureColumnWidths(_ table: MarkdownRenderedTable) -> [CGFloat] {
+        let cells = [table.header] + table.rows
+        return table.header.indices.map { columnIndex in
+            let longestLine = cells
+                .compactMap { row -> Int? in
+                    guard row.indices.contains(columnIndex) else { return nil }
+                    return String(row[columnIndex].attributedText.characters)
+                        .split(separator: "\n", omittingEmptySubsequences: false)
+                        .map(\.count)
+                        .max()
+                }
+                .max() ?? 0
+
+            // This is deliberately an estimate rather than text measurement. Exact widths
+            // would require laying every cell out twice, which is expensive in long threads.
+            return min(300, max(140, CGFloat(longestLine) * 8.25))
         }
     }
 }
