@@ -12,6 +12,7 @@
 =======
 >>>>>>> 290392fac9 (fix: reconcile rebase with latest main)
 - [Remote access](./user/remote-access.md)
+- [Appearance](./user/appearance.md)
 - [Keeping app and server in sync](./user/updating.md)
 - [Source control integrations](./user/source-control.md)
 - [Background service (Linux)](./user/background-service.md)
