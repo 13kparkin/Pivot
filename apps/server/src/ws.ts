@@ -1142,6 +1142,9 @@ const makeWsRpcLayer = (
                     : { reuseExistingThread: input.reuseExistingThread }),
                   projectId: input.projectId,
                   title: input.title,
+                  ...(input.generateTitle === undefined
+                    ? {}
+                    : { generateTitle: input.generateTitle }),
                   modelSelection: input.modelSelection,
                   runtimeMode: input.runtimeMode,
                   interactionMode: input.interactionMode,
