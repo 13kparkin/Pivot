@@ -289,8 +289,9 @@ public struct ThreadDetailView: View {
     }
 
     private func timeline(_ detail: FeatureThreadDetail) -> some View {
-        Group {
-            if detail.messages.isEmpty {
+        let isWorking = detail.thread.state == .working || detail.thread.state == .queued
+        return Group {
+            if detail.messages.isEmpty, !isWorking {
                 ContentUnavailableView(
                     "Ready for a task",
                     systemImage: "sparkles",
@@ -303,6 +304,7 @@ public struct ThreadDetailView: View {
                     messages: detail.messages,
                     renderUpdate: model.detailRenderUpdates[thread.id],
                     dynamicTypeSize: dynamicTypeSize,
+                    isWorking: isWorking,
                     onDismissKeyboard: dismissKeyboard
                 )
             }
@@ -572,6 +574,8 @@ enum FeatureComposerDraftRestoration {
 /// A recycled transcript surface. SwiftUI still owns each message's rendering,
 /// while UIKit keeps offscreen messages out of the active view hierarchy.
 private struct FeatureTranscriptCollectionView: UIViewRepresentable {
+    private static let workingIndicatorID = "__t3-working-indicator__"
+
     private enum Section: Hashable {
         case transcript
     }
@@ -580,6 +584,7 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
     let messages: [FeatureMessage]
     let renderUpdate: FeatureDetailRenderUpdate?
     let dynamicTypeSize: DynamicTypeSize
+    let isWorking: Bool
     let onDismissKeyboard: () -> Void
 
     func makeCoordinator() -> Coordinator {
@@ -608,6 +613,7 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
             messages: messages,
             renderUpdate: renderUpdate,
             dynamicTypeSize: dynamicTypeSize,
+            isWorking: isWorking,
             onDismissKeyboard: onDismissKeyboard,
             in: collectionView
         )
@@ -651,6 +657,7 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
         private var currentThreadID: String?
         private var currentDetailRevision: UInt64?
         private var currentDynamicTypeSize: DynamicTypeSize?
+        private var currentIsWorking = false
         private var markdownPrefetches: [String: MarkdownPrefetch] = [:]
         private var onDismissKeyboard: (() -> Void)?
 
@@ -661,6 +668,15 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
         func connect(to collectionView: UICollectionView) {
             let registration = UICollectionView.CellRegistration<UICollectionViewCell, String> {
                 [weak self] cell, _, messageID in
+                if messageID == FeatureTranscriptCollectionView.workingIndicatorID {
+                    cell.contentConfiguration = UIHostingConfiguration {
+                        FeatureThreadWorkingIndicator()
+                    }
+                    .margins(.all, 0)
+                    cell.backgroundConfiguration = UIBackgroundConfiguration.clear()
+                    cell.accessibilityIdentifier = "thread-working-indicator"
+                    return
+                }
                 guard let message = self?.messagesByID[messageID] else {
                     cell.contentConfiguration = nil
                     return
@@ -693,6 +709,7 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
             messages: [FeatureMessage],
             renderUpdate: FeatureDetailRenderUpdate?,
             dynamicTypeSize: DynamicTypeSize,
+            isWorking: Bool,
             onDismissKeyboard: @escaping () -> Void,
             in collectionView: UICollectionView
         ) {
@@ -702,7 +719,8 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
             let threadChanged = currentThreadID != threadID
             let typeSizeChanged = currentDynamicTypeSize != dynamicTypeSize
             let revisionChanged = currentDetailRevision != renderUpdate?.revision
-            guard threadChanged || typeSizeChanged || revisionChanged else { return }
+            let workingChanged = currentIsWorking != isWorking
+            guard threadChanged || typeSizeChanged || revisionChanged || workingChanged else { return }
 
             let incremental = !threadChanged
                 ? incrementalState(messages: messages, renderUpdate: renderUpdate)
@@ -716,7 +734,8 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
 
             currentDetailRevision = renderUpdate?.revision
             currentDynamicTypeSize = dynamicTypeSize
-            guard threadChanged || idsChanged || !changedIDs.isEmpty else { return }
+            currentIsWorking = isWorking
+            guard threadChanged || idsChanged || !changedIDs.isEmpty || workingChanged else { return }
 
             if threadChanged {
                 cancelAllMarkdownPrefetches()
@@ -729,7 +748,7 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
             }
 
             let wasNearBottom = isNearBottom(collectionView)
-            let lastIDChanged = orderedIDs.last != newIDs.last
+            let lastIDChanged = orderedIDs.last != newIDs.last || workingChanged
             let isInitialLoad = currentThreadID == nil || threadChanged
             let previousIDs = orderedIDs
 
@@ -754,6 +773,15 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
                 snapshot = NSDiffableDataSourceSnapshot<Section, String>()
                 snapshot.appendSections([.transcript])
                 snapshot.appendItems(newIDs, toSection: .transcript)
+            }
+            if snapshot.indexOfItem(FeatureTranscriptCollectionView.workingIndicatorID) != nil {
+                snapshot.deleteItems([FeatureTranscriptCollectionView.workingIndicatorID])
+            }
+            if isWorking {
+                snapshot.appendItems(
+                    [FeatureTranscriptCollectionView.workingIndicatorID],
+                    toSection: .transcript
+                )
             }
             let appendedIDSet = Set(state.appendedIDs)
             snapshot.reconfigureItems(changedIDs.filter { !appendedIDSet.contains($0) })
@@ -951,6 +979,30 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
             }
             collectionView.maintainsBottomAnchor = isNearBottom(collectionView)
         }
+    }
+}
+
+private struct FeatureThreadWorkingIndicator: View {
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: "circle.dotted")
+                .font(.system(size: 17, weight: .semibold))
+                .foregroundStyle(T3Colors.statusRunning)
+                .frame(width: 22, height: 22)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Agent is working")
+                    .font(T3Typography.supportingStrong)
+                    .foregroundStyle(T3Colors.statusRunning)
+                Text("New output will appear here")
+                    .font(T3Typography.supporting)
+                    .foregroundStyle(T3Colors.textTertiary)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.vertical, 4)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Agent is working. New output will appear here.")
     }
 }
 
@@ -1257,7 +1309,12 @@ private struct FeatureMessageAttachmentsView: View {
                     VStack(alignment: .leading, spacing: 6) {
                         if attachment.mimeType.hasPrefix("image/") {
                             Group {
-                                if let url = attachment.url {
+                                if let previewData = attachment.previewData,
+                                   let image = UIImage(data: previewData) {
+                                    Image(uiImage: image)
+                                        .resizable()
+                                        .scaledToFit()
+                                } else if let url = attachment.url {
                                     FeatureRemoteAttachmentThumbnail(url: url)
                                 } else {
                                     attachmentPlaceholder(systemImage: "photo")

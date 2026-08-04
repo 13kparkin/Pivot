@@ -231,19 +231,24 @@ public struct FeatureMessageAttachment: Identifiable, Sendable, Equatable, Hasha
     public var mimeType: String
     public var sizeBytes: Int
     public var url: URL?
+    /// Small local preview retained only while an optimistic message is replaced
+    /// by its server-backed attachment URL.
+    public var previewData: Data?
 
     public init(
         id: String,
         name: String,
         mimeType: String,
         sizeBytes: Int,
-        url: URL? = nil
+        url: URL? = nil,
+        previewData: Data? = nil
     ) {
         self.id = id
         self.name = name
         self.mimeType = mimeType
         self.sizeBytes = sizeBytes
         self.url = url
+        self.previewData = previewData
     }
 }
 

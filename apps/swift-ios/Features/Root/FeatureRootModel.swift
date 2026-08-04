@@ -390,7 +390,8 @@ public final class FeatureRootModel {
                     id: $0.id.uuidString,
                     name: $0.filename,
                     mimeType: $0.mimeType,
-                    sizeBytes: $0.byteCount
+                    sizeBytes: $0.byteCount,
+                    previewData: $0.thumbnailData
                 )
             }
         )

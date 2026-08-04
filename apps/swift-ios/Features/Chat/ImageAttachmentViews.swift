@@ -131,25 +131,23 @@ struct FeatureImageAttachmentPicker: View {
         // A confirmation dialog remains the active presenter during its action. Dispatch
         // independently of the dialog's view task so dismissal cannot cancel presentation.
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
-            FeaturePhotoLibraryPresenter.present(maximumCount: max(1, remainingCount)) { images in
-                loadPhotoSelection(images)
+            FeaturePhotoLibraryPresenter.present(maximumCount: max(1, remainingCount)) { image in
+                loadPhotoSelection(image)
             }
         }
     }
 
-    private func loadPhotoSelection(_ images: [Data]) {
-        guard !images.isEmpty else { return }
-        let operation = preparationState.begin(itemCount: images.count)
+    private func loadPhotoSelection(_ image: Data) {
+        guard remainingCount > 0 else { return }
+        let ordinal = attachments.count + preparationState.pendingItemCount + 1
+        let operation = preparationState.begin(itemCount: 1)
 
         Task {
             defer { preparationState.finish(operation) }
-            for data in images.prefix(remainingCount) {
-                do {
-                    try await appendImage(data)
-                } catch {
-                    errorMessage = error.localizedDescription
-                    break
-                }
+            do {
+                try await appendImage(image, ordinal: ordinal)
+            } catch {
+                errorMessage = error.localizedDescription
             }
         }
     }
@@ -204,8 +202,8 @@ struct FeatureImageAttachmentPicker: View {
         }
     }
 
-    private func appendImage(_ data: Data) async throws {
-        let ordinal = attachments.count + 1
+    private func appendImage(_ data: Data, ordinal: Int? = nil) async throws {
+        let ordinal = ordinal ?? attachments.count + 1
         let attachment = try await Task.detached(priority: .userInitiated) {
             try FeatureImageProcessor.attachment(from: data, ordinal: ordinal)
         }.value
@@ -217,7 +215,7 @@ struct FeatureImageAttachmentPicker: View {
 private enum FeaturePhotoLibraryPresenter {
     private static var delegates: [ObjectIdentifier: Delegate] = [:]
 
-    static func present(maximumCount: Int, onSelect: @escaping ([Data]) -> Void) {
+    static func present(maximumCount: Int, onSelect: @escaping (Data) -> Void) {
         var configuration = PHPickerConfiguration(photoLibrary: .shared())
         configuration.filter = .images
         configuration.selectionLimit = maximumCount
@@ -246,9 +244,13 @@ private enum FeaturePhotoLibraryPresenter {
     }
 
     final class Delegate: NSObject, PHPickerViewControllerDelegate {
-        private let onSelect: ([Data]) -> Void
+        private struct Provider: @unchecked Sendable {
+            let value: NSItemProvider
+        }
 
-        init(onSelect: @escaping ([Data]) -> Void) {
+        private let onSelect: (Data) -> Void
+
+        init(onSelect: @escaping (Data) -> Void) {
             self.onSelect = onSelect
         }
 
@@ -256,13 +258,19 @@ private enum FeaturePhotoLibraryPresenter {
             picker.dismiss(animated: true)
             guard !results.isEmpty else { return FeaturePhotoLibraryPresenter.finish(picker) }
 
+            let providers = results.map { Provider(value: $0.itemProvider) }
             Task { @MainActor in
-                var images: [Data] = []
-                for result in results {
-                    guard let data = try? await result.itemProvider.imageData() else { continue }
-                    images.append(data)
+                await withTaskGroup(of: Data?.self) { group in
+                    for provider in providers {
+                        group.addTask {
+                            try? await provider.value.imageData()
+                        }
+                    }
+                    for await data in group {
+                        guard let data else { continue }
+                        onSelect(data)
+                    }
                 }
-                onSelect(images)
                 FeaturePhotoLibraryPresenter.finish(picker)
             }
         }

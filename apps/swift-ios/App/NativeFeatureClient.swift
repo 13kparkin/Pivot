@@ -2394,6 +2394,12 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
                 renderCacheIsSource: true,
                 delta: delta
             )
+            self.scheduleAttachmentHydration(
+                in: detail,
+                threadID: route.uiID,
+                client: route.client,
+                environmentID: route.environmentID
+            )
         }
     }
 
@@ -4042,7 +4048,16 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         client: T3Client,
         environmentID: String
     ) {
-        attachmentHydrationTasks[threadID]?.task.cancel()
+        guard detail.messages.contains(where: { message in
+            message.attachments.contains {
+                $0.mimeType.hasPrefix("image/") && $0.url == nil
+            }
+        }) else {
+            return
+        }
+        // Streaming activity can publish many detail revisions per second. Let the
+        // current asset resolution finish instead of continuously restarting it.
+        guard attachmentHydrationTasks[threadID] == nil else { return }
         let generation = environmentGeneration
         let workID = UUID()
         let task = Task { [weak self] in
@@ -4061,6 +4076,14 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
                   self.latestDetails[threadID] == detail,
                   hydrated != detail else {
                 self.finishAttachmentHydration(threadID: threadID, workID: workID)
+                if let latest = self.latestDetails[threadID], latest != detail {
+                    self.scheduleAttachmentHydration(
+                        in: latest,
+                        threadID: threadID,
+                        client: client,
+                        environmentID: environmentID
+                    )
+                }
                 return
             }
             self.publish(
