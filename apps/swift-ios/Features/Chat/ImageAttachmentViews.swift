@@ -41,7 +41,7 @@ struct FeatureImageAttachmentPicker: View {
     let maximumCount: Int
     let isEnabled: Bool
 
-    @State private var selection: [PhotosPickerItem] = []
+    @State private var isAttachmentSourcePresented = false
     @State private var isCameraPresented = false
     @State private var isFileImporterPresented = false
     @State private var errorMessage: String?
@@ -59,27 +59,8 @@ struct FeatureImageAttachmentPicker: View {
     }
 
     var body: some View {
-        Menu {
-            PhotosPicker(
-                selection: $selection,
-                maxSelectionCount: max(1, remainingCount),
-                matching: .images
-            ) {
-                Label("Photo Library", systemImage: "photo.on.rectangle")
-            }
-
-            Button {
-                isCameraPresented = true
-            } label: {
-                Label("Camera", systemImage: "camera")
-            }
-            .disabled(!UIImagePickerController.isSourceTypeAvailable(.camera))
-
-            Button {
-                isFileImporterPresented = true
-            } label: {
-                Label("Files", systemImage: "folder")
-            }
+        Button {
+            isAttachmentSourcePresented = true
         } label: {
             Image(systemName: preparationState.isPreparing ? "hourglass" : "paperclip")
                 .font(.system(size: 17, weight: .medium))
@@ -93,8 +74,12 @@ struct FeatureImageAttachmentPicker: View {
         .accessibilityLabel(attachmentAccessibilityLabel)
         .accessibilityIdentifier("image-attachment-picker")
         .accessibilityHint(attachmentAccessibilityHint)
-        .onChange(of: selection) {
-            loadPhotoSelection()
+        .confirmationDialog("Add image", isPresented: $isAttachmentSourcePresented) {
+            Button("Photo Library") { presentPhotoLibrary() }
+            Button("Camera") { isCameraPresented = true }
+                .disabled(!UIImagePickerController.isSourceTypeAvailable(.camera))
+            Button("Files") { isFileImporterPresented = true }
+            Button("Cancel", role: .cancel) {}
         }
         .fullScreenCover(isPresented: $isCameraPresented) {
             FeatureCameraPicker(
@@ -109,11 +94,6 @@ struct FeatureImageAttachmentPicker: View {
             allowsMultipleSelection: true,
             onCompletion: loadFiles
         )
-        .onChange(of: attachments.count) {
-            if attachments.count >= maximumCount {
-                selection = []
-            }
-        }
         .alert(
             "Couldn’t add image",
             isPresented: Binding(
@@ -147,19 +127,24 @@ struct FeatureImageAttachmentPicker: View {
         return "Choose a photo, take a photo, or browse image files"
     }
 
-    private func loadPhotoSelection() {
-        let items = selection
-        guard !items.isEmpty else { return }
-        selection = []
-        let operation = preparationState.begin(itemCount: items.count)
+    private func presentPhotoLibrary() {
+        // A confirmation dialog remains the active presenter during its action. Dispatch
+        // independently of the dialog's view task so dismissal cannot cancel presentation.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+            FeaturePhotoLibraryPresenter.present(maximumCount: max(1, remainingCount)) { images in
+                loadPhotoSelection(images)
+            }
+        }
+    }
+
+    private func loadPhotoSelection(_ images: [Data]) {
+        guard !images.isEmpty else { return }
+        let operation = preparationState.begin(itemCount: images.count)
 
         Task {
             defer { preparationState.finish(operation) }
-            for item in items.prefix(remainingCount) {
+            for data in images.prefix(remainingCount) {
                 do {
-                    guard let data = try await item.loadTransferable(type: Data.self) else {
-                        continue
-                    }
                     try await appendImage(data)
                 } catch {
                     errorMessage = error.localizedDescription
@@ -225,6 +210,82 @@ struct FeatureImageAttachmentPicker: View {
             try FeatureImageProcessor.attachment(from: data, ordinal: ordinal)
         }.value
         attachments.append(attachment)
+    }
+}
+
+@MainActor
+private enum FeaturePhotoLibraryPresenter {
+    private static var delegates: [ObjectIdentifier: Delegate] = [:]
+
+    static func present(maximumCount: Int, onSelect: @escaping ([Data]) -> Void) {
+        var configuration = PHPickerConfiguration(photoLibrary: .shared())
+        configuration.filter = .images
+        configuration.selectionLimit = maximumCount
+        configuration.preferredAssetRepresentationMode = .current
+
+        let picker = PHPickerViewController(configuration: configuration)
+        let delegate = Delegate(onSelect: onSelect)
+        picker.delegate = delegate
+        delegates[ObjectIdentifier(picker)] = delegate
+
+        guard let presenter = UIApplication.shared.connectedScenes
+            .compactMap({ $0 as? UIWindowScene })
+            .flatMap(\.windows)
+            .first(where: \.isKeyWindow)?
+            .rootViewController?
+            .topPresentedViewController
+        else {
+            delegates.removeValue(forKey: ObjectIdentifier(picker))
+            return
+        }
+        presenter.present(picker, animated: true)
+    }
+
+    private static func finish(_ picker: PHPickerViewController) {
+        delegates.removeValue(forKey: ObjectIdentifier(picker))
+    }
+
+    final class Delegate: NSObject, PHPickerViewControllerDelegate {
+        private let onSelect: ([Data]) -> Void
+
+        init(onSelect: @escaping ([Data]) -> Void) {
+            self.onSelect = onSelect
+        }
+
+        func picker(_ picker: PHPickerViewController, didFinishPicking results: [PHPickerResult]) {
+            picker.dismiss(animated: true)
+            guard !results.isEmpty else { return FeaturePhotoLibraryPresenter.finish(picker) }
+
+            Task { @MainActor in
+                var images: [Data] = []
+                for result in results {
+                    guard let data = try? await result.itemProvider.imageData() else { continue }
+                    images.append(data)
+                }
+                onSelect(images)
+                FeaturePhotoLibraryPresenter.finish(picker)
+            }
+        }
+    }
+}
+
+private extension UIViewController {
+    var topPresentedViewController: UIViewController {
+        presentedViewController?.topPresentedViewController ?? self
+    }
+}
+
+private extension NSItemProvider {
+    func imageData() async throws -> Data {
+        try await withCheckedThrowingContinuation { continuation in
+            loadDataRepresentation(forTypeIdentifier: UTType.image.identifier) { data, error in
+                if let data {
+                    continuation.resume(returning: data)
+                } else {
+                    continuation.resume(throwing: error ?? FeatureImageAttachmentError.encodingFailed)
+                }
+            }
+        }
     }
 }
 
