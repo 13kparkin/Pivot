@@ -150,6 +150,24 @@ function SubagentThreadRedirect({
   return <OpeningThreadLoadingScreen />;
 }
 
+// Thread selection resolves on its own tick after the connection reports
+// available, and a hidden subagent thread's redirect depends on that
+// selection landing. Deciding "unavailable" the instant the connection is
+// ready flashes the error screen over what is actually a redirect (or a
+// late-arriving shell); the decision must wait out this window first.
+const UNAVAILABLE_DECISION_DELAY_MS = 1_500;
+
+function useThreadUnavailableDecision(routeThreadKey: string | null, connectionReady: boolean) {
+  const [decided, setDecided] = useState(false);
+  useEffect(() => {
+    setDecided(false);
+    if (!connectionReady) return;
+    const timer = setTimeout(() => setDecided(true), UNAVAILABLE_DECISION_DELAY_MS);
+    return () => clearTimeout(timer);
+  }, [routeThreadKey, connectionReady]);
+  return decided;
+}
+
 export function ThreadRouteScreen(props: ThreadRouteScreenProps) {
   const { state: workspaceState } = useWorkspaceState();
   const { connectionState } = useRemoteConnectionStatus();
@@ -170,6 +188,11 @@ export function ThreadRouteScreen(props: ThreadRouteScreenProps) {
       ? null
       : scopedThreadKey(selectedThread.environmentId, selectedThread.id);
   const selectedThreadDetailState = useSelectedThreadDetailState();
+  const stillHydrating =
+    workspaceState.isLoadingConnections ||
+    routeConnectionState === "connecting" ||
+    routeConnectionState === "reconnecting";
+  const unavailableDecided = useThreadUnavailableDecision(routeThreadKey, !stillHydrating);
 
   if (environmentId === null || threadIdRaw === null) {
     return <OpeningThreadLoadingScreen />;
@@ -194,12 +217,7 @@ export function ThreadRouteScreen(props: ThreadRouteScreenProps) {
     return <ThreadRouteContent {...props} selectedThreadDetailState={selectedThreadDetailState} />;
   }
 
-  const stillHydrating =
-    workspaceState.isLoadingConnections ||
-    routeConnectionState === "connecting" ||
-    routeConnectionState === "reconnecting";
-
-  if (stillHydrating) {
+  if (stillHydrating || !unavailableDecided) {
     return <OpeningThreadLoadingScreen />;
   }
 
