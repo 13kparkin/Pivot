@@ -1952,7 +1952,13 @@ function ChatViewContent(props: ChatViewProps) {
           title: "Client and server channels differ",
           description: (
             <div className="mt-1 min-w-0 space-y-2">
-              <p>Pick Stable or Nightly for both installations.</p>
+              <p>
+                {compatibilityChannelMismatch.newerSide === "server"
+                  ? `This client is older. Update it to match the ${compatibilityChannelMismatch.serverChannel} server.`
+                  : compatibilityChannelMismatch.newerSide === "client"
+                    ? `The server is older. Update it to match this ${compatibilityChannelMismatch.clientChannel} client.`
+                    : "Pick Stable or Nightly for both installations."}
+              </p>
               <div className="grid grid-cols-[3rem_minmax(0,1fr)_auto] gap-x-3 gap-y-1.5 border-y border-current/15 py-2 text-xs">
                 <span className="text-muted-foreground">Client</span>
                 <code className="truncate text-foreground">
@@ -1973,12 +1979,14 @@ function ChatViewContent(props: ChatViewProps) {
           ),
           actions: (
             <>
-              <ServerUpdateAction
-                environmentId={activeEnvironmentUnavailableState.environmentId}
-                serverLabel={`${activeEnvironmentUnavailableState.label} server`}
-                selfUpdate={null}
-                targetVersion={compatibilityChannelMismatch.clientVersion}
-              />
+              {compatibilityChannelMismatch.newerSide === "client" ? (
+                <ServerUpdateAction
+                  environmentId={activeEnvironmentUnavailableState.environmentId}
+                  serverLabel={`${activeEnvironmentUnavailableState.label} server`}
+                  selfUpdate={null}
+                  targetVersion={compatibilityChannelMismatch.clientVersion}
+                />
+              ) : null}
               <Button
                 size="xs"
                 variant="outline"

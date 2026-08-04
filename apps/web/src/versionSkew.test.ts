@@ -39,6 +39,7 @@ describe("versionSkew", () => {
       clientChannel: "Stable",
       serverVersion: "0.0.33-nightly.20260803.4",
       serverChannel: "Nightly",
+      newerSide: "server",
     });
   });
 
@@ -54,6 +55,31 @@ describe("versionSkew", () => {
       clientChannel: "Nightly",
       serverVersion: "0.0.32",
       serverChannel: "Stable",
+      newerSide: "client",
+    });
+  });
+
+  it("uses semver precedence when the channels differ at the same release", () => {
+    expect(
+      resolveCompatibilityChannelMismatch({
+        clientVersion: "0.0.32",
+        clientStageLabel: "Latest",
+        serverVersion: "0.0.32-nightly.20260803.4",
+      }),
+    ).toMatchObject({
+      newerSide: "client",
+    });
+  });
+
+  it("does not guess which side is newer when a version cannot be compared", () => {
+    expect(
+      resolveCompatibilityChannelMismatch({
+        clientVersion: "not-semver",
+        clientStageLabel: "Latest",
+        serverVersion: "0.0.33-nightly.20260803.4",
+      }),
+    ).toMatchObject({
+      newerSide: null,
     });
   });
 
