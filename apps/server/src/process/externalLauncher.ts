@@ -16,6 +16,7 @@ import {
   ExternalLauncherUnsupportedEditorError,
   type EditorId,
   type LaunchEditorInput,
+  type RevealInFileManagerInput,
 } from "@t3tools/contracts";
 import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import { isCommandAvailable, resolveSpawnCommand } from "@t3tools/shared/shell";
@@ -45,7 +46,7 @@ export {
   ExternalLauncherUnsupportedEditorError,
   isExternalLauncherError,
 } from "@t3tools/contracts";
-export type { LaunchEditorInput };
+export type { LaunchEditorInput, RevealInFileManagerInput };
 interface EditorLaunch {
   readonly editor: EditorId;
   readonly target: string;
@@ -337,6 +338,10 @@ export class ExternalLauncher extends Context.Service<
      * Launches the editor as a detached process so server startup is not blocked.
      */
     readonly launchEditor: (input: LaunchEditorInput) => Effect.Effect<void, ExternalLauncherError>;
+    /** Reveal a workspace file in the host file manager. */
+    readonly revealInFileManager: (
+      input: RevealInFileManagerInput,
+    ) => Effect.Effect<void, ExternalLauncherError>;
   }
 >()("t3/process/externalLauncher") {}
 
@@ -381,6 +386,33 @@ const resolveEditorLaunch = Effect.fn("resolveEditorLaunch")(function* (
     target: input.cwd,
     command: fileManagerCommandForPlatform(platform),
     args: [input.cwd],
+  };
+});
+
+const resolveFileManagerRevealLaunch = Effect.fn(
+  "externalLauncher.resolveFileManagerRevealLaunch",
+)(function* (
+  input: RevealInFileManagerInput,
+): Effect.fn.Return<EditorLaunch, never, Path.Path> {
+  const platform = yield* HostProcessPlatform;
+  const path = yield* Path.Path;
+  const args =
+    platform === "darwin"
+      ? ["-R", input.path]
+      : platform === "win32"
+        ? [`/select,${input.path}`]
+        : [path.dirname(input.path)];
+
+  yield* Effect.annotateCurrentSpan({
+    "externalLauncher.target": input.path,
+    "externalLauncher.platform": platform,
+  });
+
+  return {
+    editor: "file-manager",
+    target: input.path,
+    command: fileManagerCommandForPlatform(platform),
+    args,
   };
 });
 
@@ -496,6 +528,14 @@ export const make = Effect.gen(function* () {
     launchEditor: (input) =>
       provideCommandResolutionServices(
         Effect.flatMap(resolveEditorLaunch(input), (launch) =>
+          launchEditorProcess(launch).pipe(
+            Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+          ),
+        ),
+      ),
+    revealInFileManager: (input) =>
+      provideCommandResolutionServices(
+        Effect.flatMap(resolveFileManagerRevealLaunch(input), (launch) =>
           launchEditorProcess(launch).pipe(
             Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
           ),

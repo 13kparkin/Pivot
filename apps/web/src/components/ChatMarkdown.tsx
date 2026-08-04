@@ -82,6 +82,7 @@ import { serverEnvironment } from "../state/server";
 import { assetEnvironment } from "../state/assets";
 import { usePreparedConnection } from "../state/session";
 import { previewEnvironment } from "../state/preview";
+import { shellEnvironment } from "../state/shell";
 import { useAtomCommand } from "../state/use-atom-command";
 import { useAtomQueryRunner } from "../state/use-atom-query-runner";
 import { writeTextToClipboard } from "../hooks/useCopyToClipboard";
@@ -734,6 +735,7 @@ function UncachedShikiCodeBlock({
 
 interface MarkdownFileLinkProps {
   href: string;
+  filePath: string;
   targetPath: string;
   iconPath: string;
   displayPath: string;
@@ -744,6 +746,7 @@ interface MarkdownFileLinkProps {
   theme: "light" | "dark";
   threadRef?: ScopedThreadRef | undefined;
   onOpen: (targetPath: string) => Promise<AtomCommandResult<unknown, unknown>>;
+  onRevealInFileManager: (filePath: string) => Promise<AtomCommandResult<unknown, unknown>>;
   onOpenInBrowser?: (() => Promise<AtomCommandResult<unknown, unknown>>) | undefined;
   className?: string | undefined;
 }
@@ -1017,6 +1020,7 @@ function MarkdownExternalLinkContent({
 
 const MarkdownFileLink = memo(function MarkdownFileLink({
   href,
+  filePath,
   targetPath,
   iconPath,
   displayPath,
@@ -1027,6 +1031,7 @@ const MarkdownFileLink = memo(function MarkdownFileLink({
   theme,
   threadRef,
   onOpen,
+  onRevealInFileManager,
   onOpenInBrowser,
   className,
 }: MarkdownFileLinkProps) {
@@ -1064,6 +1069,38 @@ const MarkdownFileLink = memo(function MarkdownFileLink({
       }
     })();
   }, [onOpen, targetPath]);
+
+  const handleRevealInFileManager = useCallback(() => {
+    void (async () => {
+      try {
+        const result = await onRevealInFileManager(filePath);
+        if (result._tag === "Success" || isAtomCommandInterrupted(result)) {
+          return;
+        }
+        reportMarkdownActionFailure(
+          { operation: "open-file-in-folder", target: filePath },
+          result.cause,
+        );
+        const error = squashAtomCommandFailure(result);
+        toastManager.add(
+          stackedThreadToast({
+            type: "error",
+            title: "Unable to open folder",
+            description: error instanceof Error ? error.message : "An error occurred.",
+          }),
+        );
+      } catch (cause) {
+        reportMarkdownActionFailure({ operation: "open-file-in-folder", target: filePath }, cause);
+        toastManager.add(
+          stackedThreadToast({
+            type: "error",
+            title: "Unable to open folder",
+            description: cause instanceof Error ? cause.message : "An error occurred.",
+          }),
+        );
+      }
+    })();
+  }, [filePath, onRevealInFileManager]);
 
   const handleOpenInFilePreview = useCallback(() => {
     if (!threadRef || !workspaceRelativePath) {
@@ -1162,6 +1199,7 @@ const MarkdownFileLink = memo(function MarkdownFileLink({
         const clicked = await api.contextMenu.show(
           [
             { id: "open", label: "Open in editor" },
+            { id: "open-in-folder", label: "Open in folder" },
             ...(onOpenInBrowser
               ? ([{ id: "open-in-browser", label: "Open in integrated browser" }] as const)
               : []),
@@ -1173,6 +1211,10 @@ const MarkdownFileLink = memo(function MarkdownFileLink({
 
         if (clicked === "open") {
           handleOpenInEditor();
+          return;
+        }
+        if (clicked === "open-in-folder") {
+          handleRevealInFileManager();
           return;
         }
         if (clicked === "open-in-browser") {
@@ -1193,7 +1235,15 @@ const MarkdownFileLink = memo(function MarkdownFileLink({
         );
       }
     },
-    [displayPath, handleCopy, handleOpenInBrowser, handleOpenInEditor, onOpenInBrowser, targetPath],
+    [
+      displayPath,
+      handleCopy,
+      handleOpenInBrowser,
+      handleOpenInEditor,
+      handleRevealInFileManager,
+      onOpenInBrowser,
+      targetPath,
+    ],
   );
 
   return (
@@ -1237,6 +1287,7 @@ function areMarkdownFileLinkPropsEqual(
 ): boolean {
   return (
     previous.href === next.href &&
+    previous.filePath === next.filePath &&
     previous.targetPath === next.targetPath &&
     previous.iconPath === next.iconPath &&
     previous.displayPath === next.displayPath &&
@@ -1247,6 +1298,7 @@ function areMarkdownFileLinkPropsEqual(
     previous.theme === next.theme &&
     previous.threadRef === next.threadRef &&
     previous.onOpen === next.onOpen &&
+    previous.onRevealInFileManager === next.onRevealInFileManager &&
     previous.onOpenInBrowser === next.onOpenInBrowser &&
     previous.className === next.className
   );
@@ -1267,6 +1319,9 @@ function ChatMarkdown({
     reportFailure: false,
   });
   const openPreview = useAtomCommand(previewEnvironment.open, {
+    reportFailure: false,
+  });
+  const revealInFileManager = useAtomCommand(shellEnvironment.revealInFileManager, {
     reportFailure: false,
   });
   const preparedConnection = usePreparedConnection(threadRef?.environmentId ?? null);
@@ -1344,6 +1399,21 @@ function ChatMarkdown({
     },
     [openPreview, threadRef],
   );
+  const revealMarkdownFileInFileManager = useCallback(
+    (filePath: string): Promise<AtomCommandResult<unknown, unknown>> => {
+      const targetEnvironmentId = threadRef?.environmentId ?? environmentId;
+      if (targetEnvironmentId === null) {
+        return Promise.resolve(
+          AsyncResult.failure(Cause.fail(new Error("No environment is selected."))),
+        );
+      }
+      return revealInFileManager({
+        environmentId: targetEnvironmentId,
+        input: { path: filePath },
+      });
+    },
+    [environmentId, revealInFileManager, threadRef?.environmentId],
+  );
   const openMarkdownFileInPreview = useCallback(
     (path: string) => {
       if (!threadRef || preparedConnection._tag === "None") {
@@ -1390,6 +1460,7 @@ function ChatMarkdown({
       return (
         <MarkdownFileLink
           href={fileLinkMeta.targetPath}
+          filePath={fileLinkMeta.filePath}
           targetPath={fileLinkMeta.targetPath}
           iconPath={fileLinkMeta.filePath}
           displayPath={fileLinkMeta.displayPath}
@@ -1400,6 +1471,7 @@ function ChatMarkdown({
           theme={resolvedTheme}
           threadRef={threadRef}
           onOpen={openInPreferredEditor}
+          onRevealInFileManager={revealMarkdownFileInFileManager}
           onOpenInBrowser={
             threadRef &&
             isPreviewSupportedInRuntime() &&
@@ -1593,6 +1665,7 @@ function ChatMarkdown({
     markdownFileLinkMetaByHref,
     onTaskListChange,
     openInPreferredEditor,
+    revealMarkdownFileInFileManager,
     openExternalLinkInPreview,
     openMarkdownFileInPreview,
     resolvedTheme,
