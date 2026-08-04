@@ -158,14 +158,25 @@ function SubagentThreadRedirect({
 const UNAVAILABLE_DECISION_DELAY_MS = 1_500;
 
 function useThreadUnavailableDecision(routeThreadKey: string | null, connectionReady: boolean) {
-  const [decided, setDecided] = useState(false);
+  const [decision, setDecision] = useState<{
+    readonly key: string | null;
+    readonly decided: boolean;
+  }>({ key: routeThreadKey, decided: false });
+  // A navigation reuses this mounted screen, and an effect-based reset leaves
+  // the previous route's fired decision visible for one render — exactly the
+  // flash the delay exists to prevent. Reset synchronously during render.
+  if (decision.key !== routeThreadKey) {
+    setDecision({ key: routeThreadKey, decided: false });
+  }
   useEffect(() => {
-    setDecided(false);
     if (!connectionReady) return;
-    const timer = setTimeout(() => setDecided(true), UNAVAILABLE_DECISION_DELAY_MS);
+    const timer = setTimeout(
+      () => setDecision({ key: routeThreadKey, decided: true }),
+      UNAVAILABLE_DECISION_DELAY_MS,
+    );
     return () => clearTimeout(timer);
   }, [routeThreadKey, connectionReady]);
-  return decided;
+  return decision.key === routeThreadKey && decision.decided;
 }
 
 export function ThreadRouteScreen(props: ThreadRouteScreenProps) {
