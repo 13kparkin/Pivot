@@ -212,6 +212,7 @@ private struct ModelPickerSheet: View {
         .preferredColorScheme(.dark)
         .onAppear(perform: revealSelectedLegacyModel)
         .onChange(of: selection) { revealSelectedLegacyModel() }
+        .onChange(of: providers) { revealSelectedLegacyModel() }
     }
 
     private var modelList: some View {
@@ -372,10 +373,12 @@ private struct ModelPickerSheet: View {
     }
 
     private func revealSelectedLegacyModel() {
-        guard let resolvedSelection else { return }
-        legacyModelsExpanded = displaySections.legacy.contains {
+        guard !legacyModelsExpanded, let resolvedSelection else { return }
+        if displaySections.legacy.contains(where: {
             $0.provider.id == resolvedSelection.providerID
                 && $0.model.id == resolvedSelection.modelID
+        }) {
+            legacyModelsExpanded = true
         }
     }
 

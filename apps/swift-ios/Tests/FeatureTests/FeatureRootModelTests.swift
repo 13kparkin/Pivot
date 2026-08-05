@@ -638,6 +638,26 @@ struct FeatureRootModelTests {
     }
 
     @Test
+    func testPinDoesNotMakeAnOrdinaryThreadPermanentlyActive() async {
+        let client = FeatureClientStub()
+        let thread = FeatureThread(
+            id: "thread-1",
+            projectID: "project-1",
+            title: "Thread"
+        )
+        client.createdThread = thread
+        let model = testRootModel(client: client)
+        _ = await model.createThread(projectID: thread.projectID, title: nil, selection: nil)
+
+        await model.setPinned(thread.id, pinned: true)
+        await model.setPinned(thread.id, pinned: false)
+
+        let updated = model.snapshot.threads[0]
+        #expect(updated.pinnedAt == nil)
+        #expect(!updated.keepsActive)
+    }
+
+    @Test
     func testResolveUserInputForwardsTypedAnswersAndClearsTheRequest() async {
         let client = FeatureClientStub()
         let thread = FeatureThread(id: "thread-1", projectID: "project-1", title: "Thread")

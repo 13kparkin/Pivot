@@ -302,9 +302,11 @@ public final class FeatureRootModel {
             mutateThread(id: id) {
                 $0.pinnedAt = pinned ? Date.now : nil
                 if pinned {
-                    $0.isSettled = false
-                    $0.keepsActive = true
-                    $0.settledAt = nil
+                    if $0.isSettled {
+                        $0.isSettled = false
+                        $0.keepsActive = true
+                        $0.settledAt = nil
+                    }
                     $0.snoozedUntil = nil
                     $0.snoozedAt = nil
                 }
