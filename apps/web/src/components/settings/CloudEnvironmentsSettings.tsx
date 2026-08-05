@@ -218,29 +218,7 @@ export function CloudEnvironmentsSettings() {
       <SettingsSection
         {...searchableSetting("cloud-environments")}
         icon={<RenderLogo className="size-5" />}
-      >
-        <div className="mx-3 overflow-hidden rounded-2xl border border-border/70 bg-gradient-to-br from-muted/45 via-background to-background px-5 py-5 sm:mx-4 sm:px-6">
-          <div className="flex items-start gap-4">
-            <div className="flex size-11 shrink-0 items-center justify-center rounded-xl bg-foreground text-background shadow-sm">
-              <RenderLogo className="size-6" />
-            </div>
-            <div className="min-w-0 space-y-1">
-              <h3 className="text-base font-semibold tracking-[-0.02em]">Powered by Render</h3>
-              <p className="max-w-xl text-sm leading-relaxed text-muted-foreground">
-                Deploy a temporary T3 Code machine, paste its URL, and start an agent.
-              </p>
-              <div className="flex flex-wrap gap-2 pt-2 text-[11px] font-medium text-muted-foreground">
-                <span className="rounded-full border border-border/70 bg-background/70 px-2 py-1">
-                  Free demo
-                </span>
-                <span className="rounded-full border border-border/70 bg-background/70 px-2 py-1">
-                  No logs required
-                </span>
-              </div>
-            </div>
-          </div>
-        </div>
-      </SettingsSection>
+      />
 
       <SettingsSection title="1. Deploy to Render">
         <div className="px-3 sm:px-4">
