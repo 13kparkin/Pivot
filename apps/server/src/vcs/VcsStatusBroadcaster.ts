@@ -482,7 +482,16 @@ export const make = Effect.gen(function* () {
       }),
     );
     const remote = yield* refreshRemoteStatus(cwd, { invalidate: false });
-    return mergeGitStatusParts(local, remote);
+    // A checkout can land between the two reads. refreshRemoteStatus discards
+    // a superseded remote result, which would leave `local` describing the old
+    // branch — returning that pair would hand the caller a status the cache
+    // itself no longer agrees with. Prefer the cache's halves, which the
+    // concurrent refresh has already reconciled for the new branch.
+    const cached = yield* getCachedStatus(cwd);
+    return mergeGitStatusParts(
+      cached?.local?.value ?? local,
+      cached?.remote ? cached.remote.value : remote,
+    );
   });
 
   const refreshStatus: VcsStatusBroadcaster["Service"]["refreshStatus"] = Effect.fn(

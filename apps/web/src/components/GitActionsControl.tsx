@@ -49,7 +49,6 @@ import {
   resolveQuickAction,
   resolveThreadBranchUpdate,
 } from "./GitActionsControl.logic";
-import { useThreadPr } from "./ThreadStatusIndicators";
 import { AnimatedHeight } from "./AnimatedHeight";
 import { Button } from "~/components/ui/button";
 import { Checkbox } from "~/components/ui/checkbox";
@@ -1100,22 +1099,13 @@ export default function GitActionsControl({
   // Default to true while loading so we don't flash init controls.
   const isRepo = gitStatus?.isRepo ?? true;
   const hasPrimaryRemote = gitStatus?.hasPrimaryRemote ?? false;
-  const activeThreadBranchPr = useThreadPr({
-    environmentId: activeEnvironmentId,
-    cwd: gitCwd,
-    threadBranch: activeServerThread?.branch ?? null,
-    gitStatus,
-  });
-  // Scope PR-driven actions to the thread's recorded branch: when the
-  // checkout has moved under a thread, "View PR" must open the thread's PR,
-  // not whatever the current checkout has. Non-thread contexts (project view,
-  // new composer) keep the checkout's PR.
-  const gitStatusForActions = useMemo(() => {
-    if (!gitStatus || activeServerThread?.branch == null) {
-      return gitStatus;
-    }
-    return { ...gitStatus, pr: activeThreadBranchPr };
-  }, [activeServerThread?.branch, activeThreadBranchPr, gitStatus]);
+  // Deliberately the checkout's status, not the active thread's branch: every
+  // action here (commit, push, create) runs against whatever is checked out at
+  // `gitCwd`, so gating them on another branch's PR would offer "Create PR"
+  // for a branch that already has one — or hide it for one that doesn't.
+  // Thread-scoped PR state lives on the sidebar badge and the composer pill,
+  // which are branch-keyed; the branch-mismatch banner explains the split.
+  const gitStatusForActions = gitStatus;
 
   const allFiles = gitStatusForActions?.workingTree.files ?? [];
   const selectedFiles = allFiles.filter((f) => !excludedFiles.has(f.path));

@@ -110,20 +110,33 @@ export function PrStatusTooltipContent({ status }: { status: PrStatusIndicator }
   );
 }
 
-export function resolveThreadPr(input: {
-  threadBranch: string | null;
+/**
+ * True when the streamed status describes the thread's own branch, and so is
+ * authoritative about that branch's PR — including when it reports none.
+ */
+function statusCoversBranch(
+  gitStatus: VcsStatusResult | null,
+  threadBranch: string | null,
+): gitStatus is VcsStatusResult {
+  return gitStatus !== null && threadBranch !== null && gitStatus.refName === threadBranch;
+}
+
+/**
+ * Pick the PR for `branch` from the two available sources. The streamed
+ * status wins whenever it describes that branch — including when it reports
+ * no PR, which is why this short-circuits instead of falling through with
+ * `??`: a warm branch-keyed result must never resurrect a badge the
+ * authoritative status just cleared (e.g. right after a merge).
+ */
+export function selectBranchPr(input: {
+  branch: string | null;
   gitStatus: VcsStatusResult | null;
+  branchPr: ThreadPr | null | undefined;
 }): ThreadPr | null {
-  const { threadBranch, gitStatus } = input;
-  if (gitStatus === null) {
-    return null;
+  if (statusCoversBranch(input.gitStatus, input.branch)) {
+    return input.gitStatus.pr ?? null;
   }
-
-  if (threadBranch === null || gitStatus.refName !== threadBranch) {
-    return null;
-  }
-
-  return gitStatus.pr ?? null;
+  return input.branchPr ?? null;
 }
 
 /**
@@ -146,11 +159,11 @@ export function useThreadPr(input: {
         })
       : null,
   );
-  return (
-    resolveThreadPr({ threadBranch: input.threadBranch, gitStatus: input.gitStatus }) ??
-    branchPr.data?.pr ??
-    null
-  );
+  return selectBranchPr({
+    branch: input.threadBranch,
+    gitStatus: input.gitStatus,
+    branchPr: branchPr.data?.pr,
+  });
 }
 
 export function terminalStatusFromRunningIds(

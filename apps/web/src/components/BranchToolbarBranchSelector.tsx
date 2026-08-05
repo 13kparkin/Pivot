@@ -37,7 +37,6 @@ import { getSourceControlPresentation } from "../sourceControlPresentation";
 import {
   deriveLocalBranchNameFromRemoteRef,
   resolveBranchTriggerLabel,
-  resolveBranchToolbarPrBranch,
   resolveBranchSelectionTarget,
   resolveBranchToolbarValue,
   resolveDraftEnvModeAfterBranchChange,
@@ -47,7 +46,7 @@ import {
 import {
   ChangeRequestStatusIcon,
   prStatusIndicator,
-  resolveThreadPr,
+  selectBranchPr,
 } from "./ThreadStatusIndicators";
 import { Button } from "./ui/button";
 import { Switch } from "./ui/switch";
@@ -619,16 +618,11 @@ export function BranchToolbarBranchSelector({
         })
       : null,
   );
-  const branchPr =
-    resolveThreadPr({
-      threadBranch: resolveBranchToolbarPrBranch({
-        activeThreadBranch,
-        resolvedActiveBranch,
-      }),
-      gitStatus: branchStatusQuery.data ?? null,
-    }) ??
-    branchPrQuery.data?.pr ??
-    null;
+  const branchPr = selectBranchPr({
+    branch: branchPrLookupBranch,
+    gitStatus: branchStatusQuery.data ?? null,
+    branchPr: branchPrQuery.data?.pr,
+  });
   const branchPrStatus = prStatusIndicator(branchPr, branchStatusQuery.data?.sourceControlProvider);
   // Action-oriented tooltip (the pill opens the PR), distinct from the sidebar's
   // state-description tooltip.
