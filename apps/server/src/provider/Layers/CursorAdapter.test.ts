@@ -60,6 +60,78 @@ exec ${JSON.stringify(mockAgentCommand)} ${mockAgentArgs.map((arg) => JSON.strin
   return wrapperPath;
 }
 
+async function makeTerminalCallbackWrapper(kind: "permission" | "question") {
+  const dir = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "cursor-acp-terminal-"));
+  const wrapperPath = NodePath.join(dir, "fake-agent.mjs");
+  const callback =
+    kind === "permission"
+      ? {
+          jsonrpc: "2.0",
+          id: 9001,
+          method: "session/request_permission",
+          params: {
+            sessionId: "terminal-callback-session",
+            toolCall: {
+              toolCallId: "terminal-tool-call",
+              title: "Terminal",
+              kind: "execute",
+              status: "pending",
+              content: [
+                {
+                  type: "content",
+                  content: { type: "text", text: "run terminal command" },
+                },
+              ],
+            },
+            options: [
+              { optionId: "allow-once", name: "Allow once", kind: "allow_once" },
+              { optionId: "reject-once", name: "Reject", kind: "reject_once" },
+            ],
+          },
+        }
+      : {
+          jsonrpc: "2.0",
+          id: 9002,
+          method: "cursor/ask_question",
+          params: {
+            toolCallId: "terminal-question",
+            title: "Question",
+            questions: [
+              {
+                id: "scope",
+                prompt: "Which scope?",
+                options: [{ id: "workspace", label: "Workspace" }],
+              },
+            ],
+          },
+        };
+  const script = `#!/usr/bin/env node
+import readline from "node:readline";
+const callback = ${JSON.stringify(callback)};
+const kind = ${JSON.stringify(kind)};
+const send = (message) => process.stdout.write(JSON.stringify(message) + "\\n");
+readline.createInterface({ input: process.stdin }).on("line", (line) => {
+  const message = JSON.parse(line);
+  if (!("method" in message)) return;
+  if (message.method === "initialize") {
+    send({ jsonrpc: "2.0", id: message.id, result: { protocolVersion: 1, agentCapabilities: {} } });
+  } else if (message.method === "session/new") {
+    send({ jsonrpc: "2.0", id: message.id, result: { sessionId: "terminal-callback-session" } });
+  } else if (message.method === "session/prompt") {
+    const response = { jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } };
+    const messages = kind === "question" ? [response, callback] : [callback];
+    process.stdout.write(messages.map(JSON.stringify).join("\\n") + "\\n");
+    if (kind === "permission") setTimeout(() => send(response), 10);
+  } else if (message.id !== undefined) {
+    send({ jsonrpc: "2.0", id: message.id, result: {} });
+  }
+});
+`;
+  await NodeFSP.writeFile(wrapperPath, script, "utf8");
+  await NodeFSP.chmod(wrapperPath, 0o755);
+  return wrapperPath;
+}
+
 async function makeProbeWrapper(
   requestLogPath: string,
   argvLogPath: string,
@@ -1047,6 +1119,105 @@ cursorAdapterTestLayer("CursorAdapterLive", (it) => {
       yield* adapter.stopSession(threadId);
     }),
   );
+  it.effect("resolves a pending permission before completing a normally returned turn", () =>
+    Effect.gen(function* () {
+      const adapter = yield* CursorAdapter;
+      const settings = yield* ServerSettingsService;
+      const threadId = ThreadId.make("cursor-terminal-permission");
+      const events: Array<ProviderRuntimeEvent> = [];
+      const completed = yield* Deferred.make<void>();
+      const wrapperPath = yield* Effect.promise(() => makeTerminalCallbackWrapper("permission"));
+      yield* settings.updateSettings({ providers: { cursor: { binaryPath: wrapperPath } } });
+
+      const eventsFiber = yield* Stream.runForEach(adapter.streamEvents, (event) => {
+        if (String(event.threadId) !== String(threadId)) return Effect.void;
+        events.push(event);
+        return event.type === "turn.completed"
+          ? Deferred.succeed(completed, undefined).pipe(Effect.ignore)
+          : Effect.void;
+      }).pipe(Effect.forkChild);
+
+      yield* adapter.startSession({
+        threadId,
+        provider: ProviderDriverKind.make("cursor"),
+        cwd: process.cwd(),
+        runtimeMode: "approval-required",
+      });
+      yield* adapter.sendTurn({
+        threadId,
+        input: "finish without permission response",
+        attachments: [],
+      });
+      yield* Deferred.await(completed);
+      yield* Fiber.interrupt(eventsFiber);
+
+      const relevant = events.filter(
+        (event) =>
+          event.type === "request.opened" ||
+          event.type === "request.resolved" ||
+          event.type === "turn.completed",
+      );
+      assert.deepStrictEqual(
+        relevant.map((event) => event.type),
+        ["request.opened", "request.resolved", "turn.completed"],
+      );
+      const resolved = relevant[1];
+      assert.equal(resolved?.type, "request.resolved");
+      if (resolved?.type === "request.resolved") assert.equal(resolved.payload.decision, "cancel");
+      yield* adapter.stopSession(threadId);
+    }),
+  );
+
+  it.effect("resolves a pending question before completing a normally returned turn", () =>
+    Effect.gen(function* () {
+      const adapter = yield* CursorAdapter;
+      const settings = yield* ServerSettingsService;
+      const threadId = ThreadId.make("cursor-terminal-question");
+      const events: Array<ProviderRuntimeEvent> = [];
+      const completed = yield* Deferred.make<void>();
+      const wrapperPath = yield* Effect.promise(() => makeTerminalCallbackWrapper("question"));
+      yield* settings.updateSettings({ providers: { cursor: { binaryPath: wrapperPath } } });
+
+      const eventsFiber = yield* Stream.runForEach(adapter.streamEvents, (event) => {
+        if (String(event.threadId) !== String(threadId)) return Effect.void;
+        events.push(event);
+        return event.type === "turn.completed"
+          ? Deferred.succeed(completed, undefined).pipe(Effect.ignore)
+          : Effect.void;
+      }).pipe(Effect.forkChild);
+
+      yield* adapter.startSession({
+        threadId,
+        provider: ProviderDriverKind.make("cursor"),
+        cwd: process.cwd(),
+        runtimeMode: "full-access",
+      });
+      yield* adapter.sendTurn({
+        threadId,
+        input: "finish without question response",
+        attachments: [],
+      });
+      yield* Deferred.await(completed);
+      yield* Fiber.interrupt(eventsFiber);
+
+      const relevant = events.filter(
+        (event) =>
+          event.type === "user-input.requested" ||
+          event.type === "user-input.resolved" ||
+          event.type === "turn.completed",
+      );
+      assert.deepStrictEqual(
+        relevant.map((event) => event.type),
+        ["user-input.requested", "user-input.resolved", "turn.completed"],
+      );
+      const resolved = relevant[1];
+      assert.equal(resolved?.type, "user-input.resolved");
+      if (resolved?.type === "user-input.resolved")
+        assert.deepStrictEqual(resolved.payload.answers, {});
+      yield* adapter.stopSession(threadId);
+    }),
+  );
+
   it.effect("stopping a session settles pending approval waits", () =>
     Effect.gen(function* () {
       const adapter = yield* CursorAdapter;

@@ -115,11 +115,13 @@ export interface CursorAdapterLiveOptions {
 
 interface PendingApproval {
   readonly decision: Deferred.Deferred<ProviderApprovalDecision>;
+  readonly resolutionOffered: Deferred.Deferred<void>;
   readonly kind: string | "unknown";
 }
 
 interface PendingUserInput {
   readonly answers: Deferred.Deferred<ProviderUserInputAnswers>;
+  readonly resolutionOffered: Deferred.Deferred<void>;
 }
 
 interface CursorSessionContext {
@@ -164,6 +166,24 @@ function settlePendingUserInputsAsEmptyAnswers(
       discard: true,
     },
   );
+}
+
+function settlePendingCallbacksBeforeTurnCompletion(
+  pendingApprovals: ReadonlyMap<ApprovalRequestId, PendingApproval>,
+  pendingUserInputs: ReadonlyMap<ApprovalRequestId, PendingUserInput>,
+): Effect.Effect<void> {
+  const approvals = Array.from(pendingApprovals.values());
+  const userInputs = Array.from(pendingUserInputs.values());
+  return Effect.gen(function* () {
+    yield* settlePendingApprovalsAsCancelled(pendingApprovals);
+    yield* settlePendingUserInputsAsEmptyAnswers(pendingUserInputs);
+    yield* Effect.forEach(approvals, (pending) => Deferred.await(pending.resolutionOffered), {
+      discard: true,
+    });
+    yield* Effect.forEach(userInputs, (pending) => Deferred.await(pending.resolutionOffered), {
+      discard: true,
+    });
+  });
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -583,7 +603,8 @@ export function makeCursorAdapter(
                   const requestId = ApprovalRequestId.make(yield* randomUUIDv4);
                   const runtimeRequestId = RuntimeRequestId.make(requestId);
                   const answers = yield* Deferred.make<ProviderUserInputAnswers>();
-                  pendingUserInputs.set(requestId, { answers });
+                  const resolutionOffered = yield* Deferred.make<void>();
+                  pendingUserInputs.set(requestId, { answers, resolutionOffered });
                   yield* offerRuntimeEvent({
                     type: "user-input.requested",
                     ...(yield* makeEventStamp()),
@@ -599,7 +620,6 @@ export function makeCursorAdapter(
                     },
                   });
                   const resolved = yield* Deferred.await(answers);
-                  pendingUserInputs.delete(requestId);
                   yield* offerRuntimeEvent({
                     type: "user-input.resolved",
                     ...(yield* makeEventStamp()),
@@ -609,6 +629,8 @@ export function makeCursorAdapter(
                     requestId: runtimeRequestId,
                     payload: { answers: resolved },
                   });
+                  yield* Deferred.succeed(resolutionOffered, undefined).pipe(Effect.ignore);
+                  pendingUserInputs.delete(requestId);
                   return { answers: resolved };
                 }),
               ),
@@ -687,8 +709,10 @@ export function makeCursorAdapter(
                   const requestId = ApprovalRequestId.make(yield* randomUUIDv4);
                   const runtimeRequestId = RuntimeRequestId.make(requestId);
                   const decision = yield* Deferred.make<ProviderApprovalDecision>();
+                  const resolutionOffered = yield* Deferred.make<void>();
                   pendingApprovals.set(requestId, {
                     decision,
+                    resolutionOffered,
                     kind: permissionRequest.kind,
                   });
                   yield* offerRuntimeEvent(
@@ -710,7 +734,6 @@ export function makeCursorAdapter(
                     }),
                   );
                   const resolved = yield* Deferred.await(decision);
-                  pendingApprovals.delete(requestId);
                   yield* offerRuntimeEvent(
                     makeAcpRequestResolvedEvent({
                       stamp: yield* makeEventStamp(),
@@ -722,6 +745,8 @@ export function makeCursorAdapter(
                       decision: resolved,
                     }),
                   );
+                  yield* Deferred.succeed(resolutionOffered, undefined).pipe(Effect.ignore);
+                  pendingApprovals.delete(requestId);
                   return {
                     outcome:
                       resolved === "cancel"
@@ -1030,6 +1055,12 @@ export function makeCursorAdapter(
           // Only the last remaining prompt settles the turn — a steer-
           // superseded prompt resolving (usually cancelled) while another is
           // in flight or pending must leave the merged turn running.
+          if (ctx.promptsInFlight === 1) {
+            yield* settlePendingCallbacksBeforeTurnCompletion(
+              ctx.pendingApprovals,
+              ctx.pendingUserInputs,
+            );
+          }
           if (ctx.promptsInFlight === 1) {
             yield* offerRuntimeEvent({
               type: "turn.completed",
