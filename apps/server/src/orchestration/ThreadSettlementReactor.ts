@@ -7,6 +7,7 @@ import {
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
 import * as Cache from "effect/Cache";
 import * as Cause from "effect/Cause";
+import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
@@ -14,26 +15,34 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import * as Ref from "effect/Ref";
+import type * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 
-import { resolveThreadWorkspaceCwd } from "../../checkpointing/Utils.ts";
-import { forkParked } from "../../serverActivation.ts";
-import { ServerSettingsService } from "../../serverSettings.ts";
-import { normalizeSourceBranch } from "../../sourceControl/SourceControlProvider.ts";
-import { SourceControlProviderRegistry } from "../../sourceControl/SourceControlProviderRegistry.ts";
-import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
-import { ProjectionSnapshotQuery } from "../Services/ProjectionSnapshotQuery.ts";
-import {
-  ThreadSettlementReactor,
-  type ThreadSettlementReactorShape,
-} from "../Services/ThreadSettlementReactor.ts";
-import { resolveAutomaticSettlementReason } from "../threadSettlement.ts";
+import { resolveThreadWorkspaceCwd } from "../checkpointing/Utils.ts";
+import { forkParked } from "../serverActivation.ts";
+import { ServerSettingsService } from "../serverSettings.ts";
+import { normalizeSourceBranch } from "../sourceControl/SourceControlProvider.ts";
+import { SourceControlProviderRegistry } from "../sourceControl/SourceControlProviderRegistry.ts";
+import { OrchestrationEngineService } from "./Services/OrchestrationEngine.ts";
+import { ProjectionSnapshotQuery } from "./Services/ProjectionSnapshotQuery.ts";
+import { resolveAutomaticSettlementReason } from "./threadSettlement.ts";
 
 const RECONCILE_INTERVAL = Duration.minutes(1);
 const CHANGE_REQUEST_LOOKUP_TTL = Duration.minutes(2);
 const CHANGE_REQUEST_LOOKUP_FAILURE_TTL = Duration.seconds(20);
 const MAX_BRANCH_LOOKUPS_PER_RECONCILE = 20;
 const CHANGE_REQUEST_LOOKUP_FAILED = Symbol("CHANGE_REQUEST_LOOKUP_FAILED");
+
+export class ThreadSettlementReactor extends Context.Service<
+  ThreadSettlementReactor,
+  {
+    /** Start the persisted inactivity and merged-PR settlement lifecycle. */
+    readonly start: () => Effect.Effect<void, never, Scope.Scope>;
+
+    /** Resolves when all automatic settlement work already queued is complete. */
+    readonly drain: Effect.Effect<void>;
+  }
+>()("t3/orchestration/ThreadSettlementReactor") {}
 
 function workspaceCwd(
   thread: Pick<OrchestrationThreadShell, "projectId" | "worktreePath">,
@@ -46,7 +55,7 @@ function refsMatch(left: string, right: string): boolean {
   return normalizeSourceBranch(left) === normalizeSourceBranch(right);
 }
 
-export const makeThreadSettlementReactor = Effect.gen(function* () {
+export const make = Effect.gen(function* () {
   const crypto = yield* Crypto.Crypto;
   const orchestrationEngine = yield* OrchestrationEngineService;
   const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
@@ -72,6 +81,7 @@ export const makeThreadSettlementReactor = Effect.gen(function* () {
           );
           return (
             matching.find((changeRequest) => changeRequest.state === "open")?.state ??
+            matching.find((changeRequest) => changeRequest.state === "merged")?.state ??
             matching[0]?.state ??
             null
           );
@@ -216,28 +226,25 @@ export const makeThreadSettlementReactor = Effect.gen(function* () {
 
   const worker = yield* makeDrainableWorker((_input: void) => reconcileSafely);
 
-  const start: ThreadSettlementReactorShape["start"] = Effect.fn("ThreadSettlementReactor.start")(
-    function* () {
-      yield* forkParked(
-        Stream.runForEach(serverSettings.streamChanges, () => worker.enqueue(undefined)),
-      );
-      yield* worker.enqueue(undefined);
-      yield* forkParked(
-        Effect.sleep(RECONCILE_INTERVAL).pipe(
-          Effect.andThen(worker.enqueue(undefined)),
-          Effect.forever,
-        ),
-      );
-    },
-  );
+  const start: ThreadSettlementReactor["Service"]["start"] = Effect.fn(
+    "ThreadSettlementReactor.start",
+  )(function* () {
+    yield* forkParked(
+      Stream.runForEach(serverSettings.streamChanges, () => worker.enqueue(undefined)),
+    );
+    yield* worker.enqueue(undefined);
+    yield* forkParked(
+      Effect.sleep(RECONCILE_INTERVAL).pipe(
+        Effect.andThen(worker.enqueue(undefined)),
+        Effect.forever,
+      ),
+    );
+  });
 
-  return {
+  return ThreadSettlementReactor.of({
     start,
     drain: worker.drain,
-  } satisfies ThreadSettlementReactorShape;
+  });
 });
 
-export const ThreadSettlementReactorLive = Layer.effect(
-  ThreadSettlementReactor,
-  makeThreadSettlementReactor,
-);
+export const layer = Layer.effect(ThreadSettlementReactor, make);

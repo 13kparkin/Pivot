@@ -18,18 +18,18 @@ import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
 
-import { ServerSettingsService } from "../../serverSettings.ts";
-import * as SourceControlProvider from "../../sourceControl/SourceControlProvider.ts";
-import { SourceControlProviderRegistry } from "../../sourceControl/SourceControlProviderRegistry.ts";
+import { ServerSettingsService } from "../serverSettings.ts";
+import * as SourceControlProvider from "../sourceControl/SourceControlProvider.ts";
+import { SourceControlProviderRegistry } from "../sourceControl/SourceControlProviderRegistry.ts";
 import {
   OrchestrationEngineService,
   type OrchestrationEngineShape,
-} from "../Services/OrchestrationEngine.ts";
+} from "./Services/OrchestrationEngine.ts";
 import {
   ProjectionSnapshotQuery,
   type ProjectionSnapshotQueryShape,
-} from "../Services/ProjectionSnapshotQuery.ts";
-import { makeThreadSettlementReactor } from "./ThreadSettlementReactor.ts";
+} from "./Services/ProjectionSnapshotQuery.ts";
+import { make } from "./ThreadSettlementReactor.ts";
 
 const projectId = ProjectId.make("project-1");
 const project: OrchestrationProjectShell = {
@@ -109,10 +109,15 @@ it.effect(
           branch: "feature/merged",
           pinned: true,
         });
+        const pinnedMixed = makeThread({
+          id: "pinned-mixed",
+          branch: "feature/mixed",
+          pinned: true,
+        });
         const snapshot = {
           snapshotSequence: 1,
           projects: [project],
-          threads: [inactivity, pinnedClosed, pinnedMerged],
+          threads: [inactivity, pinnedClosed, pinnedMerged, pinnedMixed],
           updatedAt: "2020-01-02T00:00:00.000Z",
         } satisfies OrchestrationShellSnapshot;
         const dispatched = yield* Ref.make<ReadonlyArray<OrchestrationCommand>>([]);
@@ -128,7 +133,12 @@ it.effect(
                 ? [changeRequest(input.headSelector, "closed")]
                 : input.headSelector === pinnedMerged.branch
                   ? [changeRequest(input.headSelector, "merged")]
-                  : [],
+                  : input.headSelector === pinnedMixed.branch
+                    ? [
+                        changeRequest(input.headSelector, "closed"),
+                        changeRequest(input.headSelector, "merged"),
+                      ]
+                    : [],
             ),
         } as unknown as SourceControlProvider.SourceControlProvider["Service"];
 
@@ -152,7 +162,7 @@ it.effect(
           NodeServices.layer,
         );
 
-        const reactor = yield* makeThreadSettlementReactor.pipe(Effect.provide(dependencies));
+        const reactor = yield* make.pipe(Effect.provide(dependencies));
         yield* reactor.start();
         yield* reactor.drain;
 
@@ -160,7 +170,7 @@ it.effect(
           .filter((command) => command.type === "thread.settle")
           .map((command) => command.threadId)
           .sort();
-        expect(settledThreadIds).toEqual([inactivity.id, pinnedMerged.id].sort());
+        expect(settledThreadIds).toEqual([inactivity.id, pinnedMerged.id, pinnedMixed.id].sort());
       }),
     ),
 );
@@ -207,7 +217,7 @@ it.effect("does not settle a stale thread when its PR state lookup fails", () =>
         NodeServices.layer,
       );
 
-      const reactor = yield* makeThreadSettlementReactor.pipe(Effect.provide(dependencies));
+      const reactor = yield* make.pipe(Effect.provide(dependencies));
       yield* reactor.start();
       yield* reactor.drain;
 
