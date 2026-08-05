@@ -25,9 +25,6 @@ import { searchableSetting } from "./settingsSearch";
 const RENDER_DEPLOY_URL =
   "https://dashboard.render.com/blueprint/new?repo=https%3A%2F%2Fgithub.com%2Fpingdotgg%2Ft3code&branch=feat%2Frender-cloud-environment";
 const CODEX_LOGIN_COMMAND = "codex login --device-auth";
-const GITHUB_LOGIN_COMMAND = "gh auth login --web --git-protocol https";
-const SHARE_ACCESS_COMMAND =
-  'node /app/apps/server/dist/bin.mjs auth pairing create --base-dir /data/t3 --label "Shared Render access" --ttl 24h --json | T3CODE_PUBLIC_URL="$RENDER_EXTERNAL_URL" node /app/infra/render/pair-url.mjs';
 
 function pairingInput(value: string): { readonly host: string; readonly pairingCode: string } {
   const url = new URL(value.trim());
@@ -119,6 +116,9 @@ export function CloudEnvironmentsSettings() {
   const renderEnvironments = useMemo(
     () => environments.filter((environment) => cloudEnvironmentProvider(environment) === "render"),
     [environments],
+  );
+  const hasConnectedRenderEnvironment = renderEnvironments.some(
+    (environment) => environment.connection.phase === "connected",
   );
 
   const reportFailure = useCallback((title: string, description: string) => {
@@ -238,17 +238,18 @@ export function CloudEnvironmentsSettings() {
           <CopyCommand command={CODEX_LOGIN_COMMAND} />
         </SettingsRow>
         <SettingsRow
-          title="Private GitHub repositories"
-          description="Run in the Render Shell, or set GH_TOKEN in Render. Public URLs need nothing."
-        >
-          <CopyCommand command={GITHUB_LOGIN_COMMAND} />
-        </SettingsRow>
-        <SettingsRow
-          title="Give someone access"
-          description="Run in the Render Shell and send the new one-time Pair URL to that person."
-        >
-          <CopyCommand command={SHARE_ACCESS_COMMAND} />
-        </SettingsRow>
+          title="Get the code"
+          description="Choose the Render environment and paste any public GitHub URL. It clones directly into the cloud workspace."
+          control={
+            <Button
+              size="sm"
+              disabled={!hasConnectedRenderEnvironment}
+              onClick={() => openCommandPalette({ open: "add-project" })}
+            >
+              Add project
+            </Button>
+          }
+        />
       </SettingsSection>
     </SettingsPageContainer>
   );
