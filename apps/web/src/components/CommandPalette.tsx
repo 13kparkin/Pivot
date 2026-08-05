@@ -1294,6 +1294,10 @@ function OpenCommandPaletteDialog(props: {
       ),
       keepOpen: true,
       run: async () => {
+        if (option.cloudProvider) {
+          startAddProjectClone(option.environmentId, "url");
+          return;
+        }
         await startAddProjectSourceSelection(option.environmentId);
       },
     });
@@ -1324,7 +1328,7 @@ function OpenCommandPaletteDialog(props: {
           ]
         : []),
     ];
-  }, [addProjectEnvironmentOptions, startAddProjectSourceSelection]);
+  }, [addProjectEnvironmentOptions, startAddProjectClone, startAddProjectSourceSelection]);
   const hasCloudAddProjectEnvironment = addProjectEnvironmentOptions.some(
     (option) => option.cloudProvider !== null,
   );

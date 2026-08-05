@@ -4,9 +4,9 @@ This experimental setup runs one T3 Code environment as a Render web service. Th
 the provider processes, repositories, worktrees, terminals, and T3 Code state. The web, desktop, and
 mobile clients connect to it over Render's public HTTPS and WebSocket endpoint.
 
-This is a single-user deployment, not a multi-tenant hosted service. The attached persistent disk
-also limits the service to one instance. Multiple agent threads can still run concurrently inside
-that instance.
+This is one shared environment, not a multi-tenant hosted service. Multiple trusted people can pair
+to it and run agent threads concurrently. The attached persistent disk limits the service to one
+instance.
 
 ## What the Blueprint Creates
 
@@ -23,8 +23,7 @@ The root [`render.yaml`](../../render.yaml) creates:
 3. Deploy the Blueprint and wait for the service health check to pass.
 4. Open the service logs and copy the `Pair URL` printed during startup. Treat this URL like a
    password: it contains a one-time pairing credential.
-5. Open the URL in a browser. The hosted T3 Code app pairs with the Render environment and saves it
-   under **Settings → Connections → Cloud environments**, labeled as powered by Render.
+5. Open the URL in a browser, or paste it under **Settings → Cloud environments → Pair URL**.
 6. Authenticate a provider and source control as described below.
 7. Open the Command Palette and choose **Add Project → Cloud environments → Render cloud
    environment**. Select a GitHub repository, another supported source-control repository, or any
@@ -71,13 +70,15 @@ or paste one into a project URL.
 
 T3 Connect is not required for this deployment. Render already gives the environment a public HTTPS
 and WebSocket endpoint, so the Pair URL registers it as a direct remote environment. Use its existing
-Connect and Disconnect controls under **Settings → Connections**. T3 Connect remains useful for
+Connect and Disconnect controls under **Settings → Cloud environments**. T3 Connect remains useful for
 machines that need its managed tunnel or account-level environment discovery.
 
 ## Operations
 
 - Each deploy prints a fresh pairing URL with a 24-hour lifetime. Existing paired browser sessions
   remain authenticated until revoked with `t3 auth`.
+- To share the environment, use the copyable command under **Settings → Cloud environments → Give
+  someone access** and send that person the new one-time Pair URL.
 - Render terminates the previous instance before starting a new one because the service has a disk.
   Expect a short interruption during deploys.
 - Do not use this Blueprint for untrusted users or repositories. Coding agents can execute commands

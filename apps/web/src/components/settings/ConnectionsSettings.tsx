@@ -1,6 +1,5 @@
 import {
   ChevronsLeftRightEllipsisIcon,
-  CloudIcon,
   PlusIcon,
   QrCodeIcon,
   RefreshCwIcon,
@@ -1746,11 +1745,6 @@ export function ConnectionsSettings() {
         .toSorted((left, right) => left.label.localeCompare(right.label)),
     [environments],
   );
-  const renderCloudEnvironments = useMemo(
-    () =>
-      savedEnvironments.filter((environment) => cloudEnvironmentProvider(environment) === "render"),
-    [savedEnvironments],
-  );
   const savedNonCloudEnvironments = useMemo(
     () => savedEnvironments.filter((environment) => cloudEnvironmentProvider(environment) === null),
     [savedEnvironments],
@@ -3356,33 +3350,6 @@ export function ConnectionsSettings() {
           <CloudLinkRow canManageRelay={canManageRelay} />
         </SettingsSection>
       )}
-
-      <SettingsSection
-        {...searchableSetting("cloud-environments")}
-        icon={<CloudIcon className="size-4" />}
-      >
-        <SettingsRow
-          title="Powered by Render"
-          description="Run the normal T3 Code server as a persistent Render service. Pair it once, then clone repositories and run agents in its cloud workspace just like another device."
-          status="Cloud repositories are stored on the Render disk under /data/workspace."
-        />
-        {renderCloudEnvironments.length === 0 ? (
-          <SettingsRow
-            title="No Render environment paired"
-            description="Deploy the Render Blueprint, copy the Pair URL from its service logs, and open it on this device. The environment will appear here automatically."
-          />
-        ) : (
-          renderCloudEnvironments.map((environment) => (
-            <SavedBackendListRow
-              key={environment.environmentId}
-              environment={environment}
-              removingEnvironmentId={removingSavedEnvironmentId}
-              onConnect={handleConnectSavedBackend}
-              onRemove={handleRemoveSavedBackend}
-            />
-          ))
-        )}
-      </SettingsSection>
 
       <SettingsSection
         {...searchableSetting("remote-environments")}
