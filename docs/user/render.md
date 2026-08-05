@@ -14,37 +14,59 @@ The root [`render.yaml`](../../render.yaml) creates:
 
 - a Docker web service containing T3 Code, Codex, Claude Code, Git, and the GitHub CLI;
 - a persistent disk mounted at `/data` for T3 Code state, provider credentials, and workspaces;
-- a health check against T3 Code's public environment descriptor; and
-- a five-minute shutdown window so active agent processes have time to stop cleanly.
+- a health check against T3 Code's public environment descriptor.
 
 ## Deploy
 
 1. In the Render Dashboard, choose **New → Blueprint**.
 2. Connect this repository and select the branch you want to deploy.
-3. Provide `OPENAI_API_KEY` and `GH_TOKEN` when Render prompts for secret environment variables.
-   `GH_TOKEN` needs access to any private repositories the environment will clone and permission to
-   push branches or open pull requests for the demo repository.
-4. Deploy the Blueprint and wait for the service health check to pass.
-5. Open the service logs and copy the `Pair URL` printed during startup. Treat this URL like a
+3. Deploy the Blueprint and wait for the service health check to pass.
+4. Open the service logs and copy the `Pair URL` printed during startup. Treat this URL like a
    password: it contains a one-time pairing credential.
-6. Open the URL in a browser. T3 Code pairs the browser with the Render-hosted environment and opens
-   the repository configured by `T3CODE_PROJECT_REPO`.
+5. Open the URL in a browser. The hosted T3 Code app pairs with the Render environment and saves it
+   under **Settings → Connections → Remote environments**.
+6. Authenticate a provider and source control as described below.
+7. Open the Command Palette, choose **Add Project**, and select the Render environment. Clone a
+   GitHub repository, another supported source-control repository, or any Git URL.
 
-The default repository is T3 Code itself. Change `T3CODE_PROJECT_REPO`, and optionally
-`T3CODE_PROJECT_BRANCH`, in the service environment settings to use another repository. The clone is
-stored under `/data/workspace/project` and survives deploys.
+Repositories are selected after pairing rather than baked into the Blueprint. Each clone is stored
+under `/data/workspace` and survives deploys. This keeps the public deployment configuration generic
+and lets each user bring repositories they already have access to.
 
 The demo Blueprint is pinned to `feat/render-cloud-environment` so it can deploy before the draft
 pull request is merged. Update the `branch` field in `render.yaml` if you rename or reuse the branch.
 
 ## Provider Authentication
 
-When `OPENAI_API_KEY` is set, the startup script initializes Codex on the persistent disk before T3
-Code starts. Claude Code is installed too; set `ANTHROPIC_API_KEY` in the Render Dashboard to use it.
+The Blueprint does not ask for an OpenAI API key. To use a ChatGPT subscription, open a Render Shell
+and run:
 
-For subscription authentication instead of an API key, open a Render Shell and run the provider's
-normal login command. `CODEX_HOME` and `CLAUDE_CONFIG_DIR` already point at the persistent disk, so
-the resulting provider session survives service restarts.
+```sh
+codex login --device-auth
+```
+
+Follow the printed link and enter the device code. `CODEX_HOME` points at the persistent disk, so the
+provider session survives service restarts. Claude Code is installed too; use its normal subscription
+login flow from a Render Shell. `CLAUDE_CONFIG_DIR` is persisted as well.
+
+## Source-control Authentication
+
+Public repositories can be cloned by URL without authentication. For private GitHub repositories,
+add a short-lived, repository-scoped `GH_TOKEN` secret in the Render service environment. Grant only
+the access needed for the workflow: read access to clone, or repository contents and pull-request
+write access to push branches and open pull requests. The startup script configures Git to use the
+token when the service restarts.
+
+Open **Settings → Source Control** and rescan to confirm that GitHub is authenticated. Then use
+**Add Project → GitHub repository** to choose the repository. Never commit a token to the Blueprint
+or paste one into a project URL.
+
+## T3 Connect
+
+T3 Connect is not required for this deployment. Render already gives the environment a public HTTPS
+and WebSocket endpoint, so the Pair URL registers it as a direct remote environment. Use its existing
+Connect and Disconnect controls under **Settings → Connections**. T3 Connect remains useful for
+machines that need its managed tunnel or account-level environment discovery.
 
 ## Operations
 
