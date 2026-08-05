@@ -243,14 +243,30 @@ function hasGraphicalFileManagerSession(
   return true;
 }
 
+function normalizeWindowsFileManagerPath(target: string): string {
+  return target.replaceAll("/", "\\");
+}
+
 function fileManagerFolderPath(platform: NodeJS.Platform, target: string, path: Path.Path): string {
   if (platform !== "win32") return path.dirname(target);
 
-  const normalized = target.replaceAll("/", "\\");
+  const normalized = normalizeWindowsFileManagerPath(target);
   const separatorIndex = normalized.lastIndexOf("\\");
   if (separatorIndex < 0) return ".";
   if (separatorIndex === 2 && normalized[1] === ":") return normalized.slice(0, 3);
   return normalized.slice(0, separatorIndex) || "\\";
+}
+
+function fileManagerRevealArgs(
+  platform: NodeJS.Platform,
+  target: string,
+  targetExists: boolean,
+  path: Path.Path,
+): ReadonlyArray<string> {
+  if (!targetExists) return [fileManagerFolderPath(platform, target, path)];
+  if (platform === "darwin") return ["-R", target];
+  if (platform === "win32") return ["/select,", normalizeWindowsFileManagerPath(target)];
+  return [fileManagerFolderPath(platform, target, path)];
 }
 
 function fileManagerCommandForPlatform(platform: NodeJS.Platform): string {
@@ -422,14 +438,18 @@ const resolveEditorLaunch = Effect.fn("resolveEditorLaunch")(function* (
 const resolveFileManagerRevealLaunch = Effect.fn("externalLauncher.resolveFileManagerRevealLaunch")(
   function* (
     input: RevealInFileManagerInput,
-  ): Effect.fn.Return<EditorLaunch, ExternalLauncherError, Path.Path> {
+  ): Effect.fn.Return<EditorLaunch, ExternalLauncherError, FileSystem.FileSystem | Path.Path> {
     const platform = yield* HostProcessPlatform;
     const env = yield* readCommandLookupEnv;
     if (!hasGraphicalFileManagerSession(platform, env)) {
       return yield* new ExternalLauncherUnsupportedEditorError({ editor: "file-manager" });
     }
+    const fileSystem = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
-    const args = [fileManagerFolderPath(platform, input.path, path)];
+    const targetExists = yield* fileSystem
+      .exists(input.path)
+      .pipe(Effect.orElseSucceed(() => false));
+    const args = fileManagerRevealArgs(platform, input.path, targetExists, path);
 
     yield* Effect.annotateCurrentSpan({
       "externalLauncher.target": input.path,

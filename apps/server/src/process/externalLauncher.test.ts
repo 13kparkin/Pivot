@@ -125,7 +125,7 @@ it.effect("reveals files with the linux file manager", () =>
   }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );
 
-it.effect("opens the containing folder with Finder", () =>
+it.effect("opens the containing folder when the Finder target is missing", () =>
   Effect.gen(function* () {
     const fileSystem = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
@@ -156,7 +156,41 @@ it.effect("opens the containing folder with Finder", () =>
   }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );
 
-it.effect("opens the containing folder with Windows Explorer", () =>
+it.effect("selects an existing file in Finder", () =>
+  Effect.gen(function* () {
+    const fileSystem = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const binDir = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-file-manager-" });
+    const commandPath = path.join(binDir, "open");
+    const targetPath = path.join(binDir, "project with spaces", "src", "index.ts");
+    yield* fileSystem.writeFileString(commandPath, "#!/bin/sh\n");
+    yield* fileSystem.chmod(commandPath, 0o755);
+    yield* fileSystem.makeDirectory(path.dirname(targetPath), { recursive: true });
+    yield* fileSystem.writeFileString(targetPath, "");
+
+    let spawned: ChildProcess.StandardCommand | undefined;
+    yield* Effect.gen(function* () {
+      const launcher = yield* ExternalLauncher.ExternalLauncher;
+      yield* launcher.revealInFileManager({ path: targetPath });
+    }).pipe(
+      Effect.provide(
+        testLayer({
+          platform: "darwin",
+          env: { PATH: binDir },
+          onSpawn: (command) => {
+            spawned = command;
+          },
+        }),
+      ),
+    );
+
+    assert.ok(spawned);
+    assert.equal(spawned.command, "open");
+    assert.deepEqual(spawned.args, ["-R", targetPath]);
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
+it.effect("opens the containing folder when the Explorer target is missing", () =>
   Effect.gen(function* () {
     const fileSystem = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
@@ -182,6 +216,39 @@ it.effect("opens the containing folder with Windows Explorer", () =>
     assert.ok(spawned);
     assert.equal(spawned.command, "explorer");
     assert.deepEqual(spawned.args, [`C:\\project files\\src`]);
+    assert.equal(spawned.options.shell, false);
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
+it.effect("selects an existing file in Windows Explorer", () =>
+  Effect.gen(function* () {
+    const fileSystem = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const binDir = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-file-manager-" });
+    const targetPath = path.join(binDir, "project files", "src", "index.ts");
+    yield* fileSystem.writeFileString(path.join(binDir, "explorer.CMD"), "@echo off\r\n");
+    yield* fileSystem.makeDirectory(path.dirname(targetPath), { recursive: true });
+    yield* fileSystem.writeFileString(targetPath, "");
+
+    let spawned: ChildProcess.StandardCommand | undefined;
+    yield* Effect.gen(function* () {
+      const launcher = yield* ExternalLauncher.ExternalLauncher;
+      yield* launcher.revealInFileManager({ path: targetPath });
+    }).pipe(
+      Effect.provide(
+        testLayer({
+          platform: "win32",
+          env: { PATH: binDir, PATHEXT: ".COM;.EXE;.BAT;.CMD" },
+          onSpawn: (command) => {
+            spawned = command;
+          },
+        }),
+      ),
+    );
+
+    assert.ok(spawned);
+    assert.equal(spawned.command, "explorer");
+    assert.deepEqual(spawned.args, ["/select,", targetPath.replaceAll("/", "\\")]);
     assert.equal(spawned.options.shell, false);
   }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );
