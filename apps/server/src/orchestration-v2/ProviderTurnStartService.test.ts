@@ -55,7 +55,7 @@ import * as Ref from "effect/Ref";
 
 import { ContextHandoffServiceV2 } from "./ContextHandoffService.ts";
 import { EventSinkV2 } from "./EventSink.ts";
-import { layer as idAllocatorLayer } from "./IdAllocator.ts";
+import * as IdAllocator from "./IdAllocator.ts";
 import type { ProviderAdapterV2SessionRuntime } from "./ProviderAdapter.ts";
 import {
   ProjectionStoreReadError,
@@ -64,10 +64,7 @@ import {
   type ProjectionStoreV2Error,
 } from "./ProjectionStore.ts";
 import { ProviderSessionManagerV2 } from "./ProviderSessionManager.ts";
-import {
-  layer as providerTurnStartLayer,
-  ProviderTurnStartServiceV2,
-} from "./ProviderTurnStartService.ts";
+import * as ProviderTurnStartService from "./ProviderTurnStartService.ts";
 import { RunExecutionServiceV2 } from "./RunExecutionService.ts";
 import { RuntimePolicyV2 } from "./RuntimePolicy.ts";
 
@@ -255,7 +252,7 @@ function makeTestLayer(input: {
       Effect.succeed(providerThread),
   } as unknown as ProviderAdapterV2SessionRuntime;
 
-  return providerTurnStartLayer.pipe(
+  return ProviderTurnStartService.layer.pipe(
     Layer.provide(
       Layer.mergeAll(
         Layer.mock(ContextHandoffServiceV2)({}),
@@ -265,7 +262,7 @@ function makeTestLayer(input: {
               Effect.as({ committed: true, storedEvents: [] }),
             ),
         }),
-        idAllocatorLayer,
+        IdAllocator.layer,
         Layer.mock(ProjectionStoreV2)({
           getThreadProjection: (requestedThreadId) =>
             requestedThreadId === threadId
@@ -307,7 +304,7 @@ it.effect("fails before provider turn start when child projection rehydration ca
       cause: "temporary database failure",
     });
     const error = yield* Effect.gen(function* () {
-      const service = yield* ProviderTurnStartServiceV2;
+      const service = yield* ProviderTurnStartService.ProviderTurnStartServiceV2;
       return yield* service.start({ threadId, runId }).pipe(Effect.flip);
     }).pipe(
       Effect.provide(
@@ -336,7 +333,7 @@ it.effect("skips a missing child projection and still starts the provider turn",
     const providerSessionOpens = yield* Ref.make(0);
     const runningWrites = yield* Ref.make(0);
     yield* Effect.gen(function* () {
-      const service = yield* ProviderTurnStartServiceV2;
+      const service = yield* ProviderTurnStartService.ProviderTurnStartServiceV2;
       yield* service.start({ threadId, runId });
     }).pipe(
       Effect.provide(
@@ -365,7 +362,7 @@ it.effect("rehydrates an existing child projection before starting the provider 
     const providerSessionOpens = yield* Ref.make(0);
     const runningWrites = yield* Ref.make(0);
     yield* Effect.gen(function* () {
-      const service = yield* ProviderTurnStartServiceV2;
+      const service = yield* ProviderTurnStartService.ProviderTurnStartServiceV2;
       yield* service.start({ threadId, runId });
     }).pipe(
       Effect.provide(
