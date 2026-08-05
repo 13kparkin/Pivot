@@ -42,7 +42,9 @@ credentials documented below:
 
 The finalize job uses them to commit and push aligned package versions to `main` as the Release App.
 GitHub Release publication uses the repository-scoped workflow token so it has a rate-limit quota
-independent from the shared Release App installation.
+independent from the shared Release App installation. Tags created with this token do not start a
+second workflow run, which keeps a manually dispatched stable release from publishing twice. Keep
+release publication on the workflow token unless the tag trigger strategy changes with it.
 
 ## T3 Connect relay deployment
 
