@@ -45,7 +45,11 @@ import {
   resolveExternalWebLinkHost,
   showExternalLinkContextMenu,
 } from "./chat/externalLinkContextMenu";
-import { buildFileLinkContextMenuItems } from "./chat/fileLinkContextMenu";
+import {
+  buildFileLinkContextMenuItems,
+  canRevealFileLinkInManager,
+  resolveFileLinkEnvironmentId,
+} from "./chat/fileLinkContextMenu";
 import { hasSpecificPierreIconForFileName, syntheticFileNameForLanguageId } from "../pierre-icons";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
 import { Button } from "./ui/button";
@@ -79,6 +83,7 @@ import { readLocalApi } from "../localApi";
 import { cn } from "../lib/utils";
 import { useRightPanelStore } from "../rightPanelStore";
 import { useActiveEnvironmentId } from "../state/entities";
+import { useEnvironment } from "../state/environments";
 import { serverEnvironment } from "../state/server";
 import { assetEnvironment } from "../state/assets";
 import { usePreparedConnection } from "../state/session";
@@ -1325,15 +1330,17 @@ function ChatMarkdown({
     reportFailure: false,
   });
   const activeEnvironmentId = useActiveEnvironmentId();
-  const environmentId = threadRef?.environmentId ?? activeEnvironmentId;
+  const environmentId = resolveFileLinkEnvironmentId(threadRef?.environmentId, activeEnvironmentId);
+  const environment = useEnvironment(environmentId);
   const preparedConnection = usePreparedConnection(environmentId);
   const serverConfig = useAtomValue(serverEnvironment.configValueAtom(environmentId));
   const availableEditors = serverConfig?.availableEditors ?? [];
   const openInPreferredEditor = useOpenInPreferredEditor(environmentId, availableEditors);
-  const canRevealInFileManager =
-    preparedConnection._tag === "Some" &&
-    serverConfig?.environment.capabilities.fileManagerReveal === true &&
-    availableEditors.includes("file-manager");
+  const canRevealInFileManager = canRevealFileLinkInManager({
+    connectionPhase: environment?.connection.phase,
+    supportsRevealRpc: serverConfig?.environment.capabilities.fileManagerReveal === true,
+    availableEditors,
+  });
   const diffThemeName = resolveDiffThemeName(resolvedTheme);
   const markdownFileLinkMetaByHref = useMemo(() => {
     const metaByHref = new Map<

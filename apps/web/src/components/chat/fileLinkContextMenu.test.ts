@@ -1,6 +1,47 @@
+import { EnvironmentId } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
-import { buildFileLinkContextMenuItems } from "./fileLinkContextMenu";
+import {
+  buildFileLinkContextMenuItems,
+  canRevealFileLinkInManager,
+  resolveFileLinkEnvironmentId,
+} from "./fileLinkContextMenu";
+
+describe("file link environment", () => {
+  it("routes through the thread environment before the active environment", () => {
+    const threadEnvironmentId = EnvironmentId.make("thread-environment");
+    expect(
+      resolveFileLinkEnvironmentId(threadEnvironmentId, EnvironmentId.make("active-environment")),
+    ).toBe(threadEnvironmentId);
+  });
+
+  it("falls back to the active environment without thread context", () => {
+    const activeEnvironmentId = EnvironmentId.make("active-environment");
+    expect(resolveFileLinkEnvironmentId(undefined, activeEnvironmentId)).toBe(activeEnvironmentId);
+  });
+
+  it.each([
+    {
+      connectionPhase: "reconnecting",
+      supportsRevealRpc: true,
+      availableEditors: ["file-manager"],
+    },
+    { connectionPhase: "connected", supportsRevealRpc: false, availableEditors: ["file-manager"] },
+    { connectionPhase: "connected", supportsRevealRpc: true, availableEditors: [] },
+  ] as const)("hides reveal when support is incomplete", (input) => {
+    expect(canRevealFileLinkInManager(input)).toBe(false);
+  });
+
+  it("allows reveal only when connected with rpc and file manager support", () => {
+    expect(
+      canRevealFileLinkInManager({
+        connectionPhase: "connected",
+        supportsRevealRpc: true,
+        availableEditors: ["file-manager"],
+      }),
+    ).toBe(true);
+  });
+});
 
 describe("chat file link context menu", () => {
   it("puts Open in folder first when the environment supports it", () => {

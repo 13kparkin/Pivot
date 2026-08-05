@@ -106,12 +106,12 @@ it.effect("reveals files with the linux file manager", () =>
     let spawned: ChildProcess.StandardCommand | undefined;
     yield* Effect.gen(function* () {
       const launcher = yield* ExternalLauncher.ExternalLauncher;
-      yield* launcher.revealInFileManager({ path: "/tmp/project/src/index.ts" });
+      yield* launcher.revealInFileManager({ path: "/tmp/project with spaces/src/index.ts" });
     }).pipe(
       Effect.provide(
         testLayer({
           platform: "linux",
-          env: { PATH: binDir },
+          env: { PATH: binDir, DISPLAY: ":0" },
           onSpawn: (command) => {
             spawned = command;
           },
@@ -121,11 +121,11 @@ it.effect("reveals files with the linux file manager", () =>
 
     assert.ok(spawned);
     assert.equal(spawned.command, "xdg-open");
-    assert.deepEqual(spawned.args, ["/tmp/project/src"]);
+    assert.deepEqual(spawned.args, ["/tmp/project with spaces/src"]);
   }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );
 
-it.effect("reveals files with Finder", () =>
+it.effect("opens the containing folder with Finder", () =>
   Effect.gen(function* () {
     const fileSystem = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
@@ -137,7 +137,7 @@ it.effect("reveals files with Finder", () =>
     let spawned: ChildProcess.StandardCommand | undefined;
     yield* Effect.gen(function* () {
       const launcher = yield* ExternalLauncher.ExternalLauncher;
-      yield* launcher.revealInFileManager({ path: "/tmp/project/src/index.ts" });
+      yield* launcher.revealInFileManager({ path: "/tmp/project with spaces/src/index.ts" });
     }).pipe(
       Effect.provide(
         testLayer({
@@ -152,11 +152,11 @@ it.effect("reveals files with Finder", () =>
 
     assert.ok(spawned);
     assert.equal(spawned.command, "open");
-    assert.deepEqual(spawned.args, ["-R", "/tmp/project/src/index.ts"]);
+    assert.deepEqual(spawned.args, ["/tmp/project with spaces/src"]);
   }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );
 
-it.effect("reveals files with Windows Explorer", () =>
+it.effect("opens the containing folder with Windows Explorer", () =>
   Effect.gen(function* () {
     const fileSystem = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
@@ -181,7 +181,8 @@ it.effect("reveals files with Windows Explorer", () =>
 
     assert.ok(spawned);
     assert.equal(spawned.command, "explorer");
-    assert.deepEqual(spawned.args, [`/select,"C:\\project files\\src\\index.ts"`]);
+    assert.deepEqual(spawned.args, [`C:\\project files\\src`]);
+    assert.equal(spawned.options.shell, false);
   }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );
 
@@ -371,6 +372,107 @@ it.effect("rescans after an interrupted discovery instead of caching the interru
     ),
   );
 });
+it.effect("does not advertise a file manager on headless Linux", () =>
+  Effect.gen(function* () {
+    const fileSystem = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const binDir = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-headless-linux-" });
+    const commandPath = path.join(binDir, "xdg-open");
+    yield* fileSystem.writeFileString(commandPath, "#!/bin/sh\n");
+    yield* fileSystem.chmod(commandPath, 0o755);
+
+    const editors = yield* Effect.gen(function* () {
+      const launcher = yield* ExternalLauncher.ExternalLauncher;
+      return yield* launcher.resolveAvailableEditors();
+    }).pipe(Effect.provide(testLayer({ platform: "linux", env: { PATH: binDir } })));
+
+    assert.equal(editors.includes("file-manager"), false);
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
+it.effect("advertises a file manager in a Linux graphical session", () =>
+  Effect.gen(function* () {
+    const fileSystem = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const binDir = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-desktop-linux-" });
+    const commandPath = path.join(binDir, "xdg-open");
+    yield* fileSystem.writeFileString(commandPath, "#!/bin/sh\n");
+    yield* fileSystem.chmod(commandPath, 0o755);
+
+    const editors = yield* Effect.gen(function* () {
+      const launcher = yield* ExternalLauncher.ExternalLauncher;
+      return yield* launcher.resolveAvailableEditors();
+    }).pipe(
+      Effect.provide(
+        testLayer({ platform: "linux", env: { PATH: binDir, WAYLAND_DISPLAY: "wayland-0" } }),
+      ),
+    );
+
+    assert.equal(editors.includes("file-manager"), true);
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
+it.effect("rejects a direct file manager reveal on headless Linux", () =>
+  Effect.gen(function* () {
+    const launcher = yield* ExternalLauncher.ExternalLauncher;
+    const error = yield* launcher
+      .revealInFileManager({ path: "/tmp/project/src/index.ts" })
+      .pipe(Effect.flip);
+    assert.instanceOf(error, ExternalLauncher.ExternalLauncherUnsupportedEditorError);
+  }).pipe(Effect.provide(testLayer({ platform: "linux", env: { PATH: "" } }))),
+);
+
+it.effect("does not advertise a file manager over SSH", () =>
+  Effect.gen(function* () {
+    const fileSystem = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const binDir = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-ssh-macos-" });
+    const commandPath = path.join(binDir, "open");
+    yield* fileSystem.writeFileString(commandPath, "#!/bin/sh\n");
+    yield* fileSystem.chmod(commandPath, 0o755);
+
+    const editors = yield* Effect.gen(function* () {
+      const launcher = yield* ExternalLauncher.ExternalLauncher;
+      return yield* launcher.resolveAvailableEditors();
+    }).pipe(
+      Effect.provide(
+        testLayer({
+          platform: "darwin",
+          env: { PATH: binDir, SSH_CONNECTION: "client server" },
+        }),
+      ),
+    );
+
+    assert.equal(editors.includes("file-manager"), false);
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
+it.effect("does not advertise Explorer from a Windows service", () =>
+  Effect.gen(function* () {
+    const fileSystem = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const binDir = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-windows-service-" });
+    yield* fileSystem.writeFileString(path.join(binDir, "explorer.CMD"), "@echo off\r\n");
+
+    const editors = yield* Effect.gen(function* () {
+      const launcher = yield* ExternalLauncher.ExternalLauncher;
+      return yield* launcher.resolveAvailableEditors();
+    }).pipe(
+      Effect.provide(
+        testLayer({
+          platform: "win32",
+          env: {
+            PATH: binDir,
+            PATHEXT: ".COM;.EXE;.BAT;.CMD",
+            SESSIONNAME: "Services",
+          },
+        }),
+      ),
+    );
+
+    assert.equal(editors.includes("file-manager"), false);
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
 
 it.effect("rejects unknown editors through the service API", () =>
   Effect.gen(function* () {

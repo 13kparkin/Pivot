@@ -107,6 +107,11 @@ const CommandLookupEnvConfig = Config.all({
   Path: Config.string("Path").pipe(Config.option),
   path: Config.string("path").pipe(Config.option),
   PATHEXT: Config.string("PATHEXT").pipe(Config.option),
+  DISPLAY: Config.string("DISPLAY").pipe(Config.option),
+  WAYLAND_DISPLAY: Config.string("WAYLAND_DISPLAY").pipe(Config.option),
+  SSH_CONNECTION: Config.string("SSH_CONNECTION").pipe(Config.option),
+  SSH_TTY: Config.string("SSH_TTY").pipe(Config.option),
+  SESSIONNAME: Config.string("SESSIONNAME").pipe(Config.option),
 }).pipe(Config.map(compactEnv));
 
 const readBrowserLaunchEnv = BrowserLaunchEnvConfig.pipe(Effect.orElseSucceed(() => ({})));
@@ -224,6 +229,30 @@ function resolveWindowsBrowserLaunch(target: string, command: string): ProcessLa
   };
 }
 
+function hasGraphicalFileManagerSession(
+  platform: NodeJS.Platform,
+  env: NodeJS.ProcessEnv,
+): boolean {
+  if (env.SSH_CONNECTION?.trim() || env.SSH_TTY?.trim()) return false;
+  if (platform === "linux") {
+    return Boolean(env.DISPLAY?.trim() || env.WAYLAND_DISPLAY?.trim());
+  }
+  if (platform === "win32") {
+    return env.SESSIONNAME?.trim().toLowerCase() !== "services";
+  }
+  return true;
+}
+
+function fileManagerFolderPath(platform: NodeJS.Platform, target: string, path: Path.Path): string {
+  if (platform !== "win32") return path.dirname(target);
+
+  const normalized = target.replaceAll("/", "\\");
+  const separatorIndex = normalized.lastIndexOf("\\");
+  if (separatorIndex < 0) return ".";
+  if (separatorIndex === 2 && normalized[1] === ":") return normalized.slice(0, 3);
+  return normalized.slice(0, separatorIndex) || "\\";
+}
+
 function fileManagerCommandForPlatform(platform: NodeJS.Platform): string {
   switch (platform) {
     case "darwin":
@@ -271,6 +300,7 @@ const buildAvailableEditors = Effect.fn("externalLauncher.buildAvailableEditors"
 
   for (const editor of EDITORS) {
     if (editor.commands === null) {
+      if (!hasGraphicalFileManagerSession(platform, env)) continue;
       const command = fileManagerCommandForPlatform(platform);
       if (yield* isCommandAvailable(command, { env })) {
         available.push(editor.id);
@@ -390,15 +420,16 @@ const resolveEditorLaunch = Effect.fn("resolveEditorLaunch")(function* (
 });
 
 const resolveFileManagerRevealLaunch = Effect.fn("externalLauncher.resolveFileManagerRevealLaunch")(
-  function* (input: RevealInFileManagerInput): Effect.fn.Return<EditorLaunch, never, Path.Path> {
+  function* (
+    input: RevealInFileManagerInput,
+  ): Effect.fn.Return<EditorLaunch, ExternalLauncherError, Path.Path> {
     const platform = yield* HostProcessPlatform;
+    const env = yield* readCommandLookupEnv;
+    if (!hasGraphicalFileManagerSession(platform, env)) {
+      return yield* new ExternalLauncherUnsupportedEditorError({ editor: "file-manager" });
+    }
     const path = yield* Path.Path;
-    const args =
-      platform === "darwin"
-        ? ["-R", input.path]
-        : platform === "win32"
-          ? [`/select,"${input.path}"`]
-          : [path.dirname(input.path)];
+    const args = [fileManagerFolderPath(platform, input.path, path)];
 
     yield* Effect.annotateCurrentSpan({
       "externalLauncher.target": input.path,
