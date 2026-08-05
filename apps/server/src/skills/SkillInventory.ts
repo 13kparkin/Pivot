@@ -49,7 +49,6 @@ const readSkillInstallations = Effect.fn("SkillInventory.readSkillInstallations"
           directoryPath: path.dirname(skill.path),
           skillFilePath: skill.path,
           content,
-          enabled: skill.enabled,
         })),
       ),
     );

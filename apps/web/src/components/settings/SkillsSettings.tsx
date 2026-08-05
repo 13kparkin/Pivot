@@ -156,15 +156,16 @@ function EnvironmentSkillInventory({
     [query, state],
   );
   const isConnected = Option.isSome(prepared);
-  const skillCount = displayedSkillCount(visibleInventory, isConnected);
+  const skillCount = displayedSkillCount(
+    state.status === "loaded" ? state.inventory : null,
+    isConnected,
+  );
   const phase = environment.connection.phase;
   const isSearching = query.trim().length > 0;
-  const open = !collapsed;
-
-  // Searching would otherwise hide its own matches inside collapsed sections.
-  useEffect(() => {
-    if (isSearching) setCollapsed(false);
-  }, [isSearching]);
+  const open = isSearching || !collapsed;
+  const setOpen = (nextOpen: boolean) => {
+    if (!isSearching) setCollapsed(!nextOpen);
+  };
 
   return (
     <section>
@@ -177,7 +178,7 @@ function EnvironmentSkillInventory({
             aria-expanded={open}
             // The panel unmounts while closed, so only reference it when open.
             aria-controls={open ? panelId : undefined}
-            onClick={() => setCollapsed((value) => !value)}
+            onClick={() => setOpen(!open)}
             className="flex min-w-0 flex-1 cursor-pointer items-center gap-2 rounded-lg py-2 pl-3 text-left transition-colors hover:bg-muted/25 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset sm:pl-4"
           >
             <DisclosureChevron open={open} />
@@ -202,7 +203,7 @@ function EnvironmentSkillInventory({
         ) : null}
       </div>
 
-      <Collapsible open={open} onOpenChange={(next) => setCollapsed(!next)}>
+      <Collapsible open={open} onOpenChange={setOpen}>
         <CollapsibleContent id={panelId}>
           <div className="pb-2">
             {Option.isNone(prepared) ? (
@@ -237,11 +238,6 @@ function SkillHarnessGroups({
   );
   const groups = useMemo(() => groupSkillsByHarness(inventory.installations), [inventory]);
 
-  // Searching would otherwise hide its own matches inside collapsed harnesses.
-  useEffect(() => {
-    if (isSearching) setCollapsedHarnesses(new Set());
-  }, [isSearching]);
-
   return groups.map((group) => (
     <SkillHarnessGroup
       key={group.key}
@@ -249,10 +245,12 @@ function SkillHarnessGroups({
       harness={group.harness}
       rootPath={group.rootPath}
       skills={group.skills}
-      open={!collapsedHarnesses.has(group.key)}
-      onOpenChange={(nextOpen) =>
-        setCollapsedHarnesses((keys) => setKeyCollapsed(keys, group.key, !nextOpen))
-      }
+      open={isSearching || !collapsedHarnesses.has(group.key)}
+      onOpenChange={(nextOpen) => {
+        if (!isSearching) {
+          setCollapsedHarnesses((keys) => setKeyCollapsed(keys, group.key, !nextOpen));
+        }
+      }}
     />
   ));
 }

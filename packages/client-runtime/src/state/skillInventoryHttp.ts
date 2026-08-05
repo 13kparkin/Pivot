@@ -24,13 +24,13 @@ export function formatSkillPath(path: string): string {
 }
 
 export function filterSkillInventory(inventory: SkillInventory, query: string): SkillInventory {
-  const normalizedQuery = query.trim().toLocaleLowerCase();
+  const normalizedQuery = query.trim().toLowerCase();
   if (!normalizedQuery) return inventory;
   return {
     ...inventory,
     installations: inventory.installations.filter((skill) =>
       [skill.name, skill.description ?? "", skill.directoryPath, skill.harnessDisplayName].some(
-        (value) => value.toLocaleLowerCase().includes(normalizedQuery),
+        (value) => value.toLowerCase().includes(normalizedQuery),
       ),
     ),
   };

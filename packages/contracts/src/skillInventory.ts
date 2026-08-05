@@ -3,6 +3,11 @@ import * as Schema from "effect/Schema";
 import { TrimmedNonEmptyString } from "./baseSchemas.ts";
 import { ProviderDriverKind, ProviderInstanceId } from "./providerInstance.ts";
 
+/**
+ * Filesystem inventory intentionally omits per-skill enablement. Codex only
+ * exposes that state through its live RPC, while Claude has no equivalent,
+ * so persisting it here would make the cross-harness response misleading.
+ */
 export const SkillInventoryInstallation = Schema.Struct({
   providerInstanceId: ProviderInstanceId,
   harness: ProviderDriverKind,
@@ -12,7 +17,6 @@ export const SkillInventoryInstallation = Schema.Struct({
   directoryPath: TrimmedNonEmptyString,
   skillFilePath: TrimmedNonEmptyString,
   content: Schema.String,
-  enabled: Schema.Boolean,
 });
 export type SkillInventoryInstallation = typeof SkillInventoryInstallation.Type;
 

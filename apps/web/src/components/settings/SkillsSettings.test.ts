@@ -22,7 +22,6 @@ const inventory: SkillInventory = {
       directoryPath: "/home/test/.codex/skills/review",
       skillFilePath: "/home/test/.codex/skills/review/SKILL.md",
       content: "---\nname: review\n---\n\n# Review",
-      enabled: true,
     },
     {
       providerInstanceId: ProviderInstanceId.make("claude"),
@@ -32,7 +31,6 @@ const inventory: SkillInventory = {
       directoryPath: "/home/test/.claude/skills/deploy",
       skillFilePath: "/home/test/.claude/skills/deploy/SKILL.md",
       content: "---\nname: deploy\n---\n\n# Deploy",
-      enabled: true,
     },
   ],
 };
