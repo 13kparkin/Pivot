@@ -16,7 +16,5 @@ services:
         value: Render cloud environment
       - key: T3CODE_WORKSPACE_DIR
         value: /data/workspace
-      - key: T3CODE_RENDER_SETUP_CODE
-        sync: false
       - key: OPENAI_API_KEY
         sync: false

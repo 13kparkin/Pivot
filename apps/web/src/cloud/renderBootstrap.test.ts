@@ -34,7 +34,6 @@ describe("requestRenderPairing", () => {
     await expect(
       requestRenderPairing({
         serviceUrl: "demo.onrender.com",
-        setupCode: "setup-code",
         fetcher,
       }),
     ).resolves.toEqual({
@@ -48,18 +47,17 @@ describe("requestRenderPairing", () => {
     );
   });
 
-  it("explains a mismatched setup code", async () => {
+  it("explains when the service is still running an older deployment", async () => {
     const fetcher = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
-      Response.json({ message: "invalid" }, { status: 401 }),
+      Response.json({ message: "missing" }, { status: 404 }),
     );
 
     const failure = await requestRenderPairing({
       serviceUrl: "https://demo.onrender.com",
-      setupCode: "wrong-code",
       fetcher,
     }).catch((error: unknown) => error);
 
     expect(failure).toBeInstanceOf(RenderBootstrapRequestError);
-    expect((failure as Error).message).toContain("does not match");
+    expect((failure as Error).message).toContain("Deploy the latest version");
   });
 });

@@ -53,22 +53,15 @@ export function maskedRenderServiceUrl(value: string): string {
 
 export async function requestRenderPairing(input: {
   readonly serviceUrl: string;
-  readonly setupCode: string;
   readonly fetcher?: typeof globalThis.fetch;
 }): Promise<{ readonly host: string; readonly pairingCode: string; readonly label: string }> {
   const host = normalizeRenderServiceUrl(input.serviceUrl);
-  const setupCode = input.setupCode.trim();
-  if (setupCode.length === 0) {
-    throw new RenderBootstrapRequestError("Enter the setup code used during deployment.");
-  }
 
   const endpoint = new URL("/.well-known/t3/render/pair", host);
   let response: Response;
   try {
     response = await (input.fetcher ?? globalThis.fetch)(endpoint, {
       method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ setupCode }),
       cache: "no-store",
       referrerPolicy: "no-referrer",
     });
@@ -83,11 +76,9 @@ export async function requestRenderPairing(input: {
     const decodedError = decodeRenderBootstrapErrorBody(responseBody);
     const serverMessage = Option.isSome(decodedError) ? decodedError.value.message : null;
     const message =
-      response.status === 401
-        ? "The setup code does not match the Render service."
-        : response.status === 403 || response.status === 404
-          ? "This service does not have in-app Render pairing yet. Deploy the latest version."
-          : serverMessage || `Render pairing failed with HTTP ${response.status}.`;
+      response.status === 403 || response.status === 404
+        ? "This service does not have in-app Render pairing yet. Deploy the latest version."
+        : serverMessage || `Render pairing failed with HTTP ${response.status}.`;
     throw new RenderBootstrapRequestError(message, response.status);
   }
 

@@ -4,13 +4,7 @@ import {
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
 import type { EnvironmentId } from "@t3tools/contracts";
-import {
-  CheckIcon,
-  CopyIcon,
-  ExternalLinkIcon,
-  LoaderCircleIcon,
-  RefreshCwIcon,
-} from "lucide-react";
+import { CheckIcon, CopyIcon, ExternalLinkIcon, LoaderCircleIcon } from "lucide-react";
 import { useCallback, useMemo, useState } from "react";
 
 import { cloudEnvironmentProvider } from "~/cloud/cloudEnvironment";
@@ -19,7 +13,6 @@ import { openCommandPalette } from "~/commandPaletteBus";
 import { environmentCatalog } from "~/connection/catalog";
 import { connectPairing as connectPairingAtom } from "~/connection/onboarding";
 import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
-import { randomHex } from "~/lib/utils";
 import { useAtomCommand } from "~/state/use-atom-command";
 import { type EnvironmentPresentation, useEnvironments } from "~/state/environments";
 import { RenderLogo } from "../RenderLogo";
@@ -33,10 +26,6 @@ const RENDER_DEPLOY_URL =
   "https://render.com/deploy?repo=https%3A%2F%2Fgithub.com%2Fpingdotgg%2Ft3code%2Ftree%2Ffeat%2Frender-cloud-environment";
 const CODEX_LOGIN_COMMAND = "codex login --device-auth";
 type RenderAuthenticationMode = "api-key" | "subscription";
-
-function newRenderSetupCode(): string {
-  return `t3-${randomHex(10)}`;
-}
 
 function CopyValueButton({ value, label }: { readonly value: string; readonly label: string }) {
   const { copyToClipboard, isCopied } = useCopyToClipboard({ target: label });
@@ -135,7 +124,6 @@ export function CloudEnvironmentsSettings() {
   const retryEnvironment = useAtomCommand(environmentCatalog.retryNow, { reportFailure: false });
   const removeEnvironment = useAtomCommand(environmentCatalog.remove, { reportFailure: false });
   const [serviceUrl, setServiceUrl] = useState("");
-  const [setupCode, setSetupCode] = useState(newRenderSetupCode);
   const [pairing, setPairing] = useState(false);
   const [pairingStatus, setPairingStatus] = useState<string | null>(null);
   const [pairError, setPairError] = useState<string | null>(null);
@@ -170,7 +158,7 @@ export function CloudEnvironmentsSettings() {
     setPairing(true);
     setPairingStatus("Waking the Render service…");
     try {
-      const pairingInput = await requestRenderPairing({ serviceUrl, setupCode });
+      const pairingInput = await requestRenderPairing({ serviceUrl });
       setServiceUrl(pairingInput.host);
       setPairingStatus("Connecting T3 Code…");
       const result = await connectPairing({
@@ -191,7 +179,7 @@ export function CloudEnvironmentsSettings() {
       setPairing(false);
       setPairingStatus(null);
     }
-  }, [connectPairing, pairing, serviceUrl, setupCode]);
+  }, [connectPairing, pairing, serviceUrl]);
 
   const handleConnect = useCallback(
     async (environmentId: EnvironmentId) => {
@@ -239,8 +227,7 @@ export function CloudEnvironmentsSettings() {
             <div className="min-w-0 space-y-1">
               <h3 className="text-base font-semibold tracking-[-0.02em]">Powered by Render</h3>
               <p className="max-w-xl text-sm leading-relaxed text-muted-foreground">
-                Deploy a temporary T3 Code machine, connect it here, and run agents on a public
-                GitHub repository.
+                Deploy a temporary T3 Code machine, paste its URL, and start an agent.
               </p>
               <div className="flex flex-wrap gap-2 pt-2 text-[11px] font-medium text-muted-foreground">
                 <span className="rounded-full border border-border/70 bg-background/70 px-2 py-1">
@@ -255,7 +242,7 @@ export function CloudEnvironmentsSettings() {
         </div>
       </SettingsSection>
 
-      <SettingsSection title="1. Deploy">
+      <SettingsSection title="1. Deploy to Render">
         <div className="px-3 sm:px-4">
           <div
             role="tablist"
@@ -283,38 +270,11 @@ export function CloudEnvironmentsSettings() {
           </div>
         </div>
 
-        <SettingsRow
-          title="Setup code"
-          description="Copy this into T3CODE_RENDER_SETUP_CODE when Render asks. It lets this screen pair the service without reading logs."
-          status="Keep it private until the demo is over."
-        >
-          <div className="mt-3 flex gap-2">
-            <Input
-              value={setupCode}
-              onChange={(event) => setSetupCode(event.target.value)}
-              aria-label="Render setup code"
-              autoComplete="off"
-              spellCheck={false}
-              className="font-mono text-xs"
-            />
-            <CopyValueButton value={setupCode} label="Render setup code" />
-            <Button
-              size="icon-sm"
-              variant="outline"
-              aria-label="Generate a new setup code"
-              disabled={pairing}
-              onClick={() => setSetupCode(newRenderSetupCode())}
-            >
-              <RefreshCwIcon className="size-3.5" />
-            </Button>
-          </div>
-        </SettingsRow>
-
         {authenticationMode === "api-key" ? (
           <div role="tabpanel">
             <SettingsRow
               title="OpenAI API key"
-              description="Render asks for OPENAI_API_KEY and the setup code. Codex is authenticated automatically when the service starts."
+              description="Render asks for OPENAI_API_KEY. Codex is authenticated automatically when the service starts."
               status="OpenAI API usage is billed separately from Render."
               control={
                 <Button
@@ -368,7 +328,7 @@ export function CloudEnvironmentsSettings() {
               }}
             />
             <Button
-              disabled={pairing || serviceUrl.trim().length === 0 || setupCode.trim().length === 0}
+              disabled={pairing || serviceUrl.trim().length === 0}
               onClick={() => void handlePair()}
             >
               {pairing ? <LoaderCircleIcon className="size-4 animate-spin" /> : null}

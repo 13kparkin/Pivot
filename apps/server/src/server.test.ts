@@ -1398,26 +1398,18 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
-  it.effect("pairs a Render environment from its setup code without reading logs", () =>
+  it.effect("pairs a Render environment from its service URL without reading logs", () =>
     Effect.gen(function* () {
       yield* buildAppUnderTest({
         hostEnvironment: {
           T3CODE_CLOUD_PROVIDER: "render",
           T3CODE_ENVIRONMENT_LABEL: "Render cloud environment",
-          T3CODE_RENDER_SETUP_CODE: "render-setup-code-1234",
         },
       });
 
       const url = yield* getHttpServerUrl("/.well-known/t3/render/pair");
-      const rejected = yield* fetchEffect(url, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: jsonRequestBody({ setupCode: "wrong-code" }),
-      });
       const response = yield* fetchEffect(url, {
         method: "POST",
-        headers: { "content-type": "application/json" },
-        body: jsonRequestBody({ setupCode: "render-setup-code-1234" }),
       });
       const body = yield* responseJsonEffect<{
         readonly pairingCode: string;
@@ -1427,7 +1419,6 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         scope: "orchestration:read orchestration:operate terminal:operate review:write relay:read",
       });
 
-      assert.equal(rejected.status, 401);
       assert.equal(response.status, 200);
       assert.equal(response.headers["cache-control"], "no-store");
       assert.equal(response.headers["referrer-policy"], "no-referrer");

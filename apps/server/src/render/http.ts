@@ -1,9 +1,7 @@
-import * as NodeCrypto from "node:crypto";
 import {
   EnvironmentHttpApi,
   EnvironmentHttpForbiddenError,
   EnvironmentHttpInternalServerError,
-  EnvironmentHttpUnauthorizedError,
 } from "@t3tools/contracts";
 import { HostProcessEnvironment } from "@t3tools/shared/hostProcess";
 import * as Effect from "effect/Effect";
@@ -20,12 +18,6 @@ const RENDER_BOOTSTRAP_RESPONSE_HEADERS = {
   "x-content-type-options": "nosniff",
 } as const;
 
-export function renderSetupCodeMatches(expected: string, candidate: string): boolean {
-  const expectedDigest = NodeCrypto.createHash("sha256").update(expected).digest();
-  const candidateDigest = NodeCrypto.createHash("sha256").update(candidate).digest();
-  return NodeCrypto.timingSafeEqual(expectedDigest, candidateDigest);
-}
-
 const appendRenderBootstrapResponseHeaders = HttpEffect.appendPreResponseHandler(
   (_request, response) =>
     Effect.succeed(HttpServerResponse.setHeaders(response, RENDER_BOOTSTRAP_RESPONSE_HEADERS)),
@@ -38,23 +30,16 @@ export const renderBootstrapHttpApiLayer = HttpApiBuilder.group(
     const hostEnvironment = yield* HostProcessEnvironment;
     const serverAuth = yield* EnvironmentAuth.EnvironmentAuth;
     const configuredProvider = hostEnvironment.T3CODE_CLOUD_PROVIDER?.trim().toLowerCase();
-    const configuredSetupCode = hostEnvironment.T3CODE_RENDER_SETUP_CODE?.trim() ?? "";
     const environmentLabel =
       hostEnvironment.T3CODE_ENVIRONMENT_LABEL?.trim() || "Render cloud environment";
-    delete hostEnvironment.T3CODE_RENDER_SETUP_CODE;
 
     return handlers.handle(
       "pair",
-      Effect.fn("environment.renderBootstrap.pair")(function* ({ payload }) {
+      Effect.fn("environment.renderBootstrap.pair")(function* () {
         yield* appendRenderBootstrapResponseHeaders;
-        if (configuredProvider !== "render" || configuredSetupCode.length === 0) {
+        if (configuredProvider !== "render") {
           return yield* new EnvironmentHttpForbiddenError({
             message: "This environment is not configured for Render setup.",
-          });
-        }
-        if (!renderSetupCodeMatches(configuredSetupCode, payload.setupCode)) {
-          return yield* new EnvironmentHttpUnauthorizedError({
-            message: "The Render setup code is invalid.",
           });
         }
 

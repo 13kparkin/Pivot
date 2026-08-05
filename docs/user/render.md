@@ -15,26 +15,24 @@ The root [`render.yaml`](../../render.yaml) creates:
 - a Docker web service containing T3 Code, Codex, Claude Code, Git, and the GitHub CLI;
 - an ephemeral `/data` workspace for T3 Code state, provider credentials, and repositories;
 - an optional `OPENAI_API_KEY` secret prompt for automatic Codex authentication;
-- a private setup-code prompt for pairing the service directly inside T3 Code;
+- in-app pairing directly from the service URL;
 - a health check against T3 Code's public environment descriptor.
 
 ## Deploy
 
-1. Open **Settings → Cloud environments** in T3 Code and copy the generated setup code.
-2. Choose an authentication tab, then select **Deploy on Render**.
-3. Enter the generated code in Render's `T3CODE_RENDER_SETUP_CODE` secret prompt.
-4. Choose an authentication method:
+1. Open **Settings → Cloud environments** in T3 Code.
+2. Choose an authentication method, then select **Deploy on Render**:
    - **OpenAI API key:** enter `OPENAI_API_KEY` in Render's secret prompt. Startup authenticates
      Codex automatically.
    - **ChatGPT subscription:** skip the optional API key, then use device login after cloning.
-5. Deploy the Blueprint and wait for the service health check to pass.
-6. Copy the service's `.onrender.com` URL, return to T3 Code, paste it under **Connect in T3
-   Code**, and select **Connect environment**. T3 Code wakes the service and exchanges the setup
-   code for a one-time pairing credential; there is no log-copying step.
-7. Select **Add project** and choose **Cloud environments → Render cloud
+3. Deploy the Blueprint and wait for the service health check to pass.
+4. Copy the service's `.onrender.com` URL, return to T3 Code, paste it under **Connect in T3
+   Code**, and select **Connect environment**. T3 Code wakes the service and requests a one-time
+   pairing credential; there is no log-copying step.
+5. Select **Add project** and choose **Cloud environments → Render cloud
    environment**. Paste a public GitHub URL. T3 Code clones it directly into the Render workspace;
    there is no local destination picker.
-8. API-key deployments are ready immediately. For subscription authentication, open the project
+6. API-key deployments are ready immediately. For subscription authentication, open the project
    terminal, run `codex login --device-auth`, complete the device login, and start an agent.
 
 Repositories are selected after pairing rather than baked into the Blueprint. Each clone is stored
@@ -72,9 +70,9 @@ useful for machines that need its managed tunnel or account-level environment di
 
 ## Operations
 
-- The setup code can mint one-time pairing credentials. Treat it as a secret and remove the Render
-  service when the demo is over. Existing paired browser sessions remain authenticated until the
-  ephemeral service restarts.
+- Anyone with the service URL can request a standard T3 Code pairing credential. Use this setup only
+  for a private demo and remove the Render service afterward. Existing paired browser sessions remain
+  authenticated until the ephemeral service restarts.
 - Render spins a Free web service down after 15 minutes without inbound HTTP or WebSocket traffic.
   A later request starts a fresh instance, so pair, clone, and authenticate again.
 - Do not use this Blueprint for untrusted users or repositories. Coding agents can execute commands
