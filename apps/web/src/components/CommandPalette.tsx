@@ -29,7 +29,6 @@ import { useNavigate, useParams } from "@tanstack/react-router";
 import * as Option from "effect/Option";
 import {
   ArrowLeftIcon,
-  CloudIcon,
   CornerLeftUpIcon,
   FileSearchIcon,
   FolderIcon,
@@ -120,6 +119,7 @@ import { CommandPaletteContent } from "./CommandPaletteContent";
 import { CommandPaletteResults } from "./CommandPaletteResults";
 import { AzureDevOpsIcon, BitbucketIcon, GitHubIcon, GitLabIcon } from "./Icons";
 import { ProjectFavicon } from "./ProjectFavicon";
+import { RenderLogo } from "./RenderLogo";
 import { ProjectFilePicker } from "./files/ProjectFilePicker";
 import { ProjectContentSearchDialog } from "./search/ProjectContentSearchDialog";
 import { ThreadRowLeadingStatus, ThreadRowTrailingStatus } from "./ThreadStatusIndicators";
@@ -1288,7 +1288,7 @@ function OpenCommandPaletteDialog(props: {
         : option.status,
       disabled: !option.isConnected,
       icon: option.cloudProvider ? (
-        <CloudIcon className={ITEM_ICON_CLASS} />
+        <RenderLogo className={ITEM_ICON_CLASS} />
       ) : (
         <FolderPlusIcon className={ITEM_ICON_CLASS} />
       ),

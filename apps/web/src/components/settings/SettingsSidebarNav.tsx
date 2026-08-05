@@ -11,7 +11,6 @@ import {
   ArchiveIcon,
   ArrowLeftIcon,
   BotIcon,
-  CloudIcon,
   FlaskConicalIcon,
   GitBranchIcon,
   KeyboardIcon,
@@ -36,6 +35,7 @@ import {
   useSidebar,
 } from "../ui/sidebar";
 import { T3ConnectSidebarAvatar, T3ConnectSidebarSignIn } from "../clerk/T3ConnectSidebarSignIn";
+import { RenderLogo } from "../RenderLogo";
 import { scrollToSettingsTarget } from "./settingsLayout";
 import {
   searchSettings,
@@ -53,7 +53,7 @@ const SETTINGS_SECTION_ICONS: Readonly<
   "/settings/providers": BotIcon,
   "/settings/source-control": GitBranchIcon,
   "/settings/connections": Link2Icon,
-  "/settings/cloud-environments": CloudIcon,
+  "/settings/cloud-environments": RenderLogo,
   "/settings/beta": FlaskConicalIcon,
   "/settings/archived": ArchiveIcon,
 };

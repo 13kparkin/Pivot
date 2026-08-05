@@ -371,6 +371,34 @@ export const AuthOtherClientSessionsRevokeResult = Schema.Struct({
 });
 export type AuthOtherClientSessionsRevokeResult = typeof AuthOtherClientSessionsRevokeResult.Type;
 
+export const EnvironmentRenderBootstrapPairingRequest = Schema.Struct({
+  setupCode: TrimmedNonEmptyString,
+});
+export type EnvironmentRenderBootstrapPairingRequest =
+  typeof EnvironmentRenderBootstrapPairingRequest.Type;
+
+export const EnvironmentRenderBootstrapPairingResult = Schema.Struct({
+  pairingCode: TrimmedNonEmptyString,
+  label: TrimmedNonEmptyString,
+});
+export type EnvironmentRenderBootstrapPairingResult =
+  typeof EnvironmentRenderBootstrapPairingResult.Type;
+
+const EnvironmentRenderBootstrapErrors = [
+  EnvironmentHttpBadRequestError,
+  EnvironmentHttpUnauthorizedError,
+  EnvironmentHttpForbiddenError,
+  EnvironmentHttpInternalServerError,
+] as const;
+
+export class EnvironmentRenderBootstrapHttpApi extends HttpApiGroup.make("renderBootstrap").add(
+  HttpApiEndpoint.post("pair", "/.well-known/t3/render/pair", {
+    payload: EnvironmentRenderBootstrapPairingRequest,
+    success: EnvironmentRenderBootstrapPairingResult,
+    error: EnvironmentRenderBootstrapErrors,
+  }),
+) {}
+
 export class EnvironmentMetadataHttpApi extends HttpApiGroup.make("metadata").add(
   HttpApiEndpoint.get("descriptor", "/.well-known/t3/environment", {
     success: ExecutionEnvironmentDescriptor,
@@ -551,6 +579,7 @@ export class EnvironmentConnectHttpApi extends HttpApiGroup.make("connect")
   ) {}
 
 export class EnvironmentHttpApi extends HttpApi.make("environment")
+  .add(EnvironmentRenderBootstrapHttpApi)
   .add(EnvironmentMetadataHttpApi)
   .add(EnvironmentAuthHttpApi)
   .add(EnvironmentOrchestrationHttpApi)

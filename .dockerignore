@@ -12,3 +12,11 @@ release-mock
 artifacts
 native/**/target
 *.log
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+auth.json
+.codex
+.claude

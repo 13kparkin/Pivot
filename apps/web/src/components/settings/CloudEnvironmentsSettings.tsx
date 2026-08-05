@@ -1,21 +1,28 @@
-import { CheckIcon, CloudIcon, CopyIcon, ExternalLinkIcon, LoaderCircleIcon } from "lucide-react";
 import { connectionStatusText } from "@t3tools/client-runtime/connection";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
 import type { EnvironmentId } from "@t3tools/contracts";
+import {
+  CheckIcon,
+  CopyIcon,
+  ExternalLinkIcon,
+  LoaderCircleIcon,
+  RefreshCwIcon,
+} from "lucide-react";
 import { useCallback, useMemo, useState } from "react";
 
 import { cloudEnvironmentProvider } from "~/cloud/cloudEnvironment";
+import { maskedRenderServiceUrl, requestRenderPairing } from "~/cloud/renderBootstrap";
 import { openCommandPalette } from "~/commandPaletteBus";
 import { environmentCatalog } from "~/connection/catalog";
 import { connectPairing as connectPairingAtom } from "~/connection/onboarding";
-import { readHostedPairingRequest } from "~/hostedPairing";
 import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
-import { getPairingTokenFromUrl } from "~/pairingUrl";
+import { randomHex } from "~/lib/utils";
 import { useAtomCommand } from "~/state/use-atom-command";
 import { type EnvironmentPresentation, useEnvironments } from "~/state/environments";
+import { RenderLogo } from "../RenderLogo";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { stackedThreadToast, toastManager } from "../ui/toast";
@@ -27,56 +34,73 @@ const RENDER_DEPLOY_URL =
 const CODEX_LOGIN_COMMAND = "codex login --device-auth";
 type RenderAuthenticationMode = "api-key" | "subscription";
 
-function pairingInput(value: string): { readonly host: string; readonly pairingCode: string } {
-  const url = new URL(value.trim());
-  const hostedRequest = readHostedPairingRequest(url);
-  if (hostedRequest) {
-    return { host: hostedRequest.host, pairingCode: hostedRequest.token };
-  }
-  const pairingCode = getPairingTokenFromUrl(url);
-  if (!pairingCode) {
-    throw new Error("Paste the full Pair URL from the Render logs.");
-  }
-  return { host: url.origin, pairingCode };
+function newRenderSetupCode(): string {
+  return `t3-${randomHex(10)}`;
+}
+
+function CopyValueButton({ value, label }: { readonly value: string; readonly label: string }) {
+  const { copyToClipboard, isCopied } = useCopyToClipboard({ target: label });
+  return (
+    <Button
+      size="icon-sm"
+      variant="outline"
+      aria-label={`Copy ${label}`}
+      onClick={() => copyToClipboard(value, undefined)}
+    >
+      {isCopied ? <CheckIcon className="size-3.5" /> : <CopyIcon className="size-3.5" />}
+    </Button>
+  );
 }
 
 function CopyCommand({ command }: { readonly command: string }) {
-  const { copyToClipboard, isCopied } = useCopyToClipboard({ target: "command" });
   return (
     <div className="mt-2 flex min-w-0 items-start gap-2 rounded-lg border border-border/70 bg-muted/20 p-2">
       <code className="min-w-0 flex-1 overflow-x-auto py-1 text-xs text-foreground">{command}</code>
-      <Button
-        size="icon-xs"
-        variant="ghost"
-        aria-label="Copy command"
-        onClick={() => copyToClipboard(command, undefined)}
-      >
-        {isCopied ? <CheckIcon className="size-3.5" /> : <CopyIcon className="size-3.5" />}
-      </Button>
+      <CopyValueButton value={command} label="command" />
     </div>
   );
 }
 
 function RenderEnvironmentRow({
   environment,
-  busyEnvironmentId,
+  busyEnvironmentIds,
   onConnect,
   onDisconnect,
 }: {
   readonly environment: EnvironmentPresentation;
-  readonly busyEnvironmentId: EnvironmentId | null;
+  readonly busyEnvironmentIds: ReadonlySet<EnvironmentId>;
   readonly onConnect: (environmentId: EnvironmentId) => void;
   readonly onDisconnect: (environmentId: EnvironmentId) => void;
 }) {
   const isConnected = environment.connection.phase === "connected";
-  const isBusy = busyEnvironmentId === environment.environmentId;
+  const isBusy = busyEnvironmentIds.has(environment.environmentId);
+  const serviceLabel = environment.displayUrl
+    ? maskedRenderServiceUrl(environment.displayUrl)
+    : null;
   return (
     <SettingsRow
-      title={environment.label}
+      title={
+        <span className="inline-flex items-center gap-2">
+          <RenderLogo className="size-4" />
+          {environment.label}
+        </span>
+      }
       description="Powered by Render"
-      status={connectionStatusText(environment.connection)}
+      status={[connectionStatusText(environment.connection), serviceLabel]
+        .filter(Boolean)
+        .join(" · ")}
       control={
         <>
+          {environment.displayUrl ? (
+            <Button
+              size="icon-xs"
+              variant="ghost"
+              aria-label="Open Render service"
+              render={<a href={environment.displayUrl} target="_blank" rel="noreferrer" />}
+            >
+              <ExternalLinkIcon className="size-3.5" />
+            </Button>
+          ) : null}
           {isConnected ? (
             <Button
               size="xs"
@@ -110,10 +134,14 @@ export function CloudEnvironmentsSettings() {
   const connectPairing = useAtomCommand(connectPairingAtom, { reportFailure: false });
   const retryEnvironment = useAtomCommand(environmentCatalog.retryNow, { reportFailure: false });
   const removeEnvironment = useAtomCommand(environmentCatalog.remove, { reportFailure: false });
-  const [pairUrl, setPairUrl] = useState("");
+  const [serviceUrl, setServiceUrl] = useState("");
+  const [setupCode, setSetupCode] = useState(newRenderSetupCode);
   const [pairing, setPairing] = useState(false);
+  const [pairingStatus, setPairingStatus] = useState<string | null>(null);
   const [pairError, setPairError] = useState<string | null>(null);
-  const [busyEnvironmentId, setBusyEnvironmentId] = useState<EnvironmentId | null>(null);
+  const [busyEnvironmentIds, setBusyEnvironmentIds] = useState<ReadonlySet<EnvironmentId>>(
+    () => new Set(),
+  );
   const [authenticationMode, setAuthenticationMode] = useState<RenderAuthenticationMode>("api-key");
   const renderEnvironments = useMemo(
     () => environments.filter((environment) => cloudEnvironmentProvider(environment) === "render"),
@@ -127,34 +155,49 @@ export function CloudEnvironmentsSettings() {
     toastManager.add(stackedThreadToast({ type: "error", title, description }));
   }, []);
 
+  const setEnvironmentBusy = useCallback((environmentId: EnvironmentId, busy: boolean) => {
+    setBusyEnvironmentIds((current) => {
+      const next = new Set(current);
+      if (busy) next.add(environmentId);
+      else next.delete(environmentId);
+      return next;
+    });
+  }, []);
+
   const handlePair = useCallback(async () => {
+    if (pairing) return;
     setPairError(null);
-    let input: ReturnType<typeof pairingInput>;
-    try {
-      input = pairingInput(pairUrl);
-    } catch (error) {
-      setPairError(error instanceof Error ? error.message : "Invalid Pair URL.");
-      return;
-    }
     setPairing(true);
-    const result = await connectPairing(input);
-    setPairing(false);
-    if (result._tag === "Failure") {
-      if (!isAtomCommandInterrupted(result)) {
-        const failure = squashAtomCommandFailure(result);
-        setPairError(failure instanceof Error ? failure.message : "Could not pair environment.");
+    setPairingStatus("Waking the Render service…");
+    try {
+      const pairingInput = await requestRenderPairing({ serviceUrl, setupCode });
+      setServiceUrl(pairingInput.host);
+      setPairingStatus("Connecting T3 Code…");
+      const result = await connectPairing({
+        host: pairingInput.host,
+        pairingCode: pairingInput.pairingCode,
+      });
+      if (result._tag === "Failure") {
+        if (!isAtomCommandInterrupted(result)) {
+          const failure = squashAtomCommandFailure(result);
+          setPairError(failure instanceof Error ? failure.message : "Could not pair environment.");
+        }
+        return;
       }
-      return;
+      toastManager.add({ type: "success", title: "Render environment connected" });
+    } catch (error) {
+      setPairError(error instanceof Error ? error.message : "Could not connect Render.");
+    } finally {
+      setPairing(false);
+      setPairingStatus(null);
     }
-    setPairUrl("");
-    toastManager.add({ type: "success", title: "Render environment connected" });
-  }, [connectPairing, pairUrl]);
+  }, [connectPairing, pairing, serviceUrl, setupCode]);
 
   const handleConnect = useCallback(
     async (environmentId: EnvironmentId) => {
-      setBusyEnvironmentId(environmentId);
+      setEnvironmentBusy(environmentId, true);
       const result = await retryEnvironment(environmentId);
-      setBusyEnvironmentId(null);
+      setEnvironmentBusy(environmentId, false);
       if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
         const failure = squashAtomCommandFailure(result);
         reportFailure(
@@ -163,14 +206,14 @@ export function CloudEnvironmentsSettings() {
         );
       }
     },
-    [reportFailure, retryEnvironment],
+    [reportFailure, retryEnvironment, setEnvironmentBusy],
   );
 
   const handleDisconnect = useCallback(
     async (environmentId: EnvironmentId) => {
-      setBusyEnvironmentId(environmentId);
+      setEnvironmentBusy(environmentId, true);
       const result = await removeEnvironment(environmentId);
-      setBusyEnvironmentId(null);
+      setEnvironmentBusy(environmentId, false);
       if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
         const failure = squashAtomCommandFailure(result);
         reportFailure(
@@ -179,22 +222,40 @@ export function CloudEnvironmentsSettings() {
         );
       }
     },
-    [removeEnvironment, reportFailure],
+    [removeEnvironment, reportFailure, setEnvironmentBusy],
   );
 
   return (
     <SettingsPageContainer>
       <SettingsSection
         {...searchableSetting("cloud-environments")}
-        icon={<CloudIcon className="size-4" />}
+        icon={<RenderLogo className="size-5" />}
       >
-        <SettingsRow
-          title="Powered by Render"
-          description="Creates a temporary free cloud machine for the demo."
-        />
+        <div className="mx-3 overflow-hidden rounded-2xl border border-border/70 bg-gradient-to-br from-muted/45 via-background to-background px-5 py-5 sm:mx-4 sm:px-6">
+          <div className="flex items-start gap-4">
+            <div className="flex size-11 shrink-0 items-center justify-center rounded-xl bg-foreground text-background shadow-sm">
+              <RenderLogo className="size-6" />
+            </div>
+            <div className="min-w-0 space-y-1">
+              <h3 className="text-base font-semibold tracking-[-0.02em]">Powered by Render</h3>
+              <p className="max-w-xl text-sm leading-relaxed text-muted-foreground">
+                Deploy a temporary T3 Code machine, connect it here, and run agents on a public
+                GitHub repository.
+              </p>
+              <div className="flex flex-wrap gap-2 pt-2 text-[11px] font-medium text-muted-foreground">
+                <span className="rounded-full border border-border/70 bg-background/70 px-2 py-1">
+                  Free demo
+                </span>
+                <span className="rounded-full border border-border/70 bg-background/70 px-2 py-1">
+                  No logs required
+                </span>
+              </div>
+            </div>
+          </div>
+        </div>
       </SettingsSection>
 
-      <SettingsSection title="Authenticate and deploy">
+      <SettingsSection title="1. Deploy">
         <div className="px-3 sm:px-4">
           <div
             role="tablist"
@@ -221,18 +282,46 @@ export function CloudEnvironmentsSettings() {
             </button>
           </div>
         </div>
+
+        <SettingsRow
+          title="Setup code"
+          description="Copy this into T3CODE_RENDER_SETUP_CODE when Render asks. It lets this screen pair the service without reading logs."
+          status="Keep it private until the demo is over."
+        >
+          <div className="mt-3 flex gap-2">
+            <Input
+              value={setupCode}
+              onChange={(event) => setSetupCode(event.target.value)}
+              aria-label="Render setup code"
+              autoComplete="off"
+              spellCheck={false}
+              className="font-mono text-xs"
+            />
+            <CopyValueButton value={setupCode} label="Render setup code" />
+            <Button
+              size="icon-sm"
+              variant="outline"
+              aria-label="Generate a new setup code"
+              disabled={pairing}
+              onClick={() => setSetupCode(newRenderSetupCode())}
+            >
+              <RefreshCwIcon className="size-3.5" />
+            </Button>
+          </div>
+        </SettingsRow>
+
         {authenticationMode === "api-key" ? (
           <div role="tabpanel">
             <SettingsRow
               title="OpenAI API key"
-              description="Render asks for OPENAI_API_KEY before deploying and stores it as a secret. Codex is authenticated automatically when the service starts."
-              status="API usage is billed by OpenAI separately from Render."
+              description="Render asks for OPENAI_API_KEY and the setup code. Codex is authenticated automatically when the service starts."
+              status="OpenAI API usage is billed separately from Render."
               control={
                 <Button
                   size="sm"
                   render={<a href={RENDER_DEPLOY_URL} target="_blank" rel="noreferrer" />}
                 >
-                  Deploy with API key
+                  Deploy on Render
                   <ExternalLinkIcon className="size-3.5" />
                 </Button>
               }
@@ -242,15 +331,15 @@ export function CloudEnvironmentsSettings() {
           <div role="tabpanel">
             <SettingsRow
               title="ChatGPT subscription"
-              description="Deploy without an API key. After pairing and cloning a project, run this in its T3 terminal and complete the device login."
-              status="Free instances forget this login when they restart or spin down."
+              description="Leave OPENAI_API_KEY empty. After connecting and adding a project, run the command below in its T3 terminal."
+              status="A free instance forgets this login whenever it restarts or spins down."
               control={
                 <Button
                   size="sm"
                   variant="outline"
                   render={<a href={RENDER_DEPLOY_URL} target="_blank" rel="noreferrer" />}
                 >
-                  Deploy for subscription
+                  Deploy on Render
                   <ExternalLinkIcon className="size-3.5" />
                 </Button>
               }
@@ -261,26 +350,29 @@ export function CloudEnvironmentsSettings() {
         )}
       </SettingsSection>
 
-      <SettingsSection title="Connect">
+      <SettingsSection title="2. Connect in T3 Code">
         <SettingsRow
-          title="Pair URL"
-          description="Connects this T3 Code client to the cloud machine. Copy the URL from the Render logs."
+          title="Render service URL"
+          description="Paste the .onrender.com URL shown at the top of the Render service. T3 Code pairs it here automatically."
+          status={pairingStatus}
         >
           <div className="mt-3 flex flex-col gap-2 sm:flex-row">
             <Input
-              value={pairUrl}
-              onChange={(event) => setPairUrl(event.target.value)}
-              placeholder="https://app.t3.codes/pair?host=..."
+              value={serviceUrl}
+              onChange={(event) => setServiceUrl(event.target.value)}
+              placeholder="https://your-service.onrender.com"
+              autoComplete="url"
+              spellCheck={false}
               onKeyDown={(event) => {
-                if (event.key === "Enter") void handlePair();
+                if (event.key === "Enter" && !pairing) void handlePair();
               }}
             />
             <Button
-              disabled={pairing || pairUrl.trim().length === 0}
+              disabled={pairing || serviceUrl.trim().length === 0 || setupCode.trim().length === 0}
               onClick={() => void handlePair()}
             >
               {pairing ? <LoaderCircleIcon className="size-4 animate-spin" /> : null}
-              Pair environment
+              Connect environment
             </Button>
           </div>
           {pairError ? <p className="mt-2 text-xs text-destructive">{pairError}</p> : null}
@@ -289,17 +381,18 @@ export function CloudEnvironmentsSettings() {
           <RenderEnvironmentRow
             key={environment.environmentId}
             environment={environment}
-            busyEnvironmentId={busyEnvironmentId}
+            busyEnvironmentIds={busyEnvironmentIds}
             onConnect={(environmentId) => void handleConnect(environmentId)}
             onDisconnect={(environmentId) => void handleDisconnect(environmentId)}
           />
         ))}
       </SettingsSection>
 
-      <SettingsSection title="Ready to use">
+      <SettingsSection title="3. Add a project">
         <SettingsRow
-          title="Get the code"
-          description="Choose Render and paste a public GitHub URL. The repository is cloned inside the cloud machine."
+          title="Clone a public GitHub repository"
+          description="Paste a GitHub URL and T3 Code clones it into the Render workspace, ready for an agent."
+          status={hasConnectedRenderEnvironment ? "Render is ready" : "Connect Render first"}
           control={
             <Button
               size="sm"

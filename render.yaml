@@ -5,7 +5,7 @@ services:
     plan: free
     repo: https://github.com/pingdotgg/t3code.git
     branch: feat/render-cloud-environment
-    autoDeployTrigger: commit
+    autoDeployTrigger: off
     dockerfilePath: ./infra/render/Dockerfile
     dockerContext: .
     healthCheckPath: /.well-known/t3/environment
@@ -16,7 +16,7 @@ services:
         value: Render cloud environment
       - key: T3CODE_WORKSPACE_DIR
         value: /data/workspace
-      - key: T3CODE_PAIRING_TTL
-        value: 24h
+      - key: T3CODE_RENDER_SETUP_CODE
+        sync: false
       - key: OPENAI_API_KEY
         sync: false
