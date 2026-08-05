@@ -45,6 +45,7 @@ import {
   resolveExternalWebLinkHost,
   showExternalLinkContextMenu,
 } from "./chat/externalLinkContextMenu";
+import { buildFileLinkContextMenuItems } from "./chat/fileLinkContextMenu";
 import { hasSpecificPierreIconForFileName, syntheticFileNameForLanguageId } from "../pierre-icons";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
 import { Button } from "./ui/button";
@@ -1199,17 +1200,10 @@ const MarkdownFileLink = memo(function MarkdownFileLink({
 
       try {
         const clicked = await api.contextMenu.show(
-          [
-            ...(canRevealInFileManager
-              ? ([{ id: "open-in-folder", label: "Open in folder" }] as const)
-              : []),
-            { id: "open", label: "Open in editor" },
-            ...(onOpenInBrowser
-              ? ([{ id: "open-in-browser", label: "Open in integrated browser" }] as const)
-              : []),
-            { id: "copy-relative", label: "Copy relative path" },
-            { id: "copy-full", label: "Copy full path" },
-          ] as const,
+          buildFileLinkContextMenuItems({
+            canRevealInFileManager,
+            canOpenInBrowser: onOpenInBrowser !== undefined,
+          }),
           { x: event.clientX, y: event.clientY },
         );
 
@@ -1337,7 +1331,9 @@ function ChatMarkdown({
   const availableEditors = serverConfig?.availableEditors ?? [];
   const openInPreferredEditor = useOpenInPreferredEditor(environmentId, availableEditors);
   const canRevealInFileManager =
-    preparedConnection._tag === "Some" && availableEditors.includes("file-manager");
+    preparedConnection._tag === "Some" &&
+    serverConfig?.environment.capabilities.fileManagerReveal === true &&
+    availableEditors.includes("file-manager");
   const diffThemeName = resolveDiffThemeName(resolvedTheme);
   const markdownFileLinkMetaByHref = useMemo(() => {
     const metaByHref = new Map<
