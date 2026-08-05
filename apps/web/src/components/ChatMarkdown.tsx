@@ -746,6 +746,7 @@ interface MarkdownFileLinkProps {
   theme: "light" | "dark";
   threadRef?: ScopedThreadRef | undefined;
   onOpen: (targetPath: string) => Promise<AtomCommandResult<unknown, unknown>>;
+  canRevealInFileManager: boolean;
   onRevealInFileManager: (filePath: string) => Promise<AtomCommandResult<unknown, unknown>>;
   onOpenInBrowser?: (() => Promise<AtomCommandResult<unknown, unknown>>) | undefined;
   className?: string | undefined;
@@ -1031,6 +1032,7 @@ const MarkdownFileLink = memo(function MarkdownFileLink({
   theme,
   threadRef,
   onOpen,
+  canRevealInFileManager,
   onRevealInFileManager,
   onOpenInBrowser,
   className,
@@ -1198,8 +1200,10 @@ const MarkdownFileLink = memo(function MarkdownFileLink({
       try {
         const clicked = await api.contextMenu.show(
           [
+            ...(canRevealInFileManager
+              ? ([{ id: "open-in-folder", label: "Open in folder" }] as const)
+              : []),
             { id: "open", label: "Open in editor" },
-            { id: "open-in-folder", label: "Open in folder" },
             ...(onOpenInBrowser
               ? ([{ id: "open-in-browser", label: "Open in integrated browser" }] as const)
               : []),
@@ -1236,6 +1240,7 @@ const MarkdownFileLink = memo(function MarkdownFileLink({
       }
     },
     [
+      canRevealInFileManager,
       displayPath,
       handleCopy,
       handleOpenInBrowser,
@@ -1298,6 +1303,7 @@ function areMarkdownFileLinkPropsEqual(
     previous.theme === next.theme &&
     previous.threadRef === next.threadRef &&
     previous.onOpen === next.onOpen &&
+    previous.canRevealInFileManager === next.canRevealInFileManager &&
     previous.onRevealInFileManager === next.onRevealInFileManager &&
     previous.onOpenInBrowser === next.onOpenInBrowser &&
     previous.className === next.className
@@ -1324,14 +1330,14 @@ function ChatMarkdown({
   const revealInFileManager = useAtomCommand(shellEnvironment.revealInFileManager, {
     reportFailure: false,
   });
-  const preparedConnection = usePreparedConnection(threadRef?.environmentId ?? null);
   const activeEnvironmentId = useActiveEnvironmentId();
   const environmentId = threadRef?.environmentId ?? activeEnvironmentId;
+  const preparedConnection = usePreparedConnection(environmentId);
   const serverConfig = useAtomValue(serverEnvironment.configValueAtom(environmentId));
-  const openInPreferredEditor = useOpenInPreferredEditor(
-    environmentId,
-    serverConfig?.availableEditors ?? [],
-  );
+  const availableEditors = serverConfig?.availableEditors ?? [];
+  const openInPreferredEditor = useOpenInPreferredEditor(environmentId, availableEditors);
+  const canRevealInFileManager =
+    preparedConnection._tag === "Some" && availableEditors.includes("file-manager");
   const diffThemeName = resolveDiffThemeName(resolvedTheme);
   const markdownFileLinkMetaByHref = useMemo(() => {
     const metaByHref = new Map<
@@ -1471,6 +1477,7 @@ function ChatMarkdown({
           theme={resolvedTheme}
           threadRef={threadRef}
           onOpen={openInPreferredEditor}
+          canRevealInFileManager={canRevealInFileManager}
           onRevealInFileManager={revealMarkdownFileInFileManager}
           onOpenInBrowser={
             threadRef &&
@@ -1657,6 +1664,7 @@ function ChatMarkdown({
       },
     };
   }, [
+    canRevealInFileManager,
     cwd,
     diffThemeName,
     fileLinkParentSuffixByPath,
