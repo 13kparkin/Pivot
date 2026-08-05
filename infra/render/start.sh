@@ -26,6 +26,11 @@ export T3CODE_WORKSPACE_DIR="$workspace_dir"
 
 mkdir -p "$t3_home" "$workspace_dir" "$codex_home" "$claude_config_dir"
 
+if [ -n "${OPENAI_API_KEY:-}" ]; then
+  printf '%s\n' "$OPENAI_API_KEY" | codex login --with-api-key
+  unset OPENAI_API_KEY
+fi
+
 if [ -n "${GH_TOKEN:-}" ]; then
   gh auth setup-git
 fi

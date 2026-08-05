@@ -14,21 +14,26 @@ The root [`render.yaml`](../../render.yaml) creates:
 
 - a Docker web service containing T3 Code, Codex, Claude Code, Git, and the GitHub CLI;
 - an ephemeral `/data` workspace for T3 Code state, provider credentials, and repositories;
+- an optional `OPENAI_API_KEY` secret prompt for automatic Codex authentication;
 - a health check against T3 Code's public environment descriptor.
 
 ## Deploy
 
 1. In the Render Dashboard, choose **New → Blueprint**.
 2. Connect this repository and select the branch you want to deploy.
-3. Deploy the Blueprint and wait for the service health check to pass.
-4. Open the service logs and copy the `Pair URL` printed during startup. Treat this URL like a
+3. Choose an authentication method:
+   - **OpenAI API key:** enter `OPENAI_API_KEY` in Render's secret prompt. Startup authenticates
+     Codex automatically.
+   - **ChatGPT subscription:** skip the optional API key, then use device login after cloning.
+4. Deploy the Blueprint and wait for the service health check to pass.
+5. Open the service logs and copy the `Pair URL` printed during startup. Treat this URL like a
    password: it contains a one-time pairing credential.
-5. Open the URL in a browser, or paste it under **Settings → Cloud environments → Pair URL**.
-6. Open the Command Palette and choose **Add Project → Cloud environments → Render cloud
+6. Open the URL in a browser, or paste it under **Settings → Cloud environments → Pair URL**.
+7. Open the Command Palette and choose **Add Project → Cloud environments → Render cloud
    environment**. Paste a public GitHub URL. T3 Code clones it directly into the Render workspace;
    there is no local destination picker.
-7. Open the project terminal, run `codex login --device-auth`, complete the device login, and start
-   an agent.
+8. API-key deployments are ready immediately. For subscription authentication, open the project
+   terminal, run `codex login --device-auth`, complete the device login, and start an agent.
 
 Repositories are selected after pairing rather than baked into the Blueprint. Each clone is stored
 under `/data/workspace` for the current Free-instance session.
@@ -42,8 +47,12 @@ pull request is merged. Update the `branch` field in `render.yaml` if you rename
 
 ## Provider Authentication
 
-The Blueprint does not ask for an OpenAI API key. Free instances do not include Render Shell access,
-so clone a public project, open its T3 Code terminal, and run:
+For API-key authentication, the Blueprint declares `OPENAI_API_KEY` with `sync: false`. Render asks
+for it during the initial deployment and stores it as a secret; the value is never committed to the
+repository. The startup script pipes it to `codex login --with-api-key` and removes it from the
+server process environment afterward.
+
+For ChatGPT subscription authentication, clone a public project, open its T3 Code terminal, and run:
 
 ```sh
 codex login --device-auth

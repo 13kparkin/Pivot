@@ -23,8 +23,9 @@ import { SettingsPageContainer, SettingsRow, SettingsSection } from "./settingsL
 import { searchableSetting } from "./settingsSearch";
 
 const RENDER_DEPLOY_URL =
-  "https://dashboard.render.com/blueprint/new?repo=https%3A%2F%2Fgithub.com%2Fpingdotgg%2Ft3code&branch=feat%2Frender-cloud-environment";
+  "https://render.com/deploy?repo=https%3A%2F%2Fgithub.com%2Fpingdotgg%2Ft3code%2Ftree%2Ffeat%2Frender-cloud-environment";
 const CODEX_LOGIN_COMMAND = "codex login --device-auth";
+type RenderAuthenticationMode = "api-key" | "subscription";
 
 function pairingInput(value: string): { readonly host: string; readonly pairingCode: string } {
   const url = new URL(value.trim());
@@ -113,6 +114,7 @@ export function CloudEnvironmentsSettings() {
   const [pairing, setPairing] = useState(false);
   const [pairError, setPairError] = useState<string | null>(null);
   const [busyEnvironmentId, setBusyEnvironmentId] = useState<EnvironmentId | null>(null);
+  const [authenticationMode, setAuthenticationMode] = useState<RenderAuthenticationMode>("api-key");
   const renderEnvironments = useMemo(
     () => environments.filter((environment) => cloudEnvironmentProvider(environment) === "render"),
     [environments],
@@ -189,16 +191,74 @@ export function CloudEnvironmentsSettings() {
         <SettingsRow
           title="Powered by Render"
           description="Creates a temporary free cloud machine for the demo."
-          control={
-            <Button
-              size="sm"
-              render={<a href={RENDER_DEPLOY_URL} target="_blank" rel="noreferrer" />}
-            >
-              Deploy on Render
-              <ExternalLinkIcon className="size-3.5" />
-            </Button>
-          }
         />
+      </SettingsSection>
+
+      <SettingsSection title="Authenticate and deploy">
+        <div className="px-3 sm:px-4">
+          <div
+            role="tablist"
+            aria-label="Codex authentication method"
+            className="inline-flex rounded-lg border border-border/70 bg-muted/20 p-1"
+          >
+            <button
+              type="button"
+              role="tab"
+              aria-selected={authenticationMode === "api-key"}
+              className="rounded-md px-3 py-1.5 text-xs font-medium text-muted-foreground aria-selected:bg-background aria-selected:text-foreground aria-selected:shadow-xs"
+              onClick={() => setAuthenticationMode("api-key")}
+            >
+              OpenAI API key
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={authenticationMode === "subscription"}
+              className="rounded-md px-3 py-1.5 text-xs font-medium text-muted-foreground aria-selected:bg-background aria-selected:text-foreground aria-selected:shadow-xs"
+              onClick={() => setAuthenticationMode("subscription")}
+            >
+              ChatGPT subscription
+            </button>
+          </div>
+        </div>
+        {authenticationMode === "api-key" ? (
+          <div role="tabpanel">
+            <SettingsRow
+              title="OpenAI API key"
+              description="Render asks for OPENAI_API_KEY before deploying and stores it as a secret. Codex is authenticated automatically when the service starts."
+              status="API usage is billed by OpenAI separately from Render."
+              control={
+                <Button
+                  size="sm"
+                  render={<a href={RENDER_DEPLOY_URL} target="_blank" rel="noreferrer" />}
+                >
+                  Deploy with API key
+                  <ExternalLinkIcon className="size-3.5" />
+                </Button>
+              }
+            />
+          </div>
+        ) : (
+          <div role="tabpanel">
+            <SettingsRow
+              title="ChatGPT subscription"
+              description="Deploy without an API key. After pairing and cloning a project, run this in its T3 terminal and complete the device login."
+              status="Free instances forget this login when they restart or spin down."
+              control={
+                <Button
+                  size="sm"
+                  variant="outline"
+                  render={<a href={RENDER_DEPLOY_URL} target="_blank" rel="noreferrer" />}
+                >
+                  Deploy for subscription
+                  <ExternalLinkIcon className="size-3.5" />
+                </Button>
+              }
+            >
+              <CopyCommand command={CODEX_LOGIN_COMMAND} />
+            </SettingsRow>
+          </div>
+        )}
       </SettingsSection>
 
       <SettingsSection title="Connect">
@@ -250,13 +310,6 @@ export function CloudEnvironmentsSettings() {
             </Button>
           }
         />
-        <SettingsRow
-          title="Authenticate Codex"
-          description="After cloning, open that project's terminal and run this once. Then start an agent."
-          status="Free instances forget this login when they restart or spin down."
-        >
-          <CopyCommand command={CODEX_LOGIN_COMMAND} />
-        </SettingsRow>
       </SettingsSection>
     </SettingsPageContainer>
   );

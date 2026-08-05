@@ -18,3 +18,5 @@ services:
         value: /data/workspace
       - key: T3CODE_PAIRING_TTL
         value: 24h
+      - key: OPENAI_API_KEY
+        sync: false
