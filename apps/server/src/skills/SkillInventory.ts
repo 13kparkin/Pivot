@@ -5,6 +5,7 @@ import type {
   SkillInventoryInstallation,
 } from "@t3tools/contracts";
 import { ClaudeSettings, CodexSettings, ProviderInstanceId } from "@t3tools/contracts";
+import * as Arr from "effect/Array";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -24,7 +25,7 @@ function harnessDisplayName(instance: ProviderInstanceConfig, fallback: string):
   return instance.displayName?.trim() || fallback;
 }
 
-const readSkillInstallations = Effect.fn("SkillInventory.readSkillInstallations")(
+export const readSkillInstallations = Effect.fn("SkillInventory.readSkillInstallations")(
   function* (input: {
     readonly instanceId: string;
     readonly instance: ProviderInstanceConfig;
@@ -37,9 +38,8 @@ const readSkillInstallations = Effect.fn("SkillInventory.readSkillInstallations"
   > {
     const fileSystem = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
-    return yield* Effect.forEach(input.skills, (skill) =>
+    const installations = yield* Effect.forEach(input.skills, (skill) =>
       fileSystem.readFileString(skill.path).pipe(
-        Effect.orElseSucceed(() => ""),
         Effect.map((content) => ({
           providerInstanceId: ProviderInstanceId.make(input.instanceId),
           harness: input.instance.driver,
@@ -50,8 +50,10 @@ const readSkillInstallations = Effect.fn("SkillInventory.readSkillInstallations"
           skillFilePath: skill.path,
           content,
         })),
+        Effect.option,
       ),
     );
+    return Arr.getSomes(installations);
   },
 );
 

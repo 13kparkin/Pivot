@@ -12,7 +12,7 @@ import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 
 import * as ServerSettings from "../serverSettings.ts";
-import { discoverGlobalSkillInventory } from "./SkillInventory.ts";
+import { discoverGlobalSkillInventory, readSkillInstallations } from "./SkillInventory.ts";
 
 const decodeCodexSettings = Schema.decodeSync(CodexSettings);
 const decodeClaudeSettings = Schema.decodeSync(ClaudeSettings);
@@ -33,6 +33,33 @@ const writeSkill = Effect.fn("SkillInventoryTest.writeSkill")(function* (
 });
 
 it.layer(NodeServices.layer)("discoverGlobalSkillInventory", (it) => {
+  it.effect("omits skills that become unreadable during inventory", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const tempDirectory = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "t3-skill-inventory-unreadable-",
+      });
+      const installations = yield* readSkillInstallations({
+        instanceId: "codex",
+        instance: {
+          driver: ProviderDriverKind.make("codex"),
+          config: decodeCodexSettings({}),
+        },
+        fallbackDisplayName: "Codex",
+        skills: [
+          {
+            name: "removed",
+            path: path.join(tempDirectory, "removed", "SKILL.md"),
+            enabled: true,
+            scope: "user",
+          },
+        ],
+      });
+      assert.deepEqual(installations, []);
+    }),
+  );
+
   it.effect("discovers global skills for configured Codex and Claude instances", () =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;

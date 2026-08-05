@@ -4,6 +4,7 @@ import { ProviderDriverKind, ProviderInstanceId, type SkillInventory } from "@t3
 import {
   displayedSkillCount,
   filterSkillInventory,
+  formatSkillCount,
   formatSkillPath,
   groupSkillsByHarness,
   setKeyCollapsed,
@@ -66,6 +67,12 @@ describe("skill explorer helpers", () => {
     expect(displayedSkillCount(inventory, true)).toBe(2);
     expect(displayedSkillCount(inventory, false)).toBeNull();
     expect(displayedSkillCount(null, true)).toBeNull();
+  });
+
+  it("labels filtered skill counts without hiding the installed total", () => {
+    expect(formatSkillCount(12)).toBe("12 skills");
+    expect(formatSkillCount(1)).toBe("1 skill");
+    expect(formatSkillCount(12, 2)).toBe("2 of 12 skills");
   });
 
   it("applies the requested harness collapsed state without toggling blindly", () => {

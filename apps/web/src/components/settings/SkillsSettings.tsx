@@ -7,6 +7,7 @@ import {
   displayedSkillCount,
   fetchEnvironmentSkillInventory,
   filterSkillInventory,
+  formatSkillCount,
   formatSkillPath,
   groupSkillsByHarness,
   setKeyCollapsed,
@@ -160,6 +161,7 @@ function EnvironmentSkillInventory({
     state.status === "loaded" ? state.inventory : null,
     isConnected,
   );
+  const visibleSkillCount = displayedSkillCount(visibleInventory, isConnected);
   const phase = environment.connection.phase;
   const isSearching = query.trim().length > 0;
   const open = isSearching || !collapsed;
@@ -198,7 +200,7 @@ function EnvironmentSkillInventory({
         />
         {skillCount !== null ? (
           <span className="shrink-0 font-mono text-[11px] tabular-nums text-muted-foreground/70">
-            {skillCount} {skillCount === 1 ? "skill" : "skills"}
+            {formatSkillCount(skillCount, isSearching ? (visibleSkillCount ?? 0) : undefined)}
           </span>
         ) : null}
       </div>

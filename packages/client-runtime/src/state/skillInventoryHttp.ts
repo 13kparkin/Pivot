@@ -44,6 +44,11 @@ export function displayedSkillCount(
   return inventory.installations.length;
 }
 
+export function formatSkillCount(total: number, visible?: number): string {
+  if (visible !== undefined && visible !== total) return `${visible} of ${total} skills`;
+  return `${total} ${total === 1 ? "skill" : "skills"}`;
+}
+
 export function setKeyCollapsed(
   keys: ReadonlySet<string>,
   key: string,
