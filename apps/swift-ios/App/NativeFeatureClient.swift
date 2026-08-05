@@ -1011,6 +1011,12 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         try? await refresh(client: route.client)
     }
 
+    func setThreadPinned(id: String, pinned: Bool) async throws {
+        let route = try threadRoute(for: id)
+        _ = try await route.client.pin(threadID: route.wireID, pinned: pinned)
+        try? await refresh(client: route.client)
+    }
+
     func setRuntimeMode(id: String, mode: FeatureRuntimeMode) async throws {
         let route = try threadRoute(for: id)
         _ = try await route.client.setRuntimeMode(
@@ -1737,6 +1743,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             settledAt: thread.settledAt,
             snoozedUntil: thread.snoozedUntil,
             snoozedAt: thread.snoozedAt,
+            pinnedAt: thread.pinnedAt,
             session: thread.session,
             latestUserMessageAt: thread.latestUserMessageAt,
             hasPendingApprovals: thread.hasPendingApprovals,
@@ -3151,6 +3158,8 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             ),
             snoozedUntil: thread.snoozedUntil.map(parseDate),
             snoozedAt: thread.snoozedAt.map(parseDate),
+            pinnedAt: thread.pinnedAt.map(parseDate),
+            supportsPinning: environment.descriptor?.capabilities.threadPinning,
             attentionAt: failureDate(
                 latestTurn: thread.latestTurn,
                 session: thread.session
@@ -3207,6 +3216,8 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             ),
             snoozedUntil: thread.snoozedUntil.map(parseDate),
             snoozedAt: thread.snoozedAt.map(parseDate),
+            pinnedAt: thread.pinnedAt.map(parseDate),
+            supportsPinning: environment.descriptor?.capabilities.threadPinning,
             attentionAt: failureDate(
                 latestTurn: thread.latestTurn,
                 session: thread.session
@@ -4713,6 +4724,7 @@ enum NativeThreadDetailReducer {
             settledAt: thread.settledAt,
             snoozedUntil: thread.snoozedUntil,
             snoozedAt: thread.snoozedAt,
+            pinnedAt: thread.pinnedAt,
             deletedAt: thread.deletedAt,
             messages: messages ?? thread.messages,
             activities: activities ?? thread.activities,

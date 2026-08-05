@@ -90,6 +90,34 @@ struct DailyUXSidebarTests {
     }
 
     @Test
+    func pinPromotesSettledThreadsButSnoozeStillWins() {
+        var pinnedSettled = thread(
+            id: "pinned-settled",
+            created: -100,
+            updated: -400_000,
+            state: .idle,
+            isSettled: true
+        )
+        pinnedSettled.pinnedAt = now.addingTimeInterval(-20)
+
+        var pinnedSnoozed = thread(
+            id: "pinned-snoozed",
+            created: -50,
+            updated: -10
+        )
+        pinnedSnoozed.pinnedAt = now.addingTimeInterval(-10)
+        pinnedSnoozed.snoozedUntil = now.addingTimeInterval(3_600)
+
+        let index = makeIndex([pinnedSettled, pinnedSnoozed])
+
+        #expect(index.pinned.map(\.id) == ["pinned-settled"])
+        #expect(index.snoozed.map(\.id) == ["pinned-snoozed"])
+        #expect(index.active.isEmpty)
+        #expect(index.settled.isEmpty)
+        #expect(DailyUXSidebarRefresh.nextBoundary(for: [pinnedSettled], after: now) == nil)
+    }
+
+    @Test
     func snoozedThreadsHaveAReachableReverseState() {
         var snoozed = thread(id: "snoozed", created: -20, updated: -10)
         snoozed.snoozedUntil = now.addingTimeInterval(3_600)

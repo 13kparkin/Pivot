@@ -74,6 +74,21 @@ final class CoreContractTests: XCTestCase {
         XCTAssertEqual(command["threadId"]?.stringValue, "thread-1")
         XCTAssertEqual(command["modelSelection"]?["instanceId"]?.stringValue, "codex")
         XCTAssertEqual(command["runtimeMode"]?.stringValue, "full-access")
+
+        let pin = OrchestrationCommands.pin(
+            threadID: "thread-1",
+            pinned: true,
+            commandID: "command-pin"
+        )
+        XCTAssertEqual(pin["type"]?.stringValue, "thread.pin")
+        XCTAssertEqual(pin["threadId"]?.stringValue, "thread-1")
+
+        let unpin = OrchestrationCommands.pin(
+            threadID: "thread-1",
+            pinned: false,
+            commandID: "command-unpin"
+        )
+        XCTAssertEqual(unpin["type"]?.stringValue, "thread.unpin")
     }
 
     func testFirstSendCommandCarriesCanonicalBootstrapMetadata() throws {

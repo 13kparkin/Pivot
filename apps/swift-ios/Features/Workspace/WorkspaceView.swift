@@ -241,6 +241,9 @@ public struct WorkspaceView: View {
                 onSnooze: { thread, until in
                     Task { await model.setSnoozed(thread.id, until: until) }
                 },
+                onPin: { thread, pinned in
+                    Task { await model.setPinned(thread.id, pinned: pinned) }
+                },
                 onDelete: { thread in
                     Task { await model.deleteThread(thread.id) }
                 }
@@ -657,6 +660,7 @@ private extension FeatureDraftAttachment {
 }
 
 struct HomePresentation {
+    let pinned: [FeatureThread]
     let active: [FeatureThread]
     let snoozed: [FeatureThread]
     let settled: [FeatureThread]
@@ -680,6 +684,7 @@ struct HomePresentation {
                 return $0.id < $1.id
             }
 
+        pinned = index.pinned
         active = index.active
         snoozed = index.snoozed
         settled = index.settled
@@ -688,7 +693,7 @@ struct HomePresentation {
         searchResults = normalizedQuery.isEmpty
             ? []
             : DailyUXSidebarIndex.matchingThreads(
-                index.active + index.snoozed + index.settled + archived,
+                index.pinned + index.active + index.snoozed + index.settled + archived,
                 snapshot: snapshot,
                 query: normalizedQuery
             )
@@ -928,6 +933,11 @@ struct FeatureThreadRow: View, Equatable {
                     }
                     .foregroundStyle(environmentColor)
                 }
+                if thread.pinnedAt != nil {
+                    Image(systemName: "pin.fill")
+                        .font(.system(size: 9, weight: .semibold))
+                        .foregroundStyle(T3Colors.textSecondary)
+                }
                 providerIcon(size: 16)
             }
             .font(T3Typography.homeMetadata)
@@ -955,6 +965,11 @@ struct FeatureThreadRow: View, Equatable {
                 .foregroundStyle(T3Colors.textSecondary)
                 .lineLimit(allowsMultilineTitle ? 2 : 1)
             Spacer(minLength: 8)
+            if thread.pinnedAt != nil {
+                Image(systemName: "pin.fill")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(T3Colors.textSecondary)
+            }
             providerIcon(size: 15)
             Text(SidebarRelativeAge.compact(since: thread.updatedAt, now: now))
                 .font(T3Typography.homeMetadata.monospacedDigit())

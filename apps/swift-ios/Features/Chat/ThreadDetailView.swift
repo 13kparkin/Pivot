@@ -228,6 +228,21 @@ public struct ThreadDetailView: View {
                 }
             }
             Section {
+                if currentThread.supportsPinning == true, !currentThread.isArchived {
+                    Button {
+                        Task {
+                            await model.setPinned(
+                                thread.id,
+                                pinned: currentThread.pinnedAt == nil
+                            )
+                        }
+                    } label: {
+                        Label(
+                            currentThread.pinnedAt == nil ? "Pin" : "Unpin",
+                            systemImage: currentThread.pinnedAt == nil ? "pin" : "pin.slash"
+                        )
+                    }
+                }
                 Button {
                     Task { _ = await model.detail(for: thread.id, force: true) }
                 } label: {

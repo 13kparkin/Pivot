@@ -21,6 +21,7 @@ struct HomeThreadCollectionView: UIViewRepresentable {
     let onArchive: (FeatureThread, Bool) -> Void
     let onSettle: (FeatureThread, Bool) -> Void
     let onSnooze: (FeatureThread, Date?) -> Void
+    let onPin: (FeatureThread, Bool) -> Void
     let onDelete: (FeatureThread) -> Void
 
     func makeCoordinator() -> Coordinator {
@@ -163,7 +164,7 @@ struct HomeThreadCollectionView: UIViewRepresentable {
             case .showMoreSettled:
                 collectionView.deselectItem(at: indexPath, animated: false)
                 parent.onShowMoreSettled()
-            case .empty, .searchEmpty:
+            case .empty, .searchEmpty, .pinnedDivider:
                 collectionView.deselectItem(at: indexPath, animated: false)
             }
         }
@@ -202,6 +203,14 @@ struct HomeThreadCollectionView: UIViewRepresentable {
                     finish(true)
                 }
                 primaryAction.image = UIImage(systemName: "arrow.uturn.backward")
+                primaryAction.backgroundColor = .systemBlue
+            } else if thread.pinnedAt != nil, thread.supportsPinning == true {
+                primaryAction = UIContextualAction(style: .normal, title: "Unpin") {
+                    [weak self] _, _, finish in
+                    self?.parent.onPin(thread, false)
+                    finish(true)
+                }
+                primaryAction.image = UIImage(systemName: "pin.slash")
                 primaryAction.backgroundColor = .systemBlue
             } else {
                 let isSettled = thread.isEffectivelySettled(at: .now)
@@ -297,6 +306,9 @@ struct HomeThreadCollectionView: UIViewRepresentable {
                 cell.accessibilityValue = nil
                 cell.accessibilityHint = nil
                 cell.onAccessibilityActivate = nil
+            case .pinnedDivider:
+                cell.isAccessibilityElement = false
+                cell.onAccessibilityActivate = nil
             }
         }
 
@@ -367,6 +379,17 @@ struct HomeThreadCollectionView: UIViewRepresentable {
 
             var actions: [UIMenuElement] = [rename, archive]
             if !isArchived {
+                if thread.supportsPinning == true {
+                    let isPinned = thread.pinnedAt != nil
+                    actions.append(
+                        UIAction(
+                            title: isPinned ? "Unpin" : "Pin",
+                            image: UIImage(systemName: isPinned ? "pin.slash" : "pin")
+                        ) { [weak self] _ in
+                            self?.parent.onPin(thread, !isPinned)
+                        }
+                    )
+                }
                 let isSettled = thread.isEffectivelySettled(at: .now)
                 actions.append(
                     UIAction(
@@ -449,9 +472,22 @@ struct HomeThreadCollectionView: UIViewRepresentable {
             }
         }
 
-        var items: [HomeCollectionItem] = presentation.active.isEmpty
-            ? [.empty(.active)]
-            : presentation.active.map {
+        var items = presentation.pinned.map {
+            HomeCollectionItem.thread(
+                $0,
+                presentation.rowContexts[$0.id] ?? .fallback,
+                .rich,
+                false,
+                forceRichRows
+            )
+        }
+        if !presentation.pinned.isEmpty, !presentation.active.isEmpty {
+            items.append(.pinnedDivider)
+        }
+        if presentation.active.isEmpty, presentation.pinned.isEmpty {
+            items.append(.empty(.active))
+        } else {
+            items.append(contentsOf: presentation.active.map {
                 .thread(
                     $0,
                     presentation.rowContexts[$0.id] ?? .fallback,
@@ -459,7 +495,8 @@ struct HomeThreadCollectionView: UIViewRepresentable {
                     false,
                     forceRichRows
                 )
-            }
+            })
+        }
 
         items.append(.shelfHeader(.snoozed, presentation.snoozed.count, isSnoozedExpanded))
         if isSnoozedExpanded {
@@ -543,6 +580,7 @@ private enum HomeCollectionItem: Equatable {
         case empty(HomeShelf)
         case showMoreSettled
         case searchEmpty
+        case pinnedDivider
 
         var threadID: String? {
             guard case let .thread(id) = self else { return nil }
@@ -555,6 +593,7 @@ private enum HomeCollectionItem: Equatable {
     case empty(HomeShelf)
     case showMoreSettled(Int)
     case searchEmpty(String)
+    case pinnedDivider
 
     var id: ID {
         switch self {
@@ -563,6 +602,7 @@ private enum HomeCollectionItem: Equatable {
         case let .empty(shelf): .empty(shelf)
         case .showMoreSettled: .showMoreSettled
         case .searchEmpty: .searchEmpty
+        case .pinnedDivider: .pinnedDivider
         }
     }
 }
@@ -613,6 +653,12 @@ private struct HomeCollectionCellContent: View {
             ContentUnavailableView("No matching tasks", systemImage: "magnifyingglass")
                 .foregroundStyle(T3Colors.textSecondary)
                 .frame(maxWidth: .infinity, minHeight: 160)
+        case .pinnedDivider:
+            Rectangle()
+                .fill(T3Colors.textTertiary.opacity(0.18))
+                .frame(height: 1)
+                .padding(.horizontal, 18)
+                .padding(.vertical, 3)
         }
     }
 }

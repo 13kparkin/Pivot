@@ -55,6 +55,7 @@ public protocol FeatureClient: AnyObject {
     func setThreadArchived(id: String, archived: Bool) async throws
     func setThreadSettled(id: String, settled: Bool) async throws
     func setThreadSnoozed(id: String, until: Date?) async throws
+    func setThreadPinned(id: String, pinned: Bool) async throws
     func setRuntimeMode(id: String, mode: FeatureRuntimeMode) async throws
     func setInteractionMode(id: String, mode: FeatureInteractionMode) async throws
     func deleteThread(id: String) async throws
@@ -132,6 +133,7 @@ public extension FeatureClient {
     }
     func setThreadSettled(id: String, settled: Bool) async throws {}
     func setThreadSnoozed(id: String, until: Date?) async throws {}
+    func setThreadPinned(id: String, pinned: Bool) async throws {}
     func setRuntimeMode(id: String, mode: FeatureRuntimeMode) async throws {}
     func setInteractionMode(id: String, mode: FeatureInteractionMode) async throws {}
 

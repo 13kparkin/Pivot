@@ -360,6 +360,11 @@ public actor T3Client {
     }
 
     @discardableResult
+    public func pin(threadID: String, pinned: Bool) async throws -> DispatchResult {
+        try await dispatch(OrchestrationCommands.pin(threadID: threadID, pinned: pinned))
+    }
+
+    @discardableResult
     public func setRuntimeMode(
         threadID: String,
         mode: RuntimeMode
@@ -1401,6 +1406,18 @@ public enum OrchestrationCommands {
             "threadId": .string(threadID),
             "reason": .string("user"),
         ])
+    }
+
+    public static func pin(
+        threadID: String,
+        pinned: Bool,
+        commandID: String = UUID().uuidString
+    ) -> JSONValue {
+        basic(
+            type: pinned ? "thread.pin" : "thread.unpin",
+            threadID: threadID,
+            commandID: commandID
+        )
     }
 
     public static func setRuntimeMode(

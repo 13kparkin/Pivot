@@ -274,6 +274,9 @@ public final class FeatureRootModel {
                 $0.isSettled = settled
                 $0.keepsActive = !settled
                 $0.settledAt = settledAt
+                if settled {
+                    $0.pinnedAt = nil
+                }
             }
         }
     }
@@ -287,6 +290,24 @@ public final class FeatureRootModel {
             mutateThread(id: id) {
                 $0.snoozedUntil = until
                 $0.snoozedAt = snoozedAt
+            }
+        }
+    }
+
+    public func setPinned(_ id: String, pinned: Bool) async {
+        let environment = currentEnvironmentIdentity
+        await perform {
+            try await client.setThreadPinned(id: id, pinned: pinned)
+            guard currentEnvironmentIdentity == environment else { return }
+            mutateThread(id: id) {
+                $0.pinnedAt = pinned ? Date.now : nil
+                if pinned {
+                    $0.isSettled = false
+                    $0.keepsActive = true
+                    $0.settledAt = nil
+                    $0.snoozedUntil = nil
+                    $0.snoozedAt = nil
+                }
             }
         }
     }

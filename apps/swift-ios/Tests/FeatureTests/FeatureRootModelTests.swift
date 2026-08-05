@@ -611,6 +611,33 @@ struct FeatureRootModelTests {
     }
 
     @Test
+    func testPinOptimisticallyPromotesAParkedThread() async {
+        let client = FeatureClientStub()
+        var thread = FeatureThread(
+            id: "thread-1",
+            projectID: "project-1",
+            title: "Thread",
+            isSettled: true,
+            settledAt: .now,
+            snoozedUntil: Date.now.addingTimeInterval(3_600),
+            snoozedAt: .now
+        )
+        thread.supportsPinning = true
+        client.createdThread = thread
+        let model = testRootModel(client: client)
+        _ = await model.createThread(projectID: thread.projectID, title: nil, selection: nil)
+
+        await model.setPinned(thread.id, pinned: true)
+
+        let updated = model.snapshot.threads[0]
+        #expect(updated.pinnedAt != nil)
+        #expect(!updated.isSettled)
+        #expect(updated.keepsActive)
+        #expect(updated.settledAt == nil)
+        #expect(updated.snoozedUntil == nil)
+    }
+
+    @Test
     func testResolveUserInputForwardsTypedAnswersAndClearsTheRequest() async {
         let client = FeatureClientStub()
         let thread = FeatureThread(id: "thread-1", projectID: "project-1", title: "Thread")
@@ -954,6 +981,7 @@ private func orchestrationThread(
         settledAt: nil,
         snoozedUntil: nil,
         snoozedAt: nil,
+        pinnedAt: nil,
         deletedAt: nil,
         messages: messages,
         activities: activities,

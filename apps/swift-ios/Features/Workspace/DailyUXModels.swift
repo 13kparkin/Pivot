@@ -168,6 +168,7 @@ enum DailyUXCreationContext {
 }
 
 struct DailyUXSidebarIndex {
+    let pinned: [FeatureThread]
     let active: [FeatureThread]
     let snoozed: [FeatureThread]
     let settled: [FeatureThread]
@@ -195,14 +196,13 @@ struct DailyUXSidebarIndex {
         }
         let available = visible.filter { !$0.isEffectivelySnoozed(at: now) }
 
+        pinned = available
+            .filter { $0.pinnedAt != nil }
+            .sorted(by: Self.creationOrder)
+
         active = available
-            .filter { !$0.isEffectivelySettled(at: now) }
-            .sorted { lhs, rhs in
-                if lhs.createdAt != rhs.createdAt {
-                    return lhs.createdAt > rhs.createdAt
-                }
-                return lhs.id < rhs.id
-            }
+            .filter { $0.pinnedAt == nil && !$0.isEffectivelySettled(at: now) }
+            .sorted(by: Self.creationOrder)
 
         snoozed = visible
             .filter { $0.isEffectivelySnoozed(at: now) }
@@ -216,7 +216,7 @@ struct DailyUXSidebarIndex {
             }
 
         settled = available
-            .filter { $0.isEffectivelySettled(at: now) }
+            .filter { $0.pinnedAt == nil && $0.isEffectivelySettled(at: now) }
             .sorted { lhs, rhs in
                 if lhs.settledSortDate != rhs.settledSortDate {
                     return lhs.settledSortDate > rhs.settledSortDate
@@ -225,10 +225,17 @@ struct DailyUXSidebarIndex {
             }
 
         searchResults = Self.matchingThreads(
-            active + snoozed + settled,
+            pinned + active + snoozed + settled,
             snapshot: snapshot,
             query: query
         )
+    }
+
+    private static func creationOrder(_ lhs: FeatureThread, _ rhs: FeatureThread) -> Bool {
+        if lhs.createdAt != rhs.createdAt {
+            return lhs.createdAt > rhs.createdAt
+        }
+        return lhs.id < rhs.id
     }
 
     static func matchingThreads(
@@ -283,6 +290,7 @@ enum DailyUXSidebarRefresh {
     ) -> Date? {
         guard !thread.isArchived,
               !thread.isSettled,
+              thread.pinnedAt == nil,
               !thread.keepsActive,
               let lastActivityAt = thread.lastActivityAt else {
             return nil

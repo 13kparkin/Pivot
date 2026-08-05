@@ -42,6 +42,7 @@ public struct EnvironmentDescriptor: Codable, Equatable, Sendable {
         public let connectionProbe: Bool?
         public let threadSettlement: Bool?
         public let threadSnooze: Bool?
+        public let threadPinning: Bool?
         public let threadTitleRegeneration: Bool?
         public let serverSelfUpdate: String?
         public let serverSelfUpdateProgress: Bool?
@@ -51,6 +52,7 @@ public struct EnvironmentDescriptor: Codable, Equatable, Sendable {
             case connectionProbe
             case threadSettlement
             case threadSnooze
+            case threadPinning
             case threadTitleRegeneration
             case serverSelfUpdate
             case serverSelfUpdateProgress
@@ -63,6 +65,7 @@ public struct EnvironmentDescriptor: Codable, Equatable, Sendable {
             connectionProbe = try container.decodeIfPresent(Bool.self, forKey: .connectionProbe)
             threadSettlement = try container.decodeIfPresent(Bool.self, forKey: .threadSettlement)
             threadSnooze = try container.decodeIfPresent(Bool.self, forKey: .threadSnooze)
+            threadPinning = try container.decodeIfPresent(Bool.self, forKey: .threadPinning)
             threadTitleRegeneration = try container.decodeIfPresent(
                 Bool.self,
                 forKey: .threadTitleRegeneration
@@ -333,6 +336,7 @@ public struct OrchestrationThreadShell: Codable, Identifiable, Equatable, Sendab
     public let settledAt: String?
     public let snoozedUntil: String?
     public let snoozedAt: String?
+    public let pinnedAt: String?
     public let session: OrchestrationSession?
     public let latestUserMessageAt: String?
     public let hasPendingApprovals: Bool
@@ -404,6 +408,7 @@ public struct OrchestrationThread: Codable, Identifiable, Equatable, Sendable {
     public let settledAt: String?
     public let snoozedUntil: String?
     public let snoozedAt: String?
+    public let pinnedAt: String?
     public let deletedAt: String?
     public let messages: [OrchestrationMessage]
     public let activities: [OrchestrationActivity]
