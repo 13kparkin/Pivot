@@ -2476,7 +2476,21 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
             const subagents = yield* Ref.get(subagentThreads);
             for (const [nativeThreadId, state] of Object.entries(input.item.agentsStates)) {
               const subagent = subagents.get(nativeThreadId);
-              if (subagent === undefined || subagent.task.currentActivationId === null) {
+              if (subagent === undefined) {
+                continue;
+              }
+              // A settled identity with no live activation is trailing noise.
+              // An *active* one with no activation is a just-registered agent
+              // whose child turn has not opened yet — its state on this very
+              // frame can already be terminal, and dropping it would leave the
+              // agent running forever.
+              const settled =
+                subagent.task.status === "idle" ||
+                subagent.task.status === "completed" ||
+                subagent.task.status === "failed" ||
+                subagent.task.status === "cancelled" ||
+                subagent.task.status === "interrupted";
+              if (subagent.task.currentActivationId === null && settled) {
                 continue;
               }
               yield* emitSubagentTaskUpdate({

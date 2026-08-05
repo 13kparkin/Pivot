@@ -4036,6 +4036,97 @@ describe("CodexAdapterV2 post-settle continuation", () => {
     ),
   );
 
+  const spawnEarlyTerminalTranscript = makeCodexReplayTranscript({
+    scenario: `${RESTART_SCENARIO}-spawn-early-terminal`,
+    entries: [
+      ...codexReplayPreamble({
+        nativeThreadId: RESTART_NATIVE_THREAD,
+        nativeTurnId: RESTART_NATIVE_TURN,
+        prompt: RESTART_PROMPT,
+      }),
+      restartChildFrame({
+        label: "item/completed/spawn-with-terminal-state",
+        method: "item/completed",
+        params: {
+          item: {
+            type: "collabAgentToolCall",
+            id: "call-codex-spawn-early-terminal",
+            tool: "spawnAgent",
+            status: "completed",
+            senderThreadId: RESTART_NATIVE_THREAD,
+            receiverThreadIds: [RESTART_CHILD_THREAD],
+            prompt: "finish instantly",
+            model: null,
+            reasoningEffort: null,
+            agentsStates: {
+              [RESTART_CHILD_THREAD]: {
+                status: "completed",
+                message: "EARLY_TERMINAL_RESULT",
+              },
+            },
+          },
+          threadId: RESTART_NATIVE_THREAD,
+          turnId: RESTART_NATIVE_TURN,
+          completedAtMs: 1782622482000,
+        },
+      }),
+      restartChildFrame({
+        label: "item/completed/root-answer",
+        method: "item/completed",
+        params: {
+          item: {
+            type: "agentMessage",
+            id: "root-answer-spawn-early-terminal",
+            text: "SPAWNED",
+            phase: "final_answer",
+            memoryCitation: null,
+          },
+          threadId: RESTART_NATIVE_THREAD,
+          turnId: RESTART_NATIVE_TURN,
+          completedAtMs: 1782622483000,
+        },
+      }),
+      restartChildFrame({
+        label: "turn/completed/root",
+        method: "turn/completed",
+        params: {
+          threadId: RESTART_NATIVE_THREAD,
+          turn: makeCodexReplayTurn({ id: RESTART_NATIVE_TURN, status: "completed" }),
+        },
+      }),
+    ],
+  });
+
+  it.effect("applies a terminal state arriving on the spawning frame itself", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        // The spawn registers the agent before any child turn opens an
+        // activation, so its currentActivationId is still null when the same
+        // frame's agentsStates carries the terminal state. The settled-noise
+        // gate must not swallow it, or the agent sticks at running forever.
+        const harness = yield* makeCodexReplayHarness(spawnEarlyTerminalTranscript);
+        const now = yield* DateTime.now;
+
+        yield* harness.runtime.startTurn(
+          makeCodexTestTurnInput({
+            threadId: harness.threadId,
+            providerThread: harness.providerThread,
+            now,
+            attemptId: RunAttemptId.make("attempt-codex-spawn-early-terminal"),
+            text: RESTART_PROMPT,
+          }),
+        );
+        yield* awaitUntil(() => harness.terminalEvents().length === 1, "root turn terminal");
+
+        // A completed Codex agent rests at idle (its identity stays reusable);
+        // what matters is that it left running and carries its result.
+        const finalUpdate = harness.subagentUpdates().at(-1);
+        assert.equal(finalUpdate?.subagent.status, "idle");
+        assert.equal(finalUpdate?.subagent.result, "EARLY_TERMINAL_RESULT");
+      }).pipe(Effect.provide(Layer.merge(idAllocatorLayer, NodeServices.layer))),
+    ),
+  );
+
   it.effect("does not adopt an unknown native thread when nothing is rehydrated", () =>
     Effect.scoped(
       Effect.gen(function* () {
