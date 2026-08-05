@@ -393,6 +393,7 @@ it.effect("lists compact references for every active thread, including hidden su
     parentThreadId: null,
     relationshipToParent: null,
   } as const;
+  const archivedId = ThreadId.make("thread:thread-management:refs-archived");
   const threads = [
     shell(rootId, rootLineage, null),
     shell(
@@ -417,7 +418,10 @@ it.effect("lists compact references for every active thread, including hidden su
             schemaVersion: 3,
             snapshotSequence: 10,
             threads,
-            archivedThreads: [],
+            // An archived thread still holds its worktree; worktree cleanup
+            // treats this RPC as the complete set, so omitting the archive
+            // would classify that worktree as orphaned and remove it.
+            archivedThreads: [shell(archivedId, rootLineage, null)],
           }),
       }),
     ),
@@ -427,7 +431,7 @@ it.effect("lists compact references for every active thread, including hidden su
     const service = yield* ThreadManagementService;
 
     expect(yield* service.listAllThreadRefs()).toEqual({
-      threadRefs: threads.map((thread) => ({
+      threadRefs: [...threads, shell(archivedId, rootLineage, null)].map((thread) => ({
         threadId: thread.id,
         projectId,
         worktreePath,

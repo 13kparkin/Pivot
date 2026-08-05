@@ -479,11 +479,16 @@ const make = Effect.gen(function* () {
   const listAllThreadRefs: ThreadManagementServiceShape["listAllThreadRefs"] = () =>
     orchestrator.getShellSnapshot().pipe(
       Effect.map((snapshot) => ({
-        threadRefs: snapshot.threads.map(({ id, projectId, worktreePath }) => ({
-          threadId: id,
-          projectId,
-          worktreePath,
-        })),
+        // Worktree cleanup treats this as the complete set: an archived thread
+        // still holds its worktree, so omitting the archive would classify it
+        // as orphaned and remove it.
+        threadRefs: [...snapshot.threads, ...snapshot.archivedThreads].map(
+          ({ id, projectId, worktreePath }) => ({
+            threadId: id,
+            projectId,
+            worktreePath,
+          }),
+        ),
       })),
     );
 
