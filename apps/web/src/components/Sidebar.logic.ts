@@ -148,27 +148,24 @@ export function buildBulkTitleRegenerationContextMenuItem(input: {
 export interface ThreadStatusPill {
   label:
     | "Working"
-    | "Monitoring"
     | "Connecting"
     | "Completed"
     | "Pending Approval"
     | "Awaiting Input"
+    | "Waiting"
     | "Plan Ready";
   colorClass: string;
   dotClass: string;
   pulse: boolean;
 }
 
-// Rollup order mirrors the per-thread resolver exactly: attention states,
-// then active work, then the actionable plan prompt, then passive
-// monitoring. A Monitoring sibling must never hide a Plan Ready thread.
 const THREAD_STATUS_PRIORITY: Record<ThreadStatusPill["label"], number> = {
-  "Pending Approval": 6,
-  "Awaiting Input": 5,
-  Working: 4,
-  Connecting: 4,
-  "Plan Ready": 3,
-  Monitoring: 2,
+  "Pending Approval": 5,
+  "Awaiting Input": 4,
+  Working: 3,
+  Connecting: 3,
+  Waiting: 2.5,
+  "Plan Ready": 2,
   Completed: 1,
 };
 
@@ -178,16 +175,11 @@ type ThreadStatusInput = Pick<
   | "hasPendingApprovals"
   | "hasPendingUserInput"
   | "interactionMode"
-<<<<<<< HEAD
-  | "latestTurn"
-  | "session"
-  | "backgroundLiveness"
-=======
   | "latestRun"
   | "runtime"
->>>>>>> 79c36e6204 (Complete orchestration V2 frontend cutover)
 > & {
   lastVisitedAt?: string | null | undefined;
+  pendingBackgroundTasks?: SidebarThreadSummary["pendingBackgroundTasks"] | undefined;
 };
 
 export interface ThreadJumpHintVisibilityController {
@@ -505,9 +497,14 @@ export function resolveThreadRowClassName(input: {
 
 // ── Sidebar thread status model ─────────────────────────────────────
 // Five visual states, three colors: color is reserved for "act now"
+// ── Sidebar v2 status model ─────────────────────────────────────────
+// Six visual states, three colors: color is reserved for "act now"
 // (approval), "in motion" (working), and "broken" (failed). Ready is the
 // unlabeled resting state — the agent stopped and is waiting on the user,
-// whether it finished, asked a question, or proposed a plan.
+// whether it finished, asked a question, or proposed a plan. Waiting
+// (runtime status "idle") is the agent stopped with background tasks still
+// open: not the user's turn yet, so it renders grey like working, not as a
+// false Done.
 // Unread completion is tracked separately: it describes whether a ready
 // thread needs attention, not what the thread is currently doing.
 export type SidebarThreadStatus =
@@ -517,14 +514,11 @@ export type SidebarThreadStatus =
   | "monitoring"
   | "failed"
   | "ready";
+export type SidebarV2Status = "approval" | "input" | "working" | "waiting" | "failed" | "ready";
 
 type SidebarThreadStatusInput = Pick<
   SidebarThreadSummary,
-<<<<<<< HEAD
-  "hasPendingApprovals" | "hasPendingUserInput" | "session" | "backgroundLiveness"
-=======
   "hasPendingApprovals" | "hasPendingUserInput" | "runtime"
->>>>>>> 0c15987295 (fix: reconcile rebase with latest main)
 >;
 
 export function resolveSidebarThreadStatus(thread: SidebarThreadStatusInput): SidebarThreadStatus {
@@ -540,24 +534,52 @@ export function resolveSidebarThreadStatus(thread: SidebarThreadStatusInput): Si
   ) {
     return "working";
   }
-<<<<<<< HEAD
-  // A failed session outranks lingering background liveness: the user must
-  // see the failure, not a stale Working (review finding).
-  if (thread.session?.status === "error") {
-=======
+  if (thread.runtime?.status === "idle") {
+    return "waiting";
+  }
   if (thread.runtime?.status === "failed") {
->>>>>>> 0c15987295 (fix: reconcile rebase with latest main)
     return "failed";
   }
-  // Background work outlives the turn: fleets read as working; monitoring
-  // only when watch loops are the sole live work.
-  if (thread.backgroundLiveness === "working") {
+  return "ready";
+}
+
+export type SidebarV2TopStatusKind =
+  | "approval"
+  | "done"
+  | "failed"
+  | "input"
+  | "waiting"
+  | "woke"
+  | "working";
+
+export function resolveSidebarV2TopStatus(input: {
+  readonly status: SidebarV2Status;
+  readonly isUnread: boolean;
+  readonly isWoke: boolean;
+}): SidebarV2TopStatusKind | null {
+  if (input.status === "working") {
     return "working";
   }
-  if (thread.backgroundLiveness === "monitoring") {
-    return "monitoring";
+  if (input.status === "waiting") {
+    return "waiting";
   }
-  return "ready";
+  if (input.status === "approval") {
+    return "approval";
+  }
+  if (input.status === "input") {
+    return "input";
+  }
+  if (input.status === "failed") {
+    return "failed";
+  }
+  if (input.isWoke) {
+    return "woke";
+  }
+  return input.isUnread ? "done" : null;
+}
+
+export function shouldShowSidebarV2Duration(status: SidebarV2Status): boolean {
+  return status === "working";
 }
 
 /** NaN-safe Date.parse for sort comparators: a malformed timestamp must not
@@ -742,8 +764,15 @@ export function resolveThreadStatusPill(input: {
     };
   }
 
-  // An actionable plan prompt outranks lingering background work: it needs
-  // the user's decision, while liveness merely reports (review finding).
+  if ((thread.pendingBackgroundTasks?.length ?? 0) > 0) {
+    return {
+      label: "Waiting",
+      colorClass: "text-sidebar-muted-foreground",
+      dotClass: "bg-sidebar-muted-foreground",
+      pulse: false,
+    };
+  }
+
   const hasPlanReadyPrompt =
     !thread.hasPendingUserInput &&
     thread.interactionMode === "plan" &&
@@ -754,28 +783,6 @@ export function resolveThreadStatusPill(input: {
       label: "Plan Ready",
       colorClass: "text-violet-600 dark:text-violet-300/90",
       dotClass: "bg-violet-500 dark:bg-violet-300/90",
-      pulse: false,
-    };
-  }
-
-  // The turn can settle while native background work runs on. Subagent and
-  // workflow fleets read as plain Working; Monitoring is reserved for watch
-  // loops (a parent agent babysitting a PR, tailing checks) with no other
-  // live work. Same recede treatment as Working per inbox-zero.
-  if (thread.backgroundLiveness === "working") {
-    return {
-      label: "Working",
-      colorClass: "text-sky-600 dark:text-sky-300/80",
-      dotClass: "bg-sky-500 dark:bg-sky-300/80",
-      pulse: true,
-    };
-  }
-
-  if (thread.backgroundLiveness === "monitoring") {
-    return {
-      label: "Monitoring",
-      colorClass: "text-sky-600 dark:text-sky-300/80",
-      dotClass: "bg-sky-500 dark:bg-sky-300/80",
       pulse: false,
     };
   }
