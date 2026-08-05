@@ -578,7 +578,8 @@ export function routeProviderEvent(
         ownsChildThread(event.turnItem.threadId) ||
         // A reused subagent's row and its timeline item are emitted together;
         // routing only the row would advance the agent while its item stayed
-        // frozen on the spawning run.
+        // frozen on the spawning run. Proof of driving is required for the
+        // same reason as the row route.
         (event.turnItem.type === "subagent" && drivesSubagent(event.turnItem.subagentId))
       ) {
         return [true, state];

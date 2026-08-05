@@ -1,4 +1,3 @@
-import { expect, it, vi } from "vite-plus/test";
 import { assert, it } from "@effect/vitest";
 import {
   CheckpointScopeId,
@@ -12,19 +11,35 @@ import {
   RunAttemptId,
   RunId,
   ThreadId,
-  type OrchestrationV2ThreadProjection,
+  TurnItemId,
 } from "@t3tools/contracts";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Ref from "effect/Ref";
+import { expect, vi } from "vite-plus/test";
 
 import * as ContextHandoffService from "./ContextHandoffService.ts";
+import { ContextHandoffServiceV2 } from "./ContextHandoffService.ts";
 import * as EventSink from "./EventSink.ts";
+import { EventSinkV2 } from "./EventSink.ts";
 import * as IdAllocator from "./IdAllocator.ts";
+import type { ProviderAdapterV2SessionRuntime } from "./ProviderAdapter.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
+import {
+  ProjectionStoreReadError,
+  ProjectionStoreThreadNotFoundError,
+  ProjectionStoreV2,
+  type ProjectionStoreV2Error,
+} from "./ProjectionStore.ts";
 import * as ProviderSessionManager from "./ProviderSessionManager.ts";
+import { ProviderSessionManagerV2 } from "./ProviderSessionManager.ts";
 import * as ProviderTurnStart from "./ProviderTurnStartService.ts";
+import * as ProviderTurnStartService from "./ProviderTurnStartService.ts";
 import * as RunExecutionService from "./RunExecutionService.ts";
+import { RunExecutionServiceV2 } from "./RunExecutionService.ts";
 import * as RuntimePolicy from "./RuntimePolicy.ts";
+import { RuntimePolicyV2 } from "./RuntimePolicy.ts";
 
 it("does not commit running state when inherited background routing cannot be read", async () => {
   const threadId = ThreadId.make("thread_provider_turn_start_projection_failure");
@@ -46,55 +61,6 @@ it("does not commit running state when inherited background routing cannot be re
     runs: [
       {
         id: runId,
-  TurnItemId,
-} from "@t3tools/contracts";
-import * as DateTime from "effect/DateTime";
-import * as Effect from "effect/Effect";
-import * as Layer from "effect/Layer";
-import * as Ref from "effect/Ref";
-
-import { ContextHandoffServiceV2 } from "./ContextHandoffService.ts";
-import { EventSinkV2 } from "./EventSink.ts";
-import * as IdAllocator from "./IdAllocator.ts";
-import type { ProviderAdapterV2SessionRuntime } from "./ProviderAdapter.ts";
-import {
-  ProjectionStoreReadError,
-  ProjectionStoreThreadNotFoundError,
-  ProjectionStoreV2,
-  type ProjectionStoreV2Error,
-} from "./ProjectionStore.ts";
-import { ProviderSessionManagerV2 } from "./ProviderSessionManager.ts";
-import * as ProviderTurnStartService from "./ProviderTurnStartService.ts";
-import { RunExecutionServiceV2 } from "./RunExecutionService.ts";
-import { RuntimePolicyV2 } from "./RuntimePolicy.ts";
-
-const driver = ProviderDriverKind.make("codex");
-const threadId = ThreadId.make("thread:provider-turn-start");
-const childThreadId = ThreadId.make("thread:provider-turn-start:child");
-const runId = RunId.make("run:provider-turn-start");
-const rootNodeId = NodeId.make("node:provider-turn-start:root");
-const subagentId = NodeId.make("node:provider-turn-start:subagent");
-const attemptId = RunAttemptId.make("attempt:provider-turn-start");
-const providerThreadId = ProviderThreadId.make("provider-thread:provider-turn-start");
-const childProviderThreadId = ProviderThreadId.make("provider-thread:provider-turn-start:child");
-const providerSessionId = ProviderSessionId.make("provider-session:provider-turn-start");
-const providerInstanceId = ProviderInstanceId.make("codex");
-const messageId = MessageId.make("message:provider-turn-start");
-const checkpointScopeId = CheckpointScopeId.make("checkpoint-scope:provider-turn-start");
-
-function makeRootProjection(now: DateTime.Utc): OrchestrationV2ThreadProjection {
-  return {
-    thread: {
-      id: threadId,
-      runtimeMode: "full-access",
-      interactionMode: "default",
-      worktreePath: "/tmp/provider-turn-start",
-    },
-    runs: [
-      {
-        id: runId,
-        threadId,
-        ordinal: 1,
         status: "starting",
         rootNodeId,
         activeAttemptId: attemptId,
@@ -154,6 +120,38 @@ function makeRootProjection(now: DateTime.Utc): OrchestrationV2ThreadProjection 
     expect(startRootRun).not.toHaveBeenCalled();
   }).pipe(Effect.provide(layer), Effect.runPromise);
 });
+
+const driver = ProviderDriverKind.make("codex");
+const threadId = ThreadId.make("thread:provider-turn-start");
+const childThreadId = ThreadId.make("thread:provider-turn-start:child");
+const runId = RunId.make("run:provider-turn-start");
+const rootNodeId = NodeId.make("node:provider-turn-start:root");
+const subagentId = NodeId.make("node:provider-turn-start:subagent");
+const attemptId = RunAttemptId.make("attempt:provider-turn-start");
+const providerThreadId = ProviderThreadId.make("provider-thread:provider-turn-start");
+const childProviderThreadId = ProviderThreadId.make("provider-thread:provider-turn-start:child");
+const providerSessionId = ProviderSessionId.make("provider-session:provider-turn-start");
+const providerInstanceId = ProviderInstanceId.make("codex");
+const messageId = MessageId.make("message:provider-turn-start");
+const checkpointScopeId = CheckpointScopeId.make("checkpoint-scope:provider-turn-start");
+
+function makeRootProjection(now: DateTime.Utc): OrchestrationV2ThreadProjection {
+  return {
+    thread: {
+      id: threadId,
+      runtimeMode: "full-access",
+      interactionMode: "default",
+      worktreePath: "/tmp/provider-turn-start",
+    },
+    runs: [
+      {
+        id: runId,
+        threadId,
+        ordinal: 1,
+        status: "starting",
+        rootNodeId,
+        activeAttemptId: attemptId,
+        providerThreadId,
         providerInstanceId,
         userMessageId: messageId,
         modelSelection: { instanceId: providerInstanceId },

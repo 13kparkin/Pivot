@@ -3,6 +3,7 @@ import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
 
 import {
+  orchestrationV2SubagentStatusAsTurnItemStatus,
   type ChatAttachment,
   type ModelSelection,
   type OrchestrationV2ConversationMessage,
@@ -4043,7 +4044,7 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
               parentNodeId: subagent.task.parentNodeId,
               rootNodeId: subagent.task.parentNodeId,
               kind: "subagent",
-              status,
+              status: orchestrationV2SubagentStatusAsTurnItemStatus[status],
               countsForRun: false,
               providerThreadId: parentProviderThreadId,
               providerTurnId: subagent.providerTurnId,
@@ -4064,7 +4065,7 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
               parentNodeId: null,
               rootNodeId: subagent.childRootNodeId,
               kind: "root_turn",
-              status,
+              status: orchestrationV2SubagentStatusAsTurnItemStatus[status],
               countsForRun: false,
               providerThreadId: subagent.task.providerThreadId,
               providerTurnId: null,
@@ -4093,7 +4094,7 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
               nativeItemRef,
               parentItemId: null,
               ordinal: subagent.turnItemOrdinal,
-              status,
+              status: orchestrationV2SubagentStatusAsTurnItemStatus[status],
               title: subagent.task.title,
               startedAt: subagent.task.startedAt,
               completedAt,
