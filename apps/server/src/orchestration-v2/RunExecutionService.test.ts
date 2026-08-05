@@ -254,8 +254,35 @@ it.effect("routes a reused subagent's rows to the run that re-activated it", () 
     const seeded = makeProviderEventRoutingState({
       identity: laterRun,
       providerTurnId: null,
-      relatedSubagentIds: [subagentId],
+      reactivatableSubagentSeeds: [{ id: subagentId, activationCount: 1 }],
     });
+
+    // Trailing traffic from the run that spawned the agent re-emits at the
+    // seeded baseline; identity alone must not admit it, or its stale child
+    // thread would be adopted into this run.
+    const staleTrailingRow: ProviderAdapterV2Event = {
+      ...subagentEvent,
+      subagent: { ...subagentEvent.subagent, activationCount: 1 },
+    };
+    assert.isFalse(routeProviderEvent(staleTrailingRow, laterRun, seeded)[0]);
+    const staleActivation: ProviderAdapterV2Event = {
+      ...activationEvent,
+      activation: {
+        ...activationEvent.activation,
+        id: SubagentActivationId.make(`${subagentId}:activation:1`),
+        ordinal: 1,
+      },
+    };
+    assert.isFalse(routeProviderEvent(staleActivation, laterRun, seeded)[0]);
+    // A stale subagent item is refused too until the reactivation is proven.
+    assert.isFalse(routeProviderEvent(turnItemEvent, laterRun, seeded)[0]);
+    assert.isFalse(
+      isRunOwnedSubagentTurnItem({
+        turnItem: turnItemEvent.turnItem,
+        runId: laterRun.runId,
+        activatedSubagentIds: seeded.activatedSubagentIds,
+      }),
+    );
     const [subagentAccepted, afterSubagent] = routeProviderEvent(subagentEvent, laterRun, seeded);
     assert.isTrue(subagentAccepted);
     assert.isTrue(routeProviderEvent(activationEvent, laterRun, afterSubagent)[0]);
@@ -264,7 +291,7 @@ it.effect("routes a reused subagent's rows to the run that re-activated it", () 
       isRunOwnedSubagentTurnItem({
         turnItem: turnItemEvent.turnItem,
         runId: laterRun.runId,
-        ownedSubagentIds: afterSubagent.ownedSubagentIds,
+        activatedSubagentIds: afterSubagent.activatedSubagentIds,
       }),
     );
     // Accepting the row also adopts its child thread, so the agent's own
@@ -570,7 +597,7 @@ it.effect("re-activates an interrupted subagent without adopting its stale child
       identity: laterRun,
       providerTurnId: null,
       relatedThreadIds: [],
-      relatedSubagentIds: [subagentId],
+      reactivatableSubagentSeeds: [{ id: subagentId, activationCount: 1 }],
     });
 
     // A late event from the interrupted child thread must still be refused —

@@ -488,7 +488,10 @@ export const layer: Layer.Layer<
         relatedProviderThreadIds: routableSubagents.flatMap((subagent) =>
           subagent.providerThreadId === null ? [] : [subagent.providerThreadId],
         ),
-        relatedSubagentIds: reactivatableSubagents.map((subagent) => subagent.id),
+        reactivatableSubagentSeeds: reactivatableSubagents.map((subagent) => ({
+          id: subagent.id,
+          activationCount: subagent.activationCount,
+        })),
         existingSubagents,
         providerTurnOrdinal:
           Math.max(

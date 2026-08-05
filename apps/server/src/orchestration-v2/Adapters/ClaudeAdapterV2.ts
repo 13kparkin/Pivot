@@ -1551,9 +1551,16 @@ function claudeSubagentUsage(value: unknown): OrchestrationV2SubagentUsage | und
   }
   return {
     totalTokens,
-    ...(inputTokens === undefined && cacheCreationTokens === undefined
+    // Cache reads are input the model consumed; excluding them understates
+    // inputTokens against the four-component totalTokens it must reconcile
+    // with.
+    ...(inputTokens === undefined &&
+    cacheCreationTokens === undefined &&
+    cachedInputTokens === undefined
       ? {}
-      : { inputTokens: (inputTokens ?? 0) + (cacheCreationTokens ?? 0) }),
+      : {
+          inputTokens: (inputTokens ?? 0) + (cacheCreationTokens ?? 0) + (cachedInputTokens ?? 0),
+        }),
     ...(cachedInputTokens === undefined ? {} : { cachedInputTokens }),
     ...(outputTokens === undefined ? {} : { outputTokens }),
     ...(toolUses === undefined ? {} : { toolUses }),
@@ -3084,7 +3091,7 @@ export function makeClaudeAdapterV2(
               : { role: providerSubagentRole(input.agentType, input.roleFallback) }),
             ...(input.workflow === undefined
               ? {}
-              : { workflow: { phases: [], ...(priorTask?.workflow ?? {}), ...input.workflow } }),
+              : { workflow: { phases: [], ...priorTask?.workflow, ...input.workflow } }),
             ...(input.workflowMembership === undefined
               ? {}
               : { workflowMembership: input.workflowMembership }),
