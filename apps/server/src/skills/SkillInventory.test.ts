@@ -11,7 +11,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 
-import { layerTest as serverSettingsLayerTest } from "../serverSettings.ts";
+import * as ServerSettings from "../serverSettings.ts";
 import { discoverGlobalSkillInventory } from "./SkillInventory.ts";
 
 const decodeCodexSettings = Schema.decodeSync(CodexSettings);
@@ -47,7 +47,7 @@ it.layer(NodeServices.layer)("discoverGlobalSkillInventory", (it) => {
 
       const inventory = yield* discoverGlobalSkillInventory().pipe(
         Effect.provide(
-          serverSettingsLayerTest({
+          ServerSettings.layerTest({
             providers: {
               codex: decodeCodexSettings({ homePath: path.join(tempDirectory, "empty-codex") }),
               claudeAgent: decodeClaudeSettings({
@@ -98,6 +98,63 @@ it.layer(NodeServices.layer)("discoverGlobalSkillInventory", (it) => {
     }),
   );
 
+  it.effect("respects provider enablement and instance environment", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const tempDirectory = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "t3-skill-inventory-environment-",
+      });
+      const codexHome = path.join(tempDirectory, "codex-env");
+      const claudeHome = path.join(tempDirectory, "claude-env");
+      const disabledCodexHome = path.join(tempDirectory, "codex-disabled");
+      const disabledClaudeHome = path.join(tempDirectory, "claude-disabled");
+      yield* writeSkill(codexHome, "codex-env-skill", "Loaded from CODEX_HOME.");
+      yield* writeSkill(claudeHome, "claude-env-skill", "Loaded from CLAUDE_CONFIG_DIR.");
+      yield* writeSkill(disabledCodexHome, "disabled-codex", "Must not appear.");
+      yield* writeSkill(disabledClaudeHome, "disabled-claude", "Must not appear.");
+
+      const inventory = yield* discoverGlobalSkillInventory().pipe(
+        Effect.provide(
+          ServerSettings.layerTest({
+            providers: {
+              codex: decodeCodexSettings({ homePath: path.join(tempDirectory, "legacy-codex") }),
+              claudeAgent: decodeClaudeSettings({
+                homePath: path.join(tempDirectory, "legacy-claude"),
+              }),
+            },
+            providerInstances: {
+              [ProviderInstanceId.make("codex_env")]: {
+                driver: ProviderDriverKind.make("codex"),
+                environment: [{ name: "CODEX_HOME", value: codexHome, sensitive: false }],
+                config: decodeCodexSettings({}),
+              },
+              [ProviderInstanceId.make("claude_env")]: {
+                driver: ProviderDriverKind.make("claudeAgent"),
+                environment: [{ name: "CLAUDE_CONFIG_DIR", value: claudeHome, sensitive: false }],
+                config: decodeClaudeSettings({}),
+              },
+              [ProviderInstanceId.make("codex_disabled")]: {
+                driver: ProviderDriverKind.make("codex"),
+                enabled: false,
+                config: decodeCodexSettings({ homePath: disabledCodexHome }),
+              },
+              [ProviderInstanceId.make("claude_disabled")]: {
+                driver: ProviderDriverKind.make("claudeAgent"),
+                config: decodeClaudeSettings({ enabled: false, homePath: disabledClaudeHome }),
+              },
+            },
+          }),
+        ),
+      );
+
+      assert.deepEqual(inventory.installations.map((skill) => skill.name).sort(), [
+        "claude-env-skill",
+        "codex-env-skill",
+      ]);
+    }),
+  );
+
   it.effect("ignores unsupported provider instances", () =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
@@ -107,7 +164,7 @@ it.layer(NodeServices.layer)("discoverGlobalSkillInventory", (it) => {
       });
       const inventory = yield* discoverGlobalSkillInventory().pipe(
         Effect.provide(
-          serverSettingsLayerTest({
+          ServerSettings.layerTest({
             providers: {
               codex: decodeCodexSettings({ homePath: path.join(tempDirectory, "codex") }),
               claudeAgent: decodeClaudeSettings({

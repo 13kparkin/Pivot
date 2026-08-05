@@ -1,5 +1,6 @@
 import type {
   ProviderInstanceConfig,
+  ServerProviderSkill,
   SkillInventory,
   SkillInventoryInstallation,
 } from "@t3tools/contracts";
@@ -13,6 +14,7 @@ import * as Schema from "effect/Schema";
 import { discoverClaudeSkills } from "../provider/Drivers/ClaudeSkills.ts";
 import { resolveCodexHomeLayout } from "../provider/Drivers/CodexHomeLayout.ts";
 import { deriveProviderInstanceConfigMap } from "../provider/Layers/ProviderInstanceRegistryHydration.ts";
+import { mergeProviderInstanceEnvironment } from "../provider/ProviderInstanceEnvironment.ts";
 import { ServerSettingsService } from "../serverSettings.ts";
 
 const decodeCodexSettings = Schema.decodeUnknownOption(CodexSettings);
@@ -22,6 +24,38 @@ function harnessDisplayName(instance: ProviderInstanceConfig, fallback: string):
   return instance.displayName?.trim() || fallback;
 }
 
+const readSkillInstallations = Effect.fn("SkillInventory.readSkillInstallations")(
+  function* (input: {
+    readonly instanceId: string;
+    readonly instance: ProviderInstanceConfig;
+    readonly fallbackDisplayName: string;
+    readonly skills: ReadonlyArray<ServerProviderSkill>;
+  }): Effect.fn.Return<
+    ReadonlyArray<SkillInventoryInstallation>,
+    never,
+    FileSystem.FileSystem | Path.Path
+  > {
+    const fileSystem = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    return yield* Effect.forEach(input.skills, (skill) =>
+      fileSystem.readFileString(skill.path).pipe(
+        Effect.orElseSucceed(() => ""),
+        Effect.map((content) => ({
+          providerInstanceId: ProviderInstanceId.make(input.instanceId),
+          harness: input.instance.driver,
+          harnessDisplayName: harnessDisplayName(input.instance, input.fallbackDisplayName),
+          name: skill.name,
+          ...(skill.description ? { description: skill.description } : {}),
+          directoryPath: path.dirname(skill.path),
+          skillFilePath: skill.path,
+          content,
+          enabled: skill.enabled,
+        })),
+      ),
+    );
+  },
+);
+
 const discoverInstanceSkills = Effect.fn("SkillInventory.discoverInstanceSkills")(function* (
   instanceId: string,
   instance: ProviderInstanceConfig,
@@ -30,55 +64,45 @@ const discoverInstanceSkills = Effect.fn("SkillInventory.discoverInstanceSkills"
   never,
   FileSystem.FileSystem | Path.Path
 > {
-  const fileSystem = yield* FileSystem.FileSystem;
-  const path = yield* Path.Path;
   const config = instance.config ?? {};
+  const processEnv = mergeProviderInstanceEnvironment(instance.environment);
 
   if (instance.driver === "codex") {
     const decoded = decodeCodexSettings(config);
     if (decoded._tag === "None") return [];
-    const layout = yield* resolveCodexHomeLayout(decoded.value);
-    const skills = yield* discoverClaudeSkills({ homePath: layout.sharedHomePath }, undefined, {});
-    return yield* Effect.forEach(skills, (skill) =>
-      fileSystem.readFileString(skill.path).pipe(
-        Effect.orElseSucceed(() => ""),
-        Effect.map((content) => ({
-          providerInstanceId: ProviderInstanceId.make(instanceId),
-          harness: instance.driver,
-          harnessDisplayName: harnessDisplayName(instance, "Codex"),
-          name: skill.name,
-          ...(skill.description ? { description: skill.description } : {}),
-          directoryPath: path.dirname(skill.path),
-          skillFilePath: skill.path,
-          content,
-          enabled: skill.enabled,
-        })),
-      ),
+    if (!(instance.enabled ?? decoded.value.enabled)) return [];
+    const configuredHomePath = decoded.value.homePath || processEnv.CODEX_HOME?.trim() || "";
+    const layout = yield* resolveCodexHomeLayout({
+      ...decoded.value,
+      homePath: configuredHomePath,
+    });
+    const skills = yield* discoverClaudeSkills(
+      { homePath: layout.sharedHomePath },
+      undefined,
+      processEnv,
     );
+    return yield* readSkillInstallations({
+      instanceId,
+      instance,
+      fallbackDisplayName: "Codex",
+      skills,
+    });
   }
 
   if (instance.driver === "claudeAgent") {
     const decoded = decodeClaudeSettings(config);
     if (decoded._tag === "None") return [];
-    const skills = yield* discoverClaudeSkills(decoded.value, undefined);
-    return yield* Effect.forEach(skills, (skill) =>
-      fileSystem.readFileString(skill.path).pipe(
-        Effect.orElseSucceed(() => ""),
-        Effect.map((content) => ({
-          providerInstanceId: ProviderInstanceId.make(instanceId),
-          harness: instance.driver,
-          harnessDisplayName: harnessDisplayName(instance, "Claude"),
-          name: skill.name,
-          ...(skill.description ? { description: skill.description } : {}),
-          directoryPath: path.dirname(skill.path),
-          skillFilePath: skill.path,
-          content,
-          enabled: skill.enabled,
-        })),
-      ),
-    );
+    if (!(instance.enabled ?? decoded.value.enabled)) return [];
+    const skills = yield* discoverClaudeSkills(decoded.value, undefined, processEnv);
+    return yield* readSkillInstallations({
+      instanceId,
+      instance,
+      fallbackDisplayName: "Claude",
+      skills,
+    });
   }
 
+  // Cursor, Grok, and OpenCode do not expose compatible global skill directories.
   return [];
 });
 

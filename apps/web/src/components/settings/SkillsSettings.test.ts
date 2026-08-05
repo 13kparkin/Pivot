@@ -8,7 +8,7 @@ import {
   groupSkillsByHarness,
   setKeyCollapsed,
   skillContentForDisplay,
-} from "./SkillsSettings.logic";
+} from "@t3tools/client-runtime/state/skills";
 
 const inventory: SkillInventory = {
   scannedAt: "2026-07-27T12:00:00.000Z",

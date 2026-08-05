@@ -3,7 +3,16 @@ import type { SkillInventory, SkillInventoryInstallation } from "@t3tools/contra
 import * as Option from "effect/Option";
 import { useCallback, useEffect, useId, useMemo, useState } from "react";
 
-import { fetchEnvironmentSkillInventory } from "@t3tools/client-runtime/state/skills";
+import {
+  displayedSkillCount,
+  fetchEnvironmentSkillInventory,
+  filterSkillInventory,
+  formatSkillPath,
+  groupSkillsByHarness,
+  setKeyCollapsed,
+  skillContentForDisplay,
+  skillKey,
+} from "@t3tools/client-runtime/state/skills";
 import { cn } from "../../lib/utils";
 import { runtime } from "../../lib/runtime";
 import { useCopyToClipboard } from "../../hooks/useCopyToClipboard";
@@ -18,15 +27,6 @@ import { ScrollArea } from "../ui/scroll-area";
 import { toastManager } from "../ui/toast";
 import { SettingsPageContainer, SettingsSection } from "./settingsLayout";
 import { searchableSetting } from "./settingsSearch";
-import {
-  displayedSkillCount,
-  filterSkillInventory,
-  formatSkillPath,
-  groupSkillsByHarness,
-  setKeyCollapsed,
-  skillContentForDisplay,
-  skillKey,
-} from "./SkillsSettings.logic";
 
 type InventoryState =
   | { readonly status: "loading" }
