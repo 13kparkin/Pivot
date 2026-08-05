@@ -2,6 +2,7 @@ import SwiftUI
 import UIKit
 
 public struct FeatureReviewView: View {
+    @SwiftUI.Environment(\.scenePhase) private var scenePhase
     let client: any FeatureClient
     let threadID: String
 
@@ -43,6 +44,10 @@ public struct FeatureReviewView: View {
             }
         }
         .task { await load() }
+        .onChange(of: scenePhase) { _, phase in
+            guard phase == .active, review != nil, !isLoading else { return }
+            Task { await load() }
+        }
     }
 
     private func reviewList(_ review: FeatureReview) -> some View {
@@ -185,6 +190,8 @@ private struct FeatureDiffView: View {
     let threadID: String
     let file: FeatureReviewFile
 
+    @State private var renderedLines: [FeatureDiffLine]
+    @State private var isHydrating = false
     @State private var selectedLine: FeatureReviewLineSelection?
     @State private var isCommenting = false
     @State private var comment = ""
@@ -192,9 +199,19 @@ private struct FeatureDiffView: View {
     @State private var commentError: String?
     @FocusState private var isCommentFocused: Bool
 
+    init(client: any FeatureClient, threadID: String, file: FeatureReviewFile) {
+        self.client = client
+        self.threadID = threadID
+        self.file = file
+        _renderedLines = State(initialValue: file.lines)
+    }
+
     var body: some View {
         Group {
-            if file.lines.isEmpty {
+            if renderedLines.isEmpty, isHydrating {
+                ProgressView("Loading full diff…")
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if renderedLines.isEmpty {
                 ContentUnavailableView(
                     file.change == .binary ? "Binary file" : "Diff unavailable",
                     systemImage: file.change == .binary ? "doc.richtext" : "doc.text.magnifyingglass",
@@ -203,7 +220,7 @@ private struct FeatureDiffView: View {
             } else {
                 ScrollView([.horizontal, .vertical]) {
                     LazyVStack(alignment: .leading, spacing: 0) {
-                        ForEach(file.lines) { line in
+                        ForEach(renderedLines) { line in
                             FeatureDiffLineRow(
                                 line: line,
                                 isSelected: selection(for: line) == selectedLine
@@ -237,6 +254,7 @@ private struct FeatureDiffView: View {
                 commentComposer
             }
         }
+        .task(id: file.id) { await hydrate() }
     }
 
     private var commentComposer: some View {
@@ -364,6 +382,18 @@ private struct FeatureDiffView: View {
             await Task.yield()
             isCommentFocused = true
         }
+    }
+
+    private func hydrate() async {
+        isHydrating = true
+        defer { isHydrating = false }
+        guard let contents = try? await client.loadReviewFileContents(
+            threadID: threadID,
+            file: file
+        ) else {
+            return
+        }
+        renderedLines = FeatureFullDiffHydrator.lines(for: file, contents: contents)
     }
 
     private func sendComment() {

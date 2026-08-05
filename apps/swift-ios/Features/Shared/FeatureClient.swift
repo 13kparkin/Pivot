@@ -95,6 +95,10 @@ public protocol FeatureClient: AnyObject {
     ) async throws -> [FeatureFileEntry]
     func readFile(threadID: String, path: String) async throws -> FeatureFileContent
     func loadReview(threadID: String) async throws -> FeatureReview
+    func loadReviewFileContents(
+        threadID: String,
+        file: FeatureReviewFile
+    ) async throws -> FeatureReviewFileContents?
 
     func sourceControlStatus(threadID: String) async throws -> FeatureSourceControlStatus
     func performSourceControlAction(
@@ -136,6 +140,12 @@ public extension FeatureClient {
     func setThreadPinned(id: String, pinned: Bool) async throws {}
     func setRuntimeMode(id: String, mode: FeatureRuntimeMode) async throws {}
     func setInteractionMode(id: String, mode: FeatureInteractionMode) async throws {}
+    func loadReviewFileContents(
+        threadID: String,
+        file: FeatureReviewFile
+    ) async throws -> FeatureReviewFileContents? {
+        nil
+    }
 
     func listWorkspaceBranches(
         projectID: String,

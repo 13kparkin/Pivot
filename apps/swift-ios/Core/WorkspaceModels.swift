@@ -509,6 +509,11 @@ public struct ReviewDiffPreview: Codable, Equatable, Sendable {
     public let sources: [ReviewDiffSource]
 }
 
+public struct ReviewDiffFileContents: Codable, Equatable, Sendable {
+    public let oldContents: String
+    public let newContents: String
+}
+
 // MARK: - Terminal
 
 public enum TerminalSessionStatus: String, Codable, Sendable {

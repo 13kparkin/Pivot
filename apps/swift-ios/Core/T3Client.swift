@@ -709,6 +709,31 @@ public actor T3Client {
         )
     }
 
+    public func reviewDiffFileContents(
+        cwd: String,
+        sourceKind: String,
+        changeType: String,
+        baseRef: String?,
+        headRef: String?,
+        oldPath: String,
+        newPath: String
+    ) async throws -> ReviewDiffFileContents {
+        let payload: [String: JSONValue] = [
+            "cwd": .string(cwd),
+            "sourceKind": .string(sourceKind),
+            "changeType": .string(changeType),
+            "baseRef": baseRef.map(JSONValue.string) ?? .null,
+            "headRef": headRef.map(JSONValue.string) ?? .null,
+            "oldPath": .string(oldPath),
+            "newPath": .string(newPath),
+        ]
+        return try await rpc.request(
+            RPCMethod.reviewDiffFileContents.rawValue,
+            payload: .object(payload),
+            as: ReviewDiffFileContents.self
+        )
+    }
+
     // MARK: Terminal
 
     public func openTerminal(
@@ -1133,6 +1158,7 @@ public enum RPCMethod: String, Sendable {
     case sourceControlClone = "sourceControl.cloneRepository"
     case sourceControlPublish = "sourceControl.publishRepository"
     case reviewDiffPreview = "review.getDiffPreview"
+    case reviewDiffFileContents = "review.getDiffFileContents"
     case terminalOpen = "terminal.open"
     case terminalAttach = "terminal.attach"
     case terminalWrite = "terminal.write"

@@ -576,6 +576,9 @@ public struct FeatureReviewFile: Identifiable, Sendable, Equatable, Hashable, Co
     public var additions: Int
     public var deletions: Int
     public var lines: [FeatureDiffLine]
+    public var sourceKind: String?
+    public var sourceBaseReference: String?
+    public var sourceHeadReference: String?
 
     public init(
         path: String,
@@ -583,7 +586,10 @@ public struct FeatureReviewFile: Identifiable, Sendable, Equatable, Hashable, Co
         change: FeatureReviewChangeKind,
         additions: Int,
         deletions: Int,
-        lines: [FeatureDiffLine] = []
+        lines: [FeatureDiffLine] = [],
+        sourceKind: String? = nil,
+        sourceBaseReference: String? = nil,
+        sourceHeadReference: String? = nil
     ) {
         self.path = path
         self.previousPath = previousPath
@@ -591,6 +597,153 @@ public struct FeatureReviewFile: Identifiable, Sendable, Equatable, Hashable, Co
         self.additions = additions
         self.deletions = deletions
         self.lines = lines
+        self.sourceKind = sourceKind
+        self.sourceBaseReference = sourceBaseReference
+        self.sourceHeadReference = sourceHeadReference
+    }
+}
+
+public struct FeatureReviewFileContents: Sendable, Equatable {
+    public var oldContents: String
+    public var newContents: String
+
+    public init(oldContents: String, newContents: String) {
+        self.oldContents = oldContents
+        self.newContents = newContents
+    }
+}
+
+enum FeatureFullDiffHydrator {
+    static func lines(
+        for file: FeatureReviewFile,
+        contents: FeatureReviewFileContents
+    ) -> [FeatureDiffLine] {
+        let oldLines = contentLines(contents.oldContents)
+        let newLines = contentLines(contents.newContents)
+
+        switch file.change {
+        case .added:
+            return wholeFileLines(newLines, kind: .addition, side: .new, path: file.path)
+        case .deleted:
+            return wholeFileLines(oldLines, kind: .deletion, side: .old, path: file.path)
+        case .renamed where file.additions == 0 && file.deletions == 0:
+            return newLines.enumerated().map { index, text in
+                FeatureDiffLine(
+                    id: "full-\(file.path)-\(index + 1)",
+                    kind: .context,
+                    oldLine: index + 1,
+                    newLine: index + 1,
+                    text: text
+                )
+            }
+        case .modified, .renamed, .binary:
+            break
+        }
+
+        let patchLines = file.lines.filter { $0.kind != .hunk }
+        guard !newLines.isEmpty else { return file.lines }
+        guard !patchLines.isEmpty else {
+            return newLines.enumerated().map { index, text in
+                FeatureDiffLine(
+                    id: "full-\(file.path)-\(index + 1)",
+                    kind: .context,
+                    oldLine: oldLines.indices.contains(index) ? index + 1 : nil,
+                    newLine: index + 1,
+                    text: text
+                )
+            }
+        }
+
+        let anchors = patchLines.compactMap { line -> (new: Int, offset: Int)? in
+            guard let oldLine = line.oldLine, let newLine = line.newLine else { return nil }
+            return (newLine, oldLine - newLine)
+        }
+        func oldLine(for newLine: Int) -> Int? {
+            let anchor = anchors.last(where: { $0.new <= newLine }) ?? anchors.first
+            return anchor.map { newLine + $0.offset }
+        }
+
+        var output: [FeatureDiffLine] = []
+        var nextNewLine = 1
+        for (index, line) in patchLines.enumerated() {
+            if let newLine = line.newLine {
+                if nextNewLine < newLine {
+                    for number in nextNewLine ..< newLine where newLines.indices.contains(number - 1) {
+                        output.append(
+                            FeatureDiffLine(
+                                id: "full-\(file.path)-\(number)",
+                                kind: .context,
+                                oldLine: oldLine(for: number),
+                                newLine: number,
+                                text: newLines[number - 1]
+                            )
+                        )
+                    }
+                }
+                output.append(line)
+                nextNewLine = max(nextNewLine, newLine + 1)
+            } else {
+                let nextPatchLine = patchLines.dropFirst(index + 1).compactMap(\.newLine).first
+                    ?? (newLines.count + 1)
+                if nextNewLine < nextPatchLine {
+                    for number in nextNewLine ..< nextPatchLine
+                    where newLines.indices.contains(number - 1) {
+                        output.append(
+                            FeatureDiffLine(
+                                id: "full-\(file.path)-\(number)",
+                                kind: .context,
+                                oldLine: oldLine(for: number),
+                                newLine: number,
+                                text: newLines[number - 1]
+                            )
+                        )
+                    }
+                    nextNewLine = nextPatchLine
+                }
+                output.append(line)
+            }
+        }
+        if nextNewLine <= newLines.count {
+            for number in nextNewLine ... newLines.count {
+                output.append(
+                    FeatureDiffLine(
+                        id: "full-\(file.path)-\(number)",
+                        kind: .context,
+                        oldLine: oldLine(for: number),
+                        newLine: number,
+                        text: newLines[number - 1]
+                    )
+                )
+            }
+        }
+        return output
+    }
+
+    private enum Side: Equatable { case old, new }
+
+    private static func wholeFileLines(
+        _ lines: [String],
+        kind: FeatureDiffLineKind,
+        side: Side,
+        path: String
+    ) -> [FeatureDiffLine] {
+        lines.enumerated().map { index, text in
+            let number = index + 1
+            return FeatureDiffLine(
+                id: "full-\(path)-\(number)",
+                kind: kind,
+                oldLine: side == .old ? number : nil,
+                newLine: side == .new ? number : nil,
+                text: text
+            )
+        }
+    }
+
+    private static func contentLines(_ contents: String) -> [String] {
+        guard !contents.isEmpty else { return [] }
+        var lines = contents.components(separatedBy: "\n")
+        if lines.last?.isEmpty == true { lines.removeLast() }
+        return lines
     }
 }
 

@@ -126,6 +126,16 @@ final class NativeContractExpansionTests: XCTestCase {
         )
         XCTAssertEqual(result.relativeUrl, "/api/assets/signed/image.png")
         XCTAssertEqual(result.expiresAt, 1_785_466_800_000)
+        XCTAssertEqual(
+            RPCMethod.reviewDiffFileContents.rawValue,
+            "review.getDiffFileContents"
+        )
+        let contents = try JSONDecoder.t3.decode(
+            ReviewDiffFileContents.self,
+            from: Data(#"{"oldContents":"before\n","newContents":"after\n"}"#.utf8)
+        )
+        XCTAssertEqual(contents.oldContents, "before\n")
+        XCTAssertEqual(contents.newContents, "after\n")
     }
 
     func testServerConfigDecodesFullModelPickerCatalogue() throws {

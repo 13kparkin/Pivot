@@ -122,8 +122,78 @@ struct FeatureToolStateTests {
         let addition = review.files[0].lines.first { $0.kind == .addition }
 
         #expect(review.baseReference == "main")
+        #expect(review.files[0].sourceKind == "working-tree")
+        #expect(review.files[0].sourceBaseReference == "main")
         #expect(deletion?.spans?.filter { $0.kind == .changed }.map(\.text) == ["blue"])
         #expect(addition?.spans?.filter { $0.kind == .changed }.map(\.text) == ["green"])
+    }
+
+    @Test
+    func fullDiffHydrationRestoresUnchangedRegionsWithoutLosingPatchRows() {
+        let file = FeatureReviewFile(
+            path: "App.swift",
+            change: .modified,
+            additions: 1,
+            deletions: 1,
+            lines: [
+                .init(id: "hunk", kind: .hunk, text: "@@ -2,2 +2,2 @@"),
+                .init(id: "old", kind: .deletion, oldLine: 2, text: "let color = blue"),
+                .init(id: "new", kind: .addition, newLine: 2, text: "let color = green"),
+                .init(id: "after", kind: .context, oldLine: 3, newLine: 3, text: "render()"),
+            ]
+        )
+
+        let lines = FeatureFullDiffHydrator.lines(
+            for: file,
+            contents: FeatureReviewFileContents(
+                oldContents: "import SwiftUI\nlet color = blue\nrender()\nfinish()\n",
+                newContents: "import SwiftUI\nlet color = green\nrender()\nfinish()\n"
+            )
+        )
+
+        #expect(lines.map(\.kind) == [.context, .deletion, .addition, .context, .context])
+        #expect(lines.map(\.text) == [
+            "import SwiftUI",
+            "let color = blue",
+            "let color = green",
+            "render()",
+            "finish()",
+        ])
+        #expect(lines.last?.oldLine == 4)
+        #expect(lines.last?.newLine == 4)
+    }
+
+    @Test
+    func fullDiffHydrationHandlesWholeAddedAndDeletedFiles() {
+        let added = FeatureFullDiffHydrator.lines(
+            for: FeatureReviewFile(
+                path: "Added.swift",
+                change: .added,
+                additions: 2,
+                deletions: 0
+            ),
+            contents: FeatureReviewFileContents(
+                oldContents: "",
+                newContents: "one\ntwo\n"
+            )
+        )
+        let deleted = FeatureFullDiffHydrator.lines(
+            for: FeatureReviewFile(
+                path: "Deleted.swift",
+                change: .deleted,
+                additions: 0,
+                deletions: 1
+            ),
+            contents: FeatureReviewFileContents(
+                oldContents: "gone\n",
+                newContents: ""
+            )
+        )
+
+        #expect(added.map(\.kind) == [.addition, .addition])
+        #expect(added.map(\.newLine) == [1, 2])
+        #expect(deleted.map(\.kind) == [.deletion])
+        #expect(deleted.map(\.oldLine) == [1])
     }
 
     @Test

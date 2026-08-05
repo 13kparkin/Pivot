@@ -1403,6 +1403,36 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         return NativeWorkspaceMapper.review(preview)
     }
 
+    func loadReviewFileContents(
+        threadID: String,
+        file: FeatureReviewFile
+    ) async throws -> FeatureReviewFileContents? {
+        guard file.change != .binary, let sourceKind = file.sourceKind else { return nil }
+        let route = try threadRoute(for: threadID)
+        let context = try workspaceContext(route: route)
+        let changeType: String = switch file.change {
+        case .added: "new"
+        case .deleted: "deleted"
+        case .renamed: file.additions == 0 && file.deletions == 0
+            ? "rename-pure"
+            : "rename-changed"
+        case .modified, .binary: "change"
+        }
+        let contents = try await route.client.reviewDiffFileContents(
+            cwd: context.cwd,
+            sourceKind: sourceKind,
+            changeType: changeType,
+            baseRef: file.sourceBaseReference,
+            headRef: file.sourceHeadReference,
+            oldPath: file.previousPath ?? file.path,
+            newPath: file.path
+        )
+        return FeatureReviewFileContents(
+            oldContents: contents.oldContents,
+            newContents: contents.newContents
+        )
+    }
+
     func sourceControlStatus(threadID: String) async throws -> FeatureSourceControlStatus {
         let route = try threadRoute(for: threadID)
         let context = try workspaceContext(route: route)

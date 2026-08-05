@@ -188,7 +188,10 @@ enum NativeWorkspaceMapper {
                     change: change,
                     additions: additions,
                     deletions: deletions,
-                    lines: annotateChangedSpans(lines)
+                    lines: annotateChangedSpans(lines),
+                    sourceKind: source.kind,
+                    sourceBaseReference: source.baseRef,
+                    sourceHeadReference: source.headRef
                 )
             )
         }
@@ -300,7 +303,10 @@ enum NativeWorkspaceMapper {
                     change: .modified,
                     additions: additions,
                     deletions: deletions,
-                    lines: annotateChangedSpans(lines)
+                    lines: annotateChangedSpans(lines),
+                    sourceKind: source.kind,
+                    sourceBaseReference: source.baseRef,
+                    sourceHeadReference: source.headRef
                 ),
             ]
         }
