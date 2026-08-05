@@ -197,6 +197,12 @@ export function HomeHeader(props: {
     ) ??
     props.environments.find((environment) => environment.connectionState !== "connected") ??
     props.environments[0];
+  const selectedEnvironment =
+    props.selectedEnvironmentId === null
+      ? null
+      : (props.environments.find(
+          (environment) => environment.environmentId === props.selectedEnvironmentId,
+        ) ?? null);
   const selectedProjectLabel =
     props.projects.find((project) => project.key === props.selectedProjectKey)?.label ??
     "All projects";
@@ -314,9 +320,9 @@ export function HomeHeader(props: {
                     {selectedProjectLabel}
                   </Text>
                   <SymbolView name="chevron.down" size={10} tintColor="#636366" type="monochrome" />
-                  {props.selectedEnvironmentId !== null && troubledEnvironment ? (
+                  {selectedEnvironment ? (
                     <Text className="ml-2 text-xs text-[#71717a]" numberOfLines={1}>
-                      {troubledEnvironment.label}
+                      {selectedEnvironment.label}
                     </Text>
                   ) : null}
                 </Pressable>

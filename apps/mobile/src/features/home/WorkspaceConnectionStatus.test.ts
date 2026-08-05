@@ -2,6 +2,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import type { WorkspaceState } from "../../state/workspaceModel";
 import {
+  resolveHomeEnvironmentConnectionPhase,
   shouldShowWorkspaceConnectionStatus,
   workspaceConnectionHeaderPresentation,
   workspaceConnectionStatusLabel,
@@ -26,6 +27,12 @@ function workspaceState(overrides: Partial<WorkspaceState> = {}): WorkspaceState
 }
 
 describe("workspace connection status", () => {
+  it("treats uncatalogued saved environments as connecting during startup", () => {
+    expect(resolveHomeEnvironmentConnectionPhase(undefined, true)).toBe("connecting");
+    expect(resolveHomeEnvironmentConnectionPhase(undefined, false)).toBe("available");
+    expect(resolveHomeEnvironmentConnectionPhase("connected", true)).toBe("connected");
+  });
+
   it("stays hidden while a ready environment is connected", () => {
     expect(shouldShowWorkspaceConnectionStatus(workspaceState())).toBe(false);
   });

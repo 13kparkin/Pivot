@@ -2,6 +2,13 @@ import type { EnvironmentConnectionPhase } from "@t3tools/client-runtime/connect
 
 import type { WorkspaceState } from "../../state/workspaceModel";
 
+export function resolveHomeEnvironmentConnectionPhase(
+  connectionState: EnvironmentConnectionPhase | undefined,
+  isLoadingConnections: boolean,
+): EnvironmentConnectionPhase {
+  return connectionState ?? (isLoadingConnections ? "connecting" : "available");
+}
+
 export function shouldShowWorkspaceConnectionStatus(state: WorkspaceState): boolean {
   return (
     state.networkStatus === "offline" ||

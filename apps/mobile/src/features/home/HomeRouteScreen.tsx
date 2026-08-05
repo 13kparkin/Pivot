@@ -20,6 +20,7 @@ import { HomeScreen } from "./HomeScreen";
 import { HomeHeader } from "./HomeHeader";
 import { useHomeListOptions } from "./home-list-options";
 import { buildHomeProjectScopes } from "./homeThreadList";
+import { resolveHomeEnvironmentConnectionPhase } from "./workspace-connection-status";
 import { usePendingTaskListActions } from "./usePendingTaskListActions";
 import { useThreadListActions } from "./useThreadListActions";
 
@@ -61,12 +62,14 @@ export function HomeRouteScreen() {
       Object.values(savedConnectionsById).map((connection) => ({
         environmentId: connection.environmentId,
         label: connection.environmentLabel,
-        connectionState:
-          connectionStateByEnvironmentId.get(connection.environmentId) ?? "available",
+        connectionState: resolveHomeEnvironmentConnectionPhase(
+          connectionStateByEnvironmentId.get(connection.environmentId),
+          catalogState.isLoadingConnections,
+        ),
       })),
       Order.mapInput(Order.String, (environment: { readonly label: string }) => environment.label),
     );
-  }, [savedConnectionsById, workspaceEnvironments]);
+  }, [catalogState.isLoadingConnections, savedConnectionsById, workspaceEnvironments]);
   const availableEnvironmentIds = useMemo(
     () => new Set(environments.map((environment) => environment.environmentId)),
     [environments],

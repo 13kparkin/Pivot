@@ -47,6 +47,7 @@ export function PendingUserInputCard(props: PendingUserInputCardProps) {
   const draft = activeQuestion ? props.drafts[activeQuestion.id] : undefined;
   const isResponding = props.respondingUserInputId === props.pendingUserInput.requestId;
   const isLastQuestion = questionIndex >= props.pendingUserInput.questions.length - 1;
+  const canGoBack = questionIndex > 0 && !isResponding;
   const canAdvance = hasDraftAnswer(draft);
 
   if (!activeQuestion) {
@@ -66,6 +67,11 @@ export function PendingUserInputCard(props: PendingUserInputCardProps) {
     if (props.answers) {
       void props.onSubmit();
     }
+  };
+
+  const handleBack = () => {
+    if (!canGoBack) return;
+    setQuestionIndex((current) => Math.max(0, current - 1));
   };
 
   return (
@@ -153,7 +159,21 @@ export function PendingUserInputCard(props: PendingUserInputCardProps) {
         />
       </View>
 
-      <View className="items-end border-t border-border px-3 py-2.5">
+      <View className="flex-row items-center justify-between border-t border-border px-3 py-2.5">
+        {questionIndex > 0 ? (
+          <Pressable
+            accessibilityLabel="Previous question"
+            accessibilityRole="button"
+            accessibilityState={{ disabled: !canGoBack }}
+            className={cn("min-h-11 items-center justify-center px-3", !canGoBack && "opacity-50")}
+            disabled={!canGoBack}
+            onPress={handleBack}
+          >
+            <Text className="font-t3-bold text-base text-foreground-muted">Back</Text>
+          </Pressable>
+        ) : (
+          <View />
+        )}
         <Pressable
           accessibilityLabel={isLastQuestion ? "Submit answers" : "Next question"}
           accessibilityRole="button"
