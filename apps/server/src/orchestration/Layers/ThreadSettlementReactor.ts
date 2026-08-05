@@ -33,6 +33,7 @@ const RECONCILE_INTERVAL = Duration.minutes(1);
 const CHANGE_REQUEST_LOOKUP_TTL = Duration.minutes(2);
 const CHANGE_REQUEST_LOOKUP_FAILURE_TTL = Duration.seconds(20);
 const MAX_BRANCH_LOOKUPS_PER_RECONCILE = 20;
+const CHANGE_REQUEST_LOOKUP_FAILED = Symbol("CHANGE_REQUEST_LOOKUP_FAILED");
 
 function workspaceCwd(
   thread: Pick<OrchestrationThreadShell, "projectId" | "worktreePath">,
@@ -120,7 +121,7 @@ export const makeThreadSettlementReactor = Effect.gen(function* () {
           cwdLength: cwd.length,
           branch,
           errorTag: error._tag,
-        }).pipe(Effect.as(null)),
+        }).pipe(Effect.as(CHANGE_REQUEST_LOOKUP_FAILED)),
       ),
     );
 
@@ -129,7 +130,7 @@ export const makeThreadSettlementReactor = Effect.gen(function* () {
   )(function* (input: {
     readonly thread: OrchestrationThreadShell;
     readonly cwd: string | undefined;
-  }): Effect.fn.Return<ChangeRequestState | null> {
+  }): Effect.fn.Return<ChangeRequestState | null | typeof CHANGE_REQUEST_LOOKUP_FAILED> {
     const branch = input.thread.branch;
     if (branch === null || input.cwd === undefined) return null;
     return yield* lookupBranchChangeRequestState(input.cwd, branch);
@@ -189,6 +190,9 @@ export const makeThreadSettlementReactor = Effect.gen(function* () {
           cwd: cwdByThreadId.get(thread.id),
         }).pipe(
           Effect.flatMap((changeRequestState) => {
+            // A failed lookup is unknown, not evidence that no PR exists.
+            // Fail closed so a transient provider outage cannot hide live work.
+            if (changeRequestState === CHANGE_REQUEST_LOOKUP_FAILED) return Effect.void;
             const reason = resolveAutomaticSettlementReason(thread, {
               now: nowIso,
               autoSettleAfterDays: settings.threadAutoSettleAfterDays,

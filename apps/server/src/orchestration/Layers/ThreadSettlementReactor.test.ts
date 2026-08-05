@@ -2,6 +2,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   ProjectId,
   ProviderInstanceId,
+  SourceControlProviderError,
   ThreadId,
   TurnId,
   type ChangeRequest,
@@ -162,4 +163,55 @@ it.effect(
         expect(settledThreadIds).toEqual([inactivity.id, pinnedMerged.id].sort());
       }),
     ),
+);
+
+it.effect("does not settle a stale thread when its PR state lookup fails", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const thread = makeThread({ id: "lookup-failed", branch: "feature/open-pr" });
+      const snapshot = {
+        snapshotSequence: 1,
+        projects: [project],
+        threads: [thread],
+        updatedAt: "2020-01-02T00:00:00.000Z",
+      } satisfies OrchestrationShellSnapshot;
+      const dispatched = yield* Ref.make<ReadonlyArray<OrchestrationCommand>>([]);
+      const provider = {
+        listChangeRequests: () =>
+          Effect.fail(
+            new SourceControlProviderError({
+              provider: "github",
+              operation: "listChangeRequests",
+              cwd: project.workspaceRoot,
+              detail: "temporary lookup failure",
+            }),
+          ),
+      } as unknown as SourceControlProvider.SourceControlProvider["Service"];
+      const dependencies = Layer.mergeAll(
+        Layer.succeed(OrchestrationEngineService, {
+          readEvents: () => Stream.empty,
+          dispatch: (command) =>
+            Ref.update(dispatched, (commands) => [...commands, command]).pipe(
+              Effect.as({ sequence: 1 }),
+            ),
+          streamDomainEvents: Stream.empty,
+          latestSequence: Effect.succeed(0),
+        } satisfies OrchestrationEngineShape),
+        Layer.succeed(ProjectionSnapshotQuery, {
+          getShellSnapshot: () => Effect.succeed(snapshot),
+        } as unknown as ProjectionSnapshotQueryShape),
+        ServerSettingsService.layerTest(),
+        Layer.mock(SourceControlProviderRegistry)({
+          resolve: () => Effect.succeed(provider),
+        }),
+        NodeServices.layer,
+      );
+
+      const reactor = yield* makeThreadSettlementReactor.pipe(Effect.provide(dependencies));
+      yield* reactor.start();
+      yield* reactor.drain;
+
+      expect(yield* Ref.get(dispatched)).toEqual([]);
+    }),
+  ),
 );

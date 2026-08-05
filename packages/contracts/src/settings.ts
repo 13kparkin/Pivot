@@ -195,6 +195,9 @@ export const DEFAULT_CLIENT_SETTINGS: ClientSettings = Schema.decodeSync(ClientS
 
 export const MIN_THREAD_AUTO_SETTLE_AFTER_DAYS = 1;
 export const MAX_THREAD_AUTO_SETTLE_AFTER_DAYS = 90;
+// Replaces the former client-local sidebar setting. Its value is intentionally
+// not migrated because different clients can hold conflicting preferences;
+// the first server-owned value keeps the prior three-day default.
 export const ThreadAutoSettleAfterDays = Schema.Number.check(
   Schema.isBetween({
     minimum: MIN_THREAD_AUTO_SETTLE_AFTER_DAYS,
