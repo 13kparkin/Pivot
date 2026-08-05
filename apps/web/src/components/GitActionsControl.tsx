@@ -49,6 +49,7 @@ import {
   resolveQuickAction,
   resolveThreadBranchUpdate,
 } from "./GitActionsControl.logic";
+import { useThreadPr } from "./ThreadStatusIndicators";
 import { AnimatedHeight } from "./AnimatedHeight";
 import { Button } from "~/components/ui/button";
 import { Checkbox } from "~/components/ui/checkbox";
@@ -1099,7 +1100,22 @@ export default function GitActionsControl({
   // Default to true while loading so we don't flash init controls.
   const isRepo = gitStatus?.isRepo ?? true;
   const hasPrimaryRemote = gitStatus?.hasPrimaryRemote ?? false;
-  const gitStatusForActions = gitStatus;
+  const activeThreadBranchPr = useThreadPr({
+    environmentId: activeEnvironmentId,
+    cwd: gitCwd,
+    threadBranch: activeServerThread?.branch ?? null,
+    gitStatus,
+  });
+  // Scope PR-driven actions to the thread's recorded branch: when the
+  // checkout has moved under a thread, "View PR" must open the thread's PR,
+  // not whatever the current checkout has. Non-thread contexts (project view,
+  // new composer) keep the checkout's PR.
+  const gitStatusForActions = useMemo(() => {
+    if (!gitStatus || activeServerThread?.branch == null) {
+      return gitStatus;
+    }
+    return { ...gitStatus, pr: activeThreadBranchPr };
+  }, [activeServerThread?.branch, activeThreadBranchPr, gitStatus]);
 
   const allFiles = gitStatusForActions?.workingTree.files ?? [];
   const selectedFiles = allFiles.filter((f) => !excludedFiles.has(f.path));

@@ -127,8 +127,8 @@ import {
 import { resolveLocalCheckoutBranchMismatch } from "./BranchToolbar.logic";
 import {
   prStatusIndicator,
-  resolveThreadPr,
   settledPrHoverColorClass,
+  useThreadPr,
   terminalStatusFromRunningIds,
   type TerminalStatusIndicator,
 } from "./ThreadStatusIndicators";
@@ -543,7 +543,9 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
     activeThreadBranch: thread.branch,
     currentGitBranch: gitStatus.data?.refName ?? null,
   });
-  const pr = resolveThreadPr({
+  const pr = useThreadPr({
+    environmentId: thread.environmentId,
+    cwd: gitCwd,
     threadBranch: thread.branch,
     gitStatus: gitStatus.data,
   });

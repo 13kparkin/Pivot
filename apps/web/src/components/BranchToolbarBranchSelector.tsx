@@ -601,14 +601,34 @@ export function BranchToolbarBranchSelector({
     startFromOrigin,
   });
 
-  // PR pill shown next to the branch selector when the active branch has one.
-  const branchPr = resolveThreadPr({
-    threadBranch: resolveBranchToolbarPrBranch({
-      activeThreadBranch,
-      resolvedActiveBranch,
-    }),
-    gitStatus: branchStatusQuery.data ?? null,
-  });
+  // PR pill shown next to the branch selector when the displayed ref has one.
+  // The stream-fed status is the fast path while the checkout matches; the
+  // branch-keyed query keeps the pill correct when the checkout has moved
+  // elsewhere. Draft "From <base>" selectors intentionally show none — the
+  // base branch's PR is not this thread's.
+  const branchPrLookupBranch =
+    (effectiveEnvMode === "worktree" && !activeWorktreePath) ||
+    resolvedActiveBranchIsRemote === true
+      ? null
+      : resolvedActiveBranch;
+  const branchPrQuery = useEnvironmentQuery(
+    branchCwd !== null && branchPrLookupBranch !== null
+      ? vcsEnvironment.branchPr({
+          environmentId,
+          input: { cwd: branchCwd, branch: branchPrLookupBranch },
+        })
+      : null,
+  );
+  const branchPr =
+    resolveThreadPr({
+      threadBranch: resolveBranchToolbarPrBranch({
+        activeThreadBranch,
+        resolvedActiveBranch,
+      }),
+      gitStatus: branchStatusQuery.data ?? null,
+    }) ??
+    branchPrQuery.data?.pr ??
+    null;
   const branchPrStatus = prStatusIndicator(branchPr, branchStatusQuery.data?.sourceControlProvider);
   // Action-oriented tooltip (the pill opens the PR), distinct from the sidebar's
   // state-description tooltip.

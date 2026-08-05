@@ -3,7 +3,7 @@ import {
   scopedThreadKey,
   scopeThreadRef,
 } from "@t3tools/client-runtime/environment";
-import type { VcsStatusResult } from "@t3tools/contracts";
+import type { EnvironmentId, VcsStatusResult } from "@t3tools/contracts";
 import { CloudIcon, FolderGit2Icon, GitPullRequestIcon, TerminalIcon } from "lucide-react";
 import { useMemo } from "react";
 import { useEnvironment, usePrimaryEnvironmentId } from "../state/environments";
@@ -124,6 +124,33 @@ export function resolveThreadPr(input: {
   }
 
   return gitStatus.pr ?? null;
+}
+
+/**
+ * PR state for a thread, keyed by the thread's recorded branch rather than
+ * the current checkout. The stream-fed status is the fast path while the
+ * checkout matches the thread's branch; the branch-keyed query keeps the
+ * badge alive when the checkout has moved elsewhere.
+ */
+export function useThreadPr(input: {
+  environmentId: EnvironmentId | null;
+  cwd: string | null;
+  threadBranch: string | null;
+  gitStatus: VcsStatusResult | null;
+}): ThreadPr | null {
+  const branchPr = useEnvironmentQuery(
+    input.environmentId !== null && input.threadBranch !== null && input.cwd !== null
+      ? vcsEnvironment.branchPr({
+          environmentId: input.environmentId,
+          input: { cwd: input.cwd, branch: input.threadBranch },
+        })
+      : null,
+  );
+  return (
+    resolveThreadPr({ threadBranch: input.threadBranch, gitStatus: input.gitStatus }) ??
+    branchPr.data?.pr ??
+    null
+  );
 }
 
 export function terminalStatusFromRunningIds(
@@ -250,7 +277,9 @@ export function ThreadRowLeadingStatus({ thread }: { thread: SidebarThreadSummar
         })
       : null,
   );
-  const pr = resolveThreadPr({
+  const pr = useThreadPr({
+    environmentId: thread.environmentId,
+    cwd: gitCwd,
     threadBranch: thread.branch,
     gitStatus: gitStatus.data,
   });
