@@ -188,7 +188,7 @@ export function CloudEnvironmentsSettings() {
       >
         <SettingsRow
           title="Powered by Render"
-          description="Persistent cloud agents and repositories."
+          description="Creates a temporary free cloud machine for the demo."
           control={
             <Button
               size="sm"
@@ -202,7 +202,10 @@ export function CloudEnvironmentsSettings() {
       </SettingsSection>
 
       <SettingsSection title="Connect">
-        <SettingsRow title="Pair URL" description="Paste the Pair URL printed in the Render logs.">
+        <SettingsRow
+          title="Pair URL"
+          description="Connects this T3 Code client to the cloud machine. Copy the URL from the Render logs."
+        >
           <div className="mt-3 flex flex-col gap-2 sm:flex-row">
             <Input
               value={pairUrl}
@@ -234,12 +237,9 @@ export function CloudEnvironmentsSettings() {
       </SettingsSection>
 
       <SettingsSection title="Ready to use">
-        <SettingsRow title="Authenticate Codex" description="Run once in the Render Shell.">
-          <CopyCommand command={CODEX_LOGIN_COMMAND} />
-        </SettingsRow>
         <SettingsRow
           title="Get the code"
-          description="Choose the Render environment and paste any public GitHub URL. It clones directly into the cloud workspace."
+          description="Choose Render and paste a public GitHub URL. The repository is cloned inside the cloud machine."
           control={
             <Button
               size="sm"
@@ -250,6 +250,13 @@ export function CloudEnvironmentsSettings() {
             </Button>
           }
         />
+        <SettingsRow
+          title="Authenticate Codex"
+          description="After cloning, open that project's terminal and run this once. Then start an agent."
+          status="Free instances forget this login when they restart or spin down."
+        >
+          <CopyCommand command={CODEX_LOGIN_COMMAND} />
+        </SettingsRow>
       </SettingsSection>
     </SettingsPageContainer>
   );
