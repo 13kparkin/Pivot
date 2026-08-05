@@ -189,6 +189,7 @@ final class NativeContractExpansionTests: XCTestCase {
                       "shortName": "Terra",
                       "isCustom": false,
                       "isDefault": false,
+                      "isLegacy": true,
                       "capabilities": null
                     }],
                     "slashCommands": [{
@@ -222,6 +223,8 @@ final class NativeContractExpansionTests: XCTestCase {
         XCTAssertEqual(config.settings?.newWorktreesStartFromOrigin, false)
         let model = try XCTUnwrap(provider.models.first)
         XCTAssertEqual(model.slug, "gpt-5.6-sol")
+        XCTAssertNil(model.isLegacy)
+        XCTAssertEqual(provider.models[1].isLegacy, true)
         let descriptors = try XCTUnwrap(model.capabilities?.optionDescriptors)
         guard case let .select(effort) = descriptors[0],
               case let .boolean(fastMode) = descriptors[1]
@@ -257,6 +260,75 @@ final class NativeContractExpansionTests: XCTestCase {
         }
         XCTAssertEqual(settings.defaultThreadEnvMode, .worktree)
         XCTAssertFalse(settings.newWorktreesStartFromOrigin)
+    }
+
+    func testProviderArraysDropOnlyUnknownProviderEntries() throws {
+        let providers = """
+        [{
+          "instanceId": "future-provider",
+          "driver": "future",
+          "enabled": true,
+          "installed": true,
+          "status": "ready",
+          "auth": { "status": "authenticated" },
+          "checkedAt": "2026-08-04T12:00:00.000Z",
+          "models": [{
+            "slug": "future-model",
+            "name": "Future",
+            "isCustom": false,
+            "capabilities": {
+              "optionDescriptors": [{ "type": "future-option" }]
+            }
+          }]
+        }, {
+          "instanceId": "codex",
+          "driver": "codex",
+          "enabled": true,
+          "installed": true,
+          "status": "ready",
+          "auth": { "status": "authenticated" },
+          "checkedAt": "2026-08-04T12:00:00.000Z",
+          "models": [{
+            "slug": "gpt-5.6-sol",
+            "name": "GPT-5.6 Sol",
+            "isCustom": false,
+            "isLegacy": false
+          }]
+        }]
+        """
+        let snapshot = try JSONDecoder.t3.decode(
+            ServerConfigSnapshot.self,
+            from: Data(
+                """
+                {
+                  "providers": \(providers),
+                  "settings": {
+                    "defaultThreadEnvMode": "worktree",
+                    "newWorktreesStartFromOrigin": false
+                  }
+                }
+                """.utf8
+            )
+        )
+
+        XCTAssertEqual(snapshot.providers.map(\.instanceId), ["codex"])
+        XCTAssertEqual(snapshot.settings?.defaultThreadEnvMode, .worktree)
+
+        let event = try JSONDecoder.t3.decode(
+            ServerConfigStreamEvent.self,
+            from: Data(
+                """
+                {
+                  "type": "providerStatuses",
+                  "payload": { "providers": \(providers) }
+                }
+                """.utf8
+            )
+        )
+        guard case let .providerStatuses(decodedProviders) = event else {
+            return XCTFail("Expected provider statuses")
+        }
+        XCTAssertEqual(decodedProviders.map(\.instanceId), ["codex"])
     }
 }
 

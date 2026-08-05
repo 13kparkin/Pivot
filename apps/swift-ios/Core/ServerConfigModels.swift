@@ -79,6 +79,7 @@ public struct ServerProviderModelSnapshot: Codable, Identifiable, Equatable, Sen
     public let subProvider: String?
     public let isCustom: Bool
     public let isDefault: Bool?
+    public let isLegacy: Bool?
     public let capabilities: ServerModelCapabilities?
 }
 
@@ -158,6 +159,31 @@ public struct ServerConfigSnapshot: Codable, Equatable, Sendable {
         self.providers = providers
         self.settings = settings
     }
+
+    private enum CodingKeys: String, CodingKey { case providers, settings }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        providers = try container.decode(
+            [LossyDecodableElement<ServerProviderSnapshot>].self,
+            forKey: .providers
+        ).compactMap(\.value)
+        settings = try container.decodeIfPresent(ServerSettingsSnapshot.self, forKey: .settings)
+    }
+
+    public func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(providers, forKey: .providers)
+        try container.encodeIfPresent(settings, forKey: .settings)
+    }
+}
+
+private struct LossyDecodableElement<Value: Decodable>: Decodable {
+    let value: Value?
+
+    init(from decoder: any Decoder) throws {
+        value = try? Value(from: decoder)
+    }
 }
 
 public enum ServerConfigStreamEvent: Decodable, Sendable {
@@ -167,7 +193,19 @@ public enum ServerConfigStreamEvent: Decodable, Sendable {
     case unrelated(type: String)
 
     private enum CodingKeys: String, CodingKey { case type, config, payload }
-    private struct ProviderPayload: Decodable { let providers: [ServerProviderSnapshot] }
+    private struct ProviderPayload: Decodable {
+        let providers: [ServerProviderSnapshot]
+
+        private enum CodingKeys: String, CodingKey { case providers }
+
+        init(from decoder: any Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            providers = try container.decode(
+                [LossyDecodableElement<ServerProviderSnapshot>].self,
+                forKey: .providers
+            ).compactMap(\.value)
+        }
+    }
     private struct SettingsPayload: Decodable { let settings: ServerSettingsSnapshot }
 
     public init(from decoder: any Decoder) throws {

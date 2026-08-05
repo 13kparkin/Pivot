@@ -210,6 +210,8 @@ private struct ModelPickerSheet: View {
         .presentationDetents([.large])
         .presentationDragIndicator(.visible)
         .preferredColorScheme(.dark)
+        .onAppear(perform: revealSelectedLegacyModel)
+        .onChange(of: selection) { revealSelectedLegacyModel() }
     }
 
     private var modelList: some View {
@@ -367,6 +369,14 @@ private struct ModelPickerSheet: View {
         recentStorage = ([id] + recentIDs.filter { $0 != id })
             .prefix(8)
             .joined(separator: "\n")
+    }
+
+    private func revealSelectedLegacyModel() {
+        guard let resolvedSelection else { return }
+        legacyModelsExpanded = displaySections.legacy.contains {
+            $0.provider.id == resolvedSelection.providerID
+                && $0.model.id == resolvedSelection.modelID
+        }
     }
 
     private var modelChangesAreLocked: Bool {
@@ -528,35 +538,8 @@ struct ProviderModelDisplaySections {
 }
 
 enum ProviderModelFamilyClassifier {
-    static func isCurrent(_ model: FeatureModel, provider: FeatureProvider) -> Bool {
-        let providerTokens = tokens(
-            [provider.id, provider.name, provider.driver].joined(separator: " ")
-        )
-        let modelTokens = tokens([model.id, model.name].joined(separator: " "))
-        let combined = providerTokens.union(modelTokens)
-
-        let isCodex = !providerTokens.isDisjoint(with: ["codex", "openai"])
-            || modelTokens.contains("gpt")
-        if isCodex,
-           combined.contains("5"),
-           combined.contains("6"),
-           !combined.isDisjoint(with: ["luna", "terra", "sol"]) {
-            return true
-        }
-
-        let isClaude = !providerTokens.isDisjoint(with: ["claude", "anthropic", "claudeagent"])
-            || modelTokens.contains("claude")
-        return isClaude
-            && combined.contains("5")
-            && !combined.isDisjoint(with: ["fable", "opus", "sonnet"])
-    }
-
-    private static func tokens(_ value: String) -> Set<String> {
-        Set(
-            value.lowercased()
-                .split { !$0.isLetter && !$0.isNumber }
-                .map(String.init)
-        )
+    static func isCurrent(_ model: FeatureModel, provider _: FeatureProvider) -> Bool {
+        model.isLegacy != true
     }
 }
 

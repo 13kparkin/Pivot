@@ -3765,6 +3765,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
                                     || searchable.contains("thinking")
                             },
                             isDefault: model.isDefault ?? false,
+                            isLegacy: model.isLegacy,
                             options: options
                         )
                     },

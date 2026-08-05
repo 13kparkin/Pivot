@@ -246,7 +246,12 @@ struct DailyUXModelPickerTests {
                 id: "claude",
                 name: "Claude",
                 models: [
-                    .init(id: "claude-sonnet-4", name: "Sonnet 4", isDefault: true),
+                    .init(
+                        id: "claude-sonnet-4",
+                        name: "Sonnet 4",
+                        isDefault: true,
+                        isLegacy: true
+                    ),
                     .init(id: "claude-opus-5", name: "Opus 5"),
                 ]
             ),
@@ -409,7 +414,7 @@ struct DailyUXModelPickerTests {
                     .init(id: "claude-opus-5", name: "Opus 5"),
                     .init(id: "claude-sonnet-5", name: "Sonnet 5"),
                     .init(id: "claude-fable-5", name: "Fable 5"),
-                    .init(id: "claude-haiku-3", name: "Haiku 3"),
+                    .init(id: "claude-haiku-3", name: "Haiku 3", isLegacy: true),
                 ]
             ),
         ]
@@ -438,7 +443,7 @@ struct DailyUXModelPickerTests {
     }
 
     @Test
-    func currentFamiliesAreClassifiedFromStableIDsAndNames() {
+    func serverLegacyMetadataIsAuthoritative() {
         let codex = FeatureProvider(id: "work-openai", name: "Codex", driver: "codex")
         let claude = FeatureProvider(
             id: "work-claude",
@@ -448,50 +453,56 @@ struct DailyUXModelPickerTests {
 
         #expect(
             ProviderModelFamilyClassifier.isCurrent(
-                .init(id: "gpt-5.6-codex-luna", name: "Luna"),
+                .init(id: "gpt-5.6-codex-luna", name: "Luna", isLegacy: false),
                 provider: codex
             )
         )
         #expect(
             ProviderModelFamilyClassifier.isCurrent(
-                .init(id: "gpt_5_6_terra", name: "GPT 5.6 Terra"),
+                .init(id: "gpt_5_6_terra", name: "GPT 5.6 Terra", isLegacy: false),
                 provider: codex
             )
         )
         #expect(
             ProviderModelFamilyClassifier.isCurrent(
-                .init(id: "gpt-5-6-sol", name: "Sol"),
+                .init(id: "gpt-5-6-sol", name: "Sol", isLegacy: false),
                 provider: codex
             )
         )
         #expect(
             ProviderModelFamilyClassifier.isCurrent(
-                .init(id: "claude-fable-5-202607", name: "Fable 5"),
+                .init(id: "claude-fable-5-202607", name: "Fable 5", isLegacy: false),
                 provider: claude
             )
         )
         #expect(
             ProviderModelFamilyClassifier.isCurrent(
-                .init(id: "claude-opus-5", name: "OPUS 5"),
+                .init(id: "claude-opus-5", name: "OPUS 5", isLegacy: false),
                 provider: claude
             )
         )
         #expect(
             ProviderModelFamilyClassifier.isCurrent(
-                .init(id: "claude-sonnet-5", name: "Sonnet v5"),
-                provider: claude
-            )
-        )
-        #expect(
-            !ProviderModelFamilyClassifier.isCurrent(
-                .init(id: "claude-opus-4-1", name: "Opus 4.1"),
+                .init(id: "claude-sonnet-5", name: "Sonnet v5", isLegacy: false),
                 provider: claude
             )
         )
         #expect(
             !ProviderModelFamilyClassifier.isCurrent(
-                .init(id: "gpt-5.5-codex-sol", name: "GPT 5.5 Sol"),
+                .init(id: "claude-opus-4-1", name: "Opus 4.1", isLegacy: true),
+                provider: claude
+            )
+        )
+        #expect(
+            !ProviderModelFamilyClassifier.isCurrent(
+                .init(id: "gpt-5.5-codex-sol", name: "GPT 5.5 Sol", isLegacy: true),
                 provider: codex
+            )
+        )
+        #expect(
+            ProviderModelFamilyClassifier.isCurrent(
+                .init(id: "custom-opus-4", name: "Custom Opus 4"),
+                provider: claude
             )
         )
     }
