@@ -56,6 +56,7 @@ export function HomeHeader(props: {
 
   const focusSearch = useCallback(() => {
     setSearchVisible(true);
+    searchInputRef.current?.focus();
     return true;
   }, []);
   useHardwareKeyboardCommand("focusSearch", focusSearch);

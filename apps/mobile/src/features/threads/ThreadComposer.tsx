@@ -603,7 +603,9 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
       }),
     [currentModelOption?.capabilities, currentModelSelection.options],
   );
-  const { favoriteModelKeys, toggleFavorite } = useModelFavorites(props.environmentId);
+  const { favoriteModelKeys, favoritesReady, toggleFavorite } = useModelFavorites(
+    props.environmentId,
+  );
 
   // ── Options menu ─────────────────────────────────────────
   const optionsMenuActions = useMemo(
@@ -909,6 +911,7 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
       />
       <ModelPickerSheet
         favoriteModelKeys={favoriteModelKeys}
+        favoritesEnabled={favoritesReady}
         groups={providerGroups}
         onClose={() => setModelPickerVisible(false)}
         onSelectModel={(option) => props.onUpdateModelSelection(option.selection)}

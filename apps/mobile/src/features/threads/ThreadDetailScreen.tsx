@@ -204,7 +204,8 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
   })();
   const selectedThreadFeed = props.selectedThreadFeed;
   const composerChrome = composerExpanded ? COMPOSER_EXPANDED_CHROME : COMPOSER_COLLAPSED_CHROME;
-  const requestChrome = props.activePendingUserInput ? 430 : 270;
+  const requestChrome =
+    (props.activePendingApproval ? 270 : 0) + (props.activePendingUserInput ? 430 : 0);
   const composerOverlapHeight = activePendingRequest
     ? requestChrome + Math.max(insets.bottom, 12)
     : composerChrome + composerBottomInset;
@@ -404,7 +405,7 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
             <View className="w-full self-center" style={{ maxWidth: contentMaxWidth }}>
               {activePendingRequest ? (
                 <Animated.View
-                  className="shrink-0 px-2.5 pt-1.5"
+                  className="shrink-0 gap-2 px-2.5 pt-1.5"
                   entering={FadeInDown.duration(220)}
                   exiting={FadeOut.duration(140)}
                   style={{ paddingBottom: Math.max(insets.bottom, 10) }}
@@ -416,7 +417,8 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
                       respondingApprovalId={props.respondingApprovalId}
                       onRespond={props.onRespondToApproval}
                     />
-                  ) : props.activePendingUserInput ? (
+                  ) : null}
+                  {props.activePendingUserInput ? (
                     <PendingUserInputCard
                       key={props.activePendingUserInput.requestId}
                       pendingUserInput={props.activePendingUserInput}

@@ -55,6 +55,7 @@ export function ModelPickerSheet(props: {
   readonly groups: ReadonlyArray<ProviderGroup>;
   readonly selectedModel: ModelSelection | null;
   readonly favoriteModelKeys: ReadonlySet<string>;
+  readonly favoritesEnabled: boolean;
   readonly onClose: () => void;
   readonly onSelectModel: (option: ModelOption) => void;
   readonly onToggleFavorite: (option: ModelOption) => void;
@@ -252,9 +253,12 @@ export function ModelPickerSheet(props: {
                 <Pressable
                   accessibilityLabel={favorite ? "Remove from favorites" : "Add to favorites"}
                   accessibilityRole="button"
+                  accessibilityState={{ disabled: !props.favoritesEnabled }}
                   className="ml-3 h-11 w-11 items-center justify-center active:opacity-60"
+                  disabled={!props.favoritesEnabled}
                   hitSlop={4}
                   onPress={() => props.onToggleFavorite(item.option)}
+                  style={{ opacity: props.favoritesEnabled ? 1 : 0.45 }}
                 >
                   <SymbolView
                     name={favorite ? "star.fill" : "star"}

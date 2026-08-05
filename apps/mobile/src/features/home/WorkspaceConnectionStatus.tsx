@@ -33,29 +33,33 @@ export function WorkspaceConnectionStatus(props: {
     const tintColor = presentation.tone === "amber" ? "#fbbf24" : "#f87171";
     const label = `${presentation.label} ${presentation.detail}`;
     return (
-      <View
-        accessibilityLabel={label}
-        accessibilityRole="summary"
-        className="h-12 min-w-0 flex-row items-center gap-2.5"
-      >
-        <SymbolView
-          name={
-            presentation.tone === "amber" ? "point.3.connected.trianglepath.dotted" : "wifi.slash"
-          }
-          size={17}
-          tintColor={tintColor}
-          type="monochrome"
-        />
-        <Text
-          className="min-w-0 shrink text-base font-t3-bold"
-          numberOfLines={1}
-          style={{ color: tintColor }}
+      <View className="h-12 min-w-0 flex-row items-center gap-2.5">
+        <Pressable
+          accessibilityHint="Opens environment settings"
+          accessibilityLabel={label}
+          accessibilityRole="button"
+          className="min-w-0 flex-1 flex-row items-center gap-2.5 self-stretch"
+          onPress={props.onPress}
         >
-          {presentation.label}{" "}
-          <Text className="text-sm font-t3-medium" style={{ color: tintColor, opacity: 0.72 }}>
-            {presentation.detail}
+          <SymbolView
+            name={
+              presentation.tone === "amber" ? "point.3.connected.trianglepath.dotted" : "wifi.slash"
+            }
+            size={17}
+            tintColor={tintColor}
+            type="monochrome"
+          />
+          <Text
+            className="min-w-0 shrink text-base font-t3-bold"
+            numberOfLines={1}
+            style={{ color: tintColor }}
+          >
+            {presentation.label}{" "}
+            <Text className="text-sm font-t3-medium" style={{ color: tintColor, opacity: 0.72 }}>
+              {presentation.detail}
+            </Text>
           </Text>
-        </Text>
+        </Pressable>
         {presentation.tone === "red" && props.onReconnect ? (
           <Pressable
             accessibilityLabel={`Reconnect ${presentation.label}`}

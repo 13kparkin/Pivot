@@ -49,13 +49,14 @@ export function PendingUserInputCard(props: PendingUserInputCardProps) {
   const isLastQuestion = questionIndex >= props.pendingUserInput.questions.length - 1;
   const canGoBack = questionIndex > 0 && !isResponding;
   const canAdvance = hasDraftAnswer(draft);
+  const canContinue = isLastQuestion ? props.answers !== null : canAdvance;
 
   if (!activeQuestion) {
     return null;
   }
 
   const handleAdvance = () => {
-    if (!canAdvance || isResponding) {
+    if (!canContinue || isResponding) {
       return;
     }
     if (!isLastQuestion) {
@@ -177,18 +178,18 @@ export function PendingUserInputCard(props: PendingUserInputCardProps) {
         <Pressable
           accessibilityLabel={isLastQuestion ? "Submit answers" : "Next question"}
           accessibilityRole="button"
-          accessibilityState={{ disabled: !canAdvance || isResponding }}
+          accessibilityState={{ disabled: !canContinue || isResponding }}
           className={cn(
             "min-h-11 items-center justify-center rounded-full px-5",
-            canAdvance && !isResponding ? "bg-blue-600" : "bg-subtle-strong",
+            canContinue && !isResponding ? "bg-blue-600" : "bg-subtle-strong",
           )}
-          disabled={!canAdvance || isResponding}
+          disabled={!canContinue || isResponding}
           onPress={handleAdvance}
         >
           <Text
             className={cn(
               "font-t3-bold text-base",
-              canAdvance && !isResponding ? "text-white" : "text-foreground-tertiary",
+              canContinue && !isResponding ? "text-white" : "text-foreground-tertiary",
             )}
           >
             {isLastQuestion ? "Submit answers" : "Next question"}

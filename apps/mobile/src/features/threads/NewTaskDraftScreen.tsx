@@ -83,7 +83,7 @@ export function NewTaskDraftScreen(props: {
   const selectedEnvironmentServerConfig = useEnvironmentServerConfig(
     selectedProject?.environmentId ?? null,
   );
-  const { favoriteModelKeys, toggleFavorite } = useModelFavorites(
+  const { favoriteModelKeys, favoritesReady, toggleFavorite } = useModelFavorites(
     selectedProject?.environmentId ?? null,
   );
   const environmentConnected =
@@ -1070,6 +1070,7 @@ export function NewTaskDraftScreen(props: {
       </KeyboardAvoidingView>
       <ModelPickerSheet
         favoriteModelKeys={favoriteModelKeys}
+        favoritesEnabled={favoritesReady}
         groups={flow.providerGroups}
         onClose={() => setModelPickerVisible(false)}
         onSelectModel={(option) => flow.setSelectedModelKey(option.key)}
