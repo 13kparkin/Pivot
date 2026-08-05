@@ -2,11 +2,7 @@ import * as Schema from "effect/Schema";
 import * as Rpc from "effect/unstable/rpc/Rpc";
 import * as RpcGroup from "effect/unstable/rpc/RpcGroup";
 
-import {
-  ExternalLauncherError,
-  LaunchEditorInput,
-  RevealInFileManagerInput,
-} from "./editor.ts";
+import { ExternalLauncherError, LaunchEditorInput, RevealInFileManagerInput } from "./editor.ts";
 import {
   AuthAccessStreamError,
   AuthAccessStreamEvent,

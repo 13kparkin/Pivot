@@ -166,7 +166,7 @@ it.effect("reveals files with Windows Explorer", () =>
     let spawned: ChildProcess.StandardCommand | undefined;
     yield* Effect.gen(function* () {
       const launcher = yield* ExternalLauncher.ExternalLauncher;
-      yield* launcher.revealInFileManager({ path: "C:\\project\\src\\index.ts" });
+      yield* launcher.revealInFileManager({ path: "C:\\project files\\src\\index.ts" });
     }).pipe(
       Effect.provide(
         testLayer({
@@ -181,7 +181,7 @@ it.effect("reveals files with Windows Explorer", () =>
 
     assert.ok(spawned);
     assert.equal(spawned.command, "explorer");
-    assert.deepEqual(spawned.args, ["/select,C:\\project\\src\\index.ts"]);
+    assert.deepEqual(spawned.args, [`/select,"C:\\project files\\src\\index.ts"`]);
   }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );
 

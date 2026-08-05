@@ -389,32 +389,30 @@ const resolveEditorLaunch = Effect.fn("resolveEditorLaunch")(function* (
   };
 });
 
-const resolveFileManagerRevealLaunch = Effect.fn(
-  "externalLauncher.resolveFileManagerRevealLaunch",
-)(function* (
-  input: RevealInFileManagerInput,
-): Effect.fn.Return<EditorLaunch, never, Path.Path> {
-  const platform = yield* HostProcessPlatform;
-  const path = yield* Path.Path;
-  const args =
-    platform === "darwin"
-      ? ["-R", input.path]
-      : platform === "win32"
-        ? [`/select,${input.path}`]
-        : [path.dirname(input.path)];
+const resolveFileManagerRevealLaunch = Effect.fn("externalLauncher.resolveFileManagerRevealLaunch")(
+  function* (input: RevealInFileManagerInput): Effect.fn.Return<EditorLaunch, never, Path.Path> {
+    const platform = yield* HostProcessPlatform;
+    const path = yield* Path.Path;
+    const args =
+      platform === "darwin"
+        ? ["-R", input.path]
+        : platform === "win32"
+          ? [`/select,"${input.path}"`]
+          : [path.dirname(input.path)];
 
-  yield* Effect.annotateCurrentSpan({
-    "externalLauncher.target": input.path,
-    "externalLauncher.platform": platform,
-  });
+    yield* Effect.annotateCurrentSpan({
+      "externalLauncher.target": input.path,
+      "externalLauncher.platform": platform,
+    });
 
-  return {
-    editor: "file-manager",
-    target: input.path,
-    command: fileManagerCommandForPlatform(platform),
-    args,
-  };
-});
+    return {
+      editor: "file-manager",
+      target: input.path,
+      command: fileManagerCommandForPlatform(platform),
+      args,
+    };
+  },
+);
 
 const launchAndUnref = Effect.fn("externalLauncher.launchAndUnref")(function* (
   launch: ProcessLaunch,
