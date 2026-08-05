@@ -14,5 +14,11 @@ services:
       mountPath: /data
       sizeGB: 10
     envVars:
+      - key: T3CODE_CLOUD_PROVIDER
+        value: render
+      - key: T3CODE_ENVIRONMENT_LABEL
+        value: Render cloud environment
+      - key: T3CODE_WORKSPACE_DIR
+        value: /data/workspace
       - key: T3CODE_PAIRING_TTL
         value: 24h

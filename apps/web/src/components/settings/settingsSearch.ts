@@ -167,6 +167,11 @@ export const SETTINGS_SEARCH_ITEMS = [
     to: "/settings/source-control",
   },
   {
+    id: "cloud-environments",
+    title: "Cloud environments",
+    to: "/settings/connections",
+  },
+  {
     id: "remote-environments",
     title: "Remote environments",
     to: "/settings/connections",

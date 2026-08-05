@@ -20,6 +20,9 @@ pairing_ttl="${T3CODE_PAIRING_TTL:-24h}"
 
 export CODEX_HOME="$codex_home"
 export CLAUDE_CONFIG_DIR="$claude_config_dir"
+export T3CODE_CLOUD_PROVIDER="${T3CODE_CLOUD_PROVIDER:-render}"
+export T3CODE_ENVIRONMENT_LABEL="${T3CODE_ENVIRONMENT_LABEL:-Render cloud environment}"
+export T3CODE_WORKSPACE_DIR="$workspace_dir"
 
 mkdir -p "$t3_home" "$workspace_dir" "$codex_home" "$claude_config_dir"
 

@@ -24,14 +24,20 @@ The root [`render.yaml`](../../render.yaml) creates:
 4. Open the service logs and copy the `Pair URL` printed during startup. Treat this URL like a
    password: it contains a one-time pairing credential.
 5. Open the URL in a browser. The hosted T3 Code app pairs with the Render environment and saves it
-   under **Settings → Connections → Remote environments**.
+   under **Settings → Connections → Cloud environments**, labeled as powered by Render.
 6. Authenticate a provider and source control as described below.
-7. Open the Command Palette, choose **Add Project**, and select the Render environment. Clone a
-   GitHub repository, another supported source-control repository, or any Git URL.
+7. Open the Command Palette and choose **Add Project → Cloud environments → Render cloud
+   environment**. Select a GitHub repository, another supported source-control repository, or any
+   Git URL. T3 Code clones it directly into the Render workspace; there is no local destination
+   picker.
 
 Repositories are selected after pairing rather than baked into the Blueprint. Each clone is stored
 under `/data/workspace` and survives deploys. This keeps the public deployment configuration generic
 and lets each user bring repositories they already have access to.
+
+The Render service advertises cloud metadata in its normal T3 environment descriptor. That is what
+lets clients present it as a cloud device and automatically route project cloning to its persistent
+workspace while leaving the existing local-device folder flow unchanged.
 
 The demo Blueprint is pinned to `feat/render-cloud-environment` so it can deploy before the draft
 pull request is merged. Update the `branch` field in `render.yaml` if you rename or reuse the branch.

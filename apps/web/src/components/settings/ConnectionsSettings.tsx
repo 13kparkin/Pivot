@@ -1,5 +1,6 @@
 import {
   ChevronsLeftRightEllipsisIcon,
+  CloudIcon,
   PlusIcon,
   QrCodeIcon,
   RefreshCwIcon,
@@ -131,6 +132,7 @@ import { ConnectionStatusDot } from "../ConnectionStatusDot";
 import { ServerUpdateAction, ServerUpdateProgress } from "../ServerUpdateAction";
 import { CloudEnvironmentConnectRows } from "../cloud/CloudEnvironmentConnectList";
 import { ITEM_ROW_CLASSNAME, ITEM_ROW_INNER_CLASSNAME } from "./itemRows";
+import { cloudEnvironmentProvider, cloudEnvironmentProviderLabel } from "~/cloud/cloudEnvironment";
 
 const DEFAULT_TAILSCALE_SERVE_PORT = 443;
 const EMPTY_ADVERTISED_ENDPOINTS: ReadonlyArray<AdvertisedEndpoint> = [];
@@ -1394,7 +1396,9 @@ function SavedBackendListRow({
     environment.entry.profile.value._tag === "SshConnectionProfile"
       ? environment.entry.profile.value.target
       : null;
+  const cloudProvider = cloudEnvironmentProvider(environment);
   const metadataBits = [
+    cloudProvider ? `Powered by ${cloudEnvironmentProviderLabel(cloudProvider)}` : null,
     sshTarget ? `SSH ${formatDesktopSshTarget(sshTarget)}` : null,
     environment.relayManaged ? "T3 Connect" : null,
   ].filter((value): value is string => value !== null);
@@ -1741,6 +1745,15 @@ export function ConnectionsSettings() {
         .filter((environment) => environment.entry.target._tag !== "PrimaryConnectionTarget")
         .toSorted((left, right) => left.label.localeCompare(right.label)),
     [environments],
+  );
+  const renderCloudEnvironments = useMemo(
+    () =>
+      savedEnvironments.filter((environment) => cloudEnvironmentProvider(environment) === "render"),
+    [savedEnvironments],
+  );
+  const savedNonCloudEnvironments = useMemo(
+    () => savedEnvironments.filter((environment) => cloudEnvironmentProvider(environment) === null),
+    [savedEnvironments],
   );
   const savedDesktopSshEnvironmentsByAlias = useMemo(
     () =>
@@ -3345,6 +3358,33 @@ export function ConnectionsSettings() {
       )}
 
       <SettingsSection
+        {...searchableSetting("cloud-environments")}
+        icon={<CloudIcon className="size-4" />}
+      >
+        <SettingsRow
+          title="Powered by Render"
+          description="Run the normal T3 Code server as a persistent Render service. Pair it once, then clone repositories and run agents in its cloud workspace just like another device."
+          status="Cloud repositories are stored on the Render disk under /data/workspace."
+        />
+        {renderCloudEnvironments.length === 0 ? (
+          <SettingsRow
+            title="No Render environment paired"
+            description="Deploy the Render Blueprint, copy the Pair URL from its service logs, and open it on this device. The environment will appear here automatically."
+          />
+        ) : (
+          renderCloudEnvironments.map((environment) => (
+            <SavedBackendListRow
+              key={environment.environmentId}
+              environment={environment}
+              removingEnvironmentId={removingSavedEnvironmentId}
+              onConnect={handleConnectSavedBackend}
+              onRemove={handleRemoveSavedBackend}
+            />
+          ))
+        )}
+      </SettingsSection>
+
+      <SettingsSection
         {...searchableSetting("remote-environments")}
         headerAction={
           <Dialog
@@ -3408,7 +3448,7 @@ export function ConnectionsSettings() {
           </Dialog>
         }
       >
-        {savedEnvironments.map((environment) => (
+        {savedNonCloudEnvironments.map((environment) => (
           <SavedBackendListRow
             key={environment.environmentId}
             environment={environment}
