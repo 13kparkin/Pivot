@@ -1251,7 +1251,18 @@ const make = Effect.gen(function* () {
       );
 
     if (responseSucceeded && event.payload.decision === "cancel") {
-      yield* providerService.interruptTurn({ threadId: event.payload.threadId });
+      yield* providerService.interruptTurn({ threadId: event.payload.threadId }).pipe(
+        Effect.catchCause((cause) =>
+          appendProviderFailureActivity({
+            threadId: event.payload.threadId,
+            kind: "provider.turn.interrupt.failed",
+            summary: "Provider turn interrupt failed",
+            detail: Cause.pretty(cause),
+            turnId: thread.session?.activeTurnId ?? null,
+            createdAt: event.payload.createdAt,
+          }),
+        ),
+      );
     }
   });
 
