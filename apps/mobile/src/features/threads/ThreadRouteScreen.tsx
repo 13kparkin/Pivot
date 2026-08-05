@@ -787,7 +787,7 @@ function ThreadRouteContent(
     ],
     [navigation],
   );
-  const statusGitHeaderItem = useMemo(() => {
+  const compactThreadActionItem = useMemo(() => {
     const gitItem = compactRightHeaderItems.find((item) => item.identifier === "thread-right-git");
     if (!gitItem) {
       return null;
@@ -797,10 +797,10 @@ function ThreadRouteContent(
       existingMenu && Array.isArray(existingMenu.items) ? existingMenu.items : [];
     return {
       ...gitItem,
-      accessibilityLabel: `Thread status: ${threadHeaderStatus.label}. Thread actions`,
-      icon: undefined,
-      identifier: "thread-right-status",
-      label: threadHeaderStatus.nativeLabel,
+      accessibilityLabel: "Thread actions",
+      icon: { name: "ellipsis", type: "sfSymbol" as const },
+      identifier: "thread-right-actions",
+      label: undefined,
       menu: {
         ...existingMenu,
         items: [
@@ -824,7 +824,9 @@ function ThreadRouteContent(
         ],
         title: "Thread actions",
       },
-      tintColor: threadHeaderStatus.tintColor,
+      sharesBackground: false,
+      tintColor: undefined,
+      width: 44,
     };
   }, [
     compactRightHeaderItems,
@@ -832,14 +834,45 @@ function ThreadRouteContent(
     handleOpenTerminal,
     selectedThreadCwd,
     selectedThreadProject?.workspaceRoot,
-    threadHeaderStatus,
   ]);
+  const compactThreadStatusItem = useMemo(
+    () => ({
+      accessibilityLabel: `Thread status: ${threadHeaderStatus.label}`,
+      icon: {
+        name:
+          threadHeaderStatus.kind === "done"
+            ? "checkmark.circle"
+            : threadHeaderStatus.kind === "working"
+              ? "timer"
+              : threadHeaderStatus.kind === "approval"
+                ? "exclamationmark.circle"
+                : threadHeaderStatus.kind === "input"
+                  ? "questionmark.circle"
+                  : "xmark.circle",
+        type: "sfSymbol" as const,
+      },
+      identifier: "thread-right-status",
+      label: threadHeaderStatus.nativeLabel,
+      onPress: handleOpenGitInspector,
+      sharesBackground: false,
+      tintColor: threadHeaderStatus.tintColor,
+      type: "button" as const,
+    }),
+    [handleOpenGitInspector, threadHeaderStatus],
+  );
   const nativeThreadRightHeaderItems = useMemo<NativeHeaderItems>(() => {
     if (layout.usesSplitView) {
       return threadCenterHeaderItems;
     }
-    return statusGitHeaderItem ? [statusGitHeaderItem] : [];
-  }, [layout.usesSplitView, statusGitHeaderItem, threadCenterHeaderItems]);
+    return compactThreadActionItem
+      ? [compactThreadStatusItem, compactThreadActionItem]
+      : [compactThreadStatusItem];
+  }, [
+    compactThreadActionItem,
+    compactThreadStatusItem,
+    layout.usesSplitView,
+    threadCenterHeaderItems,
+  ]);
 
   if (!environmentId || !threadId) {
     return <OpeningThreadLoadingScreen />;

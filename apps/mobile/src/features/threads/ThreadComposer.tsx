@@ -16,7 +16,15 @@ import {
 } from "@t3tools/shared/composerTrigger";
 import type { ReactNode } from "react";
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type RefObject } from "react";
-import { Image, Platform, Pressable, useColorScheme, View, type ViewStyle } from "react-native";
+import {
+  Image,
+  Keyboard,
+  Platform,
+  Pressable,
+  useColorScheme,
+  View,
+  type ViewStyle,
+} from "react-native";
 import ImageViewing from "react-native-image-viewing";
 import Animated, {
   FadeIn,
@@ -37,16 +45,16 @@ import {
   type ComposerEditorSelection,
 } from "../../components/ComposerEditor";
 import {
-  ComposerContextRing,
   ComposerToolbarButton,
   ComposerToolbarRow,
   ComposerToolbarScroller,
   ComposerToolbarTrigger,
 } from "../../components/ComposerToolbarTrigger";
 import { ControlPillMenu } from "../../components/ControlPill";
+import { ModelPickerSheet } from "../../components/ModelPickerSheet";
 import { ProviderIcon } from "../../components/ProviderIcon";
 import type { DraftComposerImageAttachment } from "../../lib/composerImages";
-import { buildModelMenuActions, buildModelOptions, groupByProvider } from "../../lib/modelOptions";
+import { buildModelOptions, groupByProvider } from "../../lib/modelOptions";
 import { useScaledTextRole } from "../settings/appearance/useScaledTextRole";
 import type { RemoteClientConnectionState } from "../../lib/connection";
 import {
@@ -61,6 +69,7 @@ import {
 } from "../../lib/providerOptions";
 import { useComposerPathSearch } from "../../state/use-composer-path-search";
 import { ComposerCommandPopover, type ComposerCommandItem } from "./ComposerCommandPopover";
+import { useModelFavorites } from "./useModelFavorites";
 
 /**
  * Height of the collapsed composer (pill + vertical padding, excluding safe-area inset).
@@ -72,7 +81,7 @@ export const COMPOSER_COLLAPSED_CHROME = 68;
  * Height of the expanded composer (card + toolbar + vertical padding, excluding safe-area inset).
  * Used by the parent to compute the larger feed bottom inset when the composer is focused.
  */
-export const COMPOSER_EXPANDED_CHROME = 212;
+export const COMPOSER_EXPANDED_CHROME = 184;
 
 export interface ThreadComposerProps {
   readonly draftMessage: string;
@@ -269,6 +278,7 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
   const { onExpandedChange } = props;
 
   const [previewImageUri, setPreviewImageUri] = useState<string | null>(null);
+  const [modelPickerVisible, setModelPickerVisible] = useState(false);
   const hasContent = props.draftMessage.trim().length > 0 || props.draftAttachments.length > 0;
   const isExpanded = isFocused;
   const canSend = hasContent;
@@ -308,14 +318,6 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
   const currentModelSelection = props.selectedThread.modelSelection;
   const currentRuntimeMode = props.selectedThread.runtimeMode;
   const currentInteractionMode = props.selectedThread.interactionMode ?? "default";
-  const accessModeLabel =
-    currentRuntimeMode === "approval-required"
-      ? "Supervised"
-      : currentRuntimeMode === "auto-accept-edits"
-        ? "Auto-accept"
-        : currentRuntimeMode === "auto"
-          ? "Auto"
-          : "Full access";
   const connectionStatus = composerConnectionStatus({
     connectionError: props.connectionError,
     connectionState: props.connectionState,
@@ -601,10 +603,7 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
       }),
     [currentModelOption?.capabilities, currentModelSelection.options],
   );
-  const modelMenuActions = useMemo(
-    () => buildModelMenuActions(providerGroups, currentModelSelection),
-    [providerGroups, currentModelSelection],
-  );
+  const { favoriteModelKeys, toggleFavorite } = useModelFavorites(props.environmentId);
 
   // ── Options menu ─────────────────────────────────────────
   const optionsMenuActions = useMemo(
@@ -656,17 +655,6 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
   );
 
   // ── Menu handlers ────────────────────────────────────────
-  function handleModelMenuAction(event: string) {
-    if (!event.startsWith("model:")) {
-      return;
-    }
-    const modelKey = event.slice("model:".length);
-    const option = modelOptions.find((o) => o.key === modelKey);
-    if (option) {
-      props.onUpdateModelSelection(option.selection);
-    }
-  }
-
   function handleOptionsMenuAction(event: string) {
     const providerOptions = applyProviderOptionMenuEvent(providerOptionDescriptors, event);
     if (providerOptions) {
@@ -727,10 +715,11 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
           style={
             isExpanded
               ? {
-                  borderRadius: 20,
+                  borderRadius: 22,
                   overflow: "hidden" as const,
-                  paddingHorizontal: 14,
-                  paddingVertical: 12,
+                  paddingHorizontal: 12,
+                  paddingBottom: 6,
+                  paddingTop: 10,
                   backgroundColor: isDarkMode ? "rgba(17,17,19,0.95)" : "rgba(255,255,255,0.95)",
                 }
               : {
@@ -783,8 +772,8 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
               style={
                 isExpanded
                   ? {
-                      minHeight: 84,
-                      maxHeight: 176,
+                      minHeight: 76,
+                      maxHeight: 160,
                       paddingHorizontal: 4,
                       paddingVertical: 4,
                     }
@@ -840,67 +829,65 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
               )}
             </Animated.View>
           ) : null}
-        </ComposerSurface>
-
-        {isExpanded ? (
-          <Animated.View entering={FadeIn.duration(160)} exiting={FadeOut.duration(120)}>
-            <ComposerToolbarRow paddingBottom={8} paddingHorizontal={0} paddingTop={8}>
-              <ComposerToolbarScroller
-                fadeOpaque={toolbarFadeOpaque}
-                fadeTransparent={toolbarFadeTransparent}
-              >
-                <ComposerToolbarButton
-                  accessibilityLabel="Add attachment"
-                  icon="plus"
-                  onPress={() => void props.onPickDraftImages()}
-                  showChevron={false}
-                />
-                <ControlPillMenu
-                  actions={modelMenuActions}
-                  onPressAction={({ nativeEvent }) => handleModelMenuAction(nativeEvent.event)}
+          {isExpanded ? (
+            <Animated.View entering={FadeIn.duration(160)} exiting={FadeOut.duration(120)}>
+              <ComposerToolbarRow paddingBottom={0} paddingHorizontal={0} paddingTop={4}>
+                <ComposerToolbarScroller
+                  fadeOpaque={toolbarFadeOpaque}
+                  fadeTransparent={toolbarFadeTransparent}
                 >
+                  <ComposerToolbarButton
+                    accessibilityLabel="Add attachment"
+                    icon="paperclip"
+                    onPress={() => void props.onPickDraftImages()}
+                    showChevron={false}
+                    variant="ghost"
+                  />
                   <ComposerToolbarTrigger
-                    accessibilityLabel="Model"
+                    accessibilityLabel="Choose model"
                     iconNode={
                       <ProviderIcon provider={currentModelOption?.providerDriver} size={18} />
                     }
                     label={currentModelOption?.label ?? currentModelSelection.model}
+                    onPress={() => {
+                      Keyboard.dismiss();
+                      setModelPickerVisible(true);
+                    }}
                     variant="ghost"
                   />
-                </ControlPillMenu>
-                <ControlPillMenu
-                  actions={optionsMenuActions}
-                  onPressAction={({ nativeEvent }) => handleOptionsMenuAction(nativeEvent.event)}
-                >
-                  <ComposerToolbarTrigger
-                    accessibilityLabel="Configuration"
-                    icon="slider.horizontal.3"
-                    label={accessModeLabel}
-                    variant="ghost"
-                  />
-                </ControlPillMenu>
-                <ComposerContextRing />
-                {showStopAction ? (
-                  <ComposerToolbarButton
-                    accessibilityLabel="Stop"
-                    icon="stop.fill"
-                    variant="danger"
-                    onPress={props.onStopThread}
-                    showChevron={false}
-                  />
-                ) : null}
-              </ComposerToolbarScroller>
-              <ComposerToolbarButton
-                accessibilityLabel={sendLabel}
-                icon="arrow.up"
-                variant="primary"
-                disabled={!canSend}
-                onPress={handleSend}
-                showChevron={false}
-              />
-            </ComposerToolbarRow>
-          </Animated.View>
-        ) : null}
+                  <ControlPillMenu
+                    actions={optionsMenuActions}
+                    onPressAction={({ nativeEvent }) => handleOptionsMenuAction(nativeEvent.event)}
+                  >
+                    <ComposerToolbarTrigger
+                      accessibilityLabel="Configuration"
+                      icon="slider.horizontal.3"
+                      showChevron={false}
+                      variant="ghost"
+                    />
+                  </ControlPillMenu>
+                  {showStopAction ? (
+                    <ComposerToolbarButton
+                      accessibilityLabel="Stop"
+                      icon="stop.fill"
+                      variant="danger"
+                      onPress={props.onStopThread}
+                      showChevron={false}
+                    />
+                  ) : null}
+                </ComposerToolbarScroller>
+                <ComposerToolbarButton
+                  accessibilityLabel={sendLabel}
+                  icon="arrow.up"
+                  variant="primary"
+                  disabled={!canSend}
+                  onPress={handleSend}
+                  showChevron={false}
+                />
+              </ComposerToolbarRow>
+            </Animated.View>
+          ) : null}
+        </ComposerSurface>
 
         {props.queueCount > 0 ? (
           <Animated.View entering={FadeIn.duration(180)} exiting={FadeOut.duration(120)}>
@@ -919,6 +906,15 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
         onRequestClose={closePreview}
         swipeToCloseEnabled
         doubleTapToZoomEnabled
+      />
+      <ModelPickerSheet
+        favoriteModelKeys={favoriteModelKeys}
+        groups={providerGroups}
+        onClose={() => setModelPickerVisible(false)}
+        onSelectModel={(option) => props.onUpdateModelSelection(option.selection)}
+        onToggleFavorite={toggleFavorite}
+        selectedModel={currentModelSelection}
+        visible={modelPickerVisible}
       />
     </Animated.View>
   );

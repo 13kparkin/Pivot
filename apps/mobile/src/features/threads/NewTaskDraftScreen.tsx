@@ -1,7 +1,7 @@
 import { NativeStackScreenOptions } from "../../native/StackHeader";
 import { StackActions, useNavigation, usePreventRemove } from "@react-navigation/native";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Alert, Pressable, View, useColorScheme } from "react-native";
+import { Alert, Keyboard, Pressable, View, useColorScheme } from "react-native";
 import { KeyboardAvoidingView, useKeyboardState } from "react-native-keyboard-controller";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useThemeColor } from "../../lib/useThemeColor";
@@ -14,7 +14,6 @@ import {
 
 import { ComposerEditor, type ComposerEditorHandle } from "../../components/ComposerEditor";
 import {
-  ComposerContextRing,
   ComposerToolbarButton,
   ComposerToolbarRow,
   ComposerToolbarScroller,
@@ -24,6 +23,7 @@ import { AppText as Text } from "../../components/AppText";
 import { SymbolView } from "../../components/AppSymbol";
 import { ComposerAttachmentStrip } from "../../components/ComposerAttachmentStrip";
 import { ControlPillMenu } from "../../components/ControlPill";
+import { ModelPickerSheet } from "../../components/ModelPickerSheet";
 import { ProviderIcon } from "../../components/ProviderIcon";
 import { ComposerSurface } from "./ThreadComposer";
 
@@ -43,7 +43,7 @@ import {
   type ComposerDraft,
 } from "../../state/use-composer-drafts";
 import { useEnvironmentServerConfig, useProjects } from "../../state/entities";
-import { buildModelMenuActions, resolveSelectableModelSelection } from "../../lib/modelOptions";
+import { resolveSelectableModelSelection } from "../../lib/modelOptions";
 import { deriveThreadTitleFromPrompt } from "../../lib/projectThreadStartTurn";
 import { armAgentAwarenessLiveActivityForLocalWork } from "../agent-awareness/remoteRegistration";
 import { enqueueThreadOutboxMessage, removeThreadOutboxMessage } from "../../state/thread-outbox";
@@ -51,6 +51,7 @@ import { useRemoteConnectionStatus } from "../../state/use-remote-environment-re
 import { branchBadgeLabel, useNewTaskFlow } from "./new-task-flow-provider";
 import { useCreateProjectThread } from "./use-project-actions";
 import { useIncomingShare } from "../sharing/IncomingShareProvider";
+import { useModelFavorites } from "./useModelFavorites";
 
 export function NewTaskDraftScreen(props: {
   readonly initialProjectRef?: {
@@ -82,6 +83,9 @@ export function NewTaskDraftScreen(props: {
   const selectedEnvironmentServerConfig = useEnvironmentServerConfig(
     selectedProject?.environmentId ?? null,
   );
+  const { favoriteModelKeys, toggleFavorite } = useModelFavorites(
+    selectedProject?.environmentId ?? null,
+  );
   const environmentConnected =
     selectedProject !== null &&
     connectedEnvironments.find(
@@ -94,6 +98,7 @@ export function NewTaskDraftScreen(props: {
   const [cancelledIncomingShareId, setCancelledIncomingShareId] = useState<string | null>(null);
   const [isReturningToProjectPicker, setIsReturningToProjectPicker] = useState(false);
   const [shareImportAttempt, setShareImportAttempt] = useState(0);
+  const [modelPickerVisible, setModelPickerVisible] = useState(false);
   const startedShareImportKeyRef = useRef<string | null>(null);
   const cancellingShareImportKeyRef = useRef<string | null>(null);
   const shareImportDraftBackupRef = useRef(new Map<string, ComposerDraft>());
@@ -506,10 +511,6 @@ export function NewTaskDraftScreen(props: {
     [flow.environments, flow.selectedEnvironmentId, isIncomingShareTransferPending],
   );
 
-  const modelMenuActions = useMemo(
-    () => buildModelMenuActions(flow.providerGroups, flow.selectedModel),
-    [flow.providerGroups, flow.selectedModel],
-  );
   const providerOptionDescriptors = useMemo(
     () =>
       resolveProviderOptionDescriptors({
@@ -633,14 +634,6 @@ export function NewTaskDraftScreen(props: {
     flow.environments.find(
       (environment) => environment.environmentId === flow.selectedEnvironmentId,
     )?.environmentLabel ?? "Environment";
-  const accessModeLabel =
-    flow.runtimeMode === "approval-required"
-      ? "Supervised"
-      : flow.runtimeMode === "auto-accept-edits"
-        ? "Auto-accept"
-        : flow.runtimeMode === "auto"
-          ? "Auto"
-          : "Full access";
   const configurationMenuActions = useMemo(
     () => [
       ...optionsMenuActions,
@@ -654,13 +647,6 @@ export function NewTaskDraftScreen(props: {
     ],
     [environmentMenuActions, optionsMenuActions, selectedEnvironmentLabel, workspaceMenuActions],
   );
-  function handleModelMenuAction(event: string) {
-    if (isIncomingShareTransferPending || !event.startsWith("model:")) {
-      return;
-    }
-    flow.setSelectedModelKey(event.slice("model:".length));
-  }
-
   function handleEnvironmentMenuAction(event: string) {
     if (isIncomingShareTransferPending || !event.startsWith("environment:")) {
       return;
@@ -911,11 +897,11 @@ export function NewTaskDraftScreen(props: {
       skills={flow.selectedProviderSkills}
       onChangeText={flow.setPrompt}
       onPasteImages={(uris) => void handleNativePasteImages(uris)}
-      placeholder="Ask anything, @tag files, / for commands"
+      placeholder="Ask anything..."
       contentInsetVertical={0}
       style={{
-        minHeight: 84,
-        maxHeight: 176,
+        minHeight: 76,
+        maxHeight: 160,
         paddingHorizontal: 4,
         paddingVertical: 4,
       }}
@@ -928,22 +914,22 @@ export function NewTaskDraftScreen(props: {
       <ComposerToolbarButton
         accessibilityLabel="Add attachment"
         disabled={isIncomingShareTransferPending}
-        icon="plus"
+        icon="paperclip"
         onPress={() => void handlePickImages()}
         showChevron={false}
+        variant="ghost"
       />
-      <ControlPillMenu
-        actions={modelMenuActions}
-        onPressAction={({ nativeEvent }) => handleModelMenuAction(nativeEvent.event)}
-      >
-        <ComposerToolbarTrigger
-          accessibilityLabel="Model"
-          disabled={isIncomingShareTransferPending}
-          iconNode={<ProviderIcon provider={flow.selectedModelOption?.providerDriver} size={16} />}
-          label={flow.selectedModelOption?.label ?? "Model"}
-          variant="ghost"
-        />
-      </ControlPillMenu>
+      <ComposerToolbarTrigger
+        accessibilityLabel="Choose model"
+        disabled={isIncomingShareTransferPending}
+        iconNode={<ProviderIcon provider={flow.selectedModelOption?.providerDriver} size={18} />}
+        label={flow.selectedModelOption?.label ?? "Model"}
+        onPress={() => {
+          Keyboard.dismiss();
+          setModelPickerVisible(true);
+        }}
+        variant="ghost"
+      />
       <ControlPillMenu
         actions={configurationMenuActions}
         onPressAction={({ nativeEvent }) => handleConfigurationMenuAction(nativeEvent.event)}
@@ -952,7 +938,7 @@ export function NewTaskDraftScreen(props: {
           accessibilityLabel="Configuration"
           disabled={isIncomingShareTransferPending}
           icon="slider.horizontal.3"
-          label={accessModeLabel}
+          showChevron={false}
           variant="ghost"
         />
       </ControlPillMenu>
@@ -976,7 +962,7 @@ export function NewTaskDraftScreen(props: {
     <View
       className="flex-1 overflow-hidden"
       style={{
-        backgroundColor: isDarkMode ? "#060607" : "#f2f2f7",
+        backgroundColor: isDarkMode ? "#000000" : "#f2f2f7",
         borderColor: isDarkMode ? "rgba(255,255,255,0.14)" : "rgba(0,0,0,0.1)",
         borderTopLeftRadius: 20,
         borderTopRightRadius: 20,
@@ -1052,10 +1038,11 @@ export function NewTaskDraftScreen(props: {
             isDarkMode={isDarkMode}
             style={{
               backgroundColor: isDarkMode ? "rgba(17,17,19,0.95)" : "rgba(255,255,255,0.95)",
-              borderRadius: 20,
+              borderRadius: 22,
               overflow: "hidden",
-              paddingHorizontal: 14,
-              paddingTop: 12,
+              paddingBottom: 6,
+              paddingHorizontal: 12,
+              paddingTop: 10,
             }}
           >
             {flow.attachments.length > 0 ? (
@@ -1069,19 +1056,27 @@ export function NewTaskDraftScreen(props: {
               </View>
             ) : null}
             {promptEditor}
-            <ComposerToolbarRow paddingBottom={8} paddingHorizontal={7} paddingTop={4}>
+            <ComposerToolbarRow paddingBottom={0} paddingHorizontal={0} paddingTop={4}>
               <ComposerToolbarScroller
                 fadeOpaque={isDarkMode ? "rgba(17,17,19,0.95)" : "rgba(255,255,255,0.95)"}
                 fadeTransparent={isDarkMode ? "rgba(17,17,19,0)" : "rgba(255,255,255,0)"}
               >
                 {toolbarPills}
               </ComposerToolbarScroller>
-              <ComposerContextRing />
               {startButton}
             </ComposerToolbarRow>
           </ComposerSurface>
         </View>
       </KeyboardAvoidingView>
+      <ModelPickerSheet
+        favoriteModelKeys={favoriteModelKeys}
+        groups={flow.providerGroups}
+        onClose={() => setModelPickerVisible(false)}
+        onSelectModel={(option) => flow.setSelectedModelKey(option.key)}
+        onToggleFavorite={toggleFavorite}
+        selectedModel={flow.selectedModel}
+        visible={modelPickerVisible}
+      />
     </View>
   );
 }
