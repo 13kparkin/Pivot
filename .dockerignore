@@ -1,0 +1,14 @@
+.git
+.repos
+.t3
+.vite-plus
+node_modules
+apps/*/node_modules
+packages/*/node_modules
+apps/*/dist
+packages/*/dist
+release
+release-mock
+artifacts
+native/**/target
+*.log
