@@ -241,6 +241,16 @@ export const make = Effect.gen(function* () {
           if (cachedDescriptor.failure._tag === "ConnectionBlockedError") {
             return yield* cachedDescriptor.failure;
           }
+          return {
+            environmentId: cached.value.environmentId,
+            label: cached.value.label,
+            httpBaseUrl: cached.value.endpoint.httpBaseUrl,
+            socketUrl: cachedSocket.success,
+            httpAuthorization: {
+              _tag: "Dpop" as const,
+              accessToken: cached.value.accessToken,
+            },
+          };
         } else if (cachedSocket.failure._tag === "ConnectionBlockedError") {
           return yield* mapDpopSocketError(cachedSocket.failure);
         }

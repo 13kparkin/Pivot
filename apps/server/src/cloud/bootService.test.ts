@@ -140,6 +140,22 @@ it.layer(NodeServices.layer)("boot service install", (it) => {
     }),
   );
 
+  it.effect("reports the installed version across launcher protocol revisions", () =>
+    Effect.gen(function* () {
+      const { service, fs, statePath } = yield* makeHarness();
+      yield* service.install;
+      yield* fs.writeFileString(
+        statePath,
+        `{"protocol":${String(SERVICE_LAUNCHER_PROTOCOL + 1)},"activeVersion":"9.9.9"}`,
+      );
+
+      expect(yield* service.status).toMatchObject({
+        current: false,
+        installedVersion: "9.9.9",
+      });
+    }),
+  );
+
   it.effect("restarts an installed service when repair fails", () =>
     Effect.gen(function* () {
       const { service, commands, control } = yield* makeHarness();

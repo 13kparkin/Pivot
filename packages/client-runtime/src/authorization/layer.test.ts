@@ -389,7 +389,7 @@ describe("RemoteEnvironmentAuthorization", () => {
     }),
   );
 
-  it.effect("refreshes a cached endpoint after descriptor discovery fails", () =>
+  it.effect("keeps a valid cached token when descriptor refresh fails transiently", () =>
     Effect.gen(function* () {
       const cached = new TokenStore.RemoteDpopAccessToken({
         environmentId: ENVIRONMENT_ID,
@@ -404,9 +404,6 @@ describe("RemoteEnvironmentAuthorization", () => {
         responses: [
           websocketTicket("cached-ticket"),
           new Response("endpoint unavailable", { status: 503 }),
-          Response.json(DESCRIPTOR),
-          accessToken("replacement-access-token"),
-          websocketTicket("replacement-ticket"),
         ],
       });
 
@@ -418,14 +415,15 @@ describe("RemoteEnvironmentAuthorization", () => {
         });
       }).pipe(Effect.provide(harness.layer));
 
-      expect(authorized.socketUrl).toContain("wsTicket=replacement-ticket");
-      expect(yield* Ref.get(harness.bootstrapCalls)).toBe(1);
+      expect(authorized.socketUrl).toContain("wsTicket=cached-ticket");
+      expect(authorized.serverVersion).toBeUndefined();
+      expect(yield* Ref.get(harness.bootstrapCalls)).toBe(0);
       expect((yield* Ref.get(harness.tokens)).get(ENVIRONMENT_ID)).toEqual(
         expect.objectContaining({
-          accessToken: "replacement-access-token",
+          accessToken: "cached-access-token",
         }),
       );
-      expect(harness.fetch.calls).toHaveLength(5);
+      expect(harness.fetch.calls).toHaveLength(2);
     }),
   );
 

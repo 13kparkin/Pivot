@@ -21,6 +21,7 @@ import {
   SERVICE_LAUNCHER_PROTOCOL,
   SERVICE_STATE_FILE,
   parseServiceState,
+  serviceStateActiveVersion,
   serviceStateHasPendingUpdate,
   type ServiceState,
 } from "./serviceProtocol.ts";
@@ -391,10 +392,13 @@ export const make = Effect.fn("cloud.boot_service.make")(function* (input: {
         fs.readFileString(statePath).pipe(Effect.option),
       ]);
     const state = Option.isSome(stateText) ? parseServiceState(stateText.value) : undefined;
+    const installedVersion = Option.isSome(stateText)
+      ? serviceStateActiveVersion(stateText.value)
+      : undefined;
     return {
       supported: true,
       installed: true,
-      ...(state?.activeVersion === undefined ? {} : { installedVersion: state.activeVersion }),
+      ...(installedVersion === undefined ? {} : { installedVersion }),
       current:
         unit === renderBootServiceUnit(plan) &&
         launcherExists &&
