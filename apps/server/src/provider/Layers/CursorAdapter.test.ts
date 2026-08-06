@@ -11,6 +11,7 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
+import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
@@ -1130,6 +1131,98 @@ cursorAdapterTestLayer("CursorAdapterLive", (it) => {
       yield* adapter.stopSession(threadId);
     }),
   );
+  it.effect("starts a fresh turn immediately after interrupting a hanging prompt", () =>
+    Effect.gen(function* () {
+      const adapter = yield* CursorAdapter;
+      const serverSettings = yield* ServerSettingsService;
+      const threadId = ThreadId.make("cursor-interrupt-follow-up-thread");
+      const tempDir = yield* Effect.promise(() =>
+        NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "cursor-acp-")),
+      );
+      const requestLogPath = NodePath.join(tempDir, "requests.ndjson");
+      const argvLogPath = NodePath.join(tempDir, "argv.txt");
+      yield* Effect.promise(() => NodeFSP.writeFile(requestLogPath, "", "utf8"));
+      const wrapperPath = yield* Effect.promise(() =>
+        makeProbeWrapper(requestLogPath, argvLogPath, {
+          T3_ACP_HANG_FIRST_PROMPT_FOREVER: "1",
+        }),
+      );
+      yield* serverSettings.updateSettings({
+        providers: { cursor: { binaryPath: wrapperPath } },
+      });
+
+      const events: Array<ProviderRuntimeEvent> = [];
+      const firstTurnStarted = yield* Deferred.make<string>();
+      const twoTurnsCompleted = yield* Deferred.make<void>();
+      const completedCountRef = yield* Ref.make(0);
+      const eventFiber = yield* Stream.runForEach(adapter.streamEvents, (event) =>
+        Effect.gen(function* () {
+          if (String(event.threadId) !== String(threadId)) return;
+          events.push(event);
+          if (event.type === "turn.started") {
+            yield* Deferred.succeed(firstTurnStarted, String(event.turnId)).pipe(Effect.ignore);
+          }
+          if (event.type === "turn.completed") {
+            const completedCount = yield* Ref.updateAndGet(completedCountRef, (count) => count + 1);
+            if (completedCount === 2) {
+              yield* Deferred.succeed(twoTurnsCompleted, undefined).pipe(Effect.ignore);
+            }
+          }
+        }),
+      ).pipe(Effect.forkChild);
+
+      yield* adapter.startSession({
+        threadId,
+        provider: ProviderDriverKind.make("cursor"),
+        cwd: process.cwd(),
+        runtimeMode: "approval-required",
+        modelSelection: {
+          instanceId: ProviderInstanceId.make("cursor"),
+          model: "default",
+        },
+      });
+      const firstSendFiber = yield* adapter
+        .sendTurn({ threadId, input: "hang", attachments: [] })
+        .pipe(Effect.forkChild);
+      const firstTurnId = yield* Deferred.await(firstTurnStarted).pipe(Effect.timeout("2 seconds"));
+      yield* waitForJsonLogMatch(
+        requestLogPath,
+        (request) => request.method === "session/prompt",
+        80,
+      ).pipe(Effect.timeout("2 seconds"));
+
+      yield* adapter.interruptTurn(threadId).pipe(Effect.timeout("2 seconds"));
+      const followUp = yield* adapter
+        .sendTurn({ threadId, input: "follow up", attachments: [] })
+        .pipe(Effect.timeout("2 seconds"));
+      yield* Fiber.join(firstSendFiber).pipe(Effect.timeout("2 seconds"));
+      yield* Deferred.await(twoTurnsCompleted).pipe(Effect.timeout("2 seconds"));
+      yield* Fiber.interrupt(eventFiber);
+
+      assert.notEqual(String(followUp.turnId), firstTurnId);
+      const completed = events.filter(
+        (event) => String(event.threadId) === String(threadId) && event.type === "turn.completed",
+      );
+      assert.lengthOf(completed, 2);
+      assert.equal(String(completed[0]?.turnId), firstTurnId);
+      if (completed[0]?.type === "turn.completed") {
+        assert.equal(completed[0].payload.state, "cancelled");
+        assert.equal(completed[0].payload.stopReason, "cancelled");
+      }
+      assert.equal(String(completed[1]?.turnId), String(followUp.turnId));
+      if (completed[1]?.type === "turn.completed") {
+        assert.equal(completed[1].payload.state, "completed");
+      }
+
+      const requests = yield* Effect.promise(() => readJsonLines(requestLogPath));
+      assert.lengthOf(
+        requests.filter((request) => request.method === "session/prompt"),
+        2,
+      );
+      yield* adapter.stopSession(threadId);
+    }).pipe(TestClock.withLive),
+  );
+
   it.effect("resolves a pending permission before completing a normally returned turn", () =>
     Effect.gen(function* () {
       const adapter = yield* CursorAdapter;

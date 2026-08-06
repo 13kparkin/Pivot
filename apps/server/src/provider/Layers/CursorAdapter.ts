@@ -1039,11 +1039,10 @@ export function makeCursorAdapter(
               Effect.gen(function* () {
                 if (promptFinalized) return false;
                 promptFinalized = true;
+                if (ctx.callbackLifecycle.generation !== generation) return false;
                 ctx.promptsInFlight = Math.max(0, ctx.promptsInFlight - 1);
                 // Only the final prompt for this generation may settle and complete the turn.
-                if (ctx.promptsInFlight !== 0 || ctx.callbackLifecycle.generation !== generation) {
-                  return false;
-                }
+                if (ctx.promptsInFlight !== 0) return false;
 
                 ctx.callbackLifecycle.admissionOpen = false;
                 yield* settlePendingCallbacks(
@@ -1190,14 +1189,21 @@ export function makeCursorAdapter(
     const interruptTurn: CursorAdapterShape["interruptTurn"] = (threadId) =>
       Effect.gen(function* () {
         const ctx = yield* requireSession(threadId);
-        yield* Effect.uninterruptible(
+        const interruptedTurnId = yield* Effect.uninterruptible(
           ctx.callbackLifecycle.semaphore.withPermit(
             Effect.gen(function* () {
+              const turnId = ctx.promptsInFlight > 0 ? ctx.activeTurnId : undefined;
               ctx.callbackLifecycle.admissionOpen = false;
               yield* settlePendingCallbacks(
                 Array.from(ctx.pendingApprovals.values()),
                 Array.from(ctx.pendingUserInputs.values()),
               );
+              if (turnId) {
+                ctx.promptsInFlight = 0;
+                ctx.callbackLifecycle.generation += 1;
+                ctx.lastPlanFingerprint = undefined;
+              }
+              return turnId;
             }),
           ),
         );
@@ -1208,6 +1214,20 @@ export function makeCursorAdapter(
             ),
           ),
         );
+        if (interruptedTurnId && !ctx.stopped) {
+          yield* makeEventStamp().pipe(
+            Effect.flatMap((stamp) =>
+              offerRuntimeEvent({
+                type: "turn.completed",
+                ...stamp,
+                provider: PROVIDER,
+                threadId,
+                turnId: interruptedTurnId,
+                payload: { state: "cancelled", stopReason: "cancelled" },
+              }),
+            ),
+          );
+        }
       });
 
     const respondToRequest: CursorAdapterShape["respondToRequest"] = (
