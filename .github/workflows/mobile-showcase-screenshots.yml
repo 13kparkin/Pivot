@@ -1,6 +1,10 @@
 name: Mobile Showcase Screenshots
 
 on:
+  push:
+    branches:
+      - t3bot/mobile-pending-card-glass
+      - t3bot/mobile-pending-card-glass-before
   workflow_dispatch:
     inputs:
       platform:
@@ -31,7 +35,7 @@ env:
 jobs:
   ios:
     name: iPhone 6.9, iPhone 6.5, and iPad 13
-    if: inputs.platform == 'all' || inputs.platform == 'ios'
+    if: github.event_name == 'push' || inputs.platform == 'all' || inputs.platform == 'ios'
     runs-on: blacksmith-12vcpu-macos-26
     timeout-minutes: 60
     steps:
@@ -62,10 +66,10 @@ jobs:
           "$vp_pnpm_bin/pnpm" --version
 
       - name: Capture iOS showcase
-        run: pnpm screenshots:mobile --platform ios --appearance "${{ inputs.appearance }}"
+        run: pnpm screenshots:mobile --platform ios --appearance "${{ inputs.appearance || 'dark' }}"
 
       - name: Validate App Store Connect assets
-        run: pnpm screenshots:mobile --platform ios --appearance "${{ inputs.appearance }}" --validate-only
+        run: pnpm screenshots:mobile --platform ios --appearance "${{ inputs.appearance || 'dark' }}" --validate-only
 
       - name: Upload iOS screenshots
         if: always()
