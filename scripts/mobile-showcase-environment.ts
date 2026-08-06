@@ -571,6 +571,40 @@ function seedDatabase(
       3,
       minutesBefore(now, 4),
     );
+    database
+      .prepare(
+        `INSERT INTO projection_thread_activities (
+          activity_id, thread_id, turn_id, tone, kind, summary, payload_json, sequence, created_at
+        ) VALUES (?, ?, ?, 'info', 'user-input.requested', ?, ?, ?, ?)`,
+      )
+      .run(
+        "choose-remote-environment",
+        SHOWCASE_THREAD_ID,
+        turnId,
+        "User input requested",
+        JSON.stringify({
+          requestId: "showcase-user-input",
+          questions: [
+            {
+              id: "environment",
+              header: "Environment",
+              question: "Which environment should receive the first remote handoff?",
+              options: [
+                {
+                  label: "Moonbase",
+                  description: "Use the primary T3 Code workspace.",
+                },
+                {
+                  label: "Suspense Station",
+                  description: "Use the React workspace.",
+                },
+              ],
+            },
+          ],
+        }),
+        4,
+        minutesBefore(now, 2),
+      );
 
     for (const [index, projector] of PROJECTOR_NAMES.entries()) {
       database
