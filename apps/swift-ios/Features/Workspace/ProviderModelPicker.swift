@@ -11,6 +11,7 @@ public struct ProviderModelPicker: View {
     let style: Style
     let isLoading: Bool
     let threadSelection: FeatureSelection?
+    let materializesDefaultSelection: Bool
 
     @State private var isPresented = false
 
@@ -19,13 +20,15 @@ public struct ProviderModelPicker: View {
         selection: Binding<FeatureSelection?>,
         style: Style = .row,
         isLoading: Bool = false,
-        threadSelection: FeatureSelection? = nil
+        threadSelection: FeatureSelection? = nil,
+        materializesDefaultSelection: Bool = true
     ) {
         self.providers = providers
         _selection = selection
         self.style = style
         self.isLoading = isLoading
         self.threadSelection = threadSelection
+        self.materializesDefaultSelection = materializesDefaultSelection
     }
 
     public var body: some View {
@@ -75,7 +78,8 @@ public struct ProviderModelPicker: View {
                 providers: normalizedProviders,
                 selection: $selection,
                 isLoading: isLoading,
-                threadSelection: threadSelection
+                threadSelection: threadSelection,
+                materializesDefaultSelection: materializesDefaultSelection
             )
         }
         .onAppear(perform: materializeSelection)
@@ -95,15 +99,25 @@ public struct ProviderModelPicker: View {
     }
 
     private var resolvedSelection: FeatureSelection? {
-        ProviderModelSelectionResolver.materialized(selection, in: normalizedProviders)
+        if materializesDefaultSelection {
+            return ProviderModelSelectionResolver.materialized(selection, in: normalizedProviders)
+        }
+        return ThreadComposerModelSelectionPolicy.resolvedSelection(
+            explicit: selection,
+            inherited: threadSelection,
+            providers: normalizedProviders
+        )
     }
 
     private func materializeSelection() {
         guard !normalizedProviders.isEmpty else { return }
-        let resolved = ProviderModelSelectionResolver.materialized(
-            selection,
-            in: normalizedProviders
-        )
+        let resolved = materializesDefaultSelection
+            ? ProviderModelSelectionResolver.materialized(selection, in: normalizedProviders)
+            : ThreadComposerModelSelectionPolicy.explicitSelection(
+                selection,
+                inherited: threadSelection,
+                providers: normalizedProviders
+            )
         guard selection != resolved else { return }
         selection = resolved
     }
@@ -158,6 +172,7 @@ private struct ModelPickerSheet: View {
     @Binding var selection: FeatureSelection?
     let isLoading: Bool
     let threadSelection: FeatureSelection?
+    let materializesDefaultSelection: Bool
 
     @AppStorage("swift-ios.model-picker.favorites") private var favoriteStorage = ""
     @AppStorage("swift-ios.model-picker.recents") private var recentStorage = ""
@@ -352,7 +367,14 @@ private struct ModelPickerSheet: View {
     }
 
     private var resolvedSelection: FeatureSelection? {
-        ProviderModelSelectionResolver.materialized(selection, in: providers)
+        if materializesDefaultSelection {
+            return ProviderModelSelectionResolver.materialized(selection, in: providers)
+        }
+        return ThreadComposerModelSelectionPolicy.resolvedSelection(
+            explicit: selection,
+            inherited: threadSelection,
+            providers: providers
+        )
     }
 
     private func select(_ option: DailyUXModelOption) {
@@ -411,19 +433,30 @@ private struct ModelPickerSheet: View {
 /// selection becomes the environment's concrete preferred model as soon as the
 /// catalog is available.
 enum ProviderModelSelectionResolver {
+    static func validated(
+        _ selection: FeatureSelection?,
+        in providers: [FeatureProvider]
+    ) -> FeatureSelection? {
+        guard !providers.isEmpty else { return selection }
+        guard var validated = DailyUXModelOptions.validated(selection, in: providers),
+              let model = providers
+                  .first(where: { $0.id == validated.providerID })?
+                  .models.first(where: { $0.id == validated.modelID }) else {
+            return nil
+        }
+        validated.options = ProviderModelConfiguration.materializedOptions(
+            for: model,
+            preserving: validated.options
+        )
+        return validated
+    }
+
     static func materialized(
         _ selection: FeatureSelection?,
         in providers: [FeatureProvider]
     ) -> FeatureSelection? {
         guard !providers.isEmpty else { return selection }
-        if var validated = DailyUXModelOptions.validated(selection, in: providers),
-           let model = providers
-               .first(where: { $0.id == validated.providerID })?
-               .models.first(where: { $0.id == validated.modelID }) {
-            validated.options = ProviderModelConfiguration.materializedOptions(
-                for: model,
-                preserving: validated.options
-            )
+        if let validated = validated(selection, in: providers) {
             return validated
         }
         let currentProviders = providers.compactMap { provider -> FeatureProvider? in
@@ -435,6 +468,40 @@ enum ProviderModelSelectionResolver {
         }
         return DailyUXModelOptions.preferredSelection(in: currentProviders)
             ?? DailyUXModelOptions.preferredSelection(in: providers)
+    }
+}
+
+/// Existing threads inherit their persisted model until the user deliberately
+/// chooses an override. Unlike new-task composers, a missing selection must not
+/// materialize the environment default and silently change providers.
+enum ThreadComposerModelSelectionPolicy {
+    static func resolvedSelection(
+        explicit: FeatureSelection?,
+        inherited: FeatureSelection?,
+        providers: [FeatureProvider]
+    ) -> FeatureSelection? {
+        explicitSelection(explicit, inherited: inherited, providers: providers)
+            ?? ProviderModelSelectionResolver.validated(inherited, in: providers)
+    }
+
+    static func explicitSelection(
+        _ explicit: FeatureSelection?,
+        inherited: FeatureSelection?,
+        providers: [FeatureProvider]
+    ) -> FeatureSelection? {
+        guard let explicit, let inherited else { return nil }
+        guard let validated = ProviderModelSelectionResolver.validated(explicit, in: providers)
+        else {
+            return nil
+        }
+
+        let inheritedProvider = providers.first { $0.id == inherited.providerID }
+        if inheritedProvider?.requiresNewThreadForModelChange == true,
+           (validated.providerID != inherited.providerID
+               || validated.modelID != inherited.modelID) {
+            return nil
+        }
+        return validated
     }
 }
 

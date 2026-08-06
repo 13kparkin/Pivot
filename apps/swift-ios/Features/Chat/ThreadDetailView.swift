@@ -133,14 +133,7 @@ public struct ThreadDetailView: View {
 
     private var currentSelection: FeatureSelection? {
         guard let providerID = detail?.thread.providerID ?? thread.providerID,
-              let modelID = detail?.thread.modelID ?? thread.modelID else {
-            return model.snapshot.settings.defaultSelection
-        }
-        if let defaultSelection = model.snapshot.settings.defaultSelection,
-           defaultSelection.providerID == providerID,
-           defaultSelection.modelID == modelID {
-            return defaultSelection
-        }
+              let modelID = detail?.thread.modelID ?? thread.modelID else { return nil }
         let provider = threadProviders.first { $0.id == providerID }
         let featureModel = provider?.models.first { $0.id == modelID }
         let savedOptions = detail?.thread.modelOptions ?? thread.modelOptions
@@ -340,6 +333,7 @@ public struct ThreadDetailView: View {
                 attachments: $attachments,
                 providers: threadProviders,
                 threadSelection: currentSelection,
+                materializesDefaultSelection: false,
                 isSending: isSending,
                 isWorking: detail.thread.state == .working || detail.thread.state == .queued,
                 focused: $composerFocused,
@@ -472,11 +466,15 @@ public struct ThreadDetailView: View {
         guard !Task.isCancelled else { return }
 
         let liveDraft = composerDraft
-        let restored = FeatureComposerDraftRestoration.merge(
+        var restored = FeatureComposerDraftRestoration.merge(
             saved: saved,
             baseline: baseline,
-            current: liveDraft,
-            fallbackSelection: currentSelection
+            current: liveDraft
+        )
+        restored.selection = ThreadComposerModelSelectionPolicy.explicitSelection(
+            restored.selection,
+            inherited: currentSelection,
+            providers: threadProviders
         )
         draft = restored.text
         attachments = restored.attachments
@@ -969,16 +967,15 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
             _ collectionView: UICollectionView,
             animated: Bool
         ) {
-            guard let lastID = dataSource?.snapshot().itemIdentifiers.last,
-                  let indexPath = dataSource?.indexPath(for: lastID) else {
-                return
-            }
             collectionView.layoutIfNeeded()
-            collectionView.scrollToItem(
-                at: indexPath,
-                at: .bottom,
-                animated: animated
+            let geometry = TranscriptViewportGeometry(
+                contentHeight: collectionView.contentSize.height,
+                viewportHeight: collectionView.bounds.height,
+                topInset: collectionView.adjustedContentInset.top,
+                bottomInset: collectionView.adjustedContentInset.bottom
             )
+            let target = CGPoint(x: collectionView.contentOffset.x, y: geometry.bottomOffset)
+            collectionView.setContentOffset(target, animated: animated)
             (collectionView as? BottomAnchoredTranscriptCollectionView)?.maintainsBottomAnchor = true
         }
 
@@ -1036,17 +1033,23 @@ struct TranscriptViewportGeometry: Equatable {
     let topInset: CGFloat
     let bottomInset: CGFloat
 
+    var bottomOffset: CGFloat {
+        max(-topInset, contentHeight - viewportHeight + bottomInset)
+    }
+
     func restoredBottomOffset(
         after previous: Self?,
         maintainsBottomAnchor: Bool,
         isInteracting: Bool
     ) -> CGFloat? {
-        guard maintainsBottomAnchor,
-              !isInteracting,
-              let previous,
+        guard maintainsBottomAnchor, !isInteracting else {
+            return nil
+        }
+
+        guard let previous,
               previous.contentHeight > 0,
               previous.viewportHeight > 0 else {
-            return nil
+            return contentHeight > 0 && viewportHeight > 0 ? bottomOffset : nil
         }
 
         let contentChanged = abs(contentHeight - previous.contentHeight) > 0.5
@@ -1054,7 +1057,7 @@ struct TranscriptViewportGeometry: Equatable {
             || abs(bottomInset - previous.bottomInset) > 0.5
         guard contentChanged || viewportChanged else { return nil }
 
-        return max(-topInset, contentHeight - viewportHeight + bottomInset)
+        return bottomOffset
     }
 }
 

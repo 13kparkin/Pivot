@@ -4,6 +4,30 @@ import Testing
 @Suite("Transcript viewport anchoring")
 struct TranscriptViewportGeometryTests {
     @Test
+    func firstLoadedTranscriptAnchorsToLatestMessage() {
+        let empty = TranscriptViewportGeometry(
+            contentHeight: 0,
+            viewportHeight: 700,
+            topInset: 0,
+            bottomInset: 0
+        )
+        let loaded = TranscriptViewportGeometry(
+            contentHeight: 1_200,
+            viewportHeight: 700,
+            topInset: 0,
+            bottomInset: 0
+        )
+
+        #expect(
+            loaded.restoredBottomOffset(
+                after: empty,
+                maintainsBottomAnchor: true,
+                isInteracting: false
+            ) == 500
+        )
+    }
+
+    @Test
     func keyboardViewportChangeKeepsLatestMessageVisible() {
         let beforeKeyboard = TranscriptViewportGeometry(
             contentHeight: 1_200,

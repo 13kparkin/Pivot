@@ -12,6 +12,7 @@ struct FeatureComposerView: View {
 
     private let providers: [FeatureProvider]
     private let threadSelection: FeatureSelection?
+    private let materializesDefaultSelection: Bool
     private let isSending: Bool
     private let isWorking: Bool
     private let focused: FocusState<Bool>.Binding
@@ -32,6 +33,7 @@ struct FeatureComposerView: View {
         attachments: Binding<[FeatureDraftAttachment]>,
         providers: [FeatureProvider],
         threadSelection: FeatureSelection?,
+        materializesDefaultSelection: Bool = true,
         isSending: Bool,
         isWorking: Bool,
         focused: FocusState<Bool>.Binding,
@@ -51,6 +53,7 @@ struct FeatureComposerView: View {
         _attachments = attachments
         self.providers = providers
         self.threadSelection = threadSelection
+        self.materializesDefaultSelection = materializesDefaultSelection
         self.isSending = isSending
         self.isWorking = isWorking
         self.focused = focused
@@ -231,7 +234,8 @@ struct FeatureComposerView: View {
                 providers: providers,
                 selection: $selection,
                 style: .compact,
-                threadSelection: threadSelection
+                threadSelection: threadSelection,
+                materializesDefaultSelection: materializesDefaultSelection
             )
             .frame(maxWidth: 220, alignment: .leading)
             .layoutPriority(2)
@@ -312,7 +316,10 @@ struct FeatureComposerView: View {
     }
 
     private var imagesAllowed: Bool {
-        DailyUXModelOptions.supportsImages(selection: selection, providers: providers)
+        DailyUXModelOptions.supportsImages(
+            selection: selection ?? threadSelection,
+            providers: providers
+        )
     }
 
     /// Trigger detection walks the whole draft with character indices and is

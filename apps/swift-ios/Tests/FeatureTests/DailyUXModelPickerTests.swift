@@ -281,6 +281,65 @@ struct DailyUXModelPickerTests {
     }
 
     @Test
+    func threadComposerInheritsClaudeWithoutMaterializingTheCodexDefault() {
+        let inherited = FeatureSelection(providerID: "claude", modelID: "claude-opus-5")
+        let providers = [
+            FeatureProvider(
+                id: "codex",
+                name: "Codex",
+                models: [.init(id: "gpt-5.6-sol", name: "Sol", isDefault: true)]
+            ),
+            FeatureProvider(
+                id: "claude",
+                name: "Claude",
+                models: [.init(id: "claude-opus-5", name: "Opus 5")]
+            ),
+        ]
+
+        #expect(
+            ThreadComposerModelSelectionPolicy.resolvedSelection(
+                explicit: nil,
+                inherited: inherited,
+                providers: providers
+            )?.providerID == "claude"
+        )
+        #expect(
+            ThreadComposerModelSelectionPolicy.explicitSelection(
+                nil,
+                inherited: inherited,
+                providers: providers
+            ) == nil
+        )
+    }
+
+    @Test
+    func lockedThreadRejectsPersistedCrossProviderOverride() {
+        let inherited = FeatureSelection(providerID: "claude", modelID: "claude-opus-5")
+        let staleDefault = FeatureSelection(providerID: "codex", modelID: "gpt-5.6-sol")
+        let providers = [
+            FeatureProvider(
+                id: "codex",
+                name: "Codex",
+                models: [.init(id: "gpt-5.6-sol", name: "Sol", isDefault: true)]
+            ),
+            FeatureProvider(
+                id: "claude",
+                name: "Claude",
+                requiresNewThreadForModelChange: true,
+                models: [.init(id: "claude-opus-5", name: "Opus 5")]
+            ),
+        ]
+
+        #expect(
+            ThreadComposerModelSelectionPolicy.explicitSelection(
+                staleDefault,
+                inherited: inherited,
+                providers: providers
+            ) == nil
+        )
+    }
+
+    @Test
     func configurationMaterializesDisplayedDefaultsWithoutOverwritingSelections() {
         let model = FeatureModel(
             id: "gpt-5.6-sol",
