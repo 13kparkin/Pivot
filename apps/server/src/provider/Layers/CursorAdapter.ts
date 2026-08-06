@@ -1011,6 +1011,7 @@ export function makeCursorAdapter(
                 threadId: input.threadId,
               });
             }
+            // A prompt sent while another is in flight steers the active turn.
             const startsTurn = ctx.promptsInFlight === 0;
             if (startsTurn) {
               ctx.callbackLifecycle.generation += 1;
@@ -1018,6 +1019,7 @@ export function makeCursorAdapter(
               ctx.activeTurnId = candidateTurnId;
               ctx.lastPlanFingerprint = undefined;
             }
+            // Count it immediately so an older prompt cannot settle the shared turn.
             ctx.promptsInFlight += 1;
             return {
               generation: ctx.callbackLifecycle.generation,
@@ -1038,6 +1040,7 @@ export function makeCursorAdapter(
                 if (promptFinalized) return false;
                 promptFinalized = true;
                 ctx.promptsInFlight = Math.max(0, ctx.promptsInFlight - 1);
+                // Only the final prompt for this generation may settle and complete the turn.
                 if (ctx.promptsInFlight !== 0 || ctx.callbackLifecycle.generation !== generation) {
                   return false;
                 }
