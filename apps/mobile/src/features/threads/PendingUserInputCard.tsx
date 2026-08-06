@@ -4,6 +4,7 @@ import { Pressable, View } from "react-native";
 import { AppText as Text, AppTextInput as TextInput } from "../../components/AppText";
 import { cn } from "../../lib/cn";
 import type { PendingUserInput, PendingUserInputDraftAnswer } from "../../lib/threadActivity";
+import { PendingCardSurface } from "./PendingCardSurface";
 
 export interface PendingUserInputCardProps {
   readonly pendingUserInput: PendingUserInput;
@@ -25,7 +26,7 @@ export interface PendingUserInputCardProps {
 
 export function PendingUserInputCard(props: PendingUserInputCardProps) {
   return (
-    <View className="gap-2.5 rounded-[20px] border border-neutral-200 bg-neutral-100/80 p-4 dark:border-white/6 dark:bg-neutral-900/80">
+    <PendingCardSurface>
       <Text className="font-t3-bold text-2xs uppercase tracking-[1.1px] text-sky-700 dark:text-sky-300">
         User input needed
       </Text>
@@ -100,6 +101,6 @@ export function PendingUserInputCard(props: PendingUserInputCardProps) {
       >
         <Text className="font-t3-extrabold text-sm text-white">Submit answers</Text>
       </Pressable>
-    </View>
+    </PendingCardSurface>
   );
 }

@@ -3,6 +3,7 @@ import { Pressable, View } from "react-native";
 
 import { AppText as Text } from "../../components/AppText";
 import type { PendingApproval } from "../../lib/threadActivity";
+import { PendingCardSurface } from "./PendingCardSurface";
 
 export interface PendingApprovalCardProps {
   readonly approval: PendingApproval;
@@ -15,7 +16,7 @@ export interface PendingApprovalCardProps {
 
 export function PendingApprovalCard(props: PendingApprovalCardProps) {
   return (
-    <View className="gap-2.5 rounded-[20px] border border-neutral-200 bg-neutral-100/80 p-4 dark:border-white/6 dark:bg-neutral-900/80">
+    <PendingCardSurface>
       <Text className="font-t3-bold text-2xs uppercase tracking-[1.1px] text-sky-700 dark:text-sky-300">
         Approval needed
       </Text>
@@ -52,6 +53,6 @@ export function PendingApprovalCard(props: PendingApprovalCardProps) {
           <Text className="font-t3-bold text-sm text-rose-700 dark:text-rose-300">Decline</Text>
         </Pressable>
       </View>
-    </View>
+    </PendingCardSurface>
   );
 }
