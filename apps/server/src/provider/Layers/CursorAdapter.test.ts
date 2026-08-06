@@ -60,7 +60,10 @@ exec ${JSON.stringify(mockAgentCommand)} ${mockAgentArgs.map((arg) => JSON.strin
   return wrapperPath;
 }
 
-async function makeTerminalCallbackWrapper(kind: "permission" | "question") {
+async function makeTerminalCallbackWrapper(
+  kind: "permission" | "question",
+  promptOutcome: "success" | "failure" | "hang" = "success",
+) {
   const dir = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "cursor-acp-terminal-"));
   const wrapperPath = NodePath.join(dir, "fake-agent.mjs");
   const callback =
@@ -109,6 +112,7 @@ async function makeTerminalCallbackWrapper(kind: "permission" | "question") {
 import readline from "node:readline";
 const callback = ${JSON.stringify(callback)};
 const kind = ${JSON.stringify(kind)};
+const promptOutcome = ${JSON.stringify(promptOutcome)};
 const send = (message) => process.stdout.write(JSON.stringify(message) + "\\n");
 readline.createInterface({ input: process.stdin }).on("line", (line) => {
   const message = JSON.parse(line);
@@ -118,10 +122,17 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
   } else if (message.method === "session/new") {
     send({ jsonrpc: "2.0", id: message.id, result: { sessionId: "terminal-callback-session" } });
   } else if (message.method === "session/prompt") {
-    const response = { jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } };
-    const messages = kind === "question" ? [response, callback] : [callback];
+    const response =
+      promptOutcome === "failure"
+        ? { jsonrpc: "2.0", id: message.id, error: { code: -32603, message: "prompt failed" } }
+        : { jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } };
+    const messages =
+      promptOutcome === "hang"
+        ? [callback]
+        : kind === "question" && promptOutcome === "success"
+          ? [response, callback]
+          : [callback, response];
     process.stdout.write(messages.map(JSON.stringify).join("\\n") + "\\n");
-    if (kind === "permission") setTimeout(() => send(response), 10);
   } else if (message.id !== undefined) {
     send({ jsonrpc: "2.0", id: message.id, result: {} });
   }
@@ -1164,6 +1175,137 @@ cursorAdapterTestLayer("CursorAdapterLive", (it) => {
       const resolved = relevant[1];
       assert.equal(resolved?.type, "request.resolved");
       if (resolved?.type === "request.resolved") assert.equal(resolved.payload.decision, "cancel");
+      yield* adapter.stopSession(threadId);
+    }),
+  );
+
+  it.effect("settles a pending callback when the terminal prompt fails", () =>
+    Effect.gen(function* () {
+      const adapter = yield* CursorAdapter;
+      const settings = yield* ServerSettingsService;
+      const threadId = ThreadId.make("cursor-terminal-failure");
+      const events: Array<ProviderRuntimeEvent> = [];
+      const requested = yield* Deferred.make<ApprovalRequestId>();
+      const resolved = yield* Deferred.make<void>();
+      const wrapperPath = yield* Effect.promise(() =>
+        makeTerminalCallbackWrapper("permission", "failure"),
+      );
+      yield* settings.updateSettings({ providers: { cursor: { binaryPath: wrapperPath } } });
+
+      const eventsFiber = yield* Stream.runForEach(adapter.streamEvents, (event) => {
+        if (String(event.threadId) !== String(threadId)) return Effect.void;
+        events.push(event);
+        if (event.type === "request.opened") {
+          return Deferred.succeed(requested, ApprovalRequestId.make(String(event.requestId))).pipe(
+            Effect.ignore,
+          );
+        }
+        if (event.type === "request.resolved") {
+          return Deferred.succeed(resolved, undefined).pipe(Effect.ignore);
+        }
+        return Effect.void;
+      }).pipe(Effect.forkChild);
+
+      yield* adapter.startSession({
+        threadId,
+        provider: ProviderDriverKind.make("cursor"),
+        cwd: process.cwd(),
+        runtimeMode: "approval-required",
+      });
+      const sendTurnFiber = yield* adapter
+        .sendTurn({
+          threadId,
+          input: "fail with a pending permission",
+          attachments: [],
+        })
+        .pipe(Effect.forkChild);
+
+      const requestId = yield* Deferred.await(requested);
+      const sendTurnExit = yield* Fiber.await(sendTurnFiber);
+      yield* Deferred.await(resolved);
+      const lateResponseExit = yield* adapter
+        .respondToRequest(threadId, requestId, "accept")
+        .pipe(Effect.exit);
+      assert.equal(sendTurnExit._tag, "Failure");
+      assert.equal(lateResponseExit._tag, "Failure");
+      assert.deepStrictEqual(
+        events
+          .filter(
+            (event) =>
+              event.type === "request.opened" ||
+              event.type === "request.resolved" ||
+              event.type === "turn.completed",
+          )
+          .map((event) => event.type),
+        ["request.opened", "request.resolved"],
+      );
+
+      yield* Fiber.interrupt(eventsFiber);
+      yield* adapter.stopSession(threadId);
+    }),
+  );
+
+  it.effect("settles a pending callback when sendTurn is interrupted", () =>
+    Effect.gen(function* () {
+      const adapter = yield* CursorAdapter;
+      const settings = yield* ServerSettingsService;
+      const threadId = ThreadId.make("cursor-terminal-fiber-interruption");
+      const events: Array<ProviderRuntimeEvent> = [];
+      const requested = yield* Deferred.make<ApprovalRequestId>();
+      const resolved = yield* Deferred.make<void>();
+      const wrapperPath = yield* Effect.promise(() =>
+        makeTerminalCallbackWrapper("permission", "hang"),
+      );
+      yield* settings.updateSettings({ providers: { cursor: { binaryPath: wrapperPath } } });
+
+      const eventsFiber = yield* Stream.runForEach(adapter.streamEvents, (event) => {
+        if (String(event.threadId) !== String(threadId)) return Effect.void;
+        events.push(event);
+        if (event.type === "request.opened") {
+          return Deferred.succeed(requested, ApprovalRequestId.make(String(event.requestId))).pipe(
+            Effect.ignore,
+          );
+        }
+        if (event.type === "request.resolved") {
+          return Deferred.succeed(resolved, undefined).pipe(Effect.ignore);
+        }
+        return Effect.void;
+      }).pipe(Effect.forkChild);
+
+      yield* adapter.startSession({
+        threadId,
+        provider: ProviderDriverKind.make("cursor"),
+        cwd: process.cwd(),
+        runtimeMode: "approval-required",
+      });
+      const sendTurnFiber = yield* adapter
+        .sendTurn({
+          threadId,
+          input: "interrupt with a pending permission",
+          attachments: [],
+        })
+        .pipe(Effect.forkChild);
+
+      const requestId = yield* Deferred.await(requested);
+      yield* Fiber.interrupt(sendTurnFiber);
+      yield* Deferred.await(resolved);
+      const lateResponseExit = yield* adapter
+        .respondToRequest(threadId, requestId, "accept")
+        .pipe(Effect.exit);
+      assert.equal(lateResponseExit._tag, "Failure");
+      assert.deepStrictEqual(
+        events
+          .filter(
+            (event) =>
+              event.type === "request.opened" ||
+              event.type === "request.resolved" ||
+              event.type === "turn.completed",
+          )
+          .map((event) => event.type),
+        ["request.opened", "request.resolved"],
+      );
+
+      yield* Fiber.interrupt(eventsFiber);
       yield* adapter.stopSession(threadId);
     }),
   );
