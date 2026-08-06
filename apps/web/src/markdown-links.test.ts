@@ -1,11 +1,34 @@
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  extractMarkdownLinkHrefs,
+  normalizeMarkdownLinkDestination,
+  normalizeMarkdownLinkHrefKey,
   resolveInlineCodeFileLinkMeta,
   resolveMarkdownFileLinkMeta,
   resolveMarkdownFileLinkTarget,
   rewriteMarkdownFileUriHref,
 } from "./markdown-links";
+
+describe("extractMarkdownLinkHrefs", () => {
+  it("extracts angle-bracketed destinations containing spaces", () => {
+    const [href] = extractMarkdownLinkHrefs('[file](<src/file name.ts> "source")');
+
+    expect(href).toBe("<src/file name.ts>");
+    expect(normalizeMarkdownLinkHrefKey(href ?? "")).toBe(
+      normalizeMarkdownLinkHrefKey("src/file%20name.ts"),
+    );
+    expect(
+      resolveMarkdownFileLinkMeta(normalizeMarkdownLinkDestination(href ?? ""), "/repo/project"),
+    ).toMatchObject({
+      filePath: "/repo/project/src/file name.ts",
+    });
+  });
+
+  it("continues to extract regular markdown destinations", () => {
+    expect(extractMarkdownLinkHrefs("[file](src/file%20name.ts)")).toEqual(["src/file%20name.ts"]);
+  });
+});
 
 describe("rewriteMarkdownFileUriHref", () => {
   it("rewrites file uri hrefs into direct path hrefs", () => {

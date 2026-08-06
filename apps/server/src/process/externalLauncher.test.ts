@@ -457,6 +457,48 @@ it.effect("does not advertise a file manager on headless Linux", () =>
   }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );
 
+it.effect("uses Windows Explorer from WSL without WSLg", () =>
+  Effect.gen(function* () {
+    const fileSystem = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const binDir = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-wsl-explorer-" });
+    const commandPath = path.join(binDir, "explorer.exe");
+    const targetPath = path.join(binDir, "project with spaces", "src", "index.ts");
+    yield* fileSystem.writeFileString(commandPath, "#!/bin/sh\n");
+    yield* fileSystem.chmod(commandPath, 0o755);
+    yield* fileSystem.makeDirectory(path.dirname(targetPath), { recursive: true });
+    yield* fileSystem.writeFileString(targetPath, "");
+
+    let spawned: ChildProcess.StandardCommand | undefined;
+    const env = { PATH: binDir, WSL_DISTRO_NAME: "Ubuntu-22.04" };
+    const editors = yield* Effect.gen(function* () {
+      const launcher = yield* ExternalLauncher.ExternalLauncher;
+      const availableEditors = yield* launcher.resolveAvailableEditors();
+      yield* launcher.revealInFileManager({ path: targetPath });
+      return availableEditors;
+    }).pipe(
+      Effect.provide(
+        testLayer({
+          platform: "linux",
+          env,
+          onSpawn: (command) => {
+            spawned = command;
+          },
+        }),
+      ),
+    );
+
+    assert.equal(editors.includes("file-manager"), true);
+    assert.ok(spawned);
+    assert.equal(spawned.command, "explorer.exe");
+    assert.deepEqual(spawned.args, [
+      "/select,",
+      `\\\\wsl.localhost\\Ubuntu-22.04${targetPath.replaceAll("/", "\\")}`,
+    ]);
+    assert.equal(spawned.options.shell, false);
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
 it.effect("advertises a file manager in a Linux graphical session", () =>
   Effect.gen(function* () {
     const fileSystem = yield* FileSystem.FileSystem;
