@@ -1,3 +1,4 @@
+import { isLiquidGlassSupported } from "@callstack/liquid-glass";
 import { type EnvironmentConnectionPhase } from "@t3tools/client-runtime/connection";
 import type { EnvironmentThreadStatus } from "@t3tools/client-runtime/state/threads";
 import { useKeyboardChatComposerInset, useKeyboardScrollToEnd } from "@legendapp/list/keyboard";
@@ -391,7 +392,7 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
               {props.activePendingApproval || props.activePendingUserInput ? (
                 <Animated.View
                   className="shrink-0 gap-3 px-4 pb-3"
-                  entering={FadeInDown.duration(220)}
+                  entering={isLiquidGlassSupported ? undefined : FadeInDown.duration(220)}
                   exiting={FadeOut.duration(140)}
                 >
                   {props.activePendingApproval ? (
