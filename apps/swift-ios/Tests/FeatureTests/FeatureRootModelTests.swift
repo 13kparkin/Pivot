@@ -6,6 +6,22 @@ import Testing
 @Suite("Feature root model")
 struct FeatureRootModelTests {
     @Test
+    func backgroundRefreshUsesTheBoundedClientPath() async {
+        let client = FeatureClientStub()
+        client.backgroundSnapshotValue = FeatureSnapshot(
+            connection: .init(state: .connected, environmentName: "Remote")
+        )
+        let model = testRootModel(client: client)
+
+        let succeeded = await model.refreshInBackground()
+
+        #expect(succeeded)
+        #expect(client.backgroundSnapshotCallCount == 1)
+        #expect(client.initialSnapshotCallCount == 0)
+        #expect(model.snapshot.connection.environmentName == "Remote")
+    }
+
+    @Test
     func savedServersKeepWorkspaceNavigationAvailableWhileDisconnected() {
         let savedEnvironment = FeatureEnvironment(
             id: "offline-demo",
@@ -1158,6 +1174,9 @@ private final class FeatureClientStub: FeatureClient {
     private let eventStream: AsyncStream<FeatureEvent>
     private let eventContinuation: AsyncStream<FeatureEvent>.Continuation
     var snapshot = FeatureSnapshot()
+    var backgroundSnapshotValue: FeatureSnapshot?
+    var initialSnapshotCallCount = 0
+    var backgroundSnapshotCallCount = 0
     var snapshotAfterPair: FeatureSnapshot?
     var snapshotAfterEnvironmentRemoval: FeatureSnapshot?
     var createdThread = FeatureThread(id: "created", projectID: "project", title: "Created")
@@ -1204,6 +1223,7 @@ private final class FeatureClientStub: FeatureClient {
     }
 
     func initialSnapshot() async throws -> FeatureSnapshot {
+        initialSnapshotCallCount += 1
         if removedEnvironmentID != nil, let snapshotAfterEnvironmentRemoval {
             return snapshotAfterEnvironmentRemoval
         }
@@ -1211,6 +1231,11 @@ private final class FeatureClientStub: FeatureClient {
             return snapshotAfterPair
         }
         return snapshot
+    }
+
+    func backgroundSnapshot() async throws -> FeatureSnapshot {
+        backgroundSnapshotCallCount += 1
+        return backgroundSnapshotValue ?? snapshot
     }
 
     func pair(endpoint: String, token: String?) async throws {

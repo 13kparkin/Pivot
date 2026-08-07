@@ -1,4 +1,5 @@
 import Foundation
+import OSLog
 
 extension FeatureInputAnswer {
     var jsonValue: JSONValue {
@@ -11,11 +12,25 @@ extension FeatureInputAnswer {
     }
 }
 
+private struct T3ConnectManagedCleanupError: LocalizedError {
+    let failureCount: Int
+
+    var errorDescription: String? {
+        "Couldn’t remove \(failureCount) managed T3 Connect "
+            + (failureCount == 1 ? "environment." : "environments.")
+    }
+}
+
 /// Composes the transport-focused Core layer with the UI-focused Features layer.
 @MainActor
 final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
     FeatureProjectCreationClient, FeatureWorkspaceAssetResolving, T3ConnectCapable
 {
+    private static let maximumRetainedThreadDetails = 6
+    private static let t3ConnectLogger = Logger(
+        subsystem: "codes.t3.swift-ios",
+        category: "T3Connect"
+    )
     private static let initialThreadUserTurnLimit = 10
     private static let olderThreadPageUserTurnLimit = 20
 
@@ -54,6 +69,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
     private var activeThreadEnvironmentID: String?
     private var latestDetails: [String: FeatureThreadDetail] = [:]
     private var detailRenderCaches: [String: NativeDetailRenderCache] = [:]
+    private var detailCacheRecency: [String] = []
     private var attachmentURLs: [AttachmentCacheKey: CachedAttachmentURL] = [:]
     private var pendingBootstrapSubmissions: [PendingBootstrapSubmission] = []
     private var pendingTurnSubmissions: [String: PendingTurnSubmission] = [:]
@@ -186,6 +202,32 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         return snapshot
     }
 
+    func backgroundSnapshot() async throws -> FeatureSnapshot {
+        let environments = try await runtime.environments()
+        guard let activeClient = try await runtime.activeClient() else {
+            return disconnectedSnapshot(environments: environments)
+        }
+        let environment = activeClient.environment
+        let loads = await loadEnvironmentShells(environments)
+        guard let currentClient = try await runtime.activeClient(),
+              currentClient.environment.id == environment.id else {
+            throw CancellationError()
+        }
+
+        reconcileEnvironmentLoads(loads, savedEnvironments: environments)
+        let activeIsReachable = loads.contains {
+            $0.environment.id == environment.id && $0.shell != nil
+        }
+        let snapshot = makeSnapshot(
+            environments: environments,
+            activeEnvironment: environment,
+            connectionState: activeIsReachable ? .connected : .disconnected,
+            connectionDetail: activeIsReachable ? nil : "That server is currently unreachable."
+        )
+        latestSnapshot = snapshot
+        return snapshot
+    }
+
     func events() -> AsyncStream<FeatureEvent> {
         stream
     }
@@ -277,6 +319,38 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             publish(snapshot)
         }
         startPolling(managedClient)
+    }
+
+    func signOutT3Connect() async {
+        // Clear the account and relay-token cache even when Clerk's remote
+        // sign-out fails, then revoke every locally minted managed credential.
+        // Manual pairings are device-owned and deliberately survive sign-out.
+        await t3ConnectController.signOut()
+        do {
+            let managedIDs = try await runtime.environments()
+                .filter { $0.kind == .managedDPoP }
+                .map(\.id)
+            var failureCount = 0
+            for id in managedIDs {
+                do {
+                    try await removeEnvironment(id: id)
+                } catch {
+                    failureCount += 1
+                    Self.t3ConnectLogger.error(
+                        "Managed environment removal failed: \(error.localizedDescription, privacy: .private)"
+                    )
+                }
+            }
+            guard failureCount == 0 else {
+                throw T3ConnectManagedCleanupError(failureCount: failureCount)
+            }
+            Self.t3ConnectLogger.info("Cleared managed T3 Connect runtime state")
+        } catch {
+            Self.t3ConnectLogger.error(
+                "Managed T3 Connect cleanup failed: \(error.localizedDescription, privacy: .private)"
+            )
+            t3ConnectController.errorMessage = error.localizedDescription
+        }
     }
 
     func activateEnvironment(id: String) async throws {
@@ -395,6 +469,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         pendingOlderThreadPage = nil
         latestDetails.removeAll()
         detailRenderCaches.removeAll()
+        detailCacheRecency.removeAll()
         attachmentURLs.removeAll()
         pendingBootstrapSubmissions.removeAll()
         pendingTurnSubmissions.removeAll()
@@ -1080,6 +1155,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         }
         latestDetails[route.uiID] = nil
         detailRenderCaches[route.uiID] = nil
+        detailCacheRecency.removeAll { $0 == route.uiID }
         await emitCachedSnapshot(for: route.environmentID)
         try? await refresh(client: route.client, includeArchived: true)
     }
@@ -1207,6 +1283,8 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         activeThreadPage = nil
         threadHistoryEpoch &+= 1
         pendingOlderThreadPage = nil
+        markThreadCacheRecentlyUsed(id)
+        evictOldThreadCachesIfNeeded()
     }
 
     func sendMessage(
@@ -2134,6 +2212,14 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
                         )
                     case .projectUpserted, .projectRemoved, .threadUpserted, .threadRemoved:
                         await self.consume(delta: item, client: activeClient)
+                    case .refreshRequired:
+                        if let shell = try? await activeClient.shellSnapshot() {
+                            await self.consume(
+                                shell: shell,
+                                client: activeClient,
+                                refreshActiveThread: true
+                            )
+                        }
                     case .synchronized:
                         break
                     }
@@ -2406,7 +2492,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             sequence = nextSequence
         case let .threadRemoved(nextSequence, _):
             sequence = nextSequence
-        case .snapshot, .synchronized:
+        case .snapshot, .synchronized, .refreshRequired:
             return
         }
 
@@ -2452,6 +2538,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             if let uiThreadID {
                 latestDetails[uiThreadID] = nil
                 detailRenderCaches[uiThreadID] = nil
+                detailCacheRecency.removeAll { $0 == uiThreadID }
             }
             if activeThreadID == uiThreadID {
                 resetDetailRefresh()
@@ -2464,7 +2551,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
                 threadHistoryEpoch &+= 1
                 pendingOlderThreadPage = nil
             }
-        case .snapshot, .synchronized:
+        case .snapshot, .synchronized, .refreshRequired:
             return
         }
 
@@ -3313,10 +3400,10 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
                 snapshot.environments[index].connectionDetail = detail
             }
             latestSnapshot = snapshot
+            continuation.yield(.snapshot(snapshot))
+            return
         }
-        continuation.yield(
-            .connection(connection)
-        )
+        continuation.yield(.connection(connection))
     }
 
     private func makeSnapshot(
@@ -3453,7 +3540,10 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             snoozedUntil: thread.snoozedUntil.map(parseDate),
             snoozedAt: thread.snoozedAt.map(parseDate),
             pinnedAt: thread.pinnedAt.map(parseDate),
+            supportsSettlement: environment.descriptor?.capabilities.threadSettlement,
+            supportsSnooze: environment.descriptor?.capabilities.threadSnooze,
             supportsPinning: environment.descriptor?.capabilities.threadPinning,
+            supportsTitleRegeneration: environment.descriptor?.capabilities.threadTitleRegeneration,
             attentionAt: failureDate(
                 latestTurn: thread.latestTurn,
                 session: thread.session
@@ -3511,7 +3601,10 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             snoozedUntil: thread.snoozedUntil.map(parseDate),
             snoozedAt: thread.snoozedAt.map(parseDate),
             pinnedAt: thread.pinnedAt.map(parseDate),
+            supportsSettlement: environment.descriptor?.capabilities.threadSettlement,
+            supportsSnooze: environment.descriptor?.capabilities.threadSnooze,
             supportsPinning: environment.descriptor?.capabilities.threadPinning,
+            supportsTitleRegeneration: environment.descriptor?.capabilities.threadTitleRegeneration,
             attentionAt: failureDate(
                 latestTurn: thread.latestTurn,
                 session: thread.session
@@ -3538,6 +3631,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         )
         let cache = detailRenderCaches[threadID] ?? NativeDetailRenderCache()
         detailRenderCaches[threadID] = cache
+        markThreadCacheRecentlyUsed(threadID)
 
         if !cache.isInitialized || mutations == nil || mutations?.requiresFullRebuild == true {
             cache.messagesByID = thread.messages.reduce(into: [:]) { result, raw in
@@ -3586,6 +3680,27 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             userInputs: cache.userInputs,
             page: page
         )
+    }
+
+    private func markThreadCacheRecentlyUsed(_ threadID: String) {
+        detailCacheRecency.removeAll { $0 == threadID }
+        detailCacheRecency.append(threadID)
+    }
+
+    private func evictOldThreadCachesIfNeeded() {
+        while detailCacheRecency.count > Self.maximumRetainedThreadDetails {
+            let threadID = detailCacheRecency.removeFirst()
+            guard threadID != activeThreadID else {
+                detailCacheRecency.append(threadID)
+                break
+            }
+            latestDetails[threadID] = nil
+            detailRenderCaches[threadID] = nil
+            terminalSnapshots = terminalSnapshots.filter { $0.key.threadID != threadID }
+            if let hydration = attachmentHydrationTasks.removeValue(forKey: threadID) {
+                hydration.task.cancel()
+            }
+        }
     }
 
     private func featurePage(
@@ -3809,12 +3924,15 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
     private func sortedByCreation(
         _ activities: [OrchestrationActivity]
     ) -> [OrchestrationActivity] {
-        activities.enumerated()
-            .map { (index: $0.offset, date: parseDate($0.element.createdAt), activity: $0.element) }
-            .sorted { lhs, rhs in
-                lhs.date != rhs.date ? lhs.date < rhs.date : lhs.index < rhs.index
-            }
-            .map(\.activity)
+        var decorated: [(index: Int, date: Date, activity: OrchestrationActivity)] = []
+        decorated.reserveCapacity(activities.count)
+        for (index, activity) in activities.enumerated() {
+            decorated.append((index, parseDate(activity.createdAt), activity))
+        }
+        decorated.sort { lhs, rhs in
+            lhs.date != rhs.date ? lhs.date < rhs.date : lhs.index < rhs.index
+        }
+        return decorated.map(\.activity)
     }
 
     private func seedWorkLogs(

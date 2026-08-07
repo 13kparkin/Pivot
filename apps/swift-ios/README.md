@@ -103,6 +103,17 @@ chooses an available iPhone from the newest installed Simulator runtime:
 Set `T3_SWIFT_SIMULATOR_ID` to pin a specific simulator. CI can invoke this same
 entry point without duplicating the simulator-selection or signing policy.
 
+Contract fixtures are encoded from the TypeScript schemas and decoded by the
+Swift test target. Regenerate and verify them after a relevant wire change:
+
+```sh
+node scripts/generate-swift-wire-fixtures.ts
+node scripts/generate-swift-wire-fixtures.ts --check
+```
+
+Pull requests that change `apps/swift-ios`, `packages/contracts`, or the fixture
+generator run both checks in the path-gated SwiftUI workflow.
+
 ## Install on a physical device
 
 Enable Developer Mode on the device, connect and trust the Mac, then find its

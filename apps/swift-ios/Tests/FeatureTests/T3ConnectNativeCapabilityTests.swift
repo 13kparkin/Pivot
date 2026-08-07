@@ -154,6 +154,83 @@ final class T3ConnectNativeCapabilityTests: XCTestCase {
         }
     }
 
+    func testSignOutRemovesManagedStateWhenClerkFailsAndPreservesManualPairing() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("t3-connect-sign-out-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let manual = Environment(
+            id: "manual-1",
+            label: "Big O",
+            httpBaseURL: URL(string: "http://100.64.0.1:3773")!,
+            webSocketBaseURL: URL(string: "ws://100.64.0.1:3773/ws")!
+        )
+        let managed = Environment(
+            id: "managed-1",
+            label: "Managed Studio",
+            httpBaseURL: URL(string: "https://managed.example")!,
+            webSocketBaseURL: URL(string: "wss://managed.example")!,
+            kind: .managedDPoP
+        )
+        let store = EnvironmentStore(
+            fileURL: directory.appendingPathComponent("environments.json")
+        )
+        try await store.save([managed, manual])
+        try await store.setActiveEnvironment(id: managed.id)
+        let manualCredential = EnvironmentCredential(accessToken: "manual-secret")
+        let managedCredential = EnvironmentCredential.managedDPoP(
+            accessToken: "managed-secret",
+            expiresAt: Date().addingTimeInterval(300),
+            scopes: T3ConnectManagedEnvironmentAuthorizer.standardScopes,
+            environmentID: managed.id,
+            proofKeyThumbprint: "proof-key"
+        )
+        let credentials = InMemoryCredentialStore(
+            credentials: [
+                manual.id: manualCredential,
+                managed.id: managedCredential,
+            ]
+        )
+        let signer = try testSigner()
+        let transport = T3ConnectNativeHTTPTransport(descriptorEnvironmentID: managed.id)
+        let controller = T3ConnectController(
+            resolution: .available(
+                T3ConnectConfiguration(
+                    clerkPublishableKey: "pk_test",
+                    relayHTTPURL: URL(string: "https://relay.example")!
+                )
+            ),
+            transport: transport,
+            signer: signer,
+            signOutOperation: { throw T3ConnectNativeTestError.clerkSignOutFailed }
+        )
+        let runtime = EnvironmentRuntime(
+            environmentStore: store,
+            credentialStore: credentials,
+            httpTransport: transport,
+            webSocketConnector: T3ConnectBlockingConnector(),
+            managedAuthorization: T3ConnectRuntimeAuthorization(controller: controller)
+        )
+        let client = NativeFeatureClient(
+            runtime: runtime,
+            t3ConnectController: controller
+        )
+
+        await client.signOutT3Connect()
+
+        let remainingEnvironments = try await runtime.environments()
+        let activeEnvironmentID = try await store.activeEnvironmentID()
+        let remainingManualCredential = await credentials.credential(for: manual.id)
+        let remainingManagedCredential = await credentials.credential(for: managed.id)
+        XCTAssertEqual(remainingEnvironments, [manual])
+        XCTAssertEqual(activeEnvironmentID, manual.id)
+        XCTAssertEqual(remainingManualCredential, manualCredential)
+        XCTAssertNil(remainingManagedCredential)
+        XCTAssertEqual(
+            controller.errorMessage,
+            T3ConnectNativeTestError.clerkSignOutFailed.localizedDescription
+        )
+    }
+
     func testInjectedManagedRuntimeRequiresItsMatchingController() async throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("t3-connect-controller-mismatch-\(UUID().uuidString)")
@@ -279,6 +356,7 @@ private actor T3ConnectNativeHTTPTransport: HTTPTransport {
 
 private enum T3ConnectNativeTestError: Error {
     case unexpectedPath(String?)
+    case clerkSignOutFailed
 }
 
 private actor T3ConnectBlockingConnector: WebSocketConnecting {

@@ -215,7 +215,7 @@ struct HomeThreadCollectionView: UIViewRepresentable {
                 }
                 primaryAction.image = UIImage(systemName: "pin.slash")
                 primaryAction.backgroundColor = .systemBlue
-            } else {
+            } else if thread.canToggleSettlement {
                 let isSettled = thread.isEffectivelySettled(at: .now)
                 primaryAction = UIContextualAction(
                     style: .normal,
@@ -228,6 +228,14 @@ struct HomeThreadCollectionView: UIViewRepresentable {
                     systemName: isSettled ? "arrow.counterclockwise" : "checkmark"
                 )
                 primaryAction.backgroundColor = isSettled ? .systemBlue : .systemGreen
+            } else {
+                primaryAction = UIContextualAction(style: .normal, title: "Archive") {
+                    [weak self] _, _, finish in
+                    self?.parent.onArchive(thread, true)
+                    finish(true)
+                }
+                primaryAction.image = UIImage(systemName: "archivebox")
+                primaryAction.backgroundColor = .systemGray
             }
 
             let configuration = UISwipeActionsConfiguration(actions: [delete, primaryAction])
@@ -393,32 +401,38 @@ struct HomeThreadCollectionView: UIViewRepresentable {
                         }
                     )
                 }
-                let isSettled = thread.isEffectivelySettled(at: .now)
-                actions.append(
-                    UIAction(
-                        title: isSettled ? "Reopen" : "Settle",
-                        image: UIImage(systemName: isSettled ? "arrow.counterclockwise" : "checkmark")
-                    ) { [weak self] _ in
-                        self?.parent.onSettle(thread, !isSettled)
-                    }
-                )
-
-                let isSnoozed = thread.isEffectivelySnoozed(at: .now)
-                let snooze = UIAction(
-                    title: isSnoozed ? "Unsnooze" : "Snooze 1 hour",
-                    image: UIImage(systemName: isSnoozed ? "bell" : "clock")
-                ) { [weak self] _ in
-                    self?.parent.onSnooze(
-                        thread,
-                        isSnoozed ? nil : Date.now.addingTimeInterval(60 * 60)
+                if thread.canToggleSettlement {
+                    let isSettled = thread.isEffectivelySettled(at: .now)
+                    actions.append(
+                        UIAction(
+                            title: isSettled ? "Reopen" : "Settle",
+                            image: UIImage(
+                                systemName: isSettled ? "arrow.counterclockwise" : "checkmark"
+                            )
+                        ) { [weak self] _ in
+                            self?.parent.onSettle(thread, !isSettled)
+                        }
                     )
                 }
-                if thread.state == .queued
-                    || thread.state == .waitingForApproval
-                    || thread.state == .waitingForInput {
-                    snooze.attributes = .disabled
+
+                if thread.canToggleSnooze {
+                    let isSnoozed = thread.isEffectivelySnoozed(at: .now)
+                    let snooze = UIAction(
+                        title: isSnoozed ? "Unsnooze" : "Snooze 1 hour",
+                        image: UIImage(systemName: isSnoozed ? "bell" : "clock")
+                    ) { [weak self] _ in
+                        self?.parent.onSnooze(
+                            thread,
+                            isSnoozed ? nil : Date.now.addingTimeInterval(60 * 60)
+                        )
+                    }
+                    if thread.state == .queued
+                        || thread.state == .waitingForApproval
+                        || thread.state == .waitingForInput {
+                        snooze.attributes = .disabled
+                    }
+                    actions.append(snooze)
                 }
-                actions.append(snooze)
             }
 
             actions.append(

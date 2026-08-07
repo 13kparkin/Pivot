@@ -19,6 +19,21 @@
             </array>
         </dict>
     </array>
+    <key>NSAppTransportSecurity</key>
+    <dict>
+        <key>NSAllowsLocalNetworking</key>
+        <true/>
+        <key>NSExceptionDomains</key>
+        <dict>
+            <key>ts.net</key>
+            <dict>
+                <key>NSExceptionAllowsInsecureHTTPLoads</key>
+                <true/>
+                <key>NSIncludesSubdomains</key>
+                <true/>
+            </dict>
+        </dict>
+    </dict>
     <key>T3ConnectClerkJWTTemplate</key>
     <string>$(T3CODE_CLERK_JWT_TEMPLATE)</string>
     <key>T3ConnectClerkPublishableKey</key>

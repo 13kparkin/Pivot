@@ -11,6 +11,7 @@ struct PlatformRootView: View {
     @State private var incomingShareCoordinator = PlatformIncomingShareCoordinator()
     @State private var incomingShareNeedsProject = false
     @State private var importedShareProjectID: String?
+    @State private var recentThreadsPersistenceTask: Task<Void, Never>?
 
     init(model: FeatureRootModel) {
         self.model = model
@@ -318,7 +319,12 @@ struct PlatformRootView: View {
             current: model.snapshot.threads
         )
         previousThreadStates = current
-        PlatformRecentThreadStore.shared.update(from: model.snapshot.threads)
+        recentThreadsPersistenceTask?.cancel()
+        let threads = model.snapshot.threads
+        recentThreadsPersistenceTask = Task.detached(priority: .utility) {
+            guard !Task.isCancelled else { return }
+            PlatformRecentThreadStore.shared.update(from: threads)
+        }
         synchronizeAgentAwareness()
 
         for signal in signals {

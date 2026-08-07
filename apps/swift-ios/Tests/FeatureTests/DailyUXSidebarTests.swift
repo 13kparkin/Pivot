@@ -132,6 +132,26 @@ struct DailyUXSidebarTests {
     }
 
     @Test
+    func lifecycleActionsHonorCapabilitiesAndKeepReverseActionsReachable() {
+        var capabilityThread = thread(id: "capabilities", created: -20, updated: -10)
+        capabilityThread.supportsSettlement = false
+        capabilityThread.supportsSnooze = false
+        #expect(!capabilityThread.canToggleSettlement)
+        #expect(!capabilityThread.canToggleSnooze)
+
+        capabilityThread.isSettled = true
+        capabilityThread.snoozedUntil = now.addingTimeInterval(3_600)
+        #expect(capabilityThread.canToggleSettlement)
+        #expect(capabilityThread.canToggleSnooze)
+
+        var legacy = thread(id: "legacy-capabilities", created: -20, updated: -10)
+        legacy.supportsSettlement = nil
+        legacy.supportsSnooze = nil
+        #expect(legacy.canToggleSettlement)
+        #expect(legacy.canToggleSnooze)
+    }
+
+    @Test
     func snoozedThreadsHaveAReachableReverseState() {
         var snoozed = thread(id: "snoozed", created: -20, updated: -10)
         snoozed.snoozedUntil = now.addingTimeInterval(3_600)

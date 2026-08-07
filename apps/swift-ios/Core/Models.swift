@@ -1,5 +1,40 @@
 import Foundation
 
+/// Arrays sent by the server are allowed to grow new element variants before a
+/// mobile release catches up. Decode each element independently so one future
+/// project, thread, message, or activity cannot discard the rest of a snapshot.
+@propertyWrapper
+public struct ForwardCompatibleArray<Element>: Codable, Equatable, Sendable
+where Element: Codable & Equatable & Sendable {
+    public var wrappedValue: [Element]
+
+    public init(wrappedValue: [Element]) {
+        self.wrappedValue = wrappedValue
+    }
+
+    public init(from decoder: any Decoder) throws {
+        var container = try decoder.unkeyedContainer()
+        var values: [Element] = []
+        values.reserveCapacity(container.count ?? 0)
+        while !container.isAtEnd {
+            // `superDecoder` advances the unkeyed container even when the
+            // element itself is not understood by this client.
+            let elementDecoder = try container.superDecoder()
+            if let value = try? Element(from: elementDecoder) {
+                values.append(value)
+            }
+        }
+        wrappedValue = values
+    }
+
+    public func encode(to encoder: any Encoder) throws {
+        var container = encoder.unkeyedContainer()
+        for value in wrappedValue {
+            try container.encode(value)
+        }
+    }
+}
+
 public enum EnvironmentKind: String, Codable, Sendable {
     case bearer
     case local
@@ -410,23 +445,23 @@ public struct OrchestrationThread: Codable, Identifiable, Equatable, Sendable {
     public let snoozedAt: String?
     public let pinnedAt: String?
     public let deletedAt: String?
-    public let messages: [OrchestrationMessage]
-    public let activities: [OrchestrationActivity]
-    public let checkpoints: [CheckpointSummary]
+    @ForwardCompatibleArray public var messages: [OrchestrationMessage]
+    @ForwardCompatibleArray public var activities: [OrchestrationActivity]
+    @ForwardCompatibleArray public var checkpoints: [CheckpointSummary]
     public let session: OrchestrationSession?
 }
 
 public struct OrchestrationShellSnapshot: Codable, Equatable, Sendable {
     public let snapshotSequence: Int
-    public let projects: [OrchestrationProject]
-    public let threads: [OrchestrationThreadShell]
+    @ForwardCompatibleArray public var projects: [OrchestrationProject]
+    @ForwardCompatibleArray public var threads: [OrchestrationThreadShell]
     public let updatedAt: String
 }
 
 public struct OrchestrationReadModel: Codable, Equatable, Sendable {
     public let snapshotSequence: Int
-    public let projects: [OrchestrationProject]
-    public let threads: [OrchestrationThread]
+    @ForwardCompatibleArray public var projects: [OrchestrationProject]
+    @ForwardCompatibleArray public var threads: [OrchestrationThread]
     public let updatedAt: String
 }
 
@@ -472,6 +507,9 @@ public enum ShellStreamItem: Decodable, Sendable {
     case projectRemoved(sequence: Int, projectID: String)
     case threadUpserted(sequence: Int, thread: OrchestrationThreadShell)
     case threadRemoved(sequence: Int, threadID: String)
+    /// A newer server emitted a delta this build cannot reduce. The live client
+    /// should fetch an authoritative shell snapshot and keep the stream alive.
+    case refreshRequired
 
     private enum CodingKeys: String, CodingKey {
         case kind, sequence, snapshot, project, projectId, thread, threadId
@@ -484,33 +522,62 @@ public enum ShellStreamItem: Decodable, Sendable {
         case "synchronized":
             self = .synchronized
         case "snapshot":
-            self = .snapshot(try container.decode(OrchestrationShellSnapshot.self, forKey: .snapshot))
+            guard let snapshot = try? container.decode(
+                OrchestrationShellSnapshot.self,
+                forKey: .snapshot
+            ) else {
+                self = .refreshRequired
+                return
+            }
+            self = .snapshot(snapshot)
         case "project-upserted":
+            guard let sequence = try? container.decode(Int.self, forKey: .sequence),
+                  let project = try? container.decode(
+                      OrchestrationProject.self,
+                      forKey: .project
+                  ) else {
+                self = .refreshRequired
+                return
+            }
             self = .projectUpserted(
-                sequence: try container.decode(Int.self, forKey: .sequence),
-                project: try container.decode(OrchestrationProject.self, forKey: .project)
+                sequence: sequence,
+                project: project
             )
         case "project-removed":
+            guard let sequence = try? container.decode(Int.self, forKey: .sequence),
+                  let projectID = try? container.decode(String.self, forKey: .projectId) else {
+                self = .refreshRequired
+                return
+            }
             self = .projectRemoved(
-                sequence: try container.decode(Int.self, forKey: .sequence),
-                projectID: try container.decode(String.self, forKey: .projectId)
+                sequence: sequence,
+                projectID: projectID
             )
         case "thread-upserted":
+            guard let sequence = try? container.decode(Int.self, forKey: .sequence),
+                  let thread = try? container.decode(
+                      OrchestrationThreadShell.self,
+                      forKey: .thread
+                  ) else {
+                self = .refreshRequired
+                return
+            }
             self = .threadUpserted(
-                sequence: try container.decode(Int.self, forKey: .sequence),
-                thread: try container.decode(OrchestrationThreadShell.self, forKey: .thread)
+                sequence: sequence,
+                thread: thread
             )
         case "thread-removed":
+            guard let sequence = try? container.decode(Int.self, forKey: .sequence),
+                  let threadID = try? container.decode(String.self, forKey: .threadId) else {
+                self = .refreshRequired
+                return
+            }
             self = .threadRemoved(
-                sequence: try container.decode(Int.self, forKey: .sequence),
-                threadID: try container.decode(String.self, forKey: .threadId)
+                sequence: sequence,
+                threadID: threadID
             )
         default:
-            throw DecodingError.dataCorruptedError(
-                forKey: .kind,
-                in: container,
-                debugDescription: "Unknown shell stream item \(kind)"
-            )
+            self = .refreshRequired
         }
     }
 }
@@ -529,17 +596,21 @@ public enum ThreadStreamItem: Decodable, Sendable {
         case "synchronized":
             self = .synchronized
         case "snapshot":
-            self = .snapshot(
-                try container.decode(OrchestrationThreadDetailSnapshot.self, forKey: .snapshot)
-            )
+            guard let snapshot = try? container.decode(
+                OrchestrationThreadDetailSnapshot.self,
+                forKey: .snapshot
+            ) else {
+                self = .event(.null)
+                return
+            }
+            self = .snapshot(snapshot)
         case "event":
-            self = .event(try container.decode(JSONValue.self, forKey: .event))
+            self = .event((try? container.decode(JSONValue.self, forKey: .event)) ?? .null)
         default:
-            throw DecodingError.dataCorruptedError(
-                forKey: .kind,
-                in: container,
-                debugDescription: "Unknown thread stream item \(kind)"
-            )
+            // The detail reducer already treats an unrecognized event as an
+            // authoritative-refresh request. Reuse that path without adding a
+            // second stream state or terminating the subscription.
+            self = .event(.null)
         }
     }
 }

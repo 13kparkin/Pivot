@@ -5,6 +5,9 @@ import Foundation
 @MainActor
 public protocol FeatureClient: AnyObject {
     func initialSnapshot() async throws -> FeatureSnapshot
+    /// Performs one bounded refresh without starting long-lived subscriptions.
+    /// Background tasks use this instead of the foreground bootstrap path.
+    func backgroundSnapshot() async throws -> FeatureSnapshot
     func events() -> AsyncStream<FeatureEvent>
 
     func pair(endpoint: String, token: String?) async throws
@@ -124,6 +127,10 @@ public protocol FeatureClient: AnyObject {
 }
 
 public extension FeatureClient {
+    func backgroundSnapshot() async throws -> FeatureSnapshot {
+        try await initialSnapshot()
+    }
+
     func loadEarlierThreadTurns(id _: String) async throws -> FeatureThreadDetail? {
         nil
     }

@@ -1,4 +1,5 @@
 import Foundation
+import OSLog
 
 public protocol WebSocketConnection: Sendable {
     func send(_ data: Data) async throws
@@ -152,6 +153,11 @@ private struct RPCResponseEnvelope: Decodable, Sendable {
 public actor WebSocketRPCClient {
     public typealias EndpointProvider = @Sendable () async throws -> URL
 
+    private static let logger = Logger(
+        subsystem: "com.t3tools.t3code",
+        category: "WebSocketRPC"
+    )
+
     private struct UnaryRequest {
         let envelope: RPCRequestEnvelope
         var sent: Bool
@@ -230,12 +236,18 @@ public actor WebSocketRPCClient {
             guard let value else { return false }
             return await value.sendKeepalive(expectedConnectionID: connectionID)
         }
+
+        func reconnectDelay(failureCount: Int, loopID: UUID) async -> Duration? {
+            guard let value else { return nil }
+            return await value.reconnectDelay(failureCount: failureCount, loopID: loopID)
+        }
     }
 
     private let connector: any WebSocketConnecting
     private let endpointProvider: EndpointProvider
     private let connectionWaitTimeout: Duration
     private let responseTimeout: Duration
+    private let reconnectBackoff: @Sendable (Int) -> Duration
     private var connection: (any WebSocketConnection)?
     private var connectionID: UUID?
     private var loopTask: Task<Void, Never>?
@@ -251,11 +263,18 @@ public actor WebSocketRPCClient {
         connector: any WebSocketConnecting = URLSessionWebSocketConnector(),
         connectionWaitTimeout: Duration = .seconds(4),
         responseTimeout: Duration = .seconds(30),
+        reconnectBackoff: @escaping @Sendable (Int) -> Duration = { failureCount in
+            // Jitter desynchronizes reconnects across environments so a
+            // server restart doesn't trigger simultaneous ticket mints.
+            let backoff = min(5.0, 0.35 * pow(1.7, Double(failureCount - 1)))
+            return .seconds(backoff * Double.random(in: 0.5...1.0))
+        },
         endpointProvider: @escaping EndpointProvider
     ) {
         self.connector = connector
         self.connectionWaitTimeout = connectionWaitTimeout
         self.responseTimeout = responseTimeout
+        self.reconnectBackoff = reconnectBackoff
         self.endpointProvider = endpointProvider
     }
 
@@ -411,7 +430,7 @@ public actor WebSocketRPCClient {
                     throw RPCError.disconnected
                 }
                 openedID = id
-                retry = 0
+                logger.info("WebSocket connection installed")
                 try await withTaskCancellationHandler {
                     while await owner.ownsConnection(loopID: loopID, connectionID: id),
                           !Task.isCancelled {
@@ -419,6 +438,10 @@ public actor WebSocketRPCClient {
                         guard try await owner.handle(data, connectionID: id) else {
                             throw RPCError.disconnected
                         }
+                        // URLSession's `resume()` does not expose a completed
+                        // WebSocket handshake. A valid inbound frame is the
+                        // first proof that the connection is actually usable.
+                        retry = 0
                     }
                 } onCancel: {
                     Task { await opened.close() }
@@ -428,6 +451,9 @@ public actor WebSocketRPCClient {
                 }
                 guard await owner.isCurrentConnectionLoop(loopID), !Task.isCancelled else { break }
             } catch {
+                logger.warning(
+                    "WebSocket connection failed: \(String(describing: error), privacy: .private)"
+                )
                 if let openedID {
                     if !(await owner.disconnected(connectionID: openedID)) {
                         await openedConnection?.close()
@@ -437,11 +463,11 @@ public actor WebSocketRPCClient {
                 }
                 guard await owner.isCurrentConnectionLoop(loopID), !Task.isCancelled else { break }
                 retry += 1
-                // Jitter desynchronizes reconnects across environments so a
-                // server restart doesn't trigger simultaneous ticket mints.
-                let backoff = min(5.0, 0.35 * pow(1.7, Double(retry - 1)))
-                let delay = backoff * Double.random(in: 0.5...1.0)
-                try? await Task.sleep(for: .seconds(delay))
+                guard let delay = await owner.reconnectDelay(
+                    failureCount: retry,
+                    loopID: loopID
+                ) else { break }
+                try? await Task.sleep(for: delay)
             }
         }
         await owner.finishConnectionLoop(loopID)
@@ -450,6 +476,11 @@ public actor WebSocketRPCClient {
     private func connectionAttempt(loopID: UUID) -> ConnectionAttempt? {
         guard isCurrentConnectionLoop(loopID) else { return nil }
         return ConnectionAttempt(connector: connector, endpointProvider: endpointProvider)
+    }
+
+    private func reconnectDelay(failureCount: Int, loopID: UUID) -> Duration? {
+        guard isCurrentConnectionLoop(loopID) else { return nil }
+        return reconnectBackoff(failureCount)
     }
 
     private func installConnection(
@@ -510,6 +541,7 @@ public actor WebSocketRPCClient {
         keepaliveTask = nil
         connection = nil
         connectionID = nil
+        Self.logger.info("WebSocket connection closed")
         failUnary(RPCError.disconnected, includingUnsent: false)
         subscriptionByRequestID.removeAll()
         let oneShotSubscriptions = subscriptions.filter { !$0.value.reconnect }
@@ -591,7 +623,8 @@ public actor WebSocketRPCClient {
     private func sendSubscription(_ subscriptionID: UUID) async {
         guard let connection,
               let connectionID,
-              var subscription = subscriptions[subscriptionID] else { return }
+              var subscription = subscriptions[subscriptionID],
+              subscription.requestID == nil else { return }
         let requestID = allocateRequestID()
         let envelope = RPCRequestEnvelope(
             id: requestID,

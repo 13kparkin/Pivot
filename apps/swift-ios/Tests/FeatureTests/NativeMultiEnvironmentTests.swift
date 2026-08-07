@@ -147,6 +147,24 @@ final class NativeMultiEnvironmentTests: XCTestCase {
         await fixture.client.disconnect()
     }
 
+    func testBackgroundSnapshotDoesNotStartAggregateRefreshLoops() async throws {
+        let loader = CountingAggregateEnvironmentLoader()
+        let fixture = try await makeFixture(
+            aggregateEnvironmentLoader: { runtime in
+                await loader.recordLoad()
+                return try await runtime.environments()
+            }
+        )
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+
+        let snapshot = try await fixture.client.backgroundSnapshot()
+
+        XCTAssertEqual(snapshot.connection.state, .connected)
+        let aggregateLoadCount = await loader.callCount
+        XCTAssertEqual(aggregateLoadCount, 0)
+        await fixture.client.disconnect()
+    }
+
     func testAggregateRefreshRetriesTransientEnvironmentLoadFailures() async throws {
         let retryObserved = expectation(description: "aggregate refresh retried")
         let loader = FailOnceAggregateEnvironmentLoader(retryObserved: retryObserved)
@@ -421,6 +439,14 @@ private actor FailOnceAggregateEnvironmentLoader {
         }
         retryObserved.fulfill()
         return try await runtime.environments()
+    }
+}
+
+private actor CountingAggregateEnvironmentLoader {
+    private(set) var callCount = 0
+
+    func recordLoad() {
+        callCount += 1
     }
 }
 

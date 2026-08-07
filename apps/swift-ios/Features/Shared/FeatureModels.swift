@@ -145,7 +145,10 @@ public struct FeatureThread: Identifiable, Sendable, Equatable, Hashable, Codabl
     public var snoozedUntil: Date?
     public var snoozedAt: Date?
     public var pinnedAt: Date?
+    public var supportsSettlement: Bool?
+    public var supportsSnooze: Bool?
     public var supportsPinning: Bool?
+    public var supportsTitleRegeneration: Bool?
     public var attentionAt: Date?
     public var workingStartedAt: Date?
     public var latestTurnCompletedAt: Date?
@@ -177,7 +180,10 @@ public struct FeatureThread: Identifiable, Sendable, Equatable, Hashable, Codabl
         snoozedUntil: Date? = nil,
         snoozedAt: Date? = nil,
         pinnedAt: Date? = nil,
+        supportsSettlement: Bool? = nil,
+        supportsSnooze: Bool? = nil,
         supportsPinning: Bool? = nil,
+        supportsTitleRegeneration: Bool? = nil,
         attentionAt: Date? = nil,
         workingStartedAt: Date? = nil,
         latestTurnCompletedAt: Date? = nil,
@@ -208,7 +214,10 @@ public struct FeatureThread: Identifiable, Sendable, Equatable, Hashable, Codabl
         self.snoozedUntil = snoozedUntil
         self.snoozedAt = snoozedAt
         self.pinnedAt = pinnedAt
+        self.supportsSettlement = supportsSettlement
+        self.supportsSnooze = supportsSnooze
         self.supportsPinning = supportsPinning
+        self.supportsTitleRegeneration = supportsTitleRegeneration
         self.attentionAt = attentionAt
         self.workingStartedAt = workingStartedAt
         self.latestTurnCompletedAt = latestTurnCompletedAt
@@ -220,6 +229,14 @@ public struct FeatureThread: Identifiable, Sendable, Equatable, Hashable, Codabl
     /// when their server supports pinning. Always keep an existing pin reversible.
     public var canTogglePin: Bool {
         pinnedAt != nil || supportsPinning != false
+    }
+
+    public var canToggleSettlement: Bool {
+        isSettled || supportsSettlement != false
+    }
+
+    public var canToggleSnooze: Bool {
+        snoozedUntil != nil || supportsSnooze != false
     }
 }
 

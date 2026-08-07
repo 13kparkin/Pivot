@@ -11,6 +11,7 @@ extension Notification.Name {
 enum PlatformAgentAwarenessProjection {
     static let terminalVisibilityWindow: TimeInterval = 15 * 60
     static let maximumRows = 5
+    static let minimumPersistenceInterval: TimeInterval = 30
 
     static func aggregate(
         snapshot: FeatureSnapshot,
@@ -182,9 +183,11 @@ final class PlatformAgentAwarenessCoordinator {
     }
 
     private var activityUpdateTask: Task<Void, Never>?
+    private var widgetUpdateTask: Task<Void, Never>?
     private var lastSignature: Signature?
     private var inFlightSignature: Signature?
     private var synchronizationGeneration = 0
+    private var widgetGeneration = 0
 
     init(
         updateLiveActivity: @escaping @MainActor (
@@ -215,7 +218,17 @@ final class PlatformAgentAwarenessCoordinator {
         let signature = Signature(
             activeCount: aggregate.activeCount,
             subtitle: aggregate.subtitle,
-            rows: aggregate.activities,
+            // `updatedAt` advances throughout a turn without changing visible
+            // state. Bucket it so long work still refreshes ActivityKit's stale
+            // date without writing widget state for every shell delta.
+            rows: aggregate.activities.map { row in
+                var row = row
+                let bucket = floor(
+                    now.timeIntervalSince1970 / PlatformAgentAwarenessProjection.minimumPersistenceInterval
+                ) * PlatformAgentAwarenessProjection.minimumPersistenceInterval
+                row.updatedAt = Date(timeIntervalSince1970: bucket).ISO8601Format()
+                return row
+            },
             enabled: liveActivitiesEnabled
         )
         let synchronization = Synchronization(
@@ -239,8 +252,7 @@ final class PlatformAgentAwarenessCoordinator {
             updatedAt: aggregate.updatedAt,
             tasks: aggregate.activities
         )
-        try? T3TaskWidgetSnapshotStore.save(widgetSnapshot)
-        WidgetCenter.shared.reloadTimelines(ofKind: "T3RecentTasksWidget")
+        scheduleWidgetUpdate(widgetSnapshot)
 
         schedule(synchronization)
     }
@@ -253,8 +265,7 @@ final class PlatformAgentAwarenessCoordinator {
         let generation = synchronizationGeneration
         lastSignature = nil
         inFlightSignature = nil
-        try? T3TaskWidgetSnapshotStore.save(.empty)
-        WidgetCenter.shared.reloadTimelines(ofKind: "T3RecentTasksWidget")
+        scheduleWidgetUpdate(.empty)
         activityUpdateTask = Task { @MainActor [weak self] in
             guard let self else { return }
             await endLiveActivities()
@@ -290,6 +301,21 @@ final class PlatformAgentAwarenessCoordinator {
                 inFlightSignature = nil
                 activityUpdateTask = nil
             }
+        }
+    }
+
+    private func scheduleWidgetUpdate(_ snapshot: T3TaskWidgetSnapshot) {
+        widgetUpdateTask?.cancel()
+        widgetGeneration &+= 1
+        let generation = widgetGeneration
+        widgetUpdateTask = Task { @MainActor [weak self] in
+            let saved = await PlatformWidgetSnapshotWriter.shared.save(
+                snapshot,
+                generation: generation
+            )
+            guard let self, saved, widgetGeneration == generation else { return }
+            WidgetCenter.shared.reloadTimelines(ofKind: "T3RecentTasksWidget")
+            widgetUpdateTask = nil
         }
     }
 
@@ -353,5 +379,22 @@ final class PlatformAgentAwarenessCoordinator {
 
     private static func notifyActivityChanged() {
         NotificationCenter.default.post(name: .platformLiveActivityChanged, object: nil)
+    }
+}
+
+private actor PlatformWidgetSnapshotWriter {
+    static let shared = PlatformWidgetSnapshotWriter()
+
+    private var latestGeneration = 0
+
+    func save(_ snapshot: T3TaskWidgetSnapshot, generation: Int) -> Bool {
+        guard generation >= latestGeneration else { return false }
+        latestGeneration = generation
+        do {
+            try T3TaskWidgetSnapshotStore.save(snapshot)
+            return true
+        } catch {
+            return false
+        }
     }
 }

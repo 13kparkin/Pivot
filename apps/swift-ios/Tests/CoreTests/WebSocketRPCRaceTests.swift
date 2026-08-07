@@ -338,6 +338,222 @@ final class WebSocketRPCRaceTests: XCTestCase {
         await connection.releaseRequest()
         await client.stop()
     }
+
+    func testConnectionSetupAndSubscribeRaceSendsOneWireRequest() async throws {
+        let connection = SetupSubscriptionRaceConnection()
+        let client = WebSocketRPCClient(
+            connector: SequencedConnector(connections: [connection]),
+            endpointProvider: { URL(string: "wss://studio.example/ws")! }
+        )
+
+        let request = Task {
+            try await client.request("server.setupBarrier", as: JSONValue.self)
+        }
+        await connection.waitUntilUnarySendSuspends()
+
+        let stream = await client.subscribe("thread.events", as: JSONValue.self)
+        await connection.waitUntilSubscriptionSendSuspends()
+        await connection.releaseUnarySend()
+        _ = try await request.value
+
+        let subscriptionRequestCount = await connection.subscriptionRequestCount()
+        XCTAssertEqual(
+            subscriptionRequestCount,
+            1,
+            "Connection setup and subscribe() must not both own the same subscription send."
+        )
+        _ = stream
+        await connection.releaseSubscriptionSend()
+        await client.stop()
+    }
+
+    func testReconnectBackoffResetsOnlyAfterValidInboundTraffic() async {
+        let connector = BackoffSequenceConnector()
+        let recorder = BackoffRecorder()
+        let client = WebSocketRPCClient(
+            connector: connector,
+            reconnectBackoff: { failureCount in
+                recorder.record(failureCount)
+                return .zero
+            },
+            endpointProvider: { URL(string: "wss://studio.example/ws")! }
+        )
+
+        await client.start()
+        await connector.waitUntilAttemptCount(4)
+
+        XCTAssertEqual(
+            recorder.values,
+            [1, 2, 1],
+            "Merely opening a socket must not reset backoff; a decoded server frame should."
+        )
+        await client.stop()
+    }
+}
+
+private final class BackoffRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var recorded: [Int] = []
+
+    var values: [Int] {
+        lock.withLock { recorded }
+    }
+
+    func record(_ value: Int) {
+        lock.withLock { recorded.append(value) }
+    }
+}
+
+private actor BackoffSequenceConnector: WebSocketConnecting {
+    private let provenConnection = PongThenFailConnection()
+    private let finalConnection = BlockingReceiveConnection()
+    private var attemptCount = 0
+    private var waiters: [(Int, CheckedContinuation<Void, Never>)] = []
+
+    func connect(to _: URL) throws -> any WebSocketConnection {
+        attemptCount += 1
+        let ready = waiters.filter { attemptCount >= $0.0 }
+        waiters.removeAll { attemptCount >= $0.0 }
+        ready.forEach { $0.1.resume() }
+        switch attemptCount {
+        case 1, 2:
+            throw URLError(.cannotConnectToHost)
+        case 3:
+            return provenConnection
+        default:
+            return finalConnection
+        }
+    }
+
+    func waitUntilAttemptCount(_ count: Int) async {
+        guard attemptCount < count else { return }
+        await withCheckedContinuation { continuation in
+            waiters.append((count, continuation))
+        }
+    }
+}
+
+private actor PongThenFailConnection: WebSocketConnection {
+    private var sentPong = false
+
+    func send(_: Data) {}
+
+    func receive() throws -> Data {
+        guard !sentPong else { throw URLError(.networkConnectionLost) }
+        sentPong = true
+        return try JSONEncoder.t3.encode(JSONValue.object(["_tag": .string("Pong")]))
+    }
+
+    func close() {}
+}
+
+private actor BlockingReceiveConnection: WebSocketConnection {
+    private var continuation: CheckedContinuation<Data, Error>?
+
+    func send(_: Data) {}
+
+    func receive() async throws -> Data {
+        try await withCheckedThrowingContinuation { continuation in
+            self.continuation = continuation
+        }
+    }
+
+    func close() {
+        continuation?.resume(throwing: CancellationError())
+        continuation = nil
+    }
+}
+
+private actor SetupSubscriptionRaceConnection: WebSocketConnection {
+    private var unaryRequestID: Int?
+    private var unarySendContinuation: CheckedContinuation<Void, Never>?
+    private var unaryWaiters: [CheckedContinuation<Void, Never>] = []
+    private var subscriptionSends = 0
+    private var subscriptionSendContinuation: CheckedContinuation<Void, Never>?
+    private var subscriptionWaiters: [CheckedContinuation<Void, Never>] = []
+    private var queuedResponses: [Data] = []
+    private var receiver: CheckedContinuation<Data, Error>?
+
+    func send(_ data: Data) async throws {
+        let envelope = try JSONDecoder.t3.decode(JSONValue.self, from: data)
+        guard envelope["_tag"]?.stringValue == "Request",
+              case let .number(rawID)? = envelope["id"],
+              let requestID = Int(exactly: rawID)
+        else { return }
+
+        if envelope["tag"]?.stringValue == "server.setupBarrier" {
+            unaryRequestID = requestID
+            let waiters = unaryWaiters
+            unaryWaiters.removeAll()
+            waiters.forEach { $0.resume() }
+            await withCheckedContinuation { unarySendContinuation = $0 }
+            enqueue(try success(requestID: requestID))
+        } else {
+            subscriptionSends += 1
+            let waiters = subscriptionWaiters
+            subscriptionWaiters.removeAll()
+            waiters.forEach { $0.resume() }
+            await withCheckedContinuation { subscriptionSendContinuation = $0 }
+        }
+    }
+
+    func receive() async throws -> Data {
+        if !queuedResponses.isEmpty { return queuedResponses.removeFirst() }
+        return try await withCheckedThrowingContinuation { receiver = $0 }
+    }
+
+    func close() {
+        unarySendContinuation?.resume()
+        unarySendContinuation = nil
+        subscriptionSendContinuation?.resume()
+        subscriptionSendContinuation = nil
+        receiver?.resume(throwing: CancellationError())
+        receiver = nil
+    }
+
+    func waitUntilUnarySendSuspends() async {
+        guard unaryRequestID == nil else { return }
+        await withCheckedContinuation { unaryWaiters.append($0) }
+    }
+
+    func waitUntilSubscriptionSendSuspends() async {
+        guard subscriptionSends == 0 else { return }
+        await withCheckedContinuation { subscriptionWaiters.append($0) }
+    }
+
+    func releaseUnarySend() {
+        unarySendContinuation?.resume()
+        unarySendContinuation = nil
+    }
+
+    func releaseSubscriptionSend() {
+        subscriptionSendContinuation?.resume()
+        subscriptionSendContinuation = nil
+    }
+
+    func subscriptionRequestCount() -> Int { subscriptionSends }
+
+    private func enqueue(_ data: Data) {
+        if let receiver {
+            self.receiver = nil
+            receiver.resume(returning: data)
+        } else {
+            queuedResponses.append(data)
+        }
+    }
+
+    private func success(requestID: Int) throws -> Data {
+        try JSONEncoder.t3.encode(
+            JSONValue.object([
+                "_tag": .string("Exit"),
+                "requestId": .number(Double(requestID)),
+                "exit": .object([
+                    "_tag": .string("Success"),
+                    "value": .object([:]),
+                ]),
+            ])
+        )
+    }
 }
 
 private actor RequestCancellationGate {

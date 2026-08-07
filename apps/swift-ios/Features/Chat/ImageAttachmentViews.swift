@@ -1,5 +1,6 @@
 import ImageIO
 import PhotosUI
+import OSLog
 import SwiftUI
 import UniformTypeIdentifiers
 import UIKit
@@ -95,6 +96,10 @@ struct FeatureImageAttachmentPicker: View {
                 onSelect: { images in
                     isPhotoLibraryPresented = false
                     loadPhotoSelections(images)
+                },
+                onFailure: { message in
+                    isPhotoLibraryPresented = false
+                    errorMessage = message
                 },
                 onCancel: { isPhotoLibraryPresented = false }
             )
@@ -273,10 +278,11 @@ struct FeaturePhotoLibraryItem: @unchecked Sendable {
 private struct FeaturePhotoLibraryPicker: UIViewControllerRepresentable {
     let maximumCount: Int
     let onSelect: ([Data]) -> Void
+    let onFailure: (String) -> Void
     let onCancel: () -> Void
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(onSelect: onSelect, onCancel: onCancel)
+        Coordinator(onSelect: onSelect, onFailure: onFailure, onCancel: onCancel)
     }
 
     func makeUIViewController(context: Context) -> PHPickerViewController {
@@ -295,14 +301,17 @@ private struct FeaturePhotoLibraryPicker: UIViewControllerRepresentable {
 
     final class Coordinator: NSObject, PHPickerViewControllerDelegate {
         private let onSelect: ([Data]) -> Void
+        private let onFailure: (String) -> Void
         private let onCancel: () -> Void
         private var didFinish = false
 
         init(
             onSelect: @escaping ([Data]) -> Void,
+            onFailure: @escaping (String) -> Void,
             onCancel: @escaping () -> Void
         ) {
             self.onSelect = onSelect
+            self.onFailure = onFailure
             self.onCancel = onCancel
         }
 
@@ -334,14 +343,30 @@ private struct FeaturePhotoLibraryPicker: UIViewControllerRepresentable {
             let items = results.map { FeaturePhotoLibraryItem(provider: $0.itemProvider) }
             Task { @MainActor in
                 var images: [Data] = []
+                var firstError: Error?
                 for item in items {
-                    if let data = try? await item.loadData() {
+                    do {
+                        let data = try await item.loadData()
                         images.append(data)
+                    } catch {
+                        firstError = firstError ?? error
+                        Self.logger.error(
+                            "Photo selection materialization failed: \(error.localizedDescription, privacy: .private)"
+                        )
                     }
                 }
-                onSelect(images)
+                if images.isEmpty, let firstError {
+                    onFailure(firstError.localizedDescription)
+                } else {
+                    onSelect(images)
+                }
             }
         }
+
+        private static let logger = Logger(
+            subsystem: Bundle.main.bundleIdentifier ?? "codes.t3.swift-ios",
+            category: "Attachments"
+        )
     }
 }
 

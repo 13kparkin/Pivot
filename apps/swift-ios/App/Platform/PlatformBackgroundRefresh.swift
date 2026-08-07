@@ -49,14 +49,40 @@ final class PlatformBackgroundRefreshCoordinator {
             return
         }
 
+        // Install cancellation before creating the operation. If expiration
+        // wins the race, `install` immediately cancels the new task.
+        let cancellation = PlatformBackgroundRefreshCancellation()
+        task.expirationHandler = {
+            cancellation.cancel()
+        }
         let operation = Task { @MainActor in
             await refreshAction()
         }
-        task.expirationHandler = {
-            operation.cancel()
-        }
+        cancellation.install(operation)
         let succeeded = await operation.value
         task.setTaskCompleted(success: succeeded && !operation.isCancelled)
+    }
+}
+
+private final class PlatformBackgroundRefreshCancellation: @unchecked Sendable {
+    private let lock = NSLock()
+    private var operation: Task<Bool, Never>?
+    private var didExpire = false
+
+    func install(_ operation: Task<Bool, Never>) {
+        let shouldCancel = lock.withLock {
+            self.operation = operation
+            return didExpire
+        }
+        if shouldCancel { operation.cancel() }
+    }
+
+    func cancel() {
+        let operation = lock.withLock {
+            didExpire = true
+            return self.operation
+        }
+        operation?.cancel()
     }
 }
 

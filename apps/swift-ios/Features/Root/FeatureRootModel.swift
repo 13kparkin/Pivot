@@ -15,6 +15,8 @@ struct FeatureDetailRenderUpdate: Equatable {
 @MainActor
 @Observable
 public final class FeatureRootModel {
+    private static let maximumRetainedThreadDetails = 6
+
     public private(set) var snapshot = FeatureSnapshot()
     public private(set) var details: [String: FeatureThreadDetail] = [:]
     /// Advances whenever a Home presentation input changes.
@@ -37,6 +39,7 @@ public final class FeatureRootModel {
     private var pendingThreadsByID: [String: FeatureThread] = [:]
     private var pendingCompletionSubmissionIDs: Set<String> = []
     private var pendingDiscardSubmissionIDs: Set<String> = []
+    private var detailRecency: [String] = []
     private var outboxDrainTask: Task<Void, Never>?
     private var outboxRetryAttempt = 0
     private var outboxGeneration: UInt64 = 0
@@ -73,6 +76,20 @@ public final class FeatureRootModel {
             if !Self.isBenignCancellation(error) {
                 errorMessage = error.localizedDescription
             }
+        }
+    }
+
+    /// Background refresh is deliberately separate from `reload()`: native
+    /// clients must not mount WebSocket streams or timers for a bounded BG task.
+    public func refreshInBackground() async -> Bool {
+        do {
+            install(try await client.backgroundSnapshot())
+            return !Task.isCancelled
+        } catch {
+            if !Self.isBenignCancellation(error) {
+                errorMessage = error.localizedDescription
+            }
+            return false
         }
     }
 
@@ -383,6 +400,8 @@ public final class FeatureRootModel {
     /// Ends any selected-thread transport work when its detail view closes.
     public func releaseThread(_ id: String) {
         client.releaseThread(id: id)
+        markDetailRecentlyUsed(id)
+        evictOldThreadDetailsIfNeeded()
     }
 
     public func sendMessage(threadID: String, text: String, selection: FeatureSelection?) async -> Bool {
@@ -703,6 +722,7 @@ public final class FeatureRootModel {
         } ?? prepared
         guard details[id] != next else { return }
         details[id] = next
+        markDetailRecentlyUsed(id)
         bumpDetailRevision(id: id, change: .full)
     }
 
@@ -712,6 +732,7 @@ public final class FeatureRootModel {
         acknowledgeDeliveredMessages(incoming.messages)
         let next = addingPendingMessages(to: incoming)
         details[id] = next
+        markDetailRecentlyUsed(id)
         let appended = next.messages.dropFirst(incoming.messages.count).map(\.id)
         let pendingDelta = FeatureDetailDelta(
             changedMessages: delta.changedMessages + next.messages.dropFirst(incoming.messages.count),
@@ -730,20 +751,37 @@ public final class FeatureRootModel {
         mutation(&detail)
         guard detail != previous else { return }
         details[id] = detail
+        markDetailRecentlyUsed(id)
         bumpDetailRevision(id: id, change: change)
     }
 
     private func removeDetail(id: String) {
         guard details.removeValue(forKey: id) != nil else { return }
+        detailRecency.removeAll { $0 == id }
         bumpDetailRevision(id: id, change: .full)
     }
 
     private func clearDetails() {
         guard !details.isEmpty else { return }
         details.removeAll()
+        detailRecency.removeAll()
         detailRevision &+= 1
         detailRevisions.removeAll()
         detailRenderUpdates.removeAll()
+    }
+
+    private func markDetailRecentlyUsed(_ id: String) {
+        detailRecency.removeAll { $0 == id }
+        detailRecency.append(id)
+    }
+
+    private func evictOldThreadDetailsIfNeeded() {
+        let protected = Set(pendingSubmissionsByID.values.map(\.threadID))
+        while details.count > Self.maximumRetainedThreadDetails,
+              let candidate = detailRecency.first(where: { !protected.contains($0) }) {
+            detailRecency.removeAll { $0 == candidate }
+            removeDetail(id: candidate)
+        }
     }
 
     private func bumpDetailRevision(id: String, change: FeatureDetailRenderChange) {

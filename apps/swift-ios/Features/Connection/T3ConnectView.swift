@@ -9,6 +9,7 @@ public struct T3ConnectView: View {
     @State private var didFinishInitialRefresh = false
     private let connectEnvironment:
         @MainActor (T3ConnectManagedEnvironmentCredential) async throws -> Void
+    private let signOut: @MainActor () async -> Void
     private let onConnected: @MainActor () async -> Void
 
     public init(
@@ -17,6 +18,7 @@ public struct T3ConnectView: View {
     ) {
         controller = capability.t3ConnectController
         connectEnvironment = capability.connectT3Environment
+        signOut = capability.signOutT3Connect
         self.onConnected = onConnected
     }
 
@@ -28,7 +30,7 @@ public struct T3ConnectView: View {
                 if controller.account != nil {
                     ToolbarItem(placement: .topBarTrailing) {
                         Button("Sign out", role: .destructive) {
-                            Task { await controller.signOut() }
+                            Task { await signOut() }
                         }
                         .disabled(controller.isRefreshing)
                     }

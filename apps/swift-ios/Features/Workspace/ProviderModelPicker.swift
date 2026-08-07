@@ -7,6 +7,7 @@ public struct ProviderModelPicker: View {
     }
 
     let providers: [FeatureProvider]
+    private let normalizedProviders: [FeatureProvider]
     @Binding var selection: FeatureSelection?
     let style: Style
     let isLoading: Bool
@@ -24,6 +25,7 @@ public struct ProviderModelPicker: View {
         materializesDefaultSelection: Bool = true
     ) {
         self.providers = providers
+        normalizedProviders = ProviderModelCatalogNormalizer.normalized(providers)
         _selection = selection
         self.style = style
         self.isLoading = isLoading
@@ -122,10 +124,6 @@ public struct ProviderModelPicker: View {
         selection = resolved
     }
 
-    private var normalizedProviders: [FeatureProvider] {
-        ProviderModelCatalogNormalizer.normalized(providers)
-    }
-
     private var selectionLabel: String {
         guard let selectedOption else {
             return "Choose model"
@@ -179,6 +177,7 @@ private struct ModelPickerSheet: View {
     @State private var query = ""
     @State private var configuring: DailyUXModelOption?
     @State private var legacyModelsExpanded = false
+    @State private var catalogCache = ModelPickerCatalogCache()
 
     var body: some View {
         NavigationStack {
@@ -230,7 +229,9 @@ private struct ModelPickerSheet: View {
     }
 
     private var modelList: some View {
-        List {
+        let catalog = cachedCatalog
+        let sections = ProviderModelDisplaySections(catalog: catalog)
+        return List {
             if modelChangesAreLocked {
                 Section {
                     Label(
@@ -242,23 +243,23 @@ private struct ModelPickerSheet: View {
                 }
             }
 
-            if !displaySections.favorites.isEmpty {
+            if !sections.favorites.isEmpty {
                 Section("Favorites") {
-                    ForEach(displaySections.favorites) { option in
+                    ForEach(sections.favorites) { option in
                         modelRow(option)
                     }
                 }
             }
 
-            if !displaySections.recents.isEmpty {
+            if !sections.recents.isEmpty {
                 Section("Recent") {
-                    ForEach(displaySections.recents) { option in
+                    ForEach(sections.recents) { option in
                         modelRow(option)
                     }
                 }
             }
 
-            ForEach(displaySections.currentProviderGroups, id: \.provider.id) { group in
+            ForEach(sections.currentProviderGroups, id: \.provider.id) { group in
                 Section(group.provider.name) {
                     ForEach(group.models) { option in
                         modelRow(option)
@@ -266,10 +267,10 @@ private struct ModelPickerSheet: View {
                 }
             }
 
-            if !displaySections.legacy.isEmpty {
+            if !sections.legacy.isEmpty {
                 Section {
                     DisclosureGroup(isExpanded: $legacyModelsExpanded) {
-                        ForEach(displaySections.legacy) { option in
+                        ForEach(sections.legacy) { option in
                             modelRow(option)
                         }
                     } label: {
@@ -277,7 +278,7 @@ private struct ModelPickerSheet: View {
                             Text("Legacy models")
                                 .font(T3Typography.control.weight(.semibold))
                             Spacer()
-                            Text("\(displaySections.legacy.count)")
+                            Text("\(sections.legacy.count)")
                                 .font(T3Typography.supporting.monospacedDigit())
                                 .foregroundStyle(T3Colors.textTertiary)
                         }
@@ -352,17 +353,17 @@ private struct ModelPickerSheet: View {
         recentStorage.split(separator: "\n").map(String.init)
     }
 
-    private var catalog: DailyUXModelCatalog {
-        DailyUXModelCatalog(
+    private var cachedCatalog: DailyUXModelCatalog {
+        catalogCache.catalog(
             providers: providers,
             query: query,
-            favoriteIDs: favoriteIDs,
-            recentIDs: recentIDs
+            favoriteStorage: favoriteStorage,
+            recentStorage: recentStorage
         )
     }
 
     private var displaySections: ProviderModelDisplaySections {
-        ProviderModelDisplaySections(catalog: catalog)
+        ProviderModelDisplaySections(catalog: cachedCatalog)
     }
 
     private var resolvedSelection: FeatureSelection? {
@@ -425,6 +426,47 @@ private struct ModelPickerSheet: View {
             next.insert(id)
         }
         favoriteStorage = next.sorted().joined(separator: "\n")
+    }
+}
+
+/// SwiftUI computed properties are ordinary function calls. The picker reads
+/// its catalog throughout one body evaluation and invalidates on every search
+/// keystroke, so retain the last derivation by its real inputs.
+@MainActor
+private final class ModelPickerCatalogCache {
+    private struct Key: Equatable {
+        let providers: [FeatureProvider]
+        let query: String
+        let favoriteStorage: String
+        let recentStorage: String
+    }
+
+    private var key: Key?
+    private var value: DailyUXModelCatalog?
+
+    func catalog(
+        providers: [FeatureProvider],
+        query: String,
+        favoriteStorage: String,
+        recentStorage: String
+    ) -> DailyUXModelCatalog {
+        let key = Key(
+            providers: providers,
+            query: query,
+            favoriteStorage: favoriteStorage,
+            recentStorage: recentStorage
+        )
+        if self.key == key, let value { return value }
+
+        let value = DailyUXModelCatalog(
+            providers: providers,
+            query: query,
+            favoriteIDs: Set(favoriteStorage.split(separator: "\n").map(String.init)),
+            recentIDs: recentStorage.split(separator: "\n").map(String.init)
+        )
+        self.key = key
+        self.value = value
+        return value
     }
 }
 
