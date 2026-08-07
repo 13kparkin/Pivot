@@ -61,6 +61,7 @@ public protocol FeatureClient: AnyObject {
     func deleteThread(id: String) async throws
 
     func loadThread(id: String) async throws -> FeatureThreadDetail
+    func loadEarlierThreadTurns(id: String) async throws -> FeatureThreadDetail?
     func releaseThread(id: String)
     func sendMessage(threadID: String, text: String, selection: FeatureSelection?) async throws
     func sendMessage(
@@ -113,6 +114,12 @@ public protocol FeatureClient: AnyObject {
     func writeTerminal(threadID: String, data: String) async throws
     func resizeTerminal(threadID: String, columns: Int, rows: Int) async throws
     func closeTerminal(threadID: String) async throws
+}
+
+public extension FeatureClient {
+    func loadEarlierThreadTurns(id _: String) async throws -> FeatureThreadDetail? {
+        nil
+    }
 }
 
 public extension FeatureClient {

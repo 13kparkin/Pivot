@@ -322,6 +322,11 @@ public struct ThreadDetailView: View {
                     renderUpdate: model.detailRenderUpdates[thread.id],
                     dynamicTypeSize: dynamicTypeSize,
                     isWorking: isWorking,
+                    canLoadEarlier: detail.page?.hasMore == true,
+                    isLoadingEarlier: detail.page?.isLoading == true,
+                    onLoadEarlier: {
+                        Task { await model.loadEarlierTurns(for: thread.id) }
+                    },
                     onDismissKeyboard: dismissKeyboard
                 )
             }
@@ -597,6 +602,7 @@ enum FeatureComposerDraftRestoration {
 /// while UIKit keeps offscreen messages out of the active view hierarchy.
 private struct FeatureTranscriptCollectionView: UIViewRepresentable {
     private static let workingIndicatorID = "__t3-working-indicator__"
+    private static let loadEarlierID = "__t3-load-earlier__"
 
     private enum Section: Hashable {
         case transcript
@@ -607,6 +613,9 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
     let renderUpdate: FeatureDetailRenderUpdate?
     let dynamicTypeSize: DynamicTypeSize
     let isWorking: Bool
+    let canLoadEarlier: Bool
+    let isLoadingEarlier: Bool
+    let onLoadEarlier: () -> Void
     let onDismissKeyboard: () -> Void
 
     func makeCoordinator() -> Coordinator {
@@ -636,6 +645,9 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
             renderUpdate: renderUpdate,
             dynamicTypeSize: dynamicTypeSize,
             isWorking: isWorking,
+            canLoadEarlier: canLoadEarlier,
+            isLoadingEarlier: isLoadingEarlier,
+            onLoadEarlier: onLoadEarlier,
             onDismissKeyboard: onDismissKeyboard,
             in: collectionView
         )
@@ -680,7 +692,10 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
         private var currentDetailRevision: UInt64?
         private var currentDynamicTypeSize: DynamicTypeSize?
         private var currentIsWorking = false
+        private var currentCanLoadEarlier = false
+        private var currentIsLoadingEarlier = false
         private var markdownPrefetches: [String: MarkdownPrefetch] = [:]
+        private var onLoadEarlier: (() -> Void)?
         private var onDismissKeyboard: (() -> Void)?
 
         deinit {
@@ -690,6 +705,18 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
         func connect(to collectionView: UICollectionView) {
             let registration = UICollectionView.CellRegistration<UICollectionViewCell, String> {
                 [weak self] cell, _, messageID in
+                if messageID == FeatureTranscriptCollectionView.loadEarlierID {
+                    cell.contentConfiguration = UIHostingConfiguration {
+                        FeatureLoadEarlierTurnsButton(
+                            isLoading: self?.currentIsLoadingEarlier == true,
+                            onLoad: { self?.onLoadEarlier?() }
+                        )
+                    }
+                    .margins(.all, 0)
+                    cell.backgroundConfiguration = UIBackgroundConfiguration.clear()
+                    cell.accessibilityIdentifier = "load-earlier-turns"
+                    return
+                }
                 if messageID == FeatureTranscriptCollectionView.workingIndicatorID {
                     cell.contentConfiguration = UIHostingConfiguration {
                         FeatureThreadWorkingIndicator()
@@ -732,17 +759,24 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
             renderUpdate: FeatureDetailRenderUpdate?,
             dynamicTypeSize: DynamicTypeSize,
             isWorking: Bool,
+            canLoadEarlier: Bool,
+            isLoadingEarlier: Bool,
+            onLoadEarlier: @escaping () -> Void,
             onDismissKeyboard: @escaping () -> Void,
             in collectionView: UICollectionView
         ) {
             guard let dataSource else { return }
+            self.onLoadEarlier = onLoadEarlier
             self.onDismissKeyboard = onDismissKeyboard
 
             let threadChanged = currentThreadID != threadID
             let typeSizeChanged = currentDynamicTypeSize != dynamicTypeSize
             let revisionChanged = currentDetailRevision != renderUpdate?.revision
             let workingChanged = currentIsWorking != isWorking
-            guard threadChanged || typeSizeChanged || revisionChanged || workingChanged else { return }
+            let loadEarlierChanged = currentCanLoadEarlier != canLoadEarlier
+                || currentIsLoadingEarlier != isLoadingEarlier
+            guard threadChanged || typeSizeChanged || revisionChanged || workingChanged
+                || loadEarlierChanged else { return }
 
             let incremental = !threadChanged
                 ? incrementalState(messages: messages, renderUpdate: renderUpdate)
@@ -757,7 +791,10 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
             currentDetailRevision = renderUpdate?.revision
             currentDynamicTypeSize = dynamicTypeSize
             currentIsWorking = isWorking
-            guard threadChanged || idsChanged || !changedIDs.isEmpty || workingChanged else { return }
+            currentCanLoadEarlier = canLoadEarlier
+            currentIsLoadingEarlier = isLoadingEarlier
+            guard threadChanged || idsChanged || !changedIDs.isEmpty || workingChanged
+                || loadEarlierChanged else { return }
 
             if threadChanged {
                 cancelAllMarkdownPrefetches()
@@ -773,6 +810,14 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
             let lastIDChanged = orderedIDs.last != newIDs.last || workingChanged
             let isInitialLoad = currentThreadID == nil || threadChanged
             let previousIDs = orderedIDs
+            let prependedMessages = !threadChanged
+                && newIDs.count > previousIDs.count
+                && Array(newIDs.suffix(previousIDs.count)) == previousIDs
+            let shouldFollowBottom = isInitialLoad || wasNearBottom
+            let prependAnchor = !shouldFollowBottom
+                && (prependedMessages || (loadEarlierChanged && !canLoadEarlier))
+                ? visibleAnchor(in: collectionView, dataSource: dataSource)
+                : nil
 
             currentThreadID = threadID
             if let replacementMessagesByID = state.replacementMessagesByID {
@@ -783,17 +828,33 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
                 isInitialLoad || wasNearBottom
 
             var snapshot: NSDiffableDataSourceSnapshot<Section, String>
-            if !threadChanged, !idsChanged {
+            if threadChanged || loadEarlierChanged {
+                snapshot = NSDiffableDataSourceSnapshot<Section, String>()
+                snapshot.appendSections([.transcript])
+                if canLoadEarlier {
+                    snapshot.appendItems(
+                        [FeatureTranscriptCollectionView.loadEarlierID],
+                        toSection: .transcript
+                    )
+                }
+                snapshot.appendItems(newIDs, toSection: .transcript)
+            } else if !idsChanged {
                 snapshot = dataSource.snapshot()
-            } else if !threadChanged, state.isAppendOnly {
+            } else if state.isAppendOnly {
                 snapshot = dataSource.snapshot()
                 snapshot.appendItems(state.appendedIDs, toSection: .transcript)
-            } else if !threadChanged, newIDs.starts(with: previousIDs) {
+            } else if newIDs.starts(with: previousIDs) {
                 snapshot = dataSource.snapshot()
                 snapshot.appendItems(Array(newIDs.dropFirst(previousIDs.count)), toSection: .transcript)
             } else {
                 snapshot = NSDiffableDataSourceSnapshot<Section, String>()
                 snapshot.appendSections([.transcript])
+                if canLoadEarlier {
+                    snapshot.appendItems(
+                        [FeatureTranscriptCollectionView.loadEarlierID],
+                        toSection: .transcript
+                    )
+                }
                 snapshot.appendItems(newIDs, toSection: .transcript)
             }
             if snapshot.indexOfItem(FeatureTranscriptCollectionView.workingIndicatorID) != nil {
@@ -806,19 +867,81 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
                 )
             }
             let appendedIDSet = Set(state.appendedIDs)
-            snapshot.reconfigureItems(changedIDs.filter { !appendedIDSet.contains($0) })
+            var reconfiguredIDs = changedIDs.filter { !appendedIDSet.contains($0) }
+            if loadEarlierChanged,
+               snapshot.indexOfItem(FeatureTranscriptCollectionView.loadEarlierID) != nil {
+                reconfiguredIDs.append(FeatureTranscriptCollectionView.loadEarlierID)
+            }
+            if !reconfiguredIDs.isEmpty {
+                snapshot.reconfigureItems(reconfiguredIDs)
+            }
 
-            let shouldFollowBottom = isInitialLoad || wasNearBottom
             dataSource.apply(snapshot, animatingDifferences: false) {
                 [weak self, weak collectionView] in
-                guard shouldFollowBottom, let self, let collectionView else { return }
+                guard let self, let collectionView else { return }
                 DispatchQueue.main.async {
-                    self.scrollToBottom(
-                        collectionView,
-                        animated: !isInitialLoad && lastIDChanged
-                    )
+                    if shouldFollowBottom {
+                        self.scrollToBottom(
+                            collectionView,
+                            animated: !isInitialLoad && lastIDChanged
+                        )
+                    } else if let prependAnchor {
+                        self.restore(prependAnchor, in: collectionView, dataSource: dataSource)
+                    }
                 }
             }
+        }
+
+        private struct VisibleAnchor {
+            let id: String
+            let offsetFromViewportTop: CGFloat
+        }
+
+        private func visibleAnchor(
+            in collectionView: UICollectionView,
+            dataSource: UICollectionViewDiffableDataSource<Section, String>
+        ) -> VisibleAnchor? {
+            for indexPath in collectionView.indexPathsForVisibleItems.sorted() {
+                guard let id = dataSource.itemIdentifier(for: indexPath),
+                      id != FeatureTranscriptCollectionView.loadEarlierID,
+                      id != FeatureTranscriptCollectionView.workingIndicatorID,
+                      let attributes = collectionView.layoutAttributesForItem(at: indexPath) else {
+                    continue
+                }
+                return VisibleAnchor(
+                    id: id,
+                    offsetFromViewportTop: attributes.frame.minY - collectionView.contentOffset.y
+                )
+            }
+            return nil
+        }
+
+        private func restore(
+            _ anchor: VisibleAnchor,
+            in collectionView: UICollectionView,
+            dataSource: UICollectionViewDiffableDataSource<Section, String>
+        ) {
+            collectionView.layoutIfNeeded()
+            guard let indexPath = dataSource.indexPath(for: anchor.id),
+                  let attributes = collectionView.layoutAttributesForItem(at: indexPath) else {
+                return
+            }
+            let minimumY = -collectionView.adjustedContentInset.top
+            let maximumY = max(
+                minimumY,
+                collectionView.contentSize.height
+                    - collectionView.bounds.height
+                    + collectionView.adjustedContentInset.bottom
+            )
+            let targetY = min(
+                maximumY,
+                max(minimumY, attributes.frame.minY - anchor.offsetFromViewportTop)
+            )
+            (collectionView as? BottomAnchoredTranscriptCollectionView)?.maintainsBottomAnchor = false
+            collectionView.setContentOffset(
+                CGPoint(x: collectionView.contentOffset.x, y: targetY),
+                animated: false
+            )
         }
 
         private struct MessageState {
@@ -1000,6 +1123,30 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
             }
             collectionView.maintainsBottomAnchor = isNearBottom(collectionView)
         }
+    }
+}
+
+private struct FeatureLoadEarlierTurnsButton: View {
+    let isLoading: Bool
+    let onLoad: () -> Void
+
+    var body: some View {
+        Button(action: onLoad) {
+            HStack(spacing: 7) {
+                if isLoading {
+                    Image(systemName: "ellipsis")
+                        .font(T3Typography.supporting.weight(.semibold))
+                }
+                Text(isLoading ? "Loading earlier turns…" : "Load earlier turns")
+                    .font(T3Typography.supporting)
+                    .foregroundStyle(T3Colors.textSecondary)
+            }
+            .frame(maxWidth: .infinity)
+            .frame(minHeight: T3Metrics.minimumTapTarget)
+        }
+        .buttonStyle(.plain)
+        .disabled(isLoading)
+        .accessibilityLabel(isLoading ? "Loading earlier turns" : "Load earlier turns")
     }
 }
 

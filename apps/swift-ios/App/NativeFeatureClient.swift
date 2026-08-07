@@ -16,6 +16,9 @@ extension FeatureInputAnswer {
 final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
     FeatureProjectCreationClient, FeatureWorkspaceAssetResolving, T3ConnectCapable
 {
+    private static let initialThreadUserTurnLimit = 10
+    private static let olderThreadPageUserTurnLimit = 20
+
     private let runtime: EnvironmentRuntime
     let t3ConnectController: T3ConnectController
     private let hasMatchingT3ConnectController: Bool
@@ -83,6 +86,9 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
     private var lastShellEventAt: Date?
     private var activeRawThread: OrchestrationThread?
     private var activeThreadSequence: Int?
+    private var activeThreadPage: FeatureThreadPage?
+    private var threadHistoryEpoch = 0
+    private var pendingOlderThreadPage: PendingOlderThreadPage?
 
     init(
         runtime: EnvironmentRuntime? = nil,
@@ -381,6 +387,9 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         activeThreadEnvironmentID = nil
         activeRawThread = nil
         activeThreadSequence = nil
+        activeThreadPage = nil
+        threadHistoryEpoch &+= 1
+        pendingOlderThreadPage = nil
         latestDetails.removeAll()
         detailRenderCaches.removeAll()
         attachmentURLs.removeAll()
@@ -1085,11 +1094,25 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         passiveDetailPollingTask = nil
         activeThreadID = route.uiID
         activeThreadEnvironmentID = environment.id
-        let snapshot = try await client.threadSnapshot(id: route.wireID)
+        threadHistoryEpoch &+= 1
+        pendingOlderThreadPage = nil
+        activeThreadPage = nil
+        let supportsPagination = serverConfigsByEnvironmentID[
+            environment.id
+        ]?.threadSnapshotPagination == true
+        let snapshot = try await client.threadSnapshot(
+            id: route.wireID,
+            turnLimit: supportsPagination ? Self.initialThreadUserTurnLimit : nil
+        )
         guard isKnownClient(client, environmentID: environment.id, generation: generation) else {
             throw CancellationError()
         }
-        let detail = mapDetail(snapshot.thread, environment: environment)
+        activeThreadPage = featurePage(snapshot.page)
+        let detail = mapDetail(
+            snapshot.thread,
+            environment: environment,
+            page: activeThreadPage
+        )
         activeRawThread = snapshot.thread
         activeThreadSequence = snapshot.snapshotSequence
         latestDetails[route.uiID] = detail
@@ -1099,8 +1122,71 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             client: client,
             environmentID: environment.id
         )
-        startDetailStream(route, after: snapshot.snapshotSequence)
+        startDetailStream(
+            route,
+            after: snapshot.snapshotSequence,
+            turnLimit: supportsPagination ? Self.initialThreadUserTurnLimit : nil
+        )
         return detail
+    }
+
+    func loadEarlierThreadTurns(id: String) async throws -> FeatureThreadDetail? {
+        let route = try threadRoute(for: id)
+        guard activeThreadID == route.uiID,
+              activeThreadEnvironmentID == route.environmentID,
+              serverConfigsByEnvironmentID[
+                  route.environmentID
+              ]?.threadSnapshotPagination == true,
+              var page = activeThreadPage,
+              page.hasMore,
+              !page.isLoading,
+              let beforeCursor = page.beforeCursor else {
+            return latestDetails[id]
+        }
+
+        let generation = environmentGeneration
+        let epoch = threadHistoryEpoch
+        let loadedSequence = activeThreadSequence ?? 0
+        page.isLoading = true
+        activeThreadPage = page
+        publishActivePageState(threadID: route.uiID)
+
+        do {
+            let snapshot = try await route.client.threadSnapshot(
+                id: route.wireID,
+                turnLimit: Self.olderThreadPageUserTurnLimit,
+                beforeCursor: beforeCursor
+            )
+            guard isKnownClient(
+                route.client,
+                environmentID: route.environmentID,
+                generation: generation
+            ), activeThreadID == route.uiID else {
+                throw CancellationError()
+            }
+            guard threadHistoryEpoch == epoch,
+                  snapshot.snapshotSequence >= loadedSequence else {
+                clearOlderThreadLoading(threadID: route.uiID)
+                return latestDetails[route.uiID]
+            }
+
+            if let watermark = snapshot.page?.threadSequence,
+               watermark > (activeThreadSequence ?? 0) {
+                pendingOlderThreadPage = PendingOlderThreadPage(
+                    snapshot: snapshot,
+                    epoch: epoch,
+                    threadID: route.uiID,
+                    environmentID: route.environmentID
+                )
+                return latestDetails[route.uiID]
+            }
+            return mergeOlderThreadPage(snapshot, route: route)
+        } catch {
+            if activeThreadID == route.uiID, threadHistoryEpoch == epoch {
+                clearOlderThreadLoading(threadID: route.uiID)
+            }
+            throw error
+        }
     }
 
     func releaseThread(id: String) {
@@ -1113,6 +1199,9 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         activeThreadEnvironmentID = nil
         activeRawThread = nil
         activeThreadSequence = nil
+        activeThreadPage = nil
+        threadHistoryEpoch &+= 1
+        pendingOlderThreadPage = nil
     }
 
     func sendMessage(
@@ -2054,12 +2143,13 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
                         self.latestServerConfig = config
                         self.setServerConfig(config, environmentID: activeClient.environment.id)
                     case let .providerStatuses(providers):
-                        let settings = self.serverConfigsByEnvironmentID[
+                        let previous = self.serverConfigsByEnvironmentID[
                             activeClient.environment.id
-                        ]?.settings
+                        ]
                         let config = ServerConfigSnapshot(
                             providers: providers,
-                            settings: settings
+                            settings: previous?.settings,
+                            threadSnapshotPagination: previous?.threadSnapshotPagination
                         )
                         self.latestServerConfig = config
                         self.setServerConfig(config, environmentID: activeClient.environment.id)
@@ -2069,7 +2159,10 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
                         ]?.providers ?? self.latestServerConfig?.providers ?? []
                         let config = ServerConfigSnapshot(
                             providers: providers,
-                            settings: settings
+                            settings: settings,
+                            threadSnapshotPagination: self.serverConfigsByEnvironmentID[
+                                activeClient.environment.id
+                            ]?.threadSnapshotPagination
                         )
                         self.latestServerConfig = config
                         self.setServerConfig(config, environmentID: activeClient.environment.id)
@@ -2278,6 +2371,9 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
                 activeThreadEnvironmentID = nil
                 activeRawThread = nil
                 activeThreadSequence = nil
+                activeThreadPage = nil
+                threadHistoryEpoch &+= 1
+                pendingOlderThreadPage = nil
             }
         case .snapshot, .synchronized:
             return
@@ -2357,7 +2453,11 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         }
     }
 
-    private func startDetailStream(_ route: NativeThreadRoute, after sequence: Int) {
+    private func startDetailStream(
+        _ route: NativeThreadRoute,
+        after sequence: Int,
+        turnLimit: Int?
+    ) {
         detailStreamGeneration &+= 1
         let streamGeneration = detailStreamGeneration
         let sessionGeneration = environmentGeneration
@@ -2365,7 +2465,8 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             do {
                 for try await item in await route.client.threadEvents(
                     threadID: route.wireID,
-                    after: sequence
+                    after: sequence,
+                    turnLimit: turnLimit
                 ) {
                     guard !Task.isCancelled,
                           let self,
@@ -2403,8 +2504,11 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             return
         case let .snapshot(snapshot):
             guard snapshot.snapshotSequence > (activeThreadSequence ?? 0) else { return }
+            threadHistoryEpoch &+= 1
+            pendingOlderThreadPage = nil
             activeThreadSequence = snapshot.snapshotSequence
             activeRawThread = snapshot.thread
+            activeThreadPage = featurePage(snapshot.page)
             scheduleRawDetailPublish(route: route, mutation: .full)
         case let .event(event):
             guard let current = activeRawThread else {
@@ -2413,6 +2517,8 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             }
             let reduction = NativeThreadDetailReducer.apply(event, to: current)
             if reduction.sequence < 0 {
+                threadHistoryEpoch &+= 1
+                pendingOlderThreadPage = nil
                 activeRawThread = nil
                 discardPendingDetailPublish()
                 scheduleDetailRefresh(threadID: route.uiID, client: route.client, force: true)
@@ -2424,9 +2530,13 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
                 activeThreadSequence = reduction.sequence
                 activeRawThread = thread
                 scheduleRawDetailPublish(route: route, mutation: reduction.renderMutation)
+                tryMergePendingOlderThreadPage(route: route)
             case .unchanged:
                 activeThreadSequence = reduction.sequence
+                tryMergePendingOlderThreadPage(route: route)
             case .refresh:
+                threadHistoryEpoch &+= 1
+                pendingOlderThreadPage = nil
                 activeThreadSequence = reduction.sequence
                 activeRawThread = nil
                 discardPendingDetailPublish()
@@ -2458,7 +2568,8 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             let detail = self.mapDetail(
                 rawThread,
                 environment: route.client.environment,
-                mutations: mutations
+                mutations: mutations,
+                page: self.activeThreadPage
             )
             let delta = self.makeDetailDelta(
                 previous: previousDetail,
@@ -2819,16 +2930,29 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         }
         let environment = route.client.environment
         let generation = environmentGeneration
-        let snapshot = try await client.threadSnapshot(id: route.wireID)
+        let supportsPagination = serverConfigsByEnvironmentID[
+            environment.id
+        ]?.threadSnapshotPagination == true
+        let snapshot = try await client.threadSnapshot(
+            id: route.wireID,
+            turnLimit: supportsPagination ? Self.initialThreadUserTurnLimit : nil
+        )
         guard isKnownClient(client, environmentID: environment.id, generation: generation) else {
             throw CancellationError()
         }
         if activeThreadID == route.uiID {
             guard snapshot.snapshotSequence >= (activeThreadSequence ?? 0) else { return }
+            threadHistoryEpoch &+= 1
+            pendingOlderThreadPage = nil
             activeRawThread = snapshot.thread
             activeThreadSequence = snapshot.snapshotSequence
+            activeThreadPage = featurePage(snapshot.page)
         }
-        let detail = mapDetail(snapshot.thread, environment: environment)
+        let detail = mapDetail(
+            snapshot.thread,
+            environment: environment,
+            page: activeThreadID == route.uiID ? activeThreadPage : featurePage(snapshot.page)
+        )
         publish(detail, threadID: route.uiID)
         let hydrationBase = latestDetails[route.uiID] ?? detail
         let hydrated = await hydratedAttachmentURLs(
@@ -3048,7 +3172,8 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             thread: incoming.thread,
             messages: replacingChangedSuffix(current.messages, with: incoming.messages),
             approvals: replacingChangedSuffix(current.approvals, with: incoming.approvals),
-            userInputs: replacingChangedSuffix(current.userInputs, with: incoming.userInputs)
+            userInputs: replacingChangedSuffix(current.userInputs, with: incoming.userInputs),
+            page: incoming.page
         )
     }
 
@@ -3315,7 +3440,8 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
     private func mapDetail(
         _ thread: OrchestrationThread,
         environment: Environment,
-        mutations: NativeDetailRenderMutations? = nil
+        mutations: NativeDetailRenderMutations? = nil,
+        page: FeatureThreadPage? = nil
     ) -> FeatureThreadDetail {
         let threadID = FeatureScopedID.thread(
             environmentID: environment.id,
@@ -3368,7 +3494,156 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             thread: mappedThread,
             messages: cache.mergedMessages,
             approvals: cache.approvals,
-            userInputs: cache.userInputs
+            userInputs: cache.userInputs,
+            page: page
+        )
+    }
+
+    private func featurePage(
+        _ page: OrchestrationThreadDetailPage?,
+        isLoading: Bool = false
+    ) -> FeatureThreadPage? {
+        page.map {
+            FeatureThreadPage(
+                beforeCursor: $0.beforeCursor,
+                hasMore: $0.hasMore,
+                isLoading: isLoading
+            )
+        }
+    }
+
+    private func publishActivePageState(threadID: String) {
+        guard var detail = latestDetails[threadID] else { return }
+        detail.page = activeThreadPage
+        publish(detail, threadID: threadID, renderCacheIsSource: true)
+    }
+
+    private func clearOlderThreadLoading(threadID: String) {
+        pendingOlderThreadPage = nil
+        activeThreadPage?.isLoading = false
+        publishActivePageState(threadID: threadID)
+    }
+
+    private func tryMergePendingOlderThreadPage(route: NativeThreadRoute) {
+        guard let pending = pendingOlderThreadPage,
+              pending.threadID == route.uiID,
+              pending.environmentID == route.environmentID else { return }
+        guard pending.epoch == threadHistoryEpoch else {
+            clearOlderThreadLoading(threadID: route.uiID)
+            return
+        }
+        if let watermark = pending.snapshot.page?.threadSequence,
+           watermark > (activeThreadSequence ?? 0) {
+            return
+        }
+        pendingOlderThreadPage = nil
+        _ = mergeOlderThreadPage(pending.snapshot, route: route)
+    }
+
+    @discardableResult
+    private func mergeOlderThreadPage(
+        _ snapshot: OrchestrationThreadDetailSnapshot,
+        route: NativeThreadRoute
+    ) -> FeatureThreadDetail? {
+        guard activeThreadID == route.uiID,
+              let loadedThread = activeRawThread,
+              let currentDetail = latestDetails[route.uiID] else {
+            clearOlderThreadLoading(threadID: route.uiID)
+            return latestDetails[route.uiID]
+        }
+
+        let mergedThread = mergingOlderHistory(snapshot.thread, into: loadedThread)
+        let olderMessages = renderedHistoryMessages(
+            snapshot.thread,
+            environmentID: route.environmentID
+        )
+        let loadedMessageIDs = Set(currentDetail.messages.map(\.id))
+        let mergedMessages = (
+            olderMessages.filter { !loadedMessageIDs.contains($0.id) }
+                + currentDetail.messages
+        ).sorted { $0.createdAt < $1.createdAt }
+
+        activeRawThread = mergedThread
+        activeThreadPage = featurePage(snapshot.page)
+
+        if let cache = detailRenderCaches[route.uiID] {
+            for rawMessage in snapshot.thread.messages where cache.messagesByID[rawMessage.id] == nil {
+                cache.messagesByID[rawMessage.id] = mapMessage(
+                    rawMessage,
+                    environmentID: route.environmentID
+                )
+            }
+            cache.mergedMessages = mergedMessages
+            rebuildMergedIndexes(cache)
+        }
+
+        let detail = FeatureThreadDetail(
+            thread: currentDetail.thread,
+            messages: mergedMessages,
+            approvals: currentDetail.approvals,
+            userInputs: currentDetail.userInputs,
+            page: activeThreadPage
+        )
+        publish(detail, threadID: route.uiID, renderCacheIsSource: true)
+        scheduleAttachmentHydration(
+            in: detail,
+            threadID: route.uiID,
+            client: route.client,
+            environmentID: route.environmentID
+        )
+        return detail
+    }
+
+    private func renderedHistoryMessages(
+        _ thread: OrchestrationThread,
+        environmentID: String
+    ) -> [FeatureMessage] {
+        let messages = thread.messages.map {
+            mapMessage($0, environmentID: environmentID)
+        }
+        let activities = thread.activities.compactMap(mapErrorActivity)
+            + collapsedWorkLogs(thread.activities)
+        return (messages + activities).sorted { $0.createdAt < $1.createdAt }
+    }
+
+    private func mergingOlderHistory(
+        _ older: OrchestrationThread,
+        into loaded: OrchestrationThread
+    ) -> OrchestrationThread {
+        func prependByID<Element: Identifiable>(
+            _ olderRows: [Element],
+            _ loadedRows: [Element]
+        ) -> [Element] where Element.ID: Hashable {
+            let loadedIDs = Set(loadedRows.map(\.id))
+            return olderRows.filter { !loadedIDs.contains($0.id) } + loadedRows
+        }
+
+        let loadedCheckpointTurns = Set(loaded.checkpoints.map(\.turnId))
+        return OrchestrationThread(
+            id: loaded.id,
+            projectId: loaded.projectId,
+            title: loaded.title,
+            modelSelection: loaded.modelSelection,
+            runtimeMode: loaded.runtimeMode,
+            interactionMode: loaded.interactionMode,
+            branch: loaded.branch,
+            worktreePath: loaded.worktreePath,
+            latestTurn: loaded.latestTurn,
+            createdAt: loaded.createdAt,
+            updatedAt: loaded.updatedAt,
+            archivedAt: loaded.archivedAt,
+            settledOverride: loaded.settledOverride,
+            settledAt: loaded.settledAt,
+            snoozedUntil: loaded.snoozedUntil,
+            snoozedAt: loaded.snoozedAt,
+            pinnedAt: loaded.pinnedAt,
+            deletedAt: loaded.deletedAt,
+            messages: prependByID(older.messages, loaded.messages),
+            activities: prependByID(older.activities, loaded.activities),
+            checkpoints: older.checkpoints.filter {
+                !loadedCheckpointTurns.contains($0.turnId)
+            } + loaded.checkpoints,
+            session: loaded.session
         )
     }
 
@@ -4917,6 +5192,13 @@ private struct NativeProjectRoute {
     let wireID: String
     let environmentID: String
     let client: T3Client
+}
+
+private struct PendingOlderThreadPage {
+    let snapshot: OrchestrationThreadDetailSnapshot
+    let epoch: Int
+    let threadID: String
+    let environmentID: String
 }
 
 private struct NativeThreadRoute {

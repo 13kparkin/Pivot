@@ -480,17 +480,32 @@ public struct FeatureThreadDetail: Sendable, Equatable, Codable {
     public var messages: [FeatureMessage]
     public var approvals: [FeatureApproval]
     public var userInputs: [FeatureUserInput]
+    public var page: FeatureThreadPage?
 
     public init(
         thread: FeatureThread,
         messages: [FeatureMessage] = [],
         approvals: [FeatureApproval] = [],
-        userInputs: [FeatureUserInput] = []
+        userInputs: [FeatureUserInput] = [],
+        page: FeatureThreadPage? = nil
     ) {
         self.thread = thread
         self.messages = messages
         self.approvals = approvals
         self.userInputs = userInputs
+        self.page = page
+    }
+}
+
+public struct FeatureThreadPage: Sendable, Equatable, Codable {
+    public var beforeCursor: String?
+    public var hasMore: Bool
+    public var isLoading: Bool
+
+    public init(beforeCursor: String?, hasMore: Bool, isLoading: Bool = false) {
+        self.beforeCursor = beforeCursor
+        self.hasMore = hasMore
+        self.isLoading = isLoading
     }
 }
 

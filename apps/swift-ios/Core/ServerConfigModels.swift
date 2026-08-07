@@ -151,16 +151,21 @@ public struct ServerSettingsSnapshot: Codable, Equatable, Sendable {
 public struct ServerConfigSnapshot: Codable, Equatable, Sendable {
     public let providers: [ServerProviderSnapshot]
     public let settings: ServerSettingsSnapshot?
+    public let threadSnapshotPagination: Bool?
 
     public init(
         providers: [ServerProviderSnapshot],
-        settings: ServerSettingsSnapshot? = nil
+        settings: ServerSettingsSnapshot? = nil,
+        threadSnapshotPagination: Bool? = nil
     ) {
         self.providers = providers
         self.settings = settings
+        self.threadSnapshotPagination = threadSnapshotPagination
     }
 
-    private enum CodingKeys: String, CodingKey { case providers, settings }
+    private enum CodingKeys: String, CodingKey {
+        case providers, settings, threadSnapshotPagination
+    }
 
     public init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -169,12 +174,20 @@ public struct ServerConfigSnapshot: Codable, Equatable, Sendable {
             forKey: .providers
         ).compactMap(\.value)
         settings = try container.decodeIfPresent(ServerSettingsSnapshot.self, forKey: .settings)
+        threadSnapshotPagination = try container.decodeIfPresent(
+            Bool.self,
+            forKey: .threadSnapshotPagination
+        )
     }
 
     public func encode(to encoder: any Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(providers, forKey: .providers)
         try container.encodeIfPresent(settings, forKey: .settings)
+        try container.encodeIfPresent(
+            threadSnapshotPagination,
+            forKey: .threadSnapshotPagination
+        )
     }
 }
 

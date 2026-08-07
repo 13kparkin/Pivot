@@ -79,6 +79,54 @@ final class TransportReliabilityTests: XCTestCase {
         XCTAssertEqual(request.timeoutInterval, 6)
     }
 
+    func testThreadSnapshotSendsPaginationWindowAndDecodesCursor() async throws {
+        let environment = Environment(
+            id: "environment-1",
+            label: "Studio",
+            httpBaseURL: URL(string: "https://studio.example")!,
+            webSocketBaseURL: URL(string: "wss://studio.example")!
+        )
+        let credentials = InMemoryCredentialStore(credentials: [
+            environment.id: EnvironmentCredential(accessToken: "access-token"),
+        ])
+        let body = try JSONEncoder.t3.encode(
+            OrchestrationThreadDetailSnapshot(
+                snapshotSequence: 42,
+                thread: paginationThreadFixture(),
+                page: OrchestrationThreadDetailPage(
+                    beforeCursor: "next-cursor",
+                    hasMore: true,
+                    snapshotSequence: 42,
+                    threadSequence: 40
+                )
+            )
+        )
+        let transport = RecordingHTTPTransport { request in
+            (body, transportResponse(request))
+        }
+        let api = EnvironmentAPI(transport: transport, credentials: credentials)
+
+        let snapshot = try await api.threadSnapshot(
+            id: "thread-1",
+            environment: environment,
+            turnLimit: 20,
+            beforeCursor: "current-cursor"
+        )
+
+        XCTAssertEqual(snapshot.page?.beforeCursor, "next-cursor")
+        XCTAssertEqual(snapshot.page?.threadSequence, 40)
+        let requests = await transport.requests
+        let request = try XCTUnwrap(requests.first)
+        let query = try XCTUnwrap(URLComponents(url: try XCTUnwrap(request.url), resolvingAgainstBaseURL: false))
+            .queryItems
+        XCTAssertEqual(
+            Dictionary(uniqueKeysWithValues: (query ?? []).compactMap { item in
+                item.value.map { (item.name, $0) }
+            }),
+            ["turnLimit": "20", "beforeCursor": "current-cursor"]
+        )
+    }
+
     func testWebSocketHandshakeOffersPerMessageDeflate() {
         let url = URL(string: "wss://studio.example/ws?wsTicket=secret")!
         let compressed = WebSocketHandshakeRequest.make(url: url)
@@ -313,6 +361,33 @@ final class TransportReliabilityTests: XCTestCase {
         )
     }
 
+}
+
+private func paginationThreadFixture() -> OrchestrationThread {
+    OrchestrationThread(
+        id: "thread-1",
+        projectId: "project-1",
+        title: "Long native thread",
+        modelSelection: ModelSelection(instanceId: "codex", model: "gpt-5.6-sol"),
+        runtimeMode: .fullAccess,
+        interactionMode: .default,
+        branch: "main",
+        worktreePath: nil,
+        latestTurn: nil,
+        createdAt: "2026-08-06T12:00:00.000Z",
+        updatedAt: "2026-08-06T12:00:00.000Z",
+        archivedAt: nil,
+        settledOverride: nil,
+        settledAt: nil,
+        snoozedUntil: nil,
+        snoozedAt: nil,
+        pinnedAt: nil,
+        deletedAt: nil,
+        messages: [],
+        activities: [],
+        checkpoints: [],
+        session: nil
+    )
 }
 
 private func transportResponse(

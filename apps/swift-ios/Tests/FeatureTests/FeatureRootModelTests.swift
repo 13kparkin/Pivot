@@ -278,6 +278,47 @@ struct FeatureRootModelTests {
     }
 
     @Test
+    func loadingEarlierTurnsPrependsHistoryAndClearsTheCursor() async {
+        let client = FeatureClientStub()
+        let thread = FeatureThread(
+            id: "thread-1",
+            projectID: "project-1",
+            environmentID: "environment-1",
+            title: "Long thread"
+        )
+        let recent = FeatureMessage(
+            id: "message-recent",
+            role: .assistant,
+            text: "Recent",
+            createdAt: Date(timeIntervalSince1970: 2)
+        )
+        let older = FeatureMessage(
+            id: "message-older",
+            role: .user,
+            text: "Older",
+            createdAt: Date(timeIntervalSince1970: 1)
+        )
+        client.threadDetail = FeatureThreadDetail(
+            thread: thread,
+            messages: [recent],
+            page: FeatureThreadPage(beforeCursor: "cursor-1", hasMore: true)
+        )
+        client.earlierThreadDetail = FeatureThreadDetail(
+            thread: thread,
+            messages: [older, recent],
+            page: FeatureThreadPage(beforeCursor: nil, hasMore: false)
+        )
+        let model = testRootModel(client: client)
+        _ = await model.detail(for: thread.id)
+
+        await model.loadEarlierTurns(for: thread.id)
+
+        #expect(model.details[thread.id]?.messages.map(\.id) == [older.id, recent.id])
+        #expect(model.details[thread.id]?.page?.hasMore == false)
+        #expect(client.loadEarlierCallCount == 1)
+    }
+
+    @Test
     func failedDiscardKeepsTheDurableAndOptimisticSubmission() async throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("t3-root-discard-failure-\(UUID().uuidString)", isDirectory: true)
@@ -1019,6 +1060,7 @@ private final class FeatureClientStub: FeatureClient {
     var snapshotAfterEnvironmentRemoval: FeatureSnapshot?
     var createdThread = FeatureThread(id: "created", projectID: "project", title: "Created")
     var threadDetail: FeatureThreadDetail?
+    var earlierThreadDetail: FeatureThreadDetail?
     var pairEndpoint: String?
     var pairToken: String?
     var sentText: String?
@@ -1037,6 +1079,7 @@ private final class FeatureClientStub: FeatureClient {
     var removedEnvironmentID: String?
     var beforeSendMessage: (() throws -> Void)?
     var loadThreadError: (any Error)?
+    var loadEarlierCallCount = 0
     var resolvedInputID: String?
     var resolvedInputAnswers: [String: FeatureInputAnswer]?
 
@@ -1139,6 +1182,11 @@ private final class FeatureClientStub: FeatureClient {
             return threadDetail
         }
         return FeatureThreadDetail(thread: createdThread)
+    }
+
+    func loadEarlierThreadTurns(id: String) async throws -> FeatureThreadDetail? {
+        loadEarlierCallCount += 1
+        return earlierThreadDetail
     }
 
     func sendMessage(threadID: String, text: String, selection: FeatureSelection?) async throws {

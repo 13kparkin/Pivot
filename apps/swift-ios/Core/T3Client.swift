@@ -73,8 +73,17 @@ public actor T3Client {
         )
     }
 
-    public func threadSnapshot(id: String) async throws -> OrchestrationThreadDetailSnapshot {
-        try await api.threadSnapshot(id: id, environment: environment)
+    public func threadSnapshot(
+        id: String,
+        turnLimit: Int? = nil,
+        beforeCursor: String? = nil
+    ) async throws -> OrchestrationThreadDetailSnapshot {
+        try await api.threadSnapshot(
+            id: id,
+            environment: environment,
+            turnLimit: turnLimit,
+            beforeCursor: beforeCursor
+        )
     }
 
     public func serverConfig() async throws -> ServerConfigSnapshot {
@@ -154,13 +163,15 @@ public actor T3Client {
 
     public func threadEvents(
         threadID: String,
-        after sequence: Int? = nil
+        after sequence: Int? = nil,
+        turnLimit: Int? = nil
     ) async -> AsyncThrowingStream<ThreadStreamItem, Error> {
         var payload: [String: JSONValue] = [
             "threadId": .string(threadID),
             "requestCompletionMarker": .bool(true),
         ]
         if let sequence { payload["afterSequence"] = .number(Double(sequence)) }
+        if let turnLimit { payload["turnLimit"] = .number(Double(turnLimit)) }
         return await rpc.subscribe(
             RPCMethod.subscribeThread.rawValue,
             payload: .object(payload),

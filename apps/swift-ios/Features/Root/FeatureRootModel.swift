@@ -365,6 +365,21 @@ public final class FeatureRootModel {
         }
     }
 
+    public func loadEarlierTurns(for id: String) async {
+        guard details[id]?.page?.hasMore == true,
+              details[id]?.page?.isLoading != true else { return }
+        let environment = currentEnvironmentIdentity
+        do {
+            guard let detail = try await client.loadEarlierThreadTurns(id: id),
+                  currentEnvironmentIdentity == environment else { return }
+            store(detail)
+        } catch {
+            if !Self.isBenignCancellation(error) {
+                errorMessage = error.localizedDescription
+            }
+        }
+    }
+
     /// Ends any selected-thread transport work when its detail view closes.
     public func releaseThread(_ id: String) {
         client.releaseThread(id: id)
@@ -680,7 +695,8 @@ public final class FeatureRootModel {
                 thread: incoming.thread,
                 messages: replacingChangedSuffix(current.messages, with: incoming.messages),
                 approvals: replacingChangedSuffix(current.approvals, with: incoming.approvals),
-                userInputs: replacingChangedSuffix(current.userInputs, with: incoming.userInputs)
+                userInputs: replacingChangedSuffix(current.userInputs, with: incoming.userInputs),
+                page: incoming.page
             )
         } ?? incoming
         guard details[id] != next else { return }

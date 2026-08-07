@@ -433,6 +433,36 @@ public struct OrchestrationReadModel: Codable, Equatable, Sendable {
 public struct OrchestrationThreadDetailSnapshot: Codable, Equatable, Sendable {
     public let snapshotSequence: Int
     public let thread: OrchestrationThread
+    public let page: OrchestrationThreadDetailPage?
+
+    public init(
+        snapshotSequence: Int,
+        thread: OrchestrationThread,
+        page: OrchestrationThreadDetailPage? = nil
+    ) {
+        self.snapshotSequence = snapshotSequence
+        self.thread = thread
+        self.page = page
+    }
+}
+
+public struct OrchestrationThreadDetailPage: Codable, Equatable, Sendable {
+    public let beforeCursor: String?
+    public let hasMore: Bool
+    public let snapshotSequence: Int
+    public let threadSequence: Int?
+
+    public init(
+        beforeCursor: String?,
+        hasMore: Bool,
+        snapshotSequence: Int,
+        threadSequence: Int? = nil
+    ) {
+        self.beforeCursor = beforeCursor
+        self.hasMore = hasMore
+        self.snapshotSequence = snapshotSequence
+        self.threadSequence = threadSequence
+    }
 }
 
 public enum ShellStreamItem: Decodable, Sendable {

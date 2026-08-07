@@ -58,6 +58,29 @@ final class CoreContractTests: XCTestCase {
         XCTAssertNil(snapshot.projects.first?.deletedAt)
     }
 
+    func testThreadPageMetadataDecodesCurrentWireShape() throws {
+        let page = try JSONDecoder.t3.decode(
+            OrchestrationThreadDetailPage.self,
+            from: Data(
+                #"{"beforeCursor":"opaque-cursor","hasMore":true,"snapshotSequence":42,"threadSequence":39}"#.utf8
+            )
+        )
+
+        XCTAssertEqual(page.beforeCursor, "opaque-cursor")
+        XCTAssertTrue(page.hasMore)
+        XCTAssertEqual(page.snapshotSequence, 42)
+        XCTAssertEqual(page.threadSequence, 39)
+    }
+
+    func testServerConfigAdvertisesThreadSnapshotPagination() throws {
+        let config = try JSONDecoder.t3.decode(
+            ServerConfigSnapshot.self,
+            from: Data(#"{"providers":[],"threadSnapshotPagination":true}"#.utf8)
+        )
+
+        XCTAssertEqual(config.threadSnapshotPagination, true)
+    }
+
     func testCommandBuildersMatchOrchestrationContract() throws {
         let model = ModelSelection(instanceId: "codex", model: "gpt-5.6-sol")
         let command = try OrchestrationCommands.createThread(

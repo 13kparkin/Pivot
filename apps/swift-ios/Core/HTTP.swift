@@ -151,12 +151,22 @@ public actor EnvironmentAPI {
 
     public func threadSnapshot(
         id: String,
-        environment: Environment
+        environment: Environment,
+        turnLimit: Int? = nil,
+        beforeCursor: String? = nil
     ) async throws -> OrchestrationThreadDetailSnapshot {
         let encodedID = id.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? id
+        var queryItems: [URLQueryItem] = []
+        if let turnLimit {
+            queryItems.append(URLQueryItem(name: "turnLimit", value: String(turnLimit)))
+        }
+        if let beforeCursor {
+            queryItems.append(URLQueryItem(name: "beforeCursor", value: beforeCursor))
+        }
         return try await authorized(
             environment: environment,
             path: "/api/orchestration/threads/\(encodedID)",
+            queryItems: queryItems,
             method: "GET",
             as: OrchestrationThreadDetailSnapshot.self
         )
@@ -231,6 +241,7 @@ public actor EnvironmentAPI {
     private func authorized<Result: Decodable & Sendable>(
         environment: Environment,
         path: String,
+        queryItems: [URLQueryItem] = [],
         method: String,
         body: Data? = nil,
         timeoutInterval: TimeInterval? = nil,
@@ -248,6 +259,7 @@ public actor EnvironmentAPI {
             var request = makeRequest(
                 environment: environment,
                 path: path,
+                queryItems: queryItems,
                 method: method,
                 body: body
             )
@@ -284,6 +296,7 @@ public actor EnvironmentAPI {
                 makeRequest(
                     environment: environment,
                     path: path,
+                    queryItems: queryItems,
                     method: method,
                     body: body
                 ),
@@ -313,6 +326,7 @@ public actor EnvironmentAPI {
                     makeRequest(
                         environment: environment,
                         path: path,
+                        queryItems: queryItems,
                         method: method,
                         body: body
                     ),
@@ -330,10 +344,13 @@ public actor EnvironmentAPI {
     private func makeRequest(
         environment: Environment,
         path: String,
+        queryItems: [URLQueryItem],
         method: String,
         body: Data?
     ) -> URLRequest {
-        var request = URLRequest(url: endpoint(environment.httpBaseURL, path: path))
+        var request = URLRequest(
+            url: endpoint(environment.httpBaseURL, path: path, queryItems: queryItems)
+        )
         request.httpMethod = method
         request.httpBody = body
         if body != nil {
@@ -460,10 +477,10 @@ public struct AuthOtherClientSessionsRevokeResult: Codable, Equatable, Sendable 
     public let revokedCount: Int
 }
 
-func endpoint(_ baseURL: URL, path: String) -> URL {
+func endpoint(_ baseURL: URL, path: String, queryItems: [URLQueryItem] = []) -> URL {
     var components = URLComponents(url: baseURL, resolvingAgainstBaseURL: false)!
     components.path = path
-    components.query = nil
+    components.queryItems = queryItems.isEmpty ? nil : queryItems
     components.fragment = nil
     return components.url!
 }
