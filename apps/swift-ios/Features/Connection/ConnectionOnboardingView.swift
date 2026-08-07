@@ -131,17 +131,32 @@ public struct ConnectionOnboardingView: View {
                     .foregroundStyle(T3Colors.textSecondary)
                     .padding(.top, 12)
 
-                Button {
-                    showingScanner = true
-                } label: {
-                    Label("Scan QR code", systemImage: "qrcode.viewfinder")
-                        .frame(maxWidth: .infinity)
+                if let capability = model.client as? any T3ConnectCapable {
+                    NavigationLink {
+                        T3ConnectView(capability: capability) {
+                            await model.reload()
+                            onConnected()
+                        }
+                    } label: {
+                        Label("Continue with T3 Connect", systemImage: "cloud")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(ConnectionPrimaryButtonStyle())
+                    .padding(.top, 36)
+                    .accessibilityHint("Sign in to connect an environment linked to your T3 account")
                 }
-                .buttonStyle(ConnectionPrimaryButtonStyle())
-                .padding(.top, 36)
-                .accessibilityHint("Opens the camera")
 
                 VStack(spacing: 0) {
+                    connectionAction(
+                        title: "Scan QR code",
+                        subtitle: "Pair directly with a computer nearby",
+                        systemImage: "qrcode.viewfinder"
+                    ) {
+                        showingScanner = true
+                    }
+
+                    Divider().overlay(Color.white.opacity(0.09))
+
                     connectionAction(
                         title: "Paste connection link",
                         subtitle: "Copy it from T3 Code on your computer",

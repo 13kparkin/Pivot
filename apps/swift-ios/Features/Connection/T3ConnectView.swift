@@ -4,10 +4,15 @@ public struct T3ConnectView: View {
     @Bindable private var controller: T3ConnectController
     private let connectEnvironment:
         @MainActor (T3ConnectManagedEnvironmentCredential) async throws -> Void
+    private let onConnected: @MainActor () async -> Void
 
-    public init(capability: any T3ConnectCapable) {
+    public init(
+        capability: any T3ConnectCapable,
+        onConnected: @escaping @MainActor () async -> Void = {}
+    ) {
         controller = capability.t3ConnectController
         connectEnvironment = capability.connectT3Environment
+        self.onConnected = onConnected
     }
 
     public var body: some View {
@@ -213,6 +218,7 @@ public struct T3ConnectView: View {
         do {
             let credential = try await controller.credential(for: environment)
             try await connectEnvironment(credential)
+            await onConnected()
         } catch {
             controller.errorMessage = error.localizedDescription
         }
