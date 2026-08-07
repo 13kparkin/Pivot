@@ -30,7 +30,7 @@ struct HomeThreadCollectionView: UIViewRepresentable {
 
     func makeUIView(context: Context) -> UICollectionView {
         var configuration = UICollectionLayoutListConfiguration(appearance: .plain)
-    configuration.backgroundColor = T3Colors.uiBackground
+        configuration.backgroundColor = T3Colors.uiBackground
         configuration.showsSeparators = false
         configuration.headerMode = .none
         configuration.footerMode = .none
@@ -42,7 +42,7 @@ struct HomeThreadCollectionView: UIViewRepresentable {
             frame: .zero,
             collectionViewLayout: UICollectionViewCompositionalLayout.list(using: configuration)
         )
-    collectionView.backgroundColor = T3Colors.uiBackground
+        collectionView.backgroundColor = T3Colors.uiBackground
         collectionView.alwaysBounceVertical = true
         collectionView.keyboardDismissMode = .interactive
         collectionView.contentInset = UIEdgeInsets(top: 4, left: 0, bottom: 74, right: 0)
@@ -252,7 +252,7 @@ struct HomeThreadCollectionView: UIViewRepresentable {
 
             cell.backgroundConfiguration = UIBackgroundConfiguration.clear()
             cell.accessories = []
-      cell.tintColor = T3Colors.uiTextPrimary
+            cell.tintColor = T3Colors.uiTextPrimary
             cell.contentView.accessibilityElementsHidden = true
             configureAccessibility(cell, item: item)
         }

@@ -246,8 +246,8 @@ public struct NewThreadView: View {
                 }
             }
             .buttonStyle(.borderedProminent)
-      .tint(T3Colors.primaryAction)
-      .foregroundStyle(T3Colors.primaryActionForeground)
+            .tint(T3Colors.primaryAction)
+            .foregroundStyle(T3Colors.primaryActionForeground)
             .padding(.top, 6)
         }
         .padding(.horizontal, 28)

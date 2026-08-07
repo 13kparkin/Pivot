@@ -4,19 +4,19 @@ import Testing
 
 @Suite("Agent awareness projection")
 struct PlatformAgentAwarenessTests {
-  @Test
-  func settingsDefaultToSystemAppearanceAndRoundTripLightMode() throws {
-    #expect(FeatureSettings().appearance == .system)
+    @Test
+    func settingsDefaultToSystemAppearanceAndRoundTripLightMode() throws {
+        #expect(FeatureSettings().appearance == .system)
 
-    var settings = FeatureSettings()
-    settings.appearance = .light
-    let roundTrip = try JSONDecoder.t3.decode(
-      FeatureSettings.self,
-      from: JSONEncoder.t3.encode(settings)
-    )
+        var settings = FeatureSettings()
+        settings.appearance = .light
+        let roundTrip = try JSONDecoder.t3.decode(
+            FeatureSettings.self,
+            from: JSONEncoder.t3.encode(settings)
+        )
 
-    #expect(roundTrip.appearance == .light)
-  }
+        #expect(roundTrip.appearance == .light)
+    }
 
     @Test
     func legacySettingsEnableLiveActivitiesWithoutResettingOtherPreferences() throws {

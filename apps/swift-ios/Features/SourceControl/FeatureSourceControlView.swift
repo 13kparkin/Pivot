@@ -36,7 +36,7 @@ public struct FeatureSourceControlView: View {
                 )
             }
         }
-    .background(T3Colors.background)
+        .background(T3Colors.background)
         .navigationTitle("Source Control")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {

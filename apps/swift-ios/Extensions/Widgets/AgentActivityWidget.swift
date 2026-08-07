@@ -6,8 +6,8 @@ struct T3TaskLiveActivity: Widget {
     var body: some WidgetConfiguration {
         ActivityConfiguration(for: LiveActivityAttributes.self) { context in
             T3LiveActivityLockScreenView(context: context)
-        .activityBackgroundTint(Color(uiColor: .systemBackground))
-        .activitySystemActionForegroundColor(Color(uiColor: .label))
+                .activityBackgroundTint(Color(uiColor: .systemBackground))
+                .activitySystemActionForegroundColor(Color(uiColor: .label))
                 .widgetURL(T3ActivityPresentation(state: context.state).deepLinkURL)
         } dynamicIsland: { context in
             let presentation = T3ActivityPresentation(state: context.state)
@@ -72,7 +72,7 @@ private struct T3LiveActivityLockScreenView: View {
             HStack(spacing: 8) {
                 Text("T3 Code")
                     .font(.system(size: 14, weight: .bold))
-          .foregroundStyle(.primary)
+                    .foregroundStyle(.primary)
                 Spacer(minLength: 8)
                 Label(presentation.shortStatus, systemImage: presentation.phase.systemImage)
                     .font(.system(size: 13, weight: .semibold))
@@ -106,7 +106,7 @@ private struct T3LiveActivityRow: View {
                 .frame(width: 14)
             Text(row.threadTitle)
                 .font(.system(size: 13, weight: .semibold))
-        .foregroundStyle(.primary)
+                .foregroundStyle(.primary)
                 .lineLimit(1)
             Text(row.projectTitle)
                 .font(.system(size: 11, weight: .medium))
@@ -164,15 +164,15 @@ extension T3AgentActivityPhase {
     var tint: Color {
         switch self {
         case .starting, .running:
-      Color(uiColor: .systemBlue)
+            Color(uiColor: .systemBlue)
         case .waitingForApproval:
-      Color(uiColor: .systemOrange)
+            Color(uiColor: .systemOrange)
         case .waitingForInput:
-      Color(uiColor: .systemIndigo)
+            Color(uiColor: .systemIndigo)
         case .completed:
-      Color(uiColor: .systemGreen)
+            Color(uiColor: .systemGreen)
         case .failed:
-      Color(uiColor: .systemRed)
+            Color(uiColor: .systemRed)
         case .stale:
             Color.secondary
         }

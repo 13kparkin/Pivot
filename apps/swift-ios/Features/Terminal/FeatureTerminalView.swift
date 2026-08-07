@@ -80,7 +80,7 @@ public struct FeatureTerminalView: View {
 
     public var body: some View {
         ZStack {
-      T3Colors.background
+            T3Colors.background
 
             GhosttyTerminalSurface(
                 terminalKey: "\(threadID):\(activeTerminalID)",
@@ -106,15 +106,15 @@ public struct FeatureTerminalView: View {
 
             if isLoading, terminal == nil {
                 ProgressView("Opening terminal…")
-          .tint(T3Colors.textPrimary)
-          .foregroundStyle(T3Colors.textPrimary)
+                    .tint(T3Colors.textPrimary)
+                    .foregroundStyle(T3Colors.textPrimary)
             } else if let errorMessage, terminal == nil {
                 ContentUnavailableView(
                     "Terminal unavailable",
                     systemImage: "terminal",
                     description: Text(errorMessage)
                 )
-        .foregroundStyle(T3Colors.textPrimary)
+                .foregroundStyle(T3Colors.textPrimary)
             }
 
             if let errorMessage, terminal != nil {
@@ -133,7 +133,7 @@ public struct FeatureTerminalView: View {
 
             terminalHeader
         }
-    .background(T3Colors.background.ignoresSafeArea())
+        .background(T3Colors.background.ignoresSafeArea())
         .toolbar(.hidden, for: .navigationBar)
         .task {
             for await updates in client.terminalSessions(threadID: threadID) {
@@ -186,7 +186,7 @@ public struct FeatureTerminalView: View {
             ZStack {
                 Text("Terminal")
                     .font(T3Typography.navigationTitle)
-          .foregroundStyle(T3Colors.textPrimary)
+                    .foregroundStyle(T3Colors.textPrimary)
 
                 HStack {
                     Button {
@@ -195,7 +195,7 @@ public struct FeatureTerminalView: View {
                         Image(systemName: "xmark")
                             .frame(width: 44, height: 44)
                     }
-          .foregroundStyle(T3Colors.textPrimary)
+                    .foregroundStyle(T3Colors.textPrimary)
                     .accessibilityLabel("Close terminal")
 
                     Spacer()
@@ -205,7 +205,7 @@ public struct FeatureTerminalView: View {
                 }
             }
             .frame(height: 48)
-      .background(T3Colors.background)
+            .background(T3Colors.background)
 
             Spacer(minLength: 0)
         }

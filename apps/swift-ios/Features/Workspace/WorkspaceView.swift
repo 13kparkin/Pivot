@@ -281,8 +281,8 @@ public struct WorkspaceView: View {
                     .foregroundStyle(T3Colors.textSecondary)
                 Button("New task", action: openNewTaskOrProjectCreation)
                     .buttonStyle(.borderedProminent)
-          .tint(T3Colors.primaryAction)
-          .foregroundStyle(T3Colors.primaryActionForeground)
+                    .tint(T3Colors.primaryAction)
+                    .foregroundStyle(T3Colors.primaryActionForeground)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(T3Colors.background)
@@ -464,10 +464,10 @@ public struct WorkspaceView: View {
         } label: {
             Image(systemName: "square.and.pencil")
                 .font(.system(size: 20, weight: .medium))
-        .foregroundStyle(T3Colors.primaryActionForeground)
+                .foregroundStyle(T3Colors.primaryActionForeground)
                 .frame(width: 52, height: 52)
-        .background(T3Colors.primaryAction, in: Circle())
-        .shadow(color: T3Colors.shadow, radius: 16, y: 8)
+                .background(T3Colors.primaryAction, in: Circle())
+                .shadow(color: T3Colors.shadow, radius: 16, y: 8)
         }
         .buttonStyle(.plain)
         .accessibilityLabel("New task")
@@ -513,7 +513,7 @@ public struct WorkspaceView: View {
                         .font(.system(size: 8, weight: .bold))
             }
             .font(T3Typography.homeMetadata.weight(.semibold))
-        .foregroundStyle(T3Colors.textSecondary)
+                .foregroundStyle(T3Colors.textSecondary)
             .frame(maxWidth: .infinity, minHeight: 40, alignment: .leading)
                 .contentShape(Rectangle())
             }
@@ -905,7 +905,7 @@ struct FeatureThreadRow: View, Equatable {
                 ProjectBadge(name: context.projectName)
                 Text(context.projectName)
                     .lineLimit(1)
-          .foregroundStyle(T3Colors.textSecondary)
+                    .foregroundStyle(T3Colors.textSecondary)
                 Spacer(minLength: 8)
                 status(at: now)
             }
@@ -927,7 +927,7 @@ struct FeatureThreadRow: View, Equatable {
                 if context.providerLooksTerminal {
                     Text(">_")
                         .font(.system(size: 9.5, weight: .bold, design: .monospaced))
-            .foregroundStyle(T3Colors.syntaxProperty)
+                        .foregroundStyle(T3Colors.syntaxProperty)
                 }
                 Spacer(minLength: 8)
                 if let environmentLabel {
@@ -955,7 +955,7 @@ struct FeatureThreadRow: View, Equatable {
         .padding(.vertical, 8)
         .frame(minHeight: 88)
         .background(
-      isSelected ? T3Colors.subtleStrong : Color.clear,
+            isSelected ? T3Colors.subtleStrong : Color.clear,
             in: RoundedRectangle(cornerRadius: 8)
         )
         .padding(.horizontal, 8)
@@ -985,7 +985,7 @@ struct FeatureThreadRow: View, Equatable {
         .frame(minHeight: 44)
         .padding(.horizontal, 8)
         .background(
-      isSelected ? T3Colors.subtleStrong : Color.clear,
+            isSelected ? T3Colors.subtleStrong : Color.clear,
             in: RoundedRectangle(cornerRadius: 7)
         )
     }
@@ -1021,12 +1021,12 @@ struct FeatureThreadRow: View, Equatable {
 
     private var statusColor: Color {
         switch thread.homeStatus {
-    case .working: T3Colors.statusRunning
-    case .approval: T3Colors.warning
-    case .input: T3Colors.statusInput
+        case .working: T3Colors.statusRunning
+        case .approval: T3Colors.warning
+        case .input: T3Colors.statusInput
         case .failed: T3Colors.danger
-    case .done: T3Colors.success
-    case .ready: T3Colors.textTertiary
+        case .done: T3Colors.success
+        case .ready: T3Colors.textTertiary
         }
     }
 
@@ -1048,7 +1048,7 @@ struct FeatureThreadRow: View, Equatable {
         case .disconnected:
             T3Colors.danger.opacity(0.78)
         case .connected, nil:
-      T3Colors.textTertiary
+            T3Colors.textTertiary
         }
     }
 

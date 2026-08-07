@@ -91,11 +91,11 @@ struct FeatureComposerView: View {
             .padding(.bottom, 10)
             .background {
                 LinearGradient(
-          colors: [
-            .clear,
-            T3Colors.background.opacity(0.94),
-            T3Colors.background,
-          ],
+                    colors: [
+                        .clear,
+                        T3Colors.background.opacity(0.94),
+                        T3Colors.background,
+                    ],
                     startPoint: .top,
                     endPoint: .bottom
                 )
@@ -141,10 +141,10 @@ struct FeatureComposerView: View {
                 collapsedComposer
             }
         }
-    .background(T3Colors.input.opacity(0.98), in: composerShape)
+        .background(T3Colors.input.opacity(0.98), in: composerShape)
         .overlay {
             composerShape
-        .stroke(T3Colors.inputBorder, lineWidth: 1)
+                .stroke(T3Colors.inputBorder, lineWidth: 1)
         }
         .clipShape(composerShape)
     }
@@ -483,7 +483,7 @@ private struct FeatureContextMeter: View {
     var body: some View {
         ZStack {
             Circle()
-        .stroke(T3Colors.border, lineWidth: 2)
+                .stroke(T3Colors.border, lineWidth: 2)
             Circle()
                 .trim(from: 0, to: clampedUsage)
                 .stroke(

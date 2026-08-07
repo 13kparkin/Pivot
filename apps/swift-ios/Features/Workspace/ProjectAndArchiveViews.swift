@@ -531,16 +531,16 @@ public struct AddProjectView: View {
             HStack(spacing: 8) {
                 if isSubmitting {
                     ProgressView()
-            .tint(T3Colors.primaryActionForeground)
+                        .tint(T3Colors.primaryActionForeground)
                 } else {
                     Image(systemName: icon)
                 }
                 Text(isSubmitting ? "Working…" : label)
             }
             .font(.body.weight(.semibold))
-      .foregroundStyle(T3Colors.primaryActionForeground)
+            .foregroundStyle(T3Colors.primaryActionForeground)
             .frame(maxWidth: .infinity, minHeight: 48)
-      .background(T3Colors.primaryAction, in: RoundedRectangle(cornerRadius: 12))
+            .background(T3Colors.primaryAction, in: RoundedRectangle(cornerRadius: 12))
         }
         .buttonStyle(.plain)
         .disabled(isSubmitting)

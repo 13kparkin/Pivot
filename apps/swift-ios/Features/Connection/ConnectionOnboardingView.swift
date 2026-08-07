@@ -58,7 +58,7 @@ public struct ConnectionOnboardingView: View {
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-      .background(T3Colors.background)
+            .background(T3Colors.background)
             .animation(.snappy(duration: 0.24), value: stage)
         }
         .toolbar {
@@ -155,7 +155,7 @@ public struct ConnectionOnboardingView: View {
                         showingScanner = true
                     }
 
-          Divider().overlay(T3Colors.border)
+                    Divider().overlay(T3Colors.border)
 
                     connectionAction(
                         title: "Paste connection link",
@@ -165,7 +165,7 @@ public struct ConnectionOnboardingView: View {
                         pasteConnectionLink()
                     }
 
-          Divider().overlay(T3Colors.border)
+                    Divider().overlay(T3Colors.border)
 
                     connectionAction(
                         title: "Enter details manually",
@@ -234,7 +234,7 @@ public struct ConnectionOnboardingView: View {
                     .accessibilityHint("Reconnects to this server")
 
                     if environment.id != model.snapshot.environments.last?.id {
-            Divider().overlay(T3Colors.border)
+                        Divider().overlay(T3Colors.border)
                     }
                 }
             }
@@ -628,10 +628,10 @@ private extension View {
             .font(.body.monospaced())
             .padding(.horizontal, 14)
             .frame(minHeight: 50)
-      .background(T3Colors.input)
+            .background(T3Colors.input)
             .overlay(alignment: .bottom) {
                 Rectangle()
-          .fill(T3Colors.inputBorder)
+                    .fill(T3Colors.inputBorder)
                     .frame(height: 1)
             }
     }
@@ -641,14 +641,14 @@ private struct ConnectionPrimaryButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .font(.body.weight(.semibold))
-      .foregroundStyle(T3Colors.primaryActionForeground)
+            .foregroundStyle(T3Colors.primaryActionForeground)
             .padding(.horizontal, 16)
             .frame(minHeight: 52)
-      .background(
-        configuration.isPressed
-          ? T3Colors.primaryAction.opacity(0.76)
-          : T3Colors.primaryAction
-      )
+            .background(
+                configuration.isPressed
+                    ? T3Colors.primaryAction.opacity(0.76)
+                    : T3Colors.primaryAction
+            )
             .clipShape(RoundedRectangle(cornerRadius: 12))
     }
 }

@@ -701,7 +701,7 @@ public struct FeatureSelection: Sendable, Equatable, Hashable, Codable {
 
 public enum FeatureAppearance: String, CaseIterable, Sendable, Codable {
     case system
-  case light
+    case light
     case dark
 }
 
@@ -713,7 +713,7 @@ public struct FeatureSettings: Sendable, Equatable, Codable {
     public var defaultSelection: FeatureSelection?
 
     public init(
-    appearance: FeatureAppearance = .system,
+        appearance: FeatureAppearance = .system,
         hapticsEnabled: Bool = true,
         notificationsEnabled: Bool = true,
         liveActivitiesEnabled: Bool = true,

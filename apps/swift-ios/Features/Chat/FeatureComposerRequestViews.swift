@@ -52,16 +52,16 @@ struct FeatureComposerApprovalPanel: View {
                 }
                 .padding(10)
                 .frame(maxWidth: .infinity, alignment: .leading)
-        .background(T3Colors.input, in: RoundedRectangle(cornerRadius: 10))
+                .background(T3Colors.input, in: RoundedRectangle(cornerRadius: 10))
                 .overlay {
                     RoundedRectangle(cornerRadius: 10)
-            .stroke(T3Colors.border, lineWidth: 1)
+                        .stroke(T3Colors.border, lineWidth: 1)
                 }
                 .padding(.top, 9)
             }
             .padding(.horizontal, 15)
             .padding(.vertical, 12)
-      .background(T3Colors.subtle)
+            .background(T3Colors.subtle)
 
             Divider().overlay(T3Colors.separator)
 
@@ -76,8 +76,8 @@ struct FeatureComposerApprovalPanel: View {
                     approvalButton(
                         "Always allow",
                         background: Color.clear,
-            border: T3Colors.border,
-            foreground: T3Colors.textPrimary,
+                        border: T3Colors.border,
+                        foreground: T3Colors.textPrimary,
                         action: { onDecision(.allowForSession) }
                     )
                 }
@@ -108,13 +108,13 @@ struct FeatureComposerApprovalPanel: View {
         _ title: String,
         background: Color,
         border: Color = .clear,
-    foreground: Color = .white,
+        foreground: Color = .white,
         action: @escaping () -> Void
     ) -> some View {
         Button(action: action) {
             Text(title)
                 .font(T3Typography.control.weight(.semibold))
-        .foregroundStyle(foreground)
+                .foregroundStyle(foreground)
                 .frame(maxWidth: .infinity)
                 .frame(height: T3Metrics.minimumTapTarget)
                 .background(background, in: RoundedRectangle(cornerRadius: 10))
@@ -182,7 +182,7 @@ struct FeatureComposerUserInputPanel: View {
                     .padding(.horizontal, 15)
                     .padding(.vertical, 12)
                     .frame(maxWidth: .infinity, alignment: .leading)
-          .background(T3Colors.subtle)
+                    .background(T3Colors.subtle)
 
                     Divider().overlay(T3Colors.separator)
 
@@ -218,12 +218,12 @@ struct FeatureComposerUserInputPanel: View {
                     .padding(.horizontal, 12)
                     .frame(minHeight: T3Metrics.minimumTapTarget)
                     .background(
-            T3Colors.input,
+                        T3Colors.input,
                         in: RoundedRectangle(cornerRadius: 11)
                     )
                     .overlay {
                         RoundedRectangle(cornerRadius: 11)
-              .stroke(T3Colors.inputBorder, lineWidth: 1)
+                            .stroke(T3Colors.inputBorder, lineWidth: 1)
                     }
                     .padding(.horizontal, 10)
                     .padding(.top, 7)
@@ -321,7 +321,7 @@ struct FeatureComposerUserInputPanel: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(option.label)
                         .font(T3Typography.control)
-            .foregroundStyle(T3Colors.textPrimary)
+                        .foregroundStyle(T3Colors.textPrimary)
 
                     if !option.detail.isEmpty, option.detail != option.label {
                         Text(option.detail)
@@ -344,7 +344,7 @@ struct FeatureComposerUserInputPanel: View {
                         .frame(width: 20, height: 20)
                         .overlay {
                             RoundedRectangle(cornerRadius: 5)
-                .stroke(T3Colors.border, lineWidth: 1)
+                                .stroke(T3Colors.border, lineWidth: 1)
                         }
                 }
             }
@@ -352,7 +352,7 @@ struct FeatureComposerUserInputPanel: View {
             .padding(.vertical, 9)
             .frame(maxWidth: .infinity, minHeight: T3Metrics.minimumTapTarget, alignment: .leading)
             .background(
-        isSelected ? T3Colors.accent.opacity(0.12) : T3Colors.subtle,
+                isSelected ? T3Colors.accent.opacity(0.12) : T3Colors.subtle,
                 in: RoundedRectangle(cornerRadius: 10)
             )
             .overlay {
