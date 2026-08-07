@@ -150,6 +150,30 @@ final class WebSocketRPCRaceTests: XCTestCase {
         await client.stop()
     }
 
+    func testRequestEnteringAlreadyCancelledNeverInstallsOrSends() async throws {
+        let connection = AutoReplyConnection()
+        let gate = RequestCancellationGate()
+        let client = WebSocketRPCClient(
+            connector: SequencedConnector(connections: [connection]),
+            endpointProvider: { URL(string: "wss://studio.example/ws")! }
+        )
+        let request = Task {
+            await gate.wait()
+            return try await client.request("server.cancelledBeforeInstall", as: JSONValue.self)
+        }
+        await gate.waitUntilEntered()
+        request.cancel()
+        await gate.release()
+
+        do {
+            _ = try await request.value
+            XCTFail("An already-cancelled request must fail before installation")
+        } catch is CancellationError {}
+        let sentRequestCount = await connection.sentRequestCount()
+        XCTAssertEqual(sentRequestCount, 0)
+        await client.stop()
+    }
+
     func testDisconnectWhileUnarySendIsSuspendedFailsWithoutReplay() async throws {
         let first = SuspendedSendConnection()
         let second = AutoReplyConnection()
@@ -313,6 +337,37 @@ final class WebSocketRPCRaceTests: XCTestCase {
         XCTAssertTrue(observedInterrupt)
         await connection.releaseRequest()
         await client.stop()
+    }
+}
+
+private actor RequestCancellationGate {
+    private var entered = false
+    private var released = false
+    private var releaseContinuation: CheckedContinuation<Void, Never>?
+    private var entryWaiters: [CheckedContinuation<Void, Never>] = []
+
+    func wait() async {
+        entered = true
+        let waiters = entryWaiters
+        entryWaiters.removeAll()
+        waiters.forEach { $0.resume() }
+        guard !released else { return }
+        await withCheckedContinuation { continuation in
+            releaseContinuation = continuation
+        }
+    }
+
+    func waitUntilEntered() async {
+        guard !entered else { return }
+        await withCheckedContinuation { continuation in
+            entryWaiters.append(continuation)
+        }
+    }
+
+    func release() {
+        released = true
+        releaseContinuation?.resume()
+        releaseContinuation = nil
     }
 }
 

@@ -364,6 +364,12 @@ public actor WebSocketRPCClient {
         )
         return try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { continuation in
+                // If cancellation won the race before onCancel could observe
+                // an installed request, complete locally and never send it.
+                guard !Task.isCancelled else {
+                    continuation.resume(throwing: CancellationError())
+                    return
+                }
                 unary[id] = UnaryRequest(
                     envelope: envelope,
                     sent: false,
