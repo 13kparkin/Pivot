@@ -552,6 +552,32 @@ public final class FeatureRootModel {
         }
     }
 
+    /// Applies appearance optimistically so selecting a theme updates every
+    /// surface immediately, then persists just that preference in the current
+    /// settings snapshot. Other unsaved Settings edits remain drafts.
+    @discardableResult
+    public func saveAppearance(_ appearance: FeatureAppearance) async -> Bool {
+        let previous = snapshot.settings
+        guard previous.appearance != appearance else { return true }
+
+        var updated = previous
+        updated.appearance = appearance
+        snapshot.settings = updated
+
+        do {
+            try await client.saveSettings(updated)
+            return true
+        } catch {
+            if snapshot.settings == updated {
+                snapshot.settings = previous
+            }
+            if !Self.isBenignCancellation(error) {
+                errorMessage = error.localizedDescription
+            }
+            return false
+        }
+    }
+
     @discardableResult
     private func perform(
         reportError: Bool = true,

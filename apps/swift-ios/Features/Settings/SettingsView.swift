@@ -124,6 +124,16 @@ public struct SettingsView: View {
             .onDisappear {
                 model.setConnectionManagementPresented(false)
             }
+            .onChange(of: settings.appearance) { _, appearance in
+                Task {
+                    let didSave = await model.saveAppearance(appearance)
+                    if !didSave {
+                        settings.appearance = model.snapshot.settings.appearance
+                        saveErrorMessage = model.errorMessage
+                            ?? "Theme preference could not be saved."
+                    }
+                }
+            }
         }
         .presentationDragIndicator(.visible)
     }

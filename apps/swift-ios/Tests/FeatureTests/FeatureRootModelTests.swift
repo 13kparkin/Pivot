@@ -6,6 +6,19 @@ import Testing
 @Suite("Feature root model")
 struct FeatureRootModelTests {
     @Test
+    func appearanceAppliesImmediatelyAndPersistsWithoutSavingTheDraft() async {
+        let client = FeatureClientStub()
+        let model = testRootModel(client: client)
+
+        let save = Task { await model.saveAppearance(.light) }
+        await Task.yield()
+
+        #expect(model.snapshot.settings.appearance == .light)
+        #expect(await save.value)
+        #expect(client.savedSettings.last?.appearance == .light)
+    }
+
+    @Test
     func backgroundRefreshUsesTheBoundedClientPath() async {
         let client = FeatureClientStub()
         client.backgroundSnapshotValue = FeatureSnapshot(
@@ -1203,6 +1216,7 @@ private final class FeatureClientStub: FeatureClient {
     var loadEarlierCallCount = 0
     var resolvedInputID: String?
     var resolvedInputAnswers: [String: FeatureInputAnswer]?
+    var savedSettings: [FeatureSettings] = []
 
     init() {
         let pair = AsyncStream<FeatureEvent>.makeStream()
@@ -1332,5 +1346,7 @@ private final class FeatureClientStub: FeatureClient {
         resolvedInputID = id
         resolvedInputAnswers = answers
     }
-    func saveSettings(_ settings: FeatureSettings) async throws {}
+    func saveSettings(_ settings: FeatureSettings) async throws {
+        savedSettings.append(settings)
+    }
 }
