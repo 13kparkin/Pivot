@@ -1341,8 +1341,9 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
           }
           // A completed assistant message only settles the turn once the
           // session is no longer running it. Providers may emit several
-          // assistant messages per turn, and the turn must stay unsettled
-          // until the provider reports turn end.
+          // assistant messages per turn (commentary between tool calls), and
+          // the turn must stay unsettled until the provider reports turn end
+          // (projected as thread.session-set leaving the "running" status).
           const session = yield* projectionThreadSessionRepository.getByThreadId({
             threadId: event.payload.threadId,
           });
@@ -1766,9 +1767,10 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
           Effect.provideService(Path.Path, path),
           Effect.provideService(ServerConfig, serverConfig),
           Effect.asVoid,
-          Effect.catchTag("SqlError", (sqlError) =>
-            Effect.fail(toPersistenceSqlError("ProjectionPipeline.projectEvent:query")(sqlError)),
-          ),
+          Effect.catchTags({
+            SqlError: (sqlError) =>
+              Effect.fail(toPersistenceSqlError("ProjectionPipeline.projectEvent:query")(sqlError)),
+          }),
         );
     };
 
