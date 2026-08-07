@@ -1,6 +1,5 @@
 import ImageIO
 import PhotosUI
-import OSLog
 import SwiftUI
 import UniformTypeIdentifiers
 import UIKit
@@ -50,6 +49,7 @@ struct FeatureImageAttachmentPicker: View {
 
     @State private var isAttachmentSourcePresented = false
     @State private var isPhotoLibraryPresented = false
+    @State private var photoSelections: [PhotosPickerItem] = []
     @State private var isCameraPresented = false
     @State private var isFileImporterPresented = false
     @State private var sourcePresentationTask: Task<Void, Never>?
@@ -90,21 +90,13 @@ struct FeatureImageAttachmentPicker: View {
             Button("Files") { present(.files) }
             Button("Cancel", role: .cancel) {}
         }
-        .fullScreenCover(isPresented: $isPhotoLibraryPresented) {
-            FeaturePhotoLibraryPicker(
-                maximumCount: max(1, remainingCount),
-                onSelect: { images in
-                    isPhotoLibraryPresented = false
-                    loadPhotoSelections(images)
-                },
-                onFailure: { message in
-                    isPhotoLibraryPresented = false
-                    errorMessage = message
-                },
-                onCancel: { isPhotoLibraryPresented = false }
-            )
-            .ignoresSafeArea()
-        }
+        .photosPicker(
+            isPresented: $isPhotoLibraryPresented,
+            selection: $photoSelections,
+            maxSelectionCount: max(1, remainingCount),
+            matching: .images,
+            preferredItemEncoding: .compatible
+        )
         .fullScreenCover(isPresented: $isCameraPresented) {
             FeatureCameraPicker(
                 onCapture: loadCapturedImage,
@@ -131,6 +123,9 @@ struct FeatureImageAttachmentPicker: View {
         }
         .onDisappear {
             sourcePresentationTask?.cancel()
+        }
+        .onChange(of: photoSelections) { _, selections in
+            loadPhotoSelections(selections)
         }
     }
 
@@ -174,16 +169,20 @@ struct FeatureImageAttachmentPicker: View {
         }
     }
 
-    private func loadPhotoSelections(_ images: [Data]) {
-        guard !images.isEmpty, canAdd else { return }
-        let selected = Array(images.prefix(remainingCount))
+    private func loadPhotoSelections(_ selections: [PhotosPickerItem]) {
+        guard !selections.isEmpty, canAdd else { return }
+        let selected = Array(selections.prefix(remainingCount))
+        photoSelections = []
         let firstOrdinal = attachments.count + preparationState.pendingItemCount + 1
         let operation = preparationState.begin(itemCount: selected.count)
 
         Task {
             defer { preparationState.finish(operation) }
-            for (offset, data) in selected.enumerated() {
+            for (offset, item) in selected.enumerated() {
                 do {
+                    guard let data = try await item.loadTransferable(type: Data.self) else {
+                        throw FeatureImageAttachmentError.invalidImage
+                    }
                     try await appendImage(data, ordinal: firstOrdinal + offset)
                 } catch {
                     errorMessage = error.localizedDescription
@@ -248,125 +247,6 @@ struct FeatureImageAttachmentPicker: View {
             try FeatureImageProcessor.attachment(from: data, ordinal: ordinal)
         }.value
         attachments.append(attachment)
-    }
-}
-
-struct FeaturePhotoLibraryItem: @unchecked Sendable {
-    let provider: NSItemProvider
-
-    func loadData() async throws -> Data {
-        guard let typeIdentifier = provider.registeredTypeIdentifiers.first(where: { identifier in
-            UTType(identifier)?.conforms(to: .image) == true
-        }) else {
-            throw FeatureImageAttachmentError.invalidImage
-        }
-
-        return try await withCheckedThrowingContinuation { continuation in
-            provider.loadDataRepresentation(forTypeIdentifier: typeIdentifier) { data, error in
-                if let data {
-                    continuation.resume(returning: data)
-                } else {
-                    continuation.resume(
-                        throwing: error ?? FeatureImageAttachmentError.encodingFailed
-                    )
-                }
-            }
-        }
-    }
-}
-
-private struct FeaturePhotoLibraryPicker: UIViewControllerRepresentable {
-    let maximumCount: Int
-    let onSelect: ([Data]) -> Void
-    let onFailure: (String) -> Void
-    let onCancel: () -> Void
-
-    func makeCoordinator() -> Coordinator {
-        Coordinator(onSelect: onSelect, onFailure: onFailure, onCancel: onCancel)
-    }
-
-    func makeUIViewController(context: Context) -> PHPickerViewController {
-        var configuration = PHPickerConfiguration(photoLibrary: .shared())
-        configuration.filter = .images
-        configuration.selectionLimit = maximumCount
-        // The composer always normalizes uploads to JPEG, so asking Photos for
-        // a compatible representation avoids slow RAW/HEIF materialization.
-        configuration.preferredAssetRepresentationMode = .compatible
-        let controller = PHPickerViewController(configuration: configuration)
-        controller.delegate = context.coordinator
-        return controller
-    }
-
-    func updateUIViewController(_ controller: PHPickerViewController, context: Context) {}
-
-    final class Coordinator: NSObject, PHPickerViewControllerDelegate {
-        private let onSelect: ([Data]) -> Void
-        private let onFailure: (String) -> Void
-        private let onCancel: () -> Void
-        private var didFinish = false
-
-        init(
-            onSelect: @escaping ([Data]) -> Void,
-            onFailure: @escaping (String) -> Void,
-            onCancel: @escaping () -> Void
-        ) {
-            self.onSelect = onSelect
-            self.onFailure = onFailure
-            self.onCancel = onCancel
-        }
-
-        func picker(_ picker: PHPickerViewController, didFinishPicking results: [PHPickerResult]) {
-            guard !didFinish else { return }
-            didFinish = true
-            guard !results.isEmpty else {
-                Task { @MainActor in
-                    await Task.yield()
-                    onCancel()
-                }
-                return
-            }
-
-            // Keep the picker and its item providers alive until Photos has
-            // materialized every selection. Dismissing the SwiftUI cover from
-            // inside this delegate callback can tear down PhotosUI while its
-            // provider transition is still in flight.
-            picker.view.isUserInteractionEnabled = false
-            let activity = UIActivityIndicatorView(style: .large)
-            activity.translatesAutoresizingMaskIntoConstraints = false
-            activity.startAnimating()
-            picker.view.addSubview(activity)
-            NSLayoutConstraint.activate([
-                activity.centerXAnchor.constraint(equalTo: picker.view.centerXAnchor),
-                activity.centerYAnchor.constraint(equalTo: picker.view.centerYAnchor),
-            ])
-
-            let items = results.map { FeaturePhotoLibraryItem(provider: $0.itemProvider) }
-            Task { @MainActor in
-                var images: [Data] = []
-                var firstError: Error?
-                for item in items {
-                    do {
-                        let data = try await item.loadData()
-                        images.append(data)
-                    } catch {
-                        firstError = firstError ?? error
-                        Self.logger.error(
-                            "Photo selection materialization failed: \(error.localizedDescription, privacy: .private)"
-                        )
-                    }
-                }
-                if images.isEmpty, let firstError {
-                    onFailure(firstError.localizedDescription)
-                } else {
-                    onSelect(images)
-                }
-            }
-        }
-
-        private static let logger = Logger(
-            subsystem: Bundle.main.bundleIdentifier ?? "codes.t3.swift-ios",
-            category: "Attachments"
-        )
     }
 }
 

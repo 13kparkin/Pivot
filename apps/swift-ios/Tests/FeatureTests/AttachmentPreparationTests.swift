@@ -1,7 +1,5 @@
 import Foundation
 import Testing
-import UniformTypeIdentifiers
-import UIKit
 @testable import T3Code
 
 @Suite("Attachment preparation")
@@ -72,39 +70,5 @@ struct AttachmentPreparationTests {
             isSending: false,
             preparationState: state
         ))
-    }
-
-    @Test
-    func photoLibraryItemLoadsItsConcreteImageRepresentation() async throws {
-        let expected = Data([0x89, 0x50, 0x4E, 0x47])
-        let provider = NSItemProvider()
-        provider.registerDataRepresentation(
-            forTypeIdentifier: UTType.png.identifier,
-            visibility: .all
-        ) { completion in
-            completion(expected, nil)
-            return nil
-        }
-
-        let loaded = try await FeaturePhotoLibraryItem(provider: provider).loadData()
-
-        #expect(loaded == expected)
-    }
-
-    @Test
-    func photoLibraryItemRejectsProvidersWithoutAnImage() async {
-        let provider = NSItemProvider(
-            item: "not an image" as NSString,
-            typeIdentifier: UTType.plainText.identifier
-        )
-
-        do {
-            _ = try await FeaturePhotoLibraryItem(provider: provider).loadData()
-            Issue.record("Expected a non-image provider to be rejected")
-        } catch FeatureImageAttachmentError.invalidImage {
-            // Expected.
-        } catch {
-            Issue.record("Unexpected error: \(error)")
-        }
     }
 }
