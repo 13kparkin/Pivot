@@ -6,6 +6,12 @@ import {
   effectiveSnoozed,
   threadWokeAt,
 } from "@t3tools/client-runtime/state/thread-settled";
+import {
+  resolveSettledTimestamp,
+  sortSettledThreadsForListV2,
+  sortThreadsForListV2,
+  threadListV2Priority,
+} from "@t3tools/client-runtime/state/thread-sort";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/models";
 import {
   scopeProjectRef,
@@ -117,14 +123,11 @@ import {
   isTrailingDoubleClick,
   orderItemsByPreferredIds,
   resolveAdjacentThreadId,
-  resolveSettledTimestamp,
   resolveSidebarV2Status,
   searchSidebarThreadsByTitle,
   resolveWorkingStartedAt,
   shouldNavigateAfterProjectRemoval,
   sortLogicalProjectsForSidebar,
-  sortSettledThreadsForSidebarV2,
-  sortThreadsForSidebarV2,
 } from "./Sidebar.logic";
 import { resolveLocalCheckoutBranchMismatch } from "./BranchToolbar.logic";
 import {
@@ -505,8 +508,7 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
     prState !== "closed";
   // Background work and approvals recede when read. Input requests stay
   // fully prominent because the agent cannot continue without the user.
-  const isInFlight =
-    status === "working" || status === "monitoring" || status === "approval";
+  const isInFlight = status === "working" || status === "monitoring" || status === "approval";
   const shouldRecede =
     (status === "ready" || isInFlight) && !isUnread && !isWoke && !props.isActive && !isSelected;
   // Status hues follow the system-wide convention set by sidebar v1 and the
@@ -1736,20 +1738,22 @@ export default function SidebarV2() {
       return {
         // Same static creation order as the inbox: a pin freezes prominence,
         // it does not introduce a new ordering scheme.
-        pinnedThreads: sortThreadsForSidebarV2(pinned),
-        activeThreads: sortThreadsForSidebarV2(active, (thread) => {
-          const threadKey = scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
-          if (wokeAtByThreadKey.has(threadKey)) return "woke";
-          if (thread.settledOverride === "active") return "unsettled";
-          return "default";
-        }),
+        pinnedThreads: sortThreadsForListV2(pinned),
+        activeThreads: sortThreadsForListV2(active, (thread) =>
+          threadListV2Priority(thread, {
+            wokeAt:
+              wokeAtByThreadKey.get(
+                scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
+              ) ?? null,
+          }),
+        ),
         // Soonest wake first: "what comes back next" is the shelf's question.
         snoozedThreads: snoozed.toSorted(
           (left, right) =>
             firstValidTimestampMs(left.snoozedUntil ?? null) -
             firstValidTimestampMs(right.snoozedUntil ?? null),
         ),
-        settledThreads: sortSettledThreadsForSidebarV2(settled),
+        settledThreads: sortSettledThreadsForListV2(settled),
         snoozeNow: preciseNow,
       };
     }, [

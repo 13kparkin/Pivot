@@ -463,13 +463,6 @@ export function resolveSidebarV2Status(thread: SidebarV2StatusInput): SidebarV2S
   return "ready";
 }
 
-/** NaN-safe Date.parse for sort comparators: a malformed timestamp must not
-    poison the whole ordering, so it sinks to the epoch instead. */
-export function parseTimestampMs(isoDate: string): number {
-  const parsed = Date.parse(isoDate);
-  return Number.isNaN(parsed) ? 0 : parsed;
-}
-
 /** First VALID timestamp wins: `a ?? b` falls through on null, but a present-
     yet-malformed string must also fall through to the next candidate rather
     than sink the row to the epoch. */
@@ -496,46 +489,6 @@ export function firstValidTimestamp(
   return null;
 }
 
-export type SidebarV2ThreadPriority = "woke" | "unsettled" | "default";
-
-const SIDEBAR_V2_THREAD_PRIORITY_RANK: Record<SidebarV2ThreadPriority, number> = {
-  woke: 0,
-  unsettled: 1,
-  default: 2,
-};
-
-/** A wake remains attention-bearing until the user visits it. Invalid local
-    visit data must not silently clear a valid server-backed wake. */
-export function isSidebarV2ThreadWoke(input: {
-  readonly wokeAt: string | null;
-  readonly lastVisitedAt: string | undefined;
-}): boolean {
-  if (input.wokeAt === null) return false;
-  const wokeAtMs = Date.parse(input.wokeAt);
-  if (Number.isNaN(wokeAtMs)) return false;
-  if (input.lastVisitedAt === undefined) return true;
-  const lastVisitedAtMs = Date.parse(input.lastVisitedAt);
-  return Number.isNaN(lastVisitedAtMs) || lastVisitedAtMs < wokeAtMs;
-}
-
-// v2 sort: attention transitions come first (woke, then manually
-// un-settled), with static creation order inside each group. Ordinary
-// activity never reorders the list.
-export function sortThreadsForSidebarV2<
-  T extends { readonly id: string; readonly createdAt: string },
->(
-  threads: readonly T[],
-  getPriority: (thread: T) => SidebarV2ThreadPriority = () => "default",
-): T[] {
-  return [...threads].toSorted(
-    (left, right) =>
-      SIDEBAR_V2_THREAD_PRIORITY_RANK[getPriority(left)] -
-        SIDEBAR_V2_THREAD_PRIORITY_RANK[getPriority(right)] ||
-      parseTimestampMs(right.createdAt) - parseTimestampMs(left.createdAt) ||
-      left.id.localeCompare(right.id),
-  );
-}
-
 /**
  * Search the already-ordered sidebar thread collection by title only.
  * Keeping the input order means lifecycle ordering (active, snoozed, settled)
@@ -548,51 +501,6 @@ export function searchSidebarThreadsByTitle<T extends { readonly title: string }
   const normalizedQuery = query.trim().toLowerCase();
   if (normalizedQuery.length === 0) return [];
   return threads.filter((thread) => thread.title.toLowerCase().includes(normalizedQuery));
-}
-
-type SettledTimestampInput = Pick<
-  SidebarThreadSummary,
-  "settledAt" | "latestUserMessageAt" | "latestTurn" | "updatedAt"
->;
-
-/** The timestamp a settled row sorts and labels by: settledAt when stamped
-    (explicit settles), otherwise last activity — the same candidates
-    threadLastActivityAt feeds the auto-settle window (user message plus all
-    latestTurn stamps), so a thread whose last activity was a turn completion
-    doesn't sort by an older message time. updatedAt is the final net. */
-export function resolveSettledTimestamp(thread: SettledTimestampInput): string | null {
-  const settledAt = firstValidTimestamp(thread.settledAt);
-  if (settledAt !== null) return settledAt;
-  let latest: string | null = null;
-  let latestMs = Number.NEGATIVE_INFINITY;
-  for (const candidate of [
-    thread.latestUserMessageAt,
-    thread.latestTurn?.requestedAt,
-    thread.latestTurn?.startedAt,
-    thread.latestTurn?.completedAt,
-  ]) {
-    if (candidate == null) continue;
-    const parsed = Date.parse(candidate);
-    if (!Number.isNaN(parsed) && parsed > latestMs) {
-      latest = candidate;
-      latestMs = parsed;
-    }
-  }
-  return latest ?? firstValidTimestamp(thread.updatedAt);
-}
-
-// Settled rows are history, so they order by when the work ENDED, not when
-// the thread was created or last touched.
-export function sortSettledThreadsForSidebarV2<
-  T extends SettledTimestampInput & { readonly id: string },
->(threads: readonly T[]): T[] {
-  const timestampMs = (thread: T) => {
-    const timestamp = resolveSettledTimestamp(thread);
-    return timestamp === null ? 0 : Date.parse(timestamp);
-  };
-  return [...threads].toSorted(
-    (left, right) => timestampMs(right) - timestampMs(left) || left.id.localeCompare(right.id),
-  );
 }
 
 /** The timestamp a working thread's elapsed label counts from: the running
