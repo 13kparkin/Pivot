@@ -102,8 +102,14 @@ public struct T3ConnectView: View {
     @ViewBuilder
     private var authenticationView: some View {
         if let clerk = controller.clerk {
-            AuthView(mode: .signInOrUp)
-                .prefetchClerkImages()
+            T3ConnectAuthenticationView {
+                await controller.refresh()
+                if controller.account != nil {
+                    isAuthPresented = false
+                    return true
+                }
+                return false
+            }
                 .environment(\.clerkTheme, T3ConnectClerkAppearance.theme)
                 .environment(clerk)
                 .preferredColorScheme(.dark)
@@ -271,6 +277,260 @@ public struct T3ConnectView: View {
 }
 
 @MainActor
+private struct T3ConnectAuthenticationView: View {
+    @SwiftUI.Environment(\.dismiss) private var dismiss
+    @SwiftUI.Environment(Clerk.self) private var clerk
+    @State private var activeProvider: OAuthProvider?
+    @State private var errorMessage: String?
+    @State private var isEmailPresented = false
+
+    private let onAuthenticationChanged: @MainActor () async -> Bool
+    private let preferredProviders: [OAuthProvider] = [
+        .apple,
+        .github,
+        .google,
+        .microsoft,
+    ]
+
+    init(
+        onAuthenticationChanged: @escaping @MainActor () async -> Bool
+    ) {
+        self.onAuthenticationChanged = onAuthenticationChanged
+    }
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 0) {
+                    brand
+                        .padding(.bottom, 38)
+
+                    Text("Continue to T3 Code")
+                        .font(.system(.largeTitle, design: .default, weight: .bold))
+                        .foregroundStyle(T3Colors.textPrimary)
+                        .padding(.bottom, 10)
+
+                    Text("Sign in to reach your environments from anywhere.")
+                        .font(T3Typography.threadBody)
+                        .foregroundStyle(T3Colors.textSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.bottom, 34)
+
+                    providerButtons
+
+                    emailButton
+                        .padding(.top, 24)
+                }
+                .frame(maxWidth: 440, alignment: .leading)
+                .padding(.horizontal, 24)
+                .padding(.top, 34)
+                .padding(.bottom, 40)
+                .frame(maxWidth: .infinity)
+            }
+            .scrollBounceBehavior(.basedOnSize)
+            .background(T3Colors.background.ignoresSafeArea())
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        dismiss()
+                    } label: {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 15, weight: .semibold))
+                            .foregroundStyle(T3Colors.textSecondary)
+                            .frame(width: T3Metrics.minimumTapTarget, height: T3Metrics.minimumTapTarget)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Close")
+                }
+            }
+            .toolbarBackground(.hidden, for: .navigationBar)
+        }
+        .task {
+            if clerk.environment == nil {
+                _ = try? await clerk.refreshEnvironment()
+            }
+        }
+        .sheet(isPresented: $isEmailPresented, onDismiss: authenticationDidFinish) {
+            AuthView(mode: .signInOrUp)
+                .prefetchClerkImages()
+                .environment(\.clerkTheme, T3ConnectClerkAppearance.theme)
+                .environment(clerk)
+                .preferredColorScheme(.dark)
+        }
+        .alert(
+            "Couldn’t sign in",
+            isPresented: Binding(
+                get: { errorMessage != nil },
+                set: { if !$0 { errorMessage = nil } }
+            )
+        ) {
+            Button("OK") { errorMessage = nil }
+        } message: {
+            Text(errorMessage ?? "Please try again.")
+        }
+    }
+
+    private var brand: some View {
+        HStack(spacing: 10) {
+            Text("T3")
+                .font(.system(size: 14, weight: .heavy, design: .rounded))
+                .foregroundStyle(.black)
+                .frame(width: 32, height: 32)
+                .background(.white)
+                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+
+            Text("T3 Connect")
+                .font(T3Typography.homeTitle)
+                .foregroundStyle(T3Colors.textPrimary)
+        }
+        .accessibilityElement(children: .combine)
+    }
+
+    @ViewBuilder
+    private var providerButtons: some View {
+        if clerk.environment == nil {
+            HStack(spacing: 10) {
+                ProgressView()
+                    .tint(.white)
+                Text("Loading sign-in options…")
+                    .font(T3Typography.control)
+                    .foregroundStyle(T3Colors.textSecondary)
+            }
+            .frame(maxWidth: .infinity, minHeight: 56)
+        } else {
+            VStack(spacing: 12) {
+                ForEach(availableProviders) { provider in
+                    providerButton(provider)
+                }
+            }
+        }
+    }
+
+    private func providerButton(_ provider: OAuthProvider) -> some View {
+        let isPrimary = provider == .apple || provider == .github
+        let foreground: Color = isPrimary ? .black : T3Colors.textPrimary
+
+        return Button {
+            Task { await signIn(with: provider) }
+        } label: {
+            HStack(spacing: 12) {
+                T3ConnectAuthProviderIcon(provider: provider)
+                    .frame(width: 22, height: 22)
+
+                Text("Continue with \(provider.name)")
+                    .font(.system(.body, design: .default, weight: .semibold))
+                    .foregroundStyle(foreground)
+
+                Spacer(minLength: 8)
+
+                if activeProvider == provider {
+                    ProgressView()
+                        .tint(foreground)
+                }
+            }
+            .padding(.horizontal, 18)
+            .frame(maxWidth: .infinity, minHeight: 56)
+            .background(isPrimary ? Color.white : T3Colors.surfaceRaised)
+            .overlay {
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .stroke(isPrimary ? Color.clear : T3Colors.border, lineWidth: 1)
+            }
+            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .disabled(activeProvider != nil)
+        .opacity(activeProvider == nil || activeProvider == provider ? 1 : 0.55)
+        .accessibilityIdentifier("t3-connect-auth-\(provider.strategy)")
+    }
+
+    private var emailButton: some View {
+        Button {
+            isEmailPresented = true
+        } label: {
+            HStack(spacing: 10) {
+                Image(systemName: "envelope")
+                    .font(.system(size: 15, weight: .medium))
+                Text("Use email instead")
+                    .font(T3Typography.control)
+                Spacer()
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 13, weight: .semibold))
+            }
+            .foregroundStyle(T3Colors.textSecondary)
+            .frame(maxWidth: .infinity, minHeight: T3Metrics.minimumTapTarget)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var availableProviders: [OAuthProvider] {
+        guard let environment = clerk.environment else { return [] }
+        let enabledStrategies = Set(
+            environment.userSettings.social.values
+                .filter { $0.enabled && $0.authenticatable }
+                .map(\.strategy)
+        )
+        return preferredProviders.filter { enabledStrategies.contains($0.strategy) }
+    }
+
+    private func signIn(with provider: OAuthProvider) async {
+        activeProvider = provider
+        defer { activeProvider = nil }
+
+        do {
+            if provider == .apple {
+                try await clerk.auth.signInWithApple()
+            } else {
+                try await clerk.auth.signInWithOAuth(provider: provider)
+            }
+
+            if !(await onAuthenticationChanged()) {
+                isEmailPresented = true
+            }
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    private func authenticationDidFinish() {
+        Task { _ = await onAuthenticationChanged() }
+    }
+}
+
+private struct T3ConnectAuthProviderIcon: View {
+    let provider: OAuthProvider
+
+    @ViewBuilder
+    var body: some View {
+        switch provider {
+        case .apple:
+            Image(systemName: "apple.logo")
+                .resizable()
+                .scaledToFit()
+                .foregroundStyle(.black)
+        case .github:
+            Image("AuthGitHub")
+                .resizable()
+                .scaledToFit()
+        case .google:
+            Image("AuthGoogle")
+                .resizable()
+                .scaledToFit()
+        case .microsoft:
+            Image("AuthMicrosoft")
+                .resizable()
+                .scaledToFit()
+        default:
+            Image(systemName: "person.crop.circle")
+                .resizable()
+                .scaledToFit()
+                .foregroundStyle(T3Colors.textPrimary)
+        }
+    }
+}
+
+@MainActor
 private enum T3ConnectClerkAppearance {
     static let theme = ClerkTheme(
         colors: .init(
@@ -288,7 +548,7 @@ private enum T3ConnectClerkAppearance {
             ring: .white,
             muted: T3Colors.surfaceRaised,
             shadow: .black,
-            border: .white
+            border: T3Colors.border
         ),
         design: .init(borderRadius: 12)
     )
