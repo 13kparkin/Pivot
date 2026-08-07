@@ -142,7 +142,11 @@ async function isStale(path: string, sinceDate: string | undefined): Promise<boo
   if (sinceDate === undefined) return false;
   try {
     const info = await NodeFSP.stat(path);
-    return info.mtime.toISOString().slice(0, 10) < sinceDate;
+    // One day of slack: mtime is UTC while sinceDate is a calendar day, and a
+    // boundary file must never be dropped just because the two disagree.
+    const cutoff = new Date(`${sinceDate}T00:00:00.000Z`);
+    cutoff.setUTCDate(cutoff.getUTCDate() - 1);
+    return info.mtime < cutoff;
   } catch {
     return false;
   }
@@ -204,7 +208,7 @@ function record(
 
 const projectOf = (cwd: unknown): string => {
   if (typeof cwd !== "string" || cwd.length === 0) return "unknown";
-  const parts = cwd.split("/").filter((part) => part.length > 0);
+  const parts = cwd.split(/[/\\]/).filter((part) => part.length > 0);
   return parts.at(-1) ?? "unknown";
 };
 
@@ -336,6 +340,10 @@ async function scanCodex(
     let previous: CodexSnapshot | undefined;
     let model = "unknown";
     let cwd: unknown;
+    // Codex only writes a service tier when the turn ran on a premium tier.
+    // Absent that marker the turn is standard, so cost is never inflated by
+    // assuming the multiplier applies.
+    let fast = false;
 
     for await (const entry of readJsonLines(file)) {
       const payload = entry["payload"];
@@ -349,6 +357,8 @@ async function scanCodex(
         if (typeof candidate === "string" && candidate.length > 0) model = candidate;
         const candidateCwd = payloadRecord?.["cwd"];
         if (typeof candidateCwd === "string") cwd = candidateCwd;
+        const tier = payloadRecord?.["service_tier"];
+        if (typeof tier === "string") fast = tier === "fast" || tier === "priority";
       }
       if (payloadRecord?.["type"] !== "token_count") continue;
 
@@ -415,7 +425,7 @@ async function scanCodex(
                 cacheReadTokens: delta.cacheReadTokens,
                 cacheWrite5mTokens: 0,
                 cacheWrite1hTokens: 0,
-                fast: true,
+                fast,
               },
               pricing,
             );

@@ -33,6 +33,37 @@ const compactTokens = (value: number): string => {
 const percent = (numerator: number, denominator: number): string =>
   denominator === 0 ? "0%" : `${((numerator / denominator) * 100).toFixed(1)}%`;
 
+/** Providers report differently sized quota windows, so the tile names the real one. */
+const limitWindowLabel = (windowMinutes: number): string => {
+  if (windowMinutes >= 10080) return `${Math.round(windowMinutes / 10080)}w`;
+  if (windowMinutes >= 1440) return `${Math.round(windowMinutes / 1440)}d`;
+  if (windowMinutes >= 60) return `${Math.round(windowMinutes / 60)}h`;
+  return `${windowMinutes}m`;
+};
+
+/**
+ * Days with no usage are absent from the series, so they are filled back in.
+ * Without this the columns would sit adjacent and a quiet week would read as
+ * continuous activity.
+ */
+const fillMissingDays = (daily: MergedUsage["daily"]): MergedUsage["daily"] => {
+  const first = daily.at(0)?.date;
+  const last = daily.at(-1)?.date;
+  if (first === undefined || last === undefined) return daily;
+  const byDate = new Map(daily.map((day) => [day.date, day]));
+  const startMs = Date.parse(`${first}T00:00:00.000Z`);
+  const endMs = Date.parse(`${last}T00:00:00.000Z`);
+  if (Number.isNaN(startMs) || Number.isNaN(endMs) || endMs < startMs) return daily;
+
+  const DAY_MS = 86_400_000;
+  // Bounded so a stray date can never produce an unbounded series.
+  const span = Math.min(Math.round((endMs - startMs) / DAY_MS) + 1, 400);
+  return Array.from({ length: span }, (_unused, index) => {
+    const date = new Date(startMs + index * DAY_MS).toISOString().slice(0, 10);
+    return byDate.get(date) ?? { date, costUsd: 0, totalTokens: 0, byProvider: [] };
+  });
+};
+
 function StatTile({ label, value, detail }: { label: string; value: string; detail?: string }) {
   return (
     <div className="min-w-0 px-4 py-3 sm:px-5">
@@ -53,12 +84,13 @@ function StatTile({ label, value, detail }: { label: string; value: string; deta
  * Stacked columns, one per day, split by provider. Heights are percentages of
  * the busiest day so the chart needs no measurement pass.
  */
-function DailyChart({ daily }: { daily: MergedUsage["daily"] }) {
-  if (daily.length === 0) {
+function DailyChart({ daily: input }: { daily: MergedUsage["daily"] }) {
+  if (input.length === 0) {
     return (
       <div className="px-4 py-8 text-xs text-muted-foreground sm:px-5">No usage recorded.</div>
     );
   }
+  const daily = fillMissingDays(input);
   const max = Math.max(...daily.map((day) => day.costUsd), 0.01);
   return (
     <div className="px-4 sm:px-5">
@@ -276,7 +308,7 @@ function HourStrip({ turnsByHour }: { turnsByHour: ReadonlyArray<number> }) {
   const max = Math.max(...turnsByHour, 1);
   return (
     <div className="px-4 sm:px-5">
-      <div className="grid grid-cols-24 gap-[2px]">
+      <div className="grid gap-[2px]" style={{ gridTemplateColumns: "repeat(24, minmax(0, 1fr))" }}>
         {turnsByHour.map((count, hour) => (
           <span
             key={`hour-${String(hour)}`}
@@ -375,7 +407,11 @@ export function UsageSettings() {
             detail={`${merged.toolCalls.toLocaleString("en-US")} calls`}
           />
           <StatTile
-            label={rateLimit === undefined ? "Code written" : "Weekly limit"}
+            label={
+              rateLimit === undefined
+                ? "Code written"
+                : `${limitWindowLabel(rateLimit.windowMinutes)} limit`
+            }
             value={
               rateLimit === undefined
                 ? `+${compactTokens(merged.linesAdded)}`
@@ -408,7 +444,7 @@ export function UsageSettings() {
         <EnvironmentsTable entries={entries} />
       </SettingsSection>
 
-      <SettingsSection title="Turns by hour">
+      <SettingsSection title="Turns by hour (UTC)">
         <HourStrip turnsByHour={merged.turnsByHour} />
       </SettingsSection>
 

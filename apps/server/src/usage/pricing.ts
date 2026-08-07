@@ -68,13 +68,22 @@ const PRICING: Readonly<Record<string, ModelPricing>> = {
 
 const SLUGS_BY_LENGTH = Object.keys(PRICING).sort((a, b) => b.length - a.length);
 
+/**
+ * A prefix only matches on a version boundary, so `claude-haiku-4-5-20251001`
+ * resolves to the `claude-haiku-4-5` family while an unrelated `gpt-5000` does
+ * not silently inherit `gpt-5` pricing.
+ */
+const matchesFamily = (slug: string, family: string): boolean =>
+  slug.startsWith(family) &&
+  (slug.length === family.length || /[-_@:.]/.test(slug[family.length] ?? ""));
+
 /** Returns undefined for unknown slugs so callers can surface them explicitly. */
 export function lookupPricing(model: string): ModelPricing | undefined {
   const slug = model.trim().toLowerCase();
   const direct = PRICING[slug];
   if (direct !== undefined) return direct;
-  const prefix = SLUGS_BY_LENGTH.find((candidate) => slug.startsWith(candidate));
-  return prefix === undefined ? undefined : PRICING[prefix];
+  const family = SLUGS_BY_LENGTH.find((candidate) => matchesFamily(slug, candidate));
+  return family === undefined ? undefined : PRICING[family];
 }
 
 export type CostInput = {

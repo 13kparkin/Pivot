@@ -176,6 +176,26 @@ describe("readLocalAgentUsage", () => {
     expect(result.costUsd).toBe(0);
   });
 
+  it("does not charge Codex fast rates when the log reports no premium tier", async () => {
+    const result = await withFixture(async ({ codex }) => {
+      await write(NodePath.join(codex, "2099", "s.jsonl"), [
+        { type: "turn_context", payload: { model: "gpt-5.6-sol", service_tier: "default" } },
+        codexTokenCount({ input: 1_000_000, cached: 0, output: 0 }),
+      ]);
+    });
+
+    const pricing = lookupPricing("gpt-5.6-sol");
+    expect(pricing?.fastMultiplier).toBe(2);
+    // Standard tier bills the base rate, not the doubled fast rate.
+    expect(result.costUsd).toBeCloseTo(pricing!.input, 6);
+  });
+
+  it("resolves a dated model slug to its family but not an unrelated slug", () => {
+    expect(lookupPricing("claude-haiku-4-5-20251001")).toEqual(lookupPricing("claude-haiku-4-5"));
+    // `gpt-5000` starts with `gpt-5` but is a different model, not a variant.
+    expect(lookupPricing("gpt-5000-turbo")).toBeUndefined();
+  });
+
   it("returns empty totals when neither agent has logs on this host", async () => {
     const result = await withFixture(async () => {});
 

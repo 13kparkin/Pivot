@@ -14,6 +14,7 @@ import { readLocalAgentUsage } from "./localAgentUsage.ts";
 /** Scans cost real IO, so a snapshot is reused briefly rather than recomputed per request. */
 const CACHE_TTL_MILLIS = Duration.toMillis(Duration.seconds(60));
 const DEFAULT_WINDOW_DAYS = 30;
+const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 
 const emptyTokens = {
   inputTokens: 0,
@@ -32,69 +33,82 @@ export class UsageService extends Context.Service<
   }
 >()("t3/usage/UsageService") {}
 
-export const UsageServiceLayer = Layer.effect(UsageService)(
-  Effect.gen(function* () {
-    const serverEnvironment = yield* ServerEnvironment.ServerEnvironment;
-    // Captured once so the returned effects carry no outstanding requirements.
-    const sql = yield* SqlClient.SqlClient;
+export const make = Effect.gen(function* () {
+  const serverEnvironment = yield* ServerEnvironment.ServerEnvironment;
+  // Captured once so the returned effects carry no outstanding requirements.
+  const sql = yield* SqlClient.SqlClient;
 
-    // Keyed by the resolved window so a narrower request cannot serve a wider
-    // cached answer, or the reverse.
-    const cache = new Map<
-      string,
-      { readonly at: number; readonly snapshot: EnvironmentUsageSnapshot }
-    >();
+  // Keyed by the resolved window so a narrower request cannot serve a wider
+  // cached answer, or the reverse.
+  const cache = new Map<
+    string,
+    { readonly at: number; readonly snapshot: EnvironmentUsageSnapshot }
+  >();
 
-    const build = (sinceDate: string): Effect.Effect<EnvironmentUsageSnapshot> =>
-      Effect.gen(function* () {
-        const descriptor = yield* serverEnvironment.getDescriptor;
-        const generatedAt = DateTime.formatIso(yield* DateTime.now);
-        const activity = yield* readActivitySummary(`${sinceDate}T00:00:00.000Z`).pipe(
-          Effect.provideService(SqlClient.SqlClient, sql),
-        );
-        const local = yield* Effect.tryPromise(() => readLocalAgentUsage({ sinceDate })).pipe(
-          Effect.catchCause((cause) =>
-            Effect.logWarning("Failed to read local agent usage logs", { cause }).pipe(
-              Effect.as(undefined),
-            ),
+  /** Snapshot plus whether the log scan actually succeeded. */
+  const build = (
+    sinceDate: string,
+  ): Effect.Effect<{ snapshot: EnvironmentUsageSnapshot; complete: boolean }> =>
+    Effect.gen(function* () {
+      const descriptor = yield* serverEnvironment.getDescriptor;
+      const generatedAt = DateTime.formatIso(yield* DateTime.now);
+      const activity = yield* readActivitySummary(`${sinceDate}T00:00:00.000Z`).pipe(
+        Effect.provideService(SqlClient.SqlClient, sql),
+      );
+      const local = yield* Effect.tryPromise(() => readLocalAgentUsage({ sinceDate })).pipe(
+        Effect.catchCause((cause) =>
+          Effect.logWarning("Failed to read local agent usage logs", { cause }).pipe(
+            Effect.as(undefined),
           ),
-        );
+        ),
+      );
 
-        return {
-          environmentId: descriptor.environmentId,
-          generatedAt,
-          firstDate: local?.firstDate,
-          lastDate: local?.lastDate,
-          costUsd: local?.costUsd ?? 0,
-          tokens: local?.tokens ?? emptyTokens,
-          messages: local?.messages ?? 0,
-          sessions: local?.sessions ?? 0,
-          models: local?.models ?? [],
-          daily: local?.daily ?? [],
-          projects: local?.projects ?? [],
-          rateLimits: local?.rateLimits ?? [],
-          sources: local?.sources ?? [],
-          activity,
-        } satisfies EnvironmentUsageSnapshot;
-      });
+      const snapshot = {
+        environmentId: descriptor.environmentId,
+        generatedAt,
+        firstDate: local?.firstDate,
+        lastDate: local?.lastDate,
+        costUsd: local?.costUsd ?? 0,
+        tokens: local?.tokens ?? emptyTokens,
+        messages: local?.messages ?? 0,
+        sessions: local?.sessions ?? 0,
+        models: local?.models ?? [],
+        daily: local?.daily ?? [],
+        projects: local?.projects ?? [],
+        rateLimits: local?.rateLimits ?? [],
+        sources: local?.sources ?? [],
+        activity,
+      } satisfies EnvironmentUsageSnapshot;
+      return { snapshot, complete: local !== undefined };
+    });
 
-    return {
-      getSnapshot: (sinceDate) =>
-        Effect.gen(function* () {
-          const now = yield* DateTime.now;
-          const resolved =
-            sinceDate ??
-            DateTime.formatIso(DateTime.subtract(now, { days: DEFAULT_WINDOW_DAYS })).slice(0, 10);
+  return {
+    getSnapshot: (sinceDate: string | undefined) =>
+      Effect.gen(function* () {
+        const now = yield* DateTime.now;
+        const fallback = DateTime.formatIso(
+          DateTime.subtract(now, { days: DEFAULT_WINDOW_DAYS }),
+        ).slice(0, 10);
+        // The wire type is a plain string, so anything that is not a calendar
+        // date falls back to the default window instead of reaching the query.
+        const resolved = sinceDate !== undefined && ISO_DATE.test(sinceDate) ? sinceDate : fallback;
 
-          const nowMillis = yield* Clock.currentTimeMillis;
-          const cached = cache.get(resolved);
-          if (cached !== undefined && nowMillis - cached.at < CACHE_TTL_MILLIS) {
-            return cached.snapshot;
-          }
-          const snapshot = yield* build(resolved);
-          cache.set(resolved, { at: nowMillis, snapshot });
-          return snapshot;
-        }),
-    };
-  }),
-);
+        const startedAt = yield* Clock.currentTimeMillis;
+        const cached = cache.get(resolved);
+        if (cached !== undefined && startedAt - cached.at < CACHE_TTL_MILLIS) {
+          return cached.snapshot;
+        }
+        const { snapshot, complete } = yield* build(resolved);
+        // Only cache a complete read, and stamp it on completion so a slow
+        // scan does not immediately expire. A failed scan reports zeros once
+        // rather than pinning the page at $0 for the whole TTL.
+        if (complete) {
+          const finishedAt = yield* Clock.currentTimeMillis;
+          cache.set(resolved, { at: finishedAt, snapshot });
+        }
+        return snapshot;
+      }),
+  };
+});
+
+export const layer = Layer.effect(UsageService, make);

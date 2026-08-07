@@ -81,6 +81,9 @@ export const readActivitySummary = (
       LIMIT ${TOP_N}
     `;
 
+    // Timestamps are stored as ISO-8601 UTC, so these buckets are UTC hours.
+    // Keeping them UTC is what makes them safe to sum across environments in
+    // different timezones; the UI labels the axis accordingly.
     const hourRows = yield* sql<{ hour: unknown; count: unknown }>`
       SELECT
         CAST(strftime('%H', requested_at) AS INTEGER) AS hour,
@@ -98,7 +101,11 @@ export const readActivitySummary = (
           WHERE kind = 'tool.completed' AND created_at >= ${sinceIso}) AS toolCalls,
         (SELECT COUNT(*) FROM projection_thread_activities
           WHERE kind = 'tool.completed' AND created_at >= ${sinceIso}
-            AND json_extract(payload_json, '$.data.item.exitCode') NOT IN (0)) AS toolFailures
+            AND (
+              json_extract(payload_json, '$.data.item.exitCode') NOT IN (0)
+              -- Claude tool results carry no exit code; they flag failure here.
+              OR json_extract(payload_json, '$.data.result.is_error') = 1
+            )) AS toolFailures
     `;
 
     const churn = yield* sql<Record<string, unknown>>`

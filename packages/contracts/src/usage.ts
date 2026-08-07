@@ -15,7 +15,7 @@ import { NonNegativeInt, TrimmedNonEmptyString } from "./baseSchemas.ts";
 export const UsageProvider = Schema.Literals(["claude", "codex"]);
 export type UsageProvider = typeof UsageProvider.Type;
 
-/** An ISO date (YYYY-MM-DD) in the host's local timezone. */
+/** An ISO calendar date, `YYYY-MM-DD`, in UTC. */
 export const UsageDate = TrimmedNonEmptyString;
 export type UsageDate = typeof UsageDate.Type;
 
@@ -115,7 +115,10 @@ export const UsageActivitySummary = Schema.Struct({
   tools: Schema.Array(UsageActivityCount),
   skills: Schema.Array(UsageActivityCount),
   subagents: Schema.Array(UsageActivityCount),
-  /** 24 buckets, index 0 is midnight local time. */
+  /**
+   * 24 buckets, index 0 is midnight UTC. UTC rather than host-local so buckets
+   * from environments in different timezones can be summed by index.
+   */
   turnsByHour: Schema.Array(NonNegativeInt),
   totalTurns: NonNegativeInt,
   totalThreads: NonNegativeInt,

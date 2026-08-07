@@ -1,4 +1,5 @@
-import { makeEnvironmentHttpApiClient } from "@t3tools/client-runtime/rpc";
+import { ManagedRelay } from "@t3tools/client-runtime/relay";
+import { fetchEnvironmentUsageSnapshot } from "@t3tools/client-runtime/state/usage";
 import type {
   EnvironmentId,
   EnvironmentUsageSnapshot,
@@ -7,11 +8,11 @@ import type {
   UsageModelTotals,
   UsageProvider,
 } from "@t3tools/contracts";
-import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
+import * as Schema from "effect/Schema";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import { primaryEnvironmentHttpLayer } from "../environments/primary/httpLayer";
+import { runtime } from "../lib/runtime";
 import { readPreparedConnection } from "./session";
 import { useEnvironments } from "./environments";
 
@@ -178,21 +179,15 @@ export function mergeUsage(entries: ReadonlyArray<EnvironmentUsageEntry>): Merge
 }
 
 /** Any failure reaching one environment, flattened so callers handle one type. */
-export class UsageFetchError extends Data.TaggedError("UsageFetchError")<{
-  readonly cause: unknown;
-}> {}
-
-const fetchSnapshot = (
-  httpBaseUrl: string,
-  sinceDate: string,
-): Effect.Effect<EnvironmentUsageSnapshot, UsageFetchError> =>
-  Effect.gen(function* () {
-    const client = yield* makeEnvironmentHttpApiClient(httpBaseUrl);
-    return yield* client.usage.snapshot({ headers: {}, payload: { sinceDate } });
-  }).pipe(
-    Effect.provide(primaryEnvironmentHttpLayer),
-    Effect.mapError((cause) => new UsageFetchError({ cause })),
-  );
+export class UsageFetchError extends Schema.TaggedErrorClass<UsageFetchError>()("UsageFetchError", {
+  environmentId: Schema.String,
+  sinceDate: Schema.String,
+  cause: Schema.Defect(),
+}) {
+  override get message(): string {
+    return `Failed to read usage since ${this.sinceDate} from environment ${this.environmentId}.`;
+  }
+}
 
 const isoDaysAgo = (days: number): string => {
   const date = new Date();
@@ -206,13 +201,20 @@ export function useUsage(windowDays: number) {
   const [isLoading, setIsLoading] = useState(true);
   const requestId = useRef(0);
 
+  // Keyed on connection phase as well as identity: an environment that finishes
+  // connecting after first paint must trigger a refetch, otherwise it would sit
+  // at "Not connected" until the user manually refreshed.
+  const targetKey = environments
+    .map((environment) => `${environment.environmentId}:${environment.connection.phase}`)
+    .join(",");
+
   const targets = useMemo(
     () =>
       environments.map((environment) => ({
         environmentId: environment.environmentId,
         label: environment.label,
       })),
-    [environments],
+    [targetKey],
   );
 
   const refresh = useCallback(async () => {
@@ -223,13 +225,28 @@ export function useUsage(windowDays: number) {
 
     const results = await Promise.all(
       targets.map(async (target): Promise<EnvironmentUsageEntry> => {
-        const connection = readPreparedConnection(target.environmentId);
-        if (connection === null) {
+        const prepared = readPreparedConnection(target.environmentId);
+        if (prepared === null) {
           return { ...target, snapshot: null, error: "Not connected" };
         }
         try {
-          const snapshot = await Effect.runPromise(
-            fetchSnapshot(connection.httpBaseUrl, sinceDate),
+          // Runs on the shared runtime, which supplies the HTTP client and the
+          // relay DPoP signer, so the request carries this environment's own
+          // credential (cookie, bearer, or DPoP) rather than the primary one's.
+          const snapshot = await runtime.runPromise(
+            Effect.gen(function* () {
+              const signer = yield* Effect.serviceOption(ManagedRelay.ManagedRelayDpopSigner);
+              return yield* fetchEnvironmentUsageSnapshot({ prepared, sinceDate, signer });
+            }).pipe(
+              Effect.mapError(
+                (cause) =>
+                  new UsageFetchError({
+                    environmentId: target.environmentId,
+                    sinceDate,
+                    cause,
+                  }),
+              ),
+            ),
           );
           return { ...target, snapshot, error: null };
         } catch {

@@ -3,7 +3,7 @@ import * as Effect from "effect/Effect";
 import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
 
 import { annotateEnvironmentRequest, requireEnvironmentScope } from "../auth/http.ts";
-import { UsageService } from "./UsageService.ts";
+import * as UsageService from "./UsageService.ts";
 
 /**
  * Usage is read-only reporting over data the host already has, so it rides the
@@ -13,7 +13,7 @@ export const usageHttpApiLayer = HttpApiBuilder.group(
   EnvironmentHttpApi,
   "usage",
   Effect.fnUntraced(function* (handlers) {
-    const usage = yield* UsageService;
+    const usage = yield* UsageService.UsageService;
 
     return handlers.handle(
       "snapshot",
