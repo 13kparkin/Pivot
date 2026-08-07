@@ -39,9 +39,8 @@ public struct ThreadDetailView: View {
 
     public var body: some View {
         Group {
-            if isLoading, detail == nil {
-                ProgressView("Loading thread…")
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            if isLoading {
+                FeatureThreadOpeningView(isRefreshing: detail != nil)
             } else if let detail {
                 timeline(detail)
             } else {
@@ -534,6 +533,24 @@ public struct ThreadDetailView: View {
         )
     }
 
+}
+
+private struct FeatureThreadOpeningView: View {
+    let isRefreshing: Bool
+
+    var body: some View {
+        VStack(spacing: 12) {
+            ProgressView()
+                .controlSize(.regular)
+            Text(isRefreshing ? "Refreshing thread…" : "Loading thread…")
+                .font(T3Typography.supporting)
+                .foregroundStyle(T3Colors.textSecondary)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(T3Colors.background)
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("thread-opening-state")
+    }
 }
 
 private enum FeatureThreadToolSurface: String, Identifiable {

@@ -92,9 +92,9 @@ struct FeatureImageAttachmentPicker: View {
         .fullScreenCover(isPresented: $isPhotoLibraryPresented) {
             FeaturePhotoLibraryPicker(
                 maximumCount: max(1, remainingCount),
-                onSelect: { items in
+                onSelect: { images in
                     isPhotoLibraryPresented = false
-                    loadPhotoSelections(items)
+                    loadPhotoSelections(images)
                 },
                 onCancel: { isPhotoLibraryPresented = false }
             )
@@ -169,17 +169,16 @@ struct FeatureImageAttachmentPicker: View {
         }
     }
 
-    private func loadPhotoSelections(_ items: [FeaturePhotoLibraryItem]) {
-        guard !items.isEmpty, canAdd else { return }
-        let selected = Array(items.prefix(remainingCount))
+    private func loadPhotoSelections(_ images: [Data]) {
+        guard !images.isEmpty, canAdd else { return }
+        let selected = Array(images.prefix(remainingCount))
         let firstOrdinal = attachments.count + preparationState.pendingItemCount + 1
         let operation = preparationState.begin(itemCount: selected.count)
 
         Task {
             defer { preparationState.finish(operation) }
-            for (offset, item) in selected.enumerated() {
+            for (offset, data) in selected.enumerated() {
                 do {
-                    let data = try await item.loadData()
                     try await appendImage(data, ordinal: firstOrdinal + offset)
                 } catch {
                     errorMessage = error.localizedDescription
@@ -273,7 +272,7 @@ struct FeaturePhotoLibraryItem: @unchecked Sendable {
 
 private struct FeaturePhotoLibraryPicker: UIViewControllerRepresentable {
     let maximumCount: Int
-    let onSelect: ([FeaturePhotoLibraryItem]) -> Void
+    let onSelect: ([Data]) -> Void
     let onCancel: () -> Void
 
     func makeCoordinator() -> Coordinator {
@@ -295,12 +294,12 @@ private struct FeaturePhotoLibraryPicker: UIViewControllerRepresentable {
     func updateUIViewController(_ controller: PHPickerViewController, context: Context) {}
 
     final class Coordinator: NSObject, PHPickerViewControllerDelegate {
-        private let onSelect: ([FeaturePhotoLibraryItem]) -> Void
+        private let onSelect: ([Data]) -> Void
         private let onCancel: () -> Void
         private var didFinish = false
 
         init(
-            onSelect: @escaping ([FeaturePhotoLibraryItem]) -> Void,
+            onSelect: @escaping ([Data]) -> Void,
             onCancel: @escaping () -> Void
         ) {
             self.onSelect = onSelect
@@ -311,10 +310,37 @@ private struct FeaturePhotoLibraryPicker: UIViewControllerRepresentable {
             guard !didFinish else { return }
             didFinish = true
             guard !results.isEmpty else {
-                onCancel()
+                Task { @MainActor in
+                    await Task.yield()
+                    onCancel()
+                }
                 return
             }
-            onSelect(results.map { FeaturePhotoLibraryItem(provider: $0.itemProvider) })
+
+            // Keep the picker and its item providers alive until Photos has
+            // materialized every selection. Dismissing the SwiftUI cover from
+            // inside this delegate callback can tear down PhotosUI while its
+            // provider transition is still in flight.
+            picker.view.isUserInteractionEnabled = false
+            let activity = UIActivityIndicatorView(style: .large)
+            activity.translatesAutoresizingMaskIntoConstraints = false
+            activity.startAnimating()
+            picker.view.addSubview(activity)
+            NSLayoutConstraint.activate([
+                activity.centerXAnchor.constraint(equalTo: picker.view.centerXAnchor),
+                activity.centerYAnchor.constraint(equalTo: picker.view.centerYAnchor),
+            ])
+
+            let items = results.map { FeaturePhotoLibraryItem(provider: $0.itemProvider) }
+            Task { @MainActor in
+                var images: [Data] = []
+                for item in items {
+                    if let data = try? await item.loadData() {
+                        images.append(data)
+                    }
+                }
+                onSelect(images)
+            }
         }
     }
 }
