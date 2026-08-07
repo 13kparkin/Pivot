@@ -407,10 +407,7 @@ private struct T3ConnectAuthenticationView: View {
     }
 
     private func providerButton(_ provider: OAuthProvider) -> some View {
-        let isPrimary = provider == .apple || provider == .github
-        let foreground: Color = isPrimary ? .black : T3Colors.textPrimary
-
-        return Button {
+        Button {
             Task { await signIn(with: provider) }
         } label: {
             HStack(spacing: 12) {
@@ -419,21 +416,21 @@ private struct T3ConnectAuthenticationView: View {
 
                 Text("Continue with \(provider.name)")
                     .font(.system(.body, design: .default, weight: .semibold))
-                    .foregroundStyle(foreground)
+                    .foregroundStyle(T3Colors.textPrimary)
 
                 Spacer(minLength: 8)
 
                 if activeProvider == provider {
                     ProgressView()
-                        .tint(foreground)
+                        .tint(T3Colors.textPrimary)
                 }
             }
             .padding(.horizontal, 18)
             .frame(maxWidth: .infinity, minHeight: 56)
-            .background(isPrimary ? Color.white : T3Colors.surfaceRaised)
+            .background(T3Colors.surfaceRaised)
             .overlay {
                 RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .stroke(isPrimary ? Color.clear : T3Colors.border, lineWidth: 1)
+                    .stroke(T3Colors.border, lineWidth: 1)
             }
             .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
             .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
@@ -508,7 +505,7 @@ private struct T3ConnectAuthProviderIcon: View {
             Image(systemName: "apple.logo")
                 .resizable()
                 .scaledToFit()
-                .foregroundStyle(.black)
+                .foregroundStyle(T3Colors.textPrimary)
         case .github:
             Image("AuthGitHub")
                 .resizable()
