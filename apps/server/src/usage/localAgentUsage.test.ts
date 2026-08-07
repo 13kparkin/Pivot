@@ -176,6 +176,37 @@ describe("readLocalAgentUsage", () => {
     expect(result.costUsd).toBe(0);
   });
 
+  it("bills only the in-window increment when a Codex session predates the window", async () => {
+    const root = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "t3-usage-"));
+    const codex = NodePath.join(root, "codex-sessions");
+    try {
+      await write(NodePath.join(codex, "2099", "s.jsonl"), [
+        { type: "turn_context", payload: { model: "gpt-5.6-sol" } },
+        // Out of window: establishes the baseline without being billed.
+        {
+          ...codexTokenCount({ input: 1_000_000, cached: 0, output: 100_000 }),
+          timestamp: "2020-01-01T00:00:00.000Z",
+        },
+        // In window: only the increment over the previous snapshot counts.
+        {
+          ...codexTokenCount({ input: 1_000_500, cached: 0, output: 100_050 }),
+          timestamp: "2026-06-01T00:00:00.000Z",
+        },
+      ]);
+      const result = await readLocalAgentUsage({
+        claudeDirs: [NodePath.join(root, "claude")],
+        codexDir: codex,
+        sinceDate: "2026-01-01",
+      });
+
+      const model = result.models.find((entry) => entry.model === "gpt-5.6-sol");
+      expect(model?.tokens.inputTokens).toBe(500);
+      expect(model?.tokens.outputTokens).toBe(50);
+    } finally {
+      await NodeFSP.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("does not charge Codex fast rates when the log reports no premium tier", async () => {
     const result = await withFixture(async ({ codex }) => {
       await write(NodePath.join(codex, "2099", "s.jsonl"), [
