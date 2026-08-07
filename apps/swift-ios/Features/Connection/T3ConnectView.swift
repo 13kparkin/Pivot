@@ -1,7 +1,12 @@
+import ClerkKit
+import ClerkKitUI
 import SwiftUI
 
 public struct T3ConnectView: View {
+    @SwiftUI.Environment(\.dismiss) private var dismiss
     @Bindable private var controller: T3ConnectController
+    @State private var isAuthPresented = false
+    @State private var didFinishInitialRefresh = false
     private let connectEnvironment:
         @MainActor (T3ConnectManagedEnvironmentCredential) async throws -> Void
     private let onConnected: @MainActor () async -> Void
@@ -16,49 +21,114 @@ public struct T3ConnectView: View {
     }
 
     public var body: some View {
-        List {
-            if let reason = controller.unavailableReason {
+        content
+            .navigationTitle("T3 Connect")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                if controller.account != nil {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button("Sign out", role: .destructive) {
+                            Task { await controller.signOut() }
+                        }
+                        .disabled(controller.isRefreshing)
+                    }
+                }
+            }
+            .refreshable {
+                await controller.refresh()
+            }
+            .task {
+                await controller.refresh()
+                didFinishInitialRefresh = true
+                presentAuthenticationIfNeeded()
+            }
+            .onChange(of: controller.account?.id) { _, accountID in
+                guard didFinishInitialRefresh,
+                      accountID == nil,
+                      controller.unavailableReason == nil else { return }
+                isAuthPresented = true
+            }
+            .fullScreenCover(
+                isPresented: $isAuthPresented,
+                onDismiss: handleAuthenticationDismissal
+            ) {
+                authenticationView
+            }
+            .alert(
+                "T3 Connect",
+                isPresented: Binding(
+                    get: { controller.errorMessage != nil },
+                    set: { if !$0 { controller.errorMessage = nil } }
+                )
+            ) {
+                Button("OK") { controller.errorMessage = nil }
+            } message: {
+                Text(controller.errorMessage ?? "Something went wrong.")
+            }
+            .preferredColorScheme(.dark)
+    }
+
+    @ViewBuilder
+    private var content: some View {
+        if let reason = controller.unavailableReason {
+            connectList {
                 unavailableSection(reason)
-            } else if let account = controller.account {
+            }
+        } else if let account = controller.account {
+            connectList {
                 accountSection(account)
                 environmentSection
-            } else {
-                signInSection
             }
+        } else {
+            ZStack {
+                Color.black.ignoresSafeArea()
+                ProgressView()
+                    .tint(.white)
+            }
+        }
+    }
+
+    private func connectList<Content: View>(
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        List {
+            content()
         }
         .listStyle(.plain)
         .scrollContentBackground(.hidden)
         .background(Color.black)
-        .navigationTitle("T3 Connect")
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            if controller.account != nil {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button("Sign out", role: .destructive) {
-                        Task { await controller.signOut() }
-                    }
-                    .disabled(controller.isRefreshing)
-                }
+    }
+
+    @ViewBuilder
+    private var authenticationView: some View {
+        if let clerk = controller.clerk {
+            AuthView(mode: .signInOrUp)
+                .prefetchClerkImages()
+                .environment(\.clerkTheme, T3ConnectClerkAppearance.theme)
+                .environment(clerk)
+                .preferredColorScheme(.dark)
+        } else {
+            ZStack {
+                Color.black.ignoresSafeArea()
+                ProgressView()
+                    .tint(.white)
             }
         }
-        .refreshable {
+    }
+
+    private func presentAuthenticationIfNeeded() {
+        guard controller.unavailableReason == nil,
+              controller.account == nil else { return }
+        isAuthPresented = true
+    }
+
+    private func handleAuthenticationDismissal() {
+        Task {
             await controller.refresh()
+            if controller.account == nil {
+                dismiss()
+            }
         }
-        .task {
-            await controller.refresh()
-        }
-        .alert(
-            "T3 Connect",
-            isPresented: Binding(
-                get: { controller.errorMessage != nil },
-                set: { if !$0 { controller.errorMessage = nil } }
-            )
-        ) {
-            Button("OK") { controller.errorMessage = nil }
-        } message: {
-            Text(controller.errorMessage ?? "Something went wrong.")
-        }
-        .preferredColorScheme(.dark)
     }
 
     private func unavailableSection(_ reason: String) -> some View {
@@ -75,48 +145,6 @@ public struct T3ConnectView: View {
             }
             .padding(.vertical, 8)
             .listRowBackground(Color.black)
-        }
-    }
-
-    private var signInSection: some View {
-        Section {
-            VStack(alignment: .leading, spacing: 12) {
-                Text("Your environments, on every device.")
-                    .font(T3Typography.homeTitle)
-                Text("T3 Connect is optional. Sign in to reach environments linked to your T3 account.")
-                    .font(T3Typography.threadBody)
-                    .foregroundStyle(T3Colors.textSecondary)
-            }
-            .padding(.vertical, 8)
-            .listRowBackground(Color.black)
-
-            ForEach(T3ConnectSignInProvider.allCases) { provider in
-                Button {
-                    Task { await controller.signIn(with: provider) }
-                } label: {
-                    HStack {
-                        Text(provider.title)
-                            .font(T3Typography.homeTitle)
-                        Spacer()
-                        Image(systemName: "arrow.up.right")
-                            .font(.body.weight(.semibold))
-                    }
-                    .foregroundStyle(.white)
-                    .padding(.vertical, 6)
-                }
-                .disabled(controller.isRefreshing)
-                .listRowBackground(Color.black)
-            }
-
-            if controller.isRefreshing {
-                HStack(spacing: 10) {
-                    ProgressView()
-                    Text("Opening secure sign in…")
-                        .font(T3Typography.supporting)
-                        .foregroundStyle(T3Colors.textSecondary)
-                }
-                .listRowBackground(Color.black)
-            }
         }
     }
 
@@ -240,4 +268,28 @@ public struct T3ConnectView: View {
         case nil: T3Colors.textTertiary
         }
     }
+}
+
+@MainActor
+private enum T3ConnectClerkAppearance {
+    static let theme = ClerkTheme(
+        colors: .init(
+            primary: .white,
+            background: T3Colors.background,
+            input: T3Colors.input,
+            danger: T3Colors.danger,
+            success: T3Colors.success,
+            warning: T3Colors.warning,
+            foreground: T3Colors.textPrimary,
+            mutedForeground: T3Colors.textSecondary,
+            primaryForeground: .black,
+            inputForeground: T3Colors.textPrimary,
+            neutral: .white,
+            ring: .white,
+            muted: T3Colors.surfaceRaised,
+            shadow: .black,
+            border: .white
+        ),
+        design: .init(borderRadius: 12)
+    )
 }

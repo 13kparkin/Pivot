@@ -1,3 +1,4 @@
+import ClerkKit
 import Foundation
 import Observation
 
@@ -85,6 +86,8 @@ public final class T3ConnectController {
         return reason
     }
 
+    var clerk: Clerk? { auth?.client }
+
     public func refresh() async {
         guard let auth, let relay else { return }
         refreshGeneration &+= 1
@@ -134,26 +137,6 @@ public final class T3ConnectController {
             }
             guard refreshGeneration == generation else { return }
             environments = loaded
-        } catch {
-            if refreshGeneration == generation {
-                errorMessage = error.localizedDescription
-            }
-        }
-    }
-
-    public func signIn(with provider: T3ConnectSignInProvider) async {
-        guard let auth else { return }
-        refreshGeneration &+= 1
-        let generation = refreshGeneration
-        isRefreshing = true
-        defer {
-            if refreshGeneration == generation { isRefreshing = false }
-        }
-        do {
-            try await auth.signIn(with: provider)
-            guard refreshGeneration == generation else { return }
-            account = auth.account
-            await refresh()
         } catch {
             if refreshGeneration == generation {
                 errorMessage = error.localizedDescription
