@@ -1,10 +1,12 @@
 import type { EnvironmentUsageSnapshot } from "@t3tools/contracts";
 import * as Clock from "effect/Clock";
+import * as Config from "effect/Config";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
@@ -15,6 +17,8 @@ import { readLocalAgentUsage } from "./localAgentUsage.ts";
 const CACHE_TTL_MILLIS = Duration.toMillis(Duration.seconds(60));
 const DEFAULT_WINDOW_DAYS = 30;
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
+/** Distinct windows a client realistically asks for; anything past this evicts oldest-first. */
+const MAX_CACHE_ENTRIES = 8;
 
 const emptyTokens = {
   inputTokens: 0,
@@ -35,6 +39,10 @@ export class UsageService extends Context.Service<
 
 export const make = Effect.gen(function* () {
   const serverEnvironment = yield* ServerEnvironment.ServerEnvironment;
+  // Agent session logs live under the OS home, not the server's base directory,
+  // so isolating them needs an explicit override. Tests and sandboxed runs set
+  // this; in normal operation it is absent and the OS home is used.
+  const agentLogHome = yield* Config.string("T3CODE_AGENT_LOG_HOME").pipe(Config.option);
   // Captured once so the returned effects carry no outstanding requirements.
   const sql = yield* SqlClient.SqlClient;
 
@@ -55,7 +63,12 @@ export const make = Effect.gen(function* () {
       const activity = yield* readActivitySummary(`${sinceDate}T00:00:00.000Z`).pipe(
         Effect.provideService(SqlClient.SqlClient, sql),
       );
-      const local = yield* Effect.tryPromise(() => readLocalAgentUsage({ sinceDate })).pipe(
+      const local = yield* Effect.tryPromise(() =>
+        readLocalAgentUsage({
+          sinceDate,
+          ...(Option.isSome(agentLogHome) ? { homeDir: agentLogHome.value } : {}),
+        }),
+      ).pipe(
         Effect.catchCause((cause) =>
           Effect.logWarning("Failed to read local agent usage logs", { cause }).pipe(
             Effect.as(undefined),
@@ -98,12 +111,25 @@ export const make = Effect.gen(function* () {
         if (cached !== undefined && startedAt - cached.at < CACHE_TTL_MILLIS) {
           return cached.snapshot;
         }
+        // Callers choose the window, so evict expired entries before inserting;
+        // otherwise one entry accumulates per distinct date string and the map
+        // grows without bound.
+        for (const [key, entry] of cache) {
+          if (startedAt - entry.at >= CACHE_TTL_MILLIS) cache.delete(key);
+        }
+
         const { snapshot, complete } = yield* build(resolved);
         // Only cache a complete read, and stamp it on completion so a slow
         // scan does not immediately expire. A failed scan reports zeros once
         // rather than pinning the page at $0 for the whole TTL.
         if (complete) {
           const finishedAt = yield* Clock.currentTimeMillis;
+          // Bounded even within one TTL window, so a burst of distinct dates
+          // cannot pin unbounded memory until the entries age out.
+          if (cache.size >= MAX_CACHE_ENTRIES) {
+            const oldest = cache.keys().next();
+            if (!oldest.done) cache.delete(oldest.value);
+          }
           cache.set(resolved, { at: finishedAt, snapshot });
         }
         return snapshot;

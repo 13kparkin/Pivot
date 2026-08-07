@@ -357,8 +357,10 @@ async function scanCodex(
         if (typeof candidate === "string" && candidate.length > 0) model = candidate;
         const candidateCwd = payloadRecord?.["cwd"];
         if (typeof candidateCwd === "string") cwd = candidateCwd;
+        // Recomputed per turn rather than latched: a session can mix tiers, and
+        // a premium turn must not price the standard turns that follow it.
         const tier = payloadRecord?.["service_tier"];
-        if (typeof tier === "string") fast = tier === "fast" || tier === "priority";
+        fast = tier === "fast" || tier === "priority";
       }
       if (payloadRecord?.["type"] !== "token_count") continue;
 

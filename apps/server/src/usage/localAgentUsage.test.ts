@@ -221,6 +221,22 @@ describe("readLocalAgentUsage", () => {
     expect(result.costUsd).toBeCloseTo(pricing!.input, 6);
   });
 
+  it("does not latch fast pricing onto standard turns later in the same session", async () => {
+    const result = await withFixture(async ({ codex }) => {
+      await write(NodePath.join(codex, "2099", "s.jsonl"), [
+        { type: "turn_context", payload: { model: "gpt-5.6-sol", service_tier: "priority" } },
+        codexTokenCount({ input: 1_000_000, cached: 0, output: 0 }),
+        // Back to standard: this turn must not inherit the premium multiplier.
+        { type: "turn_context", payload: { model: "gpt-5.6-sol", service_tier: "default" } },
+        codexTokenCount({ input: 2_000_000, cached: 0, output: 0 }),
+      ]);
+    });
+
+    const pricing = lookupPricing("gpt-5.6-sol");
+    // First 1M at the doubled rate, second 1M at the base rate.
+    expect(result.costUsd).toBeCloseTo(pricing!.input * 2 + pricing!.input, 6);
+  });
+
   it("resolves a dated model slug to its family but not an unrelated slug", () => {
     expect(lookupPricing("claude-haiku-4-5-20251001")).toEqual(lookupPricing("claude-haiku-4-5"));
     // `gpt-5000` starts with `gpt-5` but is a different model, not a variant.

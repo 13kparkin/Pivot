@@ -3326,6 +3326,51 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     }).pipe(Effect.scoped, Effect.provide(NodeHttpServerTestWithWsDeflate)),
   );
 
+  it.effect("serves a usage snapshot to an authenticated session", () =>
+    Effect.gen(function* () {
+      yield* buildAppUnderTest();
+
+      const bearerToken = yield* getAuthenticatedBearerSessionToken();
+      const usageUrl = yield* getHttpServerUrl("/api/usage/snapshot?sinceDate=2020-01-01");
+      const response = yield* fetchEffect(usageUrl, {
+        headers: { authorization: `Bearer ${bearerToken}` },
+      });
+      assert.equal(response.status, 200);
+
+      const body = yield* responseJsonEffect<{
+        readonly environmentId: string;
+        readonly costUsd: number;
+        readonly models: ReadonlyArray<unknown>;
+        readonly activity: { readonly turnsByHour: ReadonlyArray<number> };
+        readonly sources: ReadonlyArray<{ readonly provider: string }>;
+      }>(response);
+
+      // Asserts the contract shape rather than values: this reads whatever
+      // agent logs the host actually has, which is empty on CI and populated on
+      // a developer machine. Both must produce a well-formed snapshot.
+      assert.isString(body.environmentId);
+      assert.isAtLeast(body.costUsd, 0);
+      assert.isArray(body.models);
+      assert.equal(body.activity.turnsByHour.length, 24);
+      // Both slots always report, so the client can tell "nothing used" from
+      // "provider not installed on this host".
+      assert.deepEqual(body.sources.map((source) => source.provider).toSorted(), [
+        "claude",
+        "codex",
+      ]);
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("rejects an unauthenticated usage snapshot request", () =>
+    Effect.gen(function* () {
+      yield* buildAppUnderTest();
+
+      const usageUrl = yield* getHttpServerUrl("/api/usage/snapshot");
+      const response = yield* fetchEffect(usageUrl);
+      assert.equal(response.status, 401);
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
   it.effect("issues short-lived websocket tickets for authenticated bearer sessions", () =>
     Effect.gen(function* () {
       yield* buildAppUnderTest();
