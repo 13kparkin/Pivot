@@ -36,6 +36,12 @@ struct FeatureAttachmentPreparationState: Equatable {
 }
 
 struct FeatureImageAttachmentPicker: View {
+    private enum Source {
+        case photoLibrary
+        case camera
+        case files
+    }
+
     @Binding var attachments: [FeatureDraftAttachment]
     @Binding var preparationState: FeatureAttachmentPreparationState
     let maximumCount: Int
@@ -43,9 +49,9 @@ struct FeatureImageAttachmentPicker: View {
 
     @State private var isAttachmentSourcePresented = false
     @State private var isPhotoLibraryPresented = false
-    @State private var selectedPhotoItems: [PhotosPickerItem] = []
     @State private var isCameraPresented = false
     @State private var isFileImporterPresented = false
+    @State private var sourcePresentationTask: Task<Void, Never>?
     @State private var errorMessage: String?
 
     init(
@@ -77,11 +83,22 @@ struct FeatureImageAttachmentPicker: View {
         .accessibilityIdentifier("image-attachment-picker")
         .accessibilityHint(attachmentAccessibilityHint)
         .confirmationDialog("Add image", isPresented: $isAttachmentSourcePresented) {
-            Button("Photo Library") { isPhotoLibraryPresented = true }
-            Button("Camera") { isCameraPresented = true }
+            Button("Photo Library") { present(.photoLibrary) }
+            Button("Camera") { present(.camera) }
                 .disabled(!UIImagePickerController.isSourceTypeAvailable(.camera))
-            Button("Files") { isFileImporterPresented = true }
+            Button("Files") { present(.files) }
             Button("Cancel", role: .cancel) {}
+        }
+        .fullScreenCover(isPresented: $isPhotoLibraryPresented) {
+            FeaturePhotoLibraryPicker(
+                maximumCount: max(1, remainingCount),
+                onSelect: { items in
+                    isPhotoLibraryPresented = false
+                    loadPhotoSelections(items)
+                },
+                onCancel: { isPhotoLibraryPresented = false }
+            )
+            .ignoresSafeArea()
         }
         .fullScreenCover(isPresented: $isCameraPresented) {
             FeatureCameraPicker(
@@ -89,16 +106,6 @@ struct FeatureImageAttachmentPicker: View {
                 onCancel: { isCameraPresented = false }
             )
             .ignoresSafeArea()
-        }
-        .photosPicker(
-            isPresented: $isPhotoLibraryPresented,
-            selection: $selectedPhotoItems,
-            maxSelectionCount: max(1, remainingCount),
-            matching: .images,
-            preferredItemEncoding: .current
-        )
-        .onChange(of: selectedPhotoItems) { _, items in
-            loadPhotoSelections(items)
         }
         .fileImporter(
             isPresented: $isFileImporterPresented,
@@ -116,6 +123,9 @@ struct FeatureImageAttachmentPicker: View {
             Button("OK") { errorMessage = nil }
         } message: {
             Text(errorMessage ?? "")
+        }
+        .onDisappear {
+            sourcePresentationTask?.cancel()
         }
     }
 
@@ -139,10 +149,29 @@ struct FeatureImageAttachmentPicker: View {
         return "Choose a photo, take a photo, or browse image files"
     }
 
-    private func loadPhotoSelections(_ items: [PhotosPickerItem]) {
+    private func present(_ source: Source) {
+        sourcePresentationTask?.cancel()
+        isAttachmentSourcePresented = false
+        sourcePresentationTask = Task { @MainActor in
+            // A confirmation dialog is still the active presenter while its action
+            // runs. Wait for its dismissal animation before presenting another
+            // controller or UIKit can reject (or race) the new presentation.
+            try? await Task.sleep(for: .milliseconds(300))
+            guard !Task.isCancelled, canAdd else { return }
+            switch source {
+            case .photoLibrary:
+                isPhotoLibraryPresented = true
+            case .camera:
+                isCameraPresented = true
+            case .files:
+                isFileImporterPresented = true
+            }
+        }
+    }
+
+    private func loadPhotoSelections(_ items: [FeaturePhotoLibraryItem]) {
         guard !items.isEmpty, canAdd else { return }
         let selected = Array(items.prefix(remainingCount))
-        selectedPhotoItems = []
         let firstOrdinal = attachments.count + preparationState.pendingItemCount + 1
         let operation = preparationState.begin(itemCount: selected.count)
 
@@ -150,13 +179,10 @@ struct FeatureImageAttachmentPicker: View {
             defer { preparationState.finish(operation) }
             for (offset, item) in selected.enumerated() {
                 do {
-                    guard let data = try await item.loadTransferable(type: Data.self) else {
-                        throw FeatureImageAttachmentError.encodingFailed
-                    }
+                    let data = try await item.loadData()
                     try await appendImage(data, ordinal: firstOrdinal + offset)
                 } catch {
                     errorMessage = error.localizedDescription
-                    break
                 }
             }
         }
@@ -218,6 +244,78 @@ struct FeatureImageAttachmentPicker: View {
             try FeatureImageProcessor.attachment(from: data, ordinal: ordinal)
         }.value
         attachments.append(attachment)
+    }
+}
+
+struct FeaturePhotoLibraryItem: @unchecked Sendable {
+    let provider: NSItemProvider
+
+    func loadData() async throws -> Data {
+        guard let typeIdentifier = provider.registeredTypeIdentifiers.first(where: { identifier in
+            UTType(identifier)?.conforms(to: .image) == true
+        }) else {
+            throw FeatureImageAttachmentError.invalidImage
+        }
+
+        return try await withCheckedThrowingContinuation { continuation in
+            provider.loadDataRepresentation(forTypeIdentifier: typeIdentifier) { data, error in
+                if let data {
+                    continuation.resume(returning: data)
+                } else {
+                    continuation.resume(
+                        throwing: error ?? FeatureImageAttachmentError.encodingFailed
+                    )
+                }
+            }
+        }
+    }
+}
+
+private struct FeaturePhotoLibraryPicker: UIViewControllerRepresentable {
+    let maximumCount: Int
+    let onSelect: ([FeaturePhotoLibraryItem]) -> Void
+    let onCancel: () -> Void
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(onSelect: onSelect, onCancel: onCancel)
+    }
+
+    func makeUIViewController(context: Context) -> PHPickerViewController {
+        var configuration = PHPickerConfiguration(photoLibrary: .shared())
+        configuration.filter = .images
+        configuration.selectionLimit = maximumCount
+        // The composer always normalizes uploads to JPEG, so asking Photos for
+        // a compatible representation avoids slow RAW/HEIF materialization.
+        configuration.preferredAssetRepresentationMode = .compatible
+        let controller = PHPickerViewController(configuration: configuration)
+        controller.delegate = context.coordinator
+        return controller
+    }
+
+    func updateUIViewController(_ controller: PHPickerViewController, context: Context) {}
+
+    final class Coordinator: NSObject, PHPickerViewControllerDelegate {
+        private let onSelect: ([FeaturePhotoLibraryItem]) -> Void
+        private let onCancel: () -> Void
+        private var didFinish = false
+
+        init(
+            onSelect: @escaping ([FeaturePhotoLibraryItem]) -> Void,
+            onCancel: @escaping () -> Void
+        ) {
+            self.onSelect = onSelect
+            self.onCancel = onCancel
+        }
+
+        func picker(_ picker: PHPickerViewController, didFinishPicking results: [PHPickerResult]) {
+            guard !didFinish else { return }
+            didFinish = true
+            guard !results.isEmpty else {
+                onCancel()
+                return
+            }
+            onSelect(results.map { FeaturePhotoLibraryItem(provider: $0.itemProvider) })
+        }
     }
 }
 
