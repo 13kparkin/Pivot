@@ -91,8 +91,6 @@ import {
   deriveTimelineEntriesFromVisibleTurnItems,
   deriveRevertTurnCountByUserMessageId,
   deriveActiveWorkStartedAt,
-  deriveActivePlanState,
-  findSidebarProposedPlan,
   findLatestProposedPlan,
   hasActionableProposedPlan,
   isLatestRunSettled,
@@ -472,11 +470,6 @@ type EnvironmentUnavailableState = {
   readonly environmentId: EnvironmentId;
   readonly label: string;
   readonly connection: EnvironmentConnectionPresentation;
-};
-
-type ThreadPlanCatalogEntry = {
-  readonly id: ThreadId;
-  readonly projection: OrchestrationV2ThreadProjection;
 };
 
 function eventPathContainsSelector(event: Event, selector: string): boolean {
@@ -1740,29 +1733,6 @@ function ChatViewContent(props: ChatViewProps) {
     const existingThreadKeys = new Set<string>([...serverThreadKeys, ...draftThreadKeys]);
     return openTerminalThreadKeys.filter((nextThreadKey) => existingThreadKeys.has(nextThreadKey));
   }, [draftThreadKeys, openTerminalThreadKeys, serverThreadKeys]);
-  const sourcePlanThreadRef = useMemo(() => {
-    const sourceThreadId = activeLatestRun?.sourcePlanRef?.threadId;
-    if (!activeThread || !sourceThreadId || sourceThreadId === activeThread.id) {
-      return null;
-    }
-    return scopeThreadRef(activeThread.environmentId, sourceThreadId);
-  }, [activeLatestRun?.sourcePlanRef?.threadId, activeThread]);
-  const sourceThreadProjection = useThreadProjection(sourcePlanThreadRef);
-  const threadPlanCatalog = useMemo<ThreadPlanCatalogEntry[]>(() => {
-    if (!activeThread || serverProjection === null) {
-      return [];
-    }
-    const entries: ThreadPlanCatalogEntry[] = [
-      { id: activeThread.id, projection: serverProjection },
-    ];
-    if (sourcePlanThreadRef && sourceThreadProjection !== null) {
-      entries.push({
-        id: sourcePlanThreadRef.threadId,
-        projection: sourceThreadProjection.projection,
-      });
-    }
-    return entries;
-  }, [activeThread, serverProjection, sourcePlanThreadRef, sourceThreadProjection]);
   useEffect(() => {
     setMountedTerminalThreadKeys((currentThreadIds) => {
       const nextThreadIds = reconcileMountedTerminalThreadIds({
@@ -2321,20 +2291,6 @@ function ChatViewContent(props: ChatViewProps) {
     }
     return findLatestProposedPlan(serverProjection, activeLatestRun?.runId ?? null);
   }, [activeLatestRun?.runId, latestRunSettled, serverProjection]);
-  const sidebarProposedPlan = useMemo(
-    () =>
-      findSidebarProposedPlan({
-        threads: threadPlanCatalog,
-        latestRun: activeLatestRun,
-        latestRunSettled,
-        threadId: activeThread?.id ?? null,
-      }),
-    [activeLatestRun, activeThread?.id, latestRunSettled, threadPlanCatalog],
-  );
-  const activePlan = useMemo(
-    () => deriveActivePlanState(serverProjection, activeLatestRun?.runId ?? undefined),
-    [activeLatestRun?.runId, serverProjection],
-  );
   const showPlanFollowUpPrompt =
     pendingUserInputs.length === 0 &&
     interactionMode === "plan" &&
@@ -6410,8 +6366,6 @@ function ChatViewContent(props: ChatViewProps) {
                             respondingRequestIds={respondingRequestIds}
                             showPlanFollowUpPrompt={showPlanFollowUpPrompt}
                             activeProposedPlan={activeProposedPlan}
-                            activePlan={activePlan}
-                            sidebarProposedPlan={sidebarProposedPlan}
                             runtimeMode={runtimeMode}
                             interactionMode={interactionMode}
                             lockedProvider={modelPickerLockedProvider}
