@@ -224,7 +224,6 @@ private struct ModelPickerSheet: View {
         }
         .presentationDetents([.large])
         .presentationDragIndicator(.visible)
-        .preferredColorScheme(.dark)
         .onAppear(perform: revealSelectedLegacyModel)
         .onChange(of: selection) { revealSelectedLegacyModel() }
         .onChange(of: providers) { revealSelectedLegacyModel() }

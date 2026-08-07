@@ -41,9 +41,9 @@ public struct FeatureRootView: View {
                 ConnectionOnboardingView(model: model)
             }
         }
-        .preferredColorScheme(model.snapshot.settings.appearance == .dark ? .dark : nil)
-        .tint(.white)
-        .background(Color.black.ignoresSafeArea())
+    .preferredColorScheme(preferredColorScheme)
+    .tint(T3Colors.accent)
+    .background(T3Colors.background.ignoresSafeArea())
         .task { await model.start() }
         .alert(
             "Something went wrong",
@@ -69,6 +69,14 @@ public struct FeatureRootView: View {
             isManagingConnections: model.isManagingConnections
         )
     }
+
+  private var preferredColorScheme: ColorScheme? {
+    switch model.snapshot.settings.appearance {
+    case .system: nil
+    case .light: .light
+    case .dark: .dark
+    }
+  }
 }
 
 enum FeatureRootPresentation {
@@ -96,7 +104,7 @@ private struct FeatureLoadingView: View {
                 .foregroundStyle(T3Colors.textSecondary)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Color.black)
+    .background(T3Colors.background)
         .accessibilityElement(children: .combine)
     }
 }

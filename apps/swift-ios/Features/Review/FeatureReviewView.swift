@@ -30,7 +30,7 @@ public struct FeatureReviewView: View {
                 )
             }
         }
-        .background(Color.black)
+    .background(T3Colors.background)
         .navigationTitle("Review")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
@@ -239,7 +239,7 @@ private struct FeatureDiffView: View {
                 }
             }
         }
-        .background(Color.black)
+    .background(T3Colors.background)
         .navigationTitle(file.path.split(separator: "/").last.map(String.init) ?? file.path)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {

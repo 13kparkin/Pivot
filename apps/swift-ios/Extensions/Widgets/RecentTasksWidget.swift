@@ -29,7 +29,7 @@ struct T3RecentTasksWidget: Widget {
     var body: some WidgetConfiguration {
         StaticConfiguration(kind: kind, provider: T3TaskWidgetProvider()) { entry in
             T3TaskWidgetView(entry: entry)
-                .containerBackground(.black, for: .widget)
+        .containerBackground(Color(uiColor: .systemBackground), for: .widget)
         }
         .configurationDisplayName("T3 Code Tasks")
         .description("See active and recent T3 Code tasks at a glance.")
@@ -75,7 +75,7 @@ private struct T3TaskWidgetView: View {
                             .lineLimit(1)
                         Text(task.threadTitle)
                             .font(.system(size: 15, weight: .semibold))
-                            .foregroundStyle(.white)
+              .foregroundStyle(.primary)
                             .lineLimit(2)
                         Text(task.projectTitle)
                             .font(.system(size: 11, weight: .medium))
@@ -108,7 +108,7 @@ private struct T3TaskWidgetView: View {
                             VStack(alignment: .leading, spacing: 1) {
                                 Text(task.threadTitle)
                                     .font(.system(size: 13, weight: .semibold))
-                                    .foregroundStyle(.white)
+                  .foregroundStyle(.primary)
                                     .lineLimit(1)
                                 Text(task.projectTitle)
                                     .font(.system(size: 10, weight: .medium))
@@ -123,7 +123,7 @@ private struct T3TaskWidgetView: View {
                         }
                     }
                     if index < min(orderedTasks.count, 3) - 1 {
-                        Divider().overlay(.white.opacity(0.1))
+            Divider()
                     }
                 }
             }
@@ -152,7 +152,7 @@ private struct T3TaskWidgetView: View {
         HStack(spacing: 6) {
             Text("T3")
                 .font(.system(size: 14, weight: .black, design: .rounded))
-                .foregroundStyle(.white)
+        .foregroundStyle(.primary)
             Text("Code")
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(.secondary)
@@ -160,7 +160,7 @@ private struct T3TaskWidgetView: View {
             Link(destination: T3WidgetURLs.newTask) {
                 Image(systemName: "square.and.pencil")
                     .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(.white)
+          .foregroundStyle(.primary)
             }
             .accessibilityLabel("New task")
         }
@@ -170,7 +170,7 @@ private struct T3TaskWidgetView: View {
         VStack(alignment: .leading, spacing: 4) {
             Text("Ready for a task")
                 .font(.system(size: 14, weight: .semibold))
-                .foregroundStyle(.white)
+        .foregroundStyle(.primary)
             Text("Tap to start in T3 Code")
                 .font(.system(size: 11, weight: .medium))
                 .foregroundStyle(.secondary)

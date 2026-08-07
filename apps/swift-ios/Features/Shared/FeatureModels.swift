@@ -701,6 +701,7 @@ public struct FeatureSelection: Sendable, Equatable, Hashable, Codable {
 
 public enum FeatureAppearance: String, CaseIterable, Sendable, Codable {
     case system
+  case light
     case dark
 }
 
@@ -712,7 +713,7 @@ public struct FeatureSettings: Sendable, Equatable, Codable {
     public var defaultSelection: FeatureSelection?
 
     public init(
-        appearance: FeatureAppearance = .dark,
+    appearance: FeatureAppearance = .system,
         hapticsEnabled: Bool = true,
         notificationsEnabled: Bool = true,
         liveActivitiesEnabled: Bool = true,
@@ -738,7 +739,7 @@ public struct FeatureSettings: Sendable, Equatable, Codable {
         appearance = try container.decodeIfPresent(
             FeatureAppearance.self,
             forKey: .appearance
-        ) ?? .dark
+        ) ?? .system
         hapticsEnabled = try container.decodeIfPresent(
             Bool.self,
             forKey: .hapticsEnabled

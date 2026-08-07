@@ -13,7 +13,7 @@ public struct FeatureFilesView: View {
 
     public var body: some View {
         FeatureFileDirectoryView(client: client, threadID: threadID, path: nil, title: "Files")
-            .background(Color.black)
+      .background(T3Colors.background)
     }
 }
 
@@ -59,7 +59,7 @@ private struct FeatureFileDirectoryView: View {
                 .refreshable { await load() }
             }
         }
-        .background(Color.black)
+    .background(T3Colors.background)
         .navigationTitle(title)
         .navigationBarTitleDisplayMode(.inline)
         .searchable(text: $searchText, prompt: "Filter files")
@@ -208,7 +208,7 @@ private struct FeatureFilePreviewView: View {
                 )
             }
         }
-        .background(Color.black)
+    .background(T3Colors.background)
         .navigationTitle(entry.name)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
@@ -332,7 +332,7 @@ private struct FeatureSourceTextView: View {
                 .textSelection(.enabled)
             }
         }
-        .background(Color.black)
+    .background(T3Colors.background)
         .accessibilityLabel("Source file")
     }
 }
@@ -356,10 +356,10 @@ private struct FeatureHighlightedSourceLine: View {
         switch kind {
         case .plain: T3Colors.textPrimary.opacity(0.92)
         case .comment: T3Colors.textTertiary
-        case .keyword: Color(red: 0.78, green: 0.56, blue: 1)
-        case .literal: Color(red: 0.55, green: 0.78, blue: 1)
-        case .number: Color(red: 0.92, green: 0.67, blue: 0.42)
-        case .property: Color(red: 0.42, green: 0.82, blue: 0.76)
+    case .keyword: T3Colors.syntaxKeyword
+    case .literal: T3Colors.syntaxLiteral
+    case .number: T3Colors.syntaxNumber
+    case .property: T3Colors.syntaxProperty
         }
     }
 }

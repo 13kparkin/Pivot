@@ -52,7 +52,7 @@ public struct ThreadDetailView: View {
                 )
             }
         }
-        .background(Color.black)
+    .background(T3Colors.background)
         .navigationBarTitleDisplayMode(.inline)
         .navigationBarBackButtonHidden(false)
         .t3NavigationChrome()
@@ -298,9 +298,9 @@ public struct ThreadDetailView: View {
         switch currentThread.homeStatus {
         case .working: T3Colors.statusRunning
         case .approval: T3Colors.warning
-        case .input: Color(red: 0.65, green: 0.71, blue: 0.99)
+    case .input: T3Colors.statusInput
         case .failed: T3Colors.danger
-        case .done: Color(red: 0.43, green: 0.91, blue: 0.72)
+    case .done: T3Colors.success
         case .ready: T3Colors.textTertiary
         }
     }
@@ -627,7 +627,7 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
             frame: .zero,
             collectionViewLayout: Self.makeLayout()
         )
-        collectionView.backgroundColor = .black
+    collectionView.backgroundColor = T3Colors.uiBackground
         collectionView.alwaysBounceVertical = true
         collectionView.keyboardDismissMode = .onDrag
         collectionView.delaysContentTouches = false
@@ -1446,7 +1446,7 @@ struct FeatureMessageView: View {
                 .padding(.vertical, 11)
                 .frame(maxWidth: T3Metrics.readingWidth * 0.88, alignment: .leading)
                 .background(
-                    Color.white.opacity(0.09),
+          T3Colors.subtleStrong,
                     in: UnevenRoundedRectangle(
                         topLeadingRadius: 16,
                         bottomLeadingRadius: 16,

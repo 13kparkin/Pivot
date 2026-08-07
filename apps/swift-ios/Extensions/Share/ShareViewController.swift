@@ -6,7 +6,7 @@ final class T3ShareViewController: UIViewController {
 
     override func viewDidLoad() {
         super.viewDidLoad()
-        view.backgroundColor = .black
+    view.backgroundColor = .systemBackground
 
         let content = T3ShareExtensionView(
             save: { [weak self] in
@@ -28,7 +28,7 @@ final class T3ShareViewController: UIViewController {
             }
         )
         let hostingController = UIHostingController(rootView: content)
-        hostingController.view.backgroundColor = .black
+    hostingController.view.backgroundColor = .systemBackground
         addChild(hostingController)
         hostingController.view.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(hostingController.view)
@@ -66,14 +66,14 @@ struct T3ShareExtensionView: View {
                 Spacer()
                 Text("T3 Code")
                     .font(.system(size: 17, weight: .semibold))
-                    .foregroundStyle(.white)
+          .foregroundStyle(.primary)
                 Spacer()
                 Color.clear.frame(width: 52, height: 1)
             }
             .padding(.horizontal, 18)
             .padding(.vertical, 15)
 
-            Divider().overlay(.white.opacity(0.1))
+      Divider()
 
             VStack(spacing: 14) {
                 Image(systemName: phaseSymbol)
@@ -82,7 +82,7 @@ struct T3ShareExtensionView: View {
                     .accessibilityHidden(true)
                 Text(title)
                     .font(.system(size: 22, weight: .bold))
-                    .foregroundStyle(.white)
+          .foregroundStyle(.primary)
                     .multilineTextAlignment(.center)
                 Text(message)
                     .font(.system(size: 15, weight: .medium))
@@ -97,10 +97,10 @@ struct T3ShareExtensionView: View {
             Button(action: primaryAction) {
                 Text(primaryTitle)
                     .font(.system(size: 16, weight: .semibold))
-                    .foregroundStyle(.black)
+          .foregroundStyle(Color(uiColor: .systemBackground))
                     .frame(maxWidth: .infinity)
                     .frame(height: 50)
-                    .background(.white, in: RoundedRectangle(cornerRadius: 13))
+          .background(Color(uiColor: .label), in: RoundedRectangle(cornerRadius: 13))
             }
             .buttonStyle(.plain)
             .disabled(isSaving)
@@ -108,8 +108,7 @@ struct T3ShareExtensionView: View {
             .padding(.horizontal, 18)
             .padding(.bottom, 18)
         }
-        .background(Color.black.ignoresSafeArea())
-        .preferredColorScheme(.dark)
+    .background(Color(uiColor: .systemBackground).ignoresSafeArea())
     }
 
     private var isSaving: Bool {
@@ -151,9 +150,9 @@ struct T3ShareExtensionView: View {
 
     private var phaseTint: Color {
         switch phase {
-        case .saved: Color(red: 0.43, green: 0.91, blue: 0.72)
-        case .failed: Color(red: 0.99, green: 0.46, blue: 0.46)
-        default: .white
+    case .saved: Color(uiColor: .systemGreen)
+    case .failed: Color(uiColor: .systemRed)
+    default: Color(uiColor: .label)
         }
     }
 

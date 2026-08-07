@@ -1,24 +1,66 @@
 import SwiftUI
+import UIKit
 
 enum T3Colors {
-    static let background = Color.black
-    static let surface = Color(white: 0.055)
-    static let surfaceRaised = Color(white: 0.09)
-    static let input = Color(white: 0.075)
-    static let border = Color.white.opacity(0.09)
-    static let separator = Color.white.opacity(0.07)
-    static let ledgerSurface = Color(white: 0.055)
-    static let ledgerSelected = Color(white: 0.051)
+  // Keep these values aligned with apps/mobile/global.css. UIKit variants
+  // let recycled collection and terminal surfaces participate in the same
+  // system appearance changes as SwiftUI views.
+  static let uiBackground = adaptive(light: rgb(0xF2F2F7), dark: rgb(0x0A0A0A))
+  static let uiTextPrimary = adaptive(light: rgb(0x262626), dark: rgb(0xF5F5F5))
 
-    static let textPrimary = Color.white
-    static let textSecondary = Color.white.opacity(0.7)
-    static let textTertiary = Color.white.opacity(0.57)
+  static let background = Color(uiColor: uiBackground)
+  static let sheet = color(light: rgb(0xF2F2F7, alpha: 0.98), dark: rgb(0x0E0E0E, alpha: 0.98))
+  static let surface = color(light: rgb(0xFFFFFF), dark: rgb(0x171717))
+  static let surfaceRaised = color(light: rgb(0xF5F5F5), dark: rgb(0x1C1C1C))
+  static let input = color(light: rgb(0xFFFFFF), dark: rgb(0x141414))
+  static let border = color(light: rgb(0x000000, alpha: 0.08), dark: rgb(0xFFFFFF, alpha: 0.06))
+  static let inputBorder = color(
+    light: rgb(0x000000, alpha: 0.10), dark: rgb(0xFFFFFF, alpha: 0.08))
+  static let separator = color(light: rgb(0x000000, alpha: 0.04), dark: rgb(0xFFFFFF, alpha: 0.03))
+  static let subtle = color(light: rgb(0x000000, alpha: 0.04), dark: rgb(0xFFFFFF, alpha: 0.04))
+  static let subtleStrong = color(
+    light: rgb(0x000000, alpha: 0.08), dark: rgb(0xFFFFFF, alpha: 0.08))
+  static let shadow = color(light: rgb(0x000000, alpha: 0.18), dark: rgb(0x000000, alpha: 0.32))
+  static let ledgerSurface = surface
+  static let ledgerSelected = surfaceRaised
 
-    static let accent = Color(red: 0.04, green: 0.52, blue: 1)
-    static let statusRunning = Color(red: 0.13, green: 0.83, blue: 0.93)
-    static let success = Color(red: 0.19, green: 0.82, blue: 0.35)
-    static let warning = Color(red: 1, green: 0.62, blue: 0.04)
-    static let danger = Color(red: 1, green: 0.27, blue: 0.23)
+  static let textPrimary = Color(uiColor: uiTextPrimary)
+  static let textSecondary = color(light: rgb(0x525252), dark: rgb(0xA3A3A3))
+  static let textTertiary = color(light: rgb(0x737373), dark: rgb(0x8E8E93))
+  static let placeholder = color(light: rgb(0xA3A3A3), dark: rgb(0x8E8E93))
+
+  static let primaryAction = color(light: rgb(0x262626), dark: rgb(0xF5F5F5))
+  static let primaryActionForeground = color(light: rgb(0xFFFFFF), dark: rgb(0x0A0A0A))
+  static let accent = color(light: rgb(0x007AFF), dark: rgb(0x0A84FF))
+  static let statusRunning = color(light: rgb(0x0284C7), dark: rgb(0x22D3EE))
+  static let statusInput = color(light: rgb(0x4F46E5), dark: rgb(0xA5B4FC))
+  static let success = color(light: rgb(0x16A34A), dark: rgb(0x30D158))
+  static let warning = color(light: rgb(0xD97706), dark: rgb(0xFF9F0A))
+  static let danger = color(light: rgb(0xDC2626), dark: rgb(0xFF453A))
+
+  static let syntaxKeyword = color(light: rgb(0x7C3AED), dark: rgb(0xC78EFF))
+  static let syntaxLiteral = color(light: rgb(0x2563EB), dark: rgb(0x8CC7FF))
+  static let syntaxNumber = color(light: rgb(0xB45309), dark: rgb(0xEBAA6B))
+  static let syntaxProperty = color(light: rgb(0x0F766E), dark: rgb(0x6BD1C2))
+
+  private static func color(light: UIColor, dark: UIColor) -> Color {
+    Color(uiColor: adaptive(light: light, dark: dark))
+  }
+
+  private static func adaptive(light: UIColor, dark: UIColor) -> UIColor {
+    UIColor { traits in
+      traits.userInterfaceStyle == .dark ? dark : light
+    }
+  }
+
+  private static func rgb(_ hex: UInt32, alpha: CGFloat = 1) -> UIColor {
+    UIColor(
+      red: CGFloat((hex >> 16) & 0xFF) / 255,
+      green: CGFloat((hex >> 8) & 0xFF) / 255,
+      blue: CGFloat(hex & 0xFF) / 255,
+      alpha: alpha
+    )
+  }
 }
 
 /// The native client uses semantic fonts so every surface follows Dynamic Type.
@@ -56,7 +98,7 @@ enum T3Metrics {
 
 extension View {
     func t3NavigationChrome() -> some View {
-        toolbarBackground(T3Colors.background.opacity(0.97), for: .navigationBar)
+    toolbarBackground(T3Colors.sheet, for: .navigationBar)
             .toolbarBackground(.visible, for: .navigationBar)
     }
 }

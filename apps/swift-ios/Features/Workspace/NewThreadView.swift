@@ -135,7 +135,6 @@ public struct NewThreadView: View {
         .interactiveDismissDisabled(isSubmitting)
         .presentationDetents([.large])
         .presentationDragIndicator(.visible)
-        .preferredColorScheme(.dark)
     }
 
     private var topBar: some View {
@@ -247,8 +246,8 @@ public struct NewThreadView: View {
                 }
             }
             .buttonStyle(.borderedProminent)
-            .tint(.white)
-            .foregroundStyle(.black)
+      .tint(T3Colors.primaryAction)
+      .foregroundStyle(T3Colors.primaryActionForeground)
             .padding(.top, 6)
         }
         .padding(.horizontal, 28)
@@ -943,7 +942,6 @@ private struct NewTaskBranchPicker: View {
         }
         .presentationDetents([.medium, .large])
         .presentationBackground(T3Colors.background)
-        .preferredColorScheme(.dark)
     }
 
     private var filteredBranches: [FeatureWorkspaceBranch] {

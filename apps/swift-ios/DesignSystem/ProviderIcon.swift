@@ -33,6 +33,13 @@ enum ProviderBrand: String {
         }
         return nil
     }
+
+  var usesTemplateRendering: Bool {
+    switch self {
+    case .openAI, .cursor, .grok: true
+    case .claude, .openCode: false
+    }
+  }
 }
 
 /// Displays the same provider artwork used by the web and marketing surfaces.
@@ -52,7 +59,8 @@ struct ProviderIcon: View {
             ) {
                 Image(brand.rawValue)
                     .resizable()
-                    .renderingMode(.original)
+          .renderingMode(brand.usesTemplateRendering ? .template : .original)
+          .foregroundStyle(T3Colors.textSecondary)
                     .scaledToFit()
             } else {
                 Text(fallbackInitial)

@@ -65,7 +65,6 @@ public struct T3ConnectView: View {
             } message: {
                 Text(controller.errorMessage ?? "Something went wrong.")
             }
-            .preferredColorScheme(.dark)
     }
 
     @ViewBuilder
@@ -81,9 +80,9 @@ public struct T3ConnectView: View {
             }
         } else {
             ZStack {
-                Color.black.ignoresSafeArea()
+        T3Colors.background.ignoresSafeArea()
                 ProgressView()
-                    .tint(.white)
+          .tint(T3Colors.textPrimary)
             }
         }
     }
@@ -96,7 +95,7 @@ public struct T3ConnectView: View {
         }
         .listStyle(.plain)
         .scrollContentBackground(.hidden)
-        .background(Color.black)
+    .background(T3Colors.background)
     }
 
     @ViewBuilder
@@ -112,12 +111,11 @@ public struct T3ConnectView: View {
             }
                 .environment(\.clerkTheme, T3ConnectClerkAppearance.theme)
                 .environment(clerk)
-                .preferredColorScheme(.dark)
         } else {
             ZStack {
-                Color.black.ignoresSafeArea()
+        T3Colors.background.ignoresSafeArea()
                 ProgressView()
-                    .tint(.white)
+          .tint(T3Colors.textPrimary)
             }
         }
     }
@@ -150,7 +148,7 @@ public struct T3ConnectView: View {
                     .foregroundStyle(T3Colors.textTertiary)
             }
             .padding(.vertical, 8)
-            .listRowBackground(Color.black)
+      .listRowBackground(T3Colors.background)
         }
     }
 
@@ -169,7 +167,7 @@ public struct T3ConnectView: View {
                 }
             }
             .padding(.vertical, 3)
-            .listRowBackground(Color.black)
+      .listRowBackground(T3Colors.background)
         }
     }
 
@@ -184,12 +182,12 @@ public struct T3ConnectView: View {
                         .foregroundStyle(T3Colors.textSecondary)
                 }
                 .padding(.vertical, 8)
-                .listRowBackground(Color.black)
+        .listRowBackground(T3Colors.background)
             }
 
             ForEach(controller.environments) { item in
                 environmentRow(item)
-                    .listRowBackground(Color.black)
+          .listRowBackground(T3Colors.background)
                     .swipeActions {
                         Button(role: .destructive) {
                             Task { await controller.unlink(item.environment) }
@@ -206,7 +204,7 @@ public struct T3ConnectView: View {
                         .font(T3Typography.supporting)
                         .foregroundStyle(T3Colors.textSecondary)
                 }
-                .listRowBackground(Color.black)
+        .listRowBackground(T3Colors.background)
             }
         }
     }
@@ -221,7 +219,7 @@ public struct T3ConnectView: View {
             VStack(alignment: .leading, spacing: 3) {
                 Text(item.environment.label)
                     .font(T3Typography.homeTitle)
-                    .foregroundStyle(.white)
+          .foregroundStyle(T3Colors.textPrimary)
                     .lineLimit(1)
                 Text(statusText(item))
                     .font(T3Typography.supporting)
@@ -355,7 +353,6 @@ private struct T3ConnectAuthenticationView: View {
                 .prefetchClerkImages()
                 .environment(\.clerkTheme, T3ConnectClerkAppearance.theme)
                 .environment(clerk)
-                .preferredColorScheme(.dark)
         }
         .alert(
             "Couldn’t sign in",
@@ -374,9 +371,9 @@ private struct T3ConnectAuthenticationView: View {
         HStack(spacing: 10) {
             Text("T3")
                 .font(.system(size: 14, weight: .heavy, design: .rounded))
-                .foregroundStyle(.black)
+        .foregroundStyle(T3Colors.primaryActionForeground)
                 .frame(width: 32, height: 32)
-                .background(.white)
+        .background(T3Colors.primaryAction)
                 .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
 
             Text("T3 Connect")
@@ -391,7 +388,7 @@ private struct T3ConnectAuthenticationView: View {
         if clerk.environment == nil {
             HStack(spacing: 10) {
                 ProgressView()
-                    .tint(.white)
+          .tint(T3Colors.textPrimary)
                 Text("Loading sign-in options…")
                     .font(T3Typography.control)
                     .foregroundStyle(T3Colors.textSecondary)
@@ -531,7 +528,7 @@ private struct T3ConnectAuthProviderIcon: View {
 private enum T3ConnectClerkAppearance {
     static let theme = ClerkTheme(
         colors: .init(
-            primary: .white,
+      primary: T3Colors.primaryAction,
             background: T3Colors.background,
             input: T3Colors.input,
             danger: T3Colors.danger,
@@ -539,12 +536,12 @@ private enum T3ConnectClerkAppearance {
             warning: T3Colors.warning,
             foreground: T3Colors.textPrimary,
             mutedForeground: T3Colors.textSecondary,
-            primaryForeground: .black,
+      primaryForeground: T3Colors.primaryActionForeground,
             inputForeground: T3Colors.textPrimary,
-            neutral: .white,
-            ring: .white,
+      neutral: T3Colors.textPrimary,
+      ring: T3Colors.textPrimary,
             muted: T3Colors.surfaceRaised,
-            shadow: .black,
+      shadow: T3Colors.border,
             border: T3Colors.border
         ),
         design: .init(borderRadius: 12)

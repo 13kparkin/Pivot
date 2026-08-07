@@ -25,7 +25,7 @@ public struct SettingsView: View {
                 aboutSection
             }
             .scrollContentBackground(.hidden)
-            .background(Color.black)
+      .background(T3Colors.background)
             .navigationTitle("Settings")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -229,6 +229,7 @@ public struct SettingsView: View {
         Section("Preferences") {
             Picker("Theme", selection: $settings.appearance) {
                 Text("System").tag(FeatureAppearance.system)
+        Text("Light").tag(FeatureAppearance.light)
                 Text("Dark").tag(FeatureAppearance.dark)
             }
             Toggle("Haptics", isOn: $settings.hapticsEnabled)

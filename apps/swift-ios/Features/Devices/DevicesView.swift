@@ -45,7 +45,7 @@ public struct DevicesView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Color.black)
+    .background(T3Colors.background)
         .navigationTitle("Devices")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
@@ -143,7 +143,7 @@ public struct DevicesView: View {
         }
         .listStyle(.plain)
         .scrollContentBackground(.hidden)
-        .background(Color.black)
+    .background(T3Colors.background)
         .refreshable {
             await reload()
         }

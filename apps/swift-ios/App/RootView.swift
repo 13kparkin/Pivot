@@ -12,6 +12,5 @@ struct RootView<Content: View>: View {
         content
             .background(T3Colors.background.ignoresSafeArea())
             .tint(T3Colors.accent)
-            .preferredColorScheme(.dark)
     }
 }

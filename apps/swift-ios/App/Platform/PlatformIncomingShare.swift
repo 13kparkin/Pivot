@@ -236,7 +236,7 @@ struct PlatformIncomingShareDestinationSheet: View {
                             .foregroundStyle(.secondary)
                             .lineLimit(3)
                     }
-                    .listRowBackground(Color.black)
+          .listRowBackground(Color(uiColor: .systemBackground))
                 }
 
                 Section("Choose a project") {
@@ -272,7 +272,7 @@ struct PlatformIncomingShareDestinationSheet: View {
                         }
                         .buttonStyle(.plain)
                         .disabled(isImporting)
-                        .listRowBackground(Color.black)
+            .listRowBackground(Color(uiColor: .systemBackground))
                     }
                 }
 
@@ -284,11 +284,11 @@ struct PlatformIncomingShareDestinationSheet: View {
                                 .foregroundStyle(.secondary)
                         }
                     }
-                    .listRowBackground(Color.black)
+          .listRowBackground(Color(uiColor: .systemBackground))
                 }
             }
             .scrollContentBackground(.hidden)
-            .background(Color.black)
+      .background(Color(uiColor: .systemBackground))
             .navigationTitle("Start a task")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -298,8 +298,7 @@ struct PlatformIncomingShareDestinationSheet: View {
                 }
             }
         }
-        .background(Color.black.ignoresSafeArea())
-        .preferredColorScheme(.dark)
+    .background(Color(uiColor: .systemBackground).ignoresSafeArea())
         .presentationDetents([.medium, .large])
         .presentationDragIndicator(.visible)
         .interactiveDismissDisabled(isImporting)

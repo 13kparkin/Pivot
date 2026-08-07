@@ -58,10 +58,9 @@ public struct ConnectionOnboardingView: View {
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(Color.black)
+      .background(T3Colors.background)
             .animation(.snappy(duration: 0.24), value: stage)
         }
-        .preferredColorScheme(.dark)
         .toolbar {
             if stage == .welcome, let onCancel {
                 ToolbarItem(placement: .cancellationAction) {
@@ -156,7 +155,7 @@ public struct ConnectionOnboardingView: View {
                         showingScanner = true
                     }
 
-                    Divider().overlay(Color.white.opacity(0.09))
+          Divider().overlay(T3Colors.border)
 
                     connectionAction(
                         title: "Paste connection link",
@@ -166,7 +165,7 @@ public struct ConnectionOnboardingView: View {
                         pasteConnectionLink()
                     }
 
-                    Divider().overlay(Color.white.opacity(0.09))
+          Divider().overlay(T3Colors.border)
 
                     connectionAction(
                         title: "Enter details manually",
@@ -235,7 +234,7 @@ public struct ConnectionOnboardingView: View {
                     .accessibilityHint("Reconnects to this server")
 
                     if environment.id != model.snapshot.environments.last?.id {
-                        Divider().overlay(Color.white.opacity(0.09))
+            Divider().overlay(T3Colors.border)
                     }
                 }
             }
@@ -629,10 +628,10 @@ private extension View {
             .font(.body.monospaced())
             .padding(.horizontal, 14)
             .frame(minHeight: 50)
-            .background(Color.white.opacity(0.07))
+      .background(T3Colors.input)
             .overlay(alignment: .bottom) {
                 Rectangle()
-                    .fill(Color.white.opacity(0.18))
+          .fill(T3Colors.inputBorder)
                     .frame(height: 1)
             }
     }
@@ -642,10 +641,14 @@ private struct ConnectionPrimaryButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .font(.body.weight(.semibold))
-            .foregroundStyle(.black)
+      .foregroundStyle(T3Colors.primaryActionForeground)
             .padding(.horizontal, 16)
             .frame(minHeight: 52)
-            .background(configuration.isPressed ? Color.white.opacity(0.76) : .white)
+      .background(
+        configuration.isPressed
+          ? T3Colors.primaryAction.opacity(0.76)
+          : T3Colors.primaryAction
+      )
             .clipShape(RoundedRectangle(cornerRadius: 12))
     }
 }
