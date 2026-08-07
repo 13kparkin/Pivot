@@ -622,6 +622,81 @@ final class T3ConnectRuntimeTests: XCTestCase {
         })
     }
 
+    func testRelayRoutesReplaceConfiguredBasePathAndQuery() async throws {
+        let signer = try testSigner()
+        let transport = T3ConnectScriptedHTTPTransport { request, ordinal in
+            switch ordinal {
+            case 1:
+                XCTAssertEqual(request.url?.path, "/v1/client/dpop-token")
+                XCTAssertNil(request.url?.query)
+                return (.relayToken("relay-mobile", scope: "mobile:registration"), 200)
+            case 2:
+                XCTAssertEqual(request.url?.path, "/v1/mobile/devices")
+                XCTAssertNil(request.url?.query)
+                return (Data(#"{"ok":true}"#.utf8), 200)
+            default:
+                throw T3ConnectTestError.unexpectedPath(request.url?.path)
+            }
+        }
+        let relay = T3ConnectRelayClient(
+            configuration: T3ConnectConfiguration(
+                clerkPublishableKey: "pk_test",
+                relayHTTPURL: URL(string: "https://relay.example/stale/base?old=true")!
+            ),
+            transport: transport,
+            signer: signer
+        )
+
+        try await relay.registerDevice(
+            testDeviceRegistration(),
+            clerkToken: clerkJWT(subject: "mobile-account")
+        )
+    }
+
+    func testRelayRejectsFalseOKResponse() async throws {
+        let signer = try testSigner()
+        let transport = T3ConnectScriptedHTTPTransport { _, ordinal in
+            switch ordinal {
+            case 1:
+                return (.relayToken("relay-mobile", scope: "mobile:registration"), 200)
+            case 2:
+                return (Data(#"{"ok":false}"#.utf8), 200)
+            default:
+                throw T3ConnectTestError.unexpectedPath(nil)
+            }
+        }
+        let relay = T3ConnectRelayClient(
+            configuration: T3ConnectConfiguration(
+                clerkPublishableKey: "pk_test",
+                relayHTTPURL: URL(string: "https://relay.example")!
+            ),
+            transport: transport,
+            signer: signer
+        )
+
+        do {
+            try await relay.registerDevice(
+                testDeviceRegistration(),
+                clerkToken: clerkJWT(subject: "mobile-account")
+            )
+            XCTFail("A false success envelope was accepted")
+        } catch T3ConnectRelayError.invalidResponse {
+            // Expected contract rejection.
+        }
+    }
+
+    private func testDeviceRegistration() -> T3ConnectDeviceRegistration {
+        T3ConnectDeviceRegistration(
+            deviceID: "phone-1",
+            label: "Big O",
+            iosMajorVersion: 26,
+            bundleID: "com.t3tools.t3code.swiftui",
+            apsEnvironment: .sandbox,
+            pushToken: "apns-token",
+            pushToStartToken: "start-token"
+        )
+    }
+
     private func refreshFixture(
         savedThumbprint: String?,
         expiresAt: Date

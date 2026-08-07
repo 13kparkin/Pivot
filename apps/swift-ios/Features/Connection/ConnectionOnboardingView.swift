@@ -131,10 +131,11 @@ public struct ConnectionOnboardingView: View {
                     .foregroundStyle(T3Colors.textSecondary)
                     .padding(.top, 12)
 
-                if let capability = model.client as? any T3ConnectCapable {
+                if let capability = model.client as? any T3ConnectCapable,
+                   capability.t3ConnectController.unavailableReason == nil {
                     NavigationLink {
                         T3ConnectView(capability: capability) {
-                            await model.reload()
+                            await model.reloadAfterConnection()
                             onConnected()
                         }
                     } label: {

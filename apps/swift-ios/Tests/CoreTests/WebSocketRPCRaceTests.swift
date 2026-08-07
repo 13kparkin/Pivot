@@ -266,6 +266,185 @@ final class WebSocketRPCRaceTests: XCTestCase {
         XCTAssertTrue(isConnected, "Completing an old stop must not clear a newer socket.")
         await client.stop()
     }
+
+    func testSubscriptionRoutesChunkBeforeSuspendedSendReturns() async throws {
+        let connection = SubscriptionSendRaceConnection()
+        let client = WebSocketRPCClient(
+            connector: SequencedConnector(connections: [connection]),
+            endpointProvider: { URL(string: "wss://studio.example/ws")! }
+        )
+
+        await client.start()
+        await connection.waitUntilReceiveCount(1)
+        let stream = await client.subscribe("thread.events", as: JSONValue.self)
+        var iterator = stream.makeAsyncIterator()
+        await connection.waitUntilRequestSuspended()
+        await connection.waitUntilReceiveCount(2)
+        await connection.releaseRequest()
+
+        let value = try await iterator.next()
+        XCTAssertEqual(value, .object(["event": .string("ready")]))
+        await client.stop()
+    }
+
+    func testCancellingSubscriptionWhileSendIsSuspendedInterruptsWithoutResurrection() async {
+        let connection = SubscriptionSendRaceConnection()
+        let client = WebSocketRPCClient(
+            connector: SequencedConnector(connections: [connection]),
+            endpointProvider: { URL(string: "wss://studio.example/ws")! }
+        )
+
+        await client.start()
+        await connection.waitUntilReceiveCount(1)
+        var stream: AsyncThrowingStream<JSONValue, Error>? = await client.subscribe(
+            "thread.events",
+            as: JSONValue.self
+        )
+        let consumer = Task {
+            var iterator = stream!.makeAsyncIterator()
+            return try await iterator.next()
+        }
+        await connection.waitUntilRequestSuspended()
+        consumer.cancel()
+        stream = nil
+        _ = try? await consumer.value
+
+        let observedInterrupt = await connection.observesInterrupt()
+        XCTAssertTrue(observedInterrupt)
+        await connection.releaseRequest()
+        await client.stop()
+    }
+}
+
+private actor SubscriptionSendRaceConnection: WebSocketConnection {
+    private var requestID: Int?
+    private var requestContinuation: CheckedContinuation<Void, Never>?
+    private var requestWaiters: [CheckedContinuation<Void, Never>] = []
+    private var receiveContinuation: CheckedContinuation<Data, Error>?
+    private var receiveCount = 0
+    private var receiveWaiters: [(Int, CheckedContinuation<Void, Never>)] = []
+    private var queuedResponses: [Data] = []
+    private var interruptCount = 0
+    private var interruptWaiters: [CheckedContinuation<Void, Never>] = []
+
+    func send(_ data: Data) async throws {
+        let envelope = try JSONDecoder.t3.decode(JSONValue.self, from: data)
+        switch envelope["_tag"]?.stringValue {
+        case "Request":
+            guard requestID == nil,
+                  case let .number(rawID)? = envelope["id"],
+                  let id = Int(exactly: rawID) else { return }
+            requestID = id
+            enqueue(try chunk(requestID: id))
+            let waiters = requestWaiters
+            requestWaiters.removeAll()
+            waiters.forEach { $0.resume() }
+            await withCheckedContinuation { continuation in
+                requestContinuation = continuation
+            }
+            enqueue(try exit(requestID: id))
+        case "Interrupt":
+            interruptCount += 1
+            let waiters = interruptWaiters
+            interruptWaiters.removeAll()
+            waiters.forEach { $0.resume() }
+        default:
+            return
+        }
+    }
+
+    func receive() async throws -> Data {
+        receiveCount += 1
+        let ready = receiveWaiters.filter { receiveCount >= $0.0 }
+        receiveWaiters.removeAll { receiveCount >= $0.0 }
+        ready.forEach { $0.1.resume() }
+        if !queuedResponses.isEmpty { return queuedResponses.removeFirst() }
+        return try await withCheckedThrowingContinuation { continuation in
+            receiveContinuation = continuation
+        }
+    }
+
+    func close() {
+        requestContinuation?.resume()
+        requestContinuation = nil
+        receiveContinuation?.resume(throwing: CancellationError())
+        receiveContinuation = nil
+    }
+
+    func waitUntilRequestSuspended() async {
+        guard requestID == nil else { return }
+        await withCheckedContinuation { continuation in
+            requestWaiters.append(continuation)
+        }
+    }
+
+    func waitUntilReceiveCount(_ count: Int) async {
+        guard receiveCount < count else { return }
+        await withCheckedContinuation { continuation in
+            receiveWaiters.append((count, continuation))
+        }
+    }
+
+    func releaseRequest() {
+        requestContinuation?.resume()
+        requestContinuation = nil
+    }
+
+    func observesInterrupt() async -> Bool {
+        if interruptCount > 0 { return true }
+        return await withTaskGroup(of: Bool.self) { group in
+            group.addTask {
+                await self.waitUntilInterrupt()
+                return true
+            }
+            group.addTask {
+                try? await Task.sleep(for: .milliseconds(500))
+                return false
+            }
+            let result = await group.next() ?? false
+            group.cancelAll()
+            return result
+        }
+    }
+
+    private func waitUntilInterrupt() async {
+        guard interruptCount == 0 else { return }
+        await withCheckedContinuation { continuation in
+            interruptWaiters.append(continuation)
+        }
+    }
+
+    private func enqueue(_ data: Data) {
+        if let receiveContinuation {
+            self.receiveContinuation = nil
+            receiveContinuation.resume(returning: data)
+        } else {
+            queuedResponses.append(data)
+        }
+    }
+
+    private func chunk(requestID: Int) throws -> Data {
+        try JSONEncoder.t3.encode(
+            JSONValue.object([
+                "_tag": .string("Chunk"),
+                "requestId": .number(Double(requestID)),
+                "values": .array([.object(["event": .string("ready")])]),
+            ])
+        )
+    }
+
+    private func exit(requestID: Int) throws -> Data {
+        try JSONEncoder.t3.encode(
+            JSONValue.object([
+                "_tag": .string("Exit"),
+                "requestId": .number(Double(requestID)),
+                "exit": .object([
+                    "_tag": .string("Success"),
+                    "value": .null,
+                ]),
+            ])
+        )
+    }
 }
 
 private actor CloseTrackingConnection: WebSocketConnection {

@@ -192,18 +192,22 @@ public struct FeatureTerminalView: View {
     private func sendCommand() {
         guard isRunning, !input.isEmpty else { return }
         let command = input
-        input = ""
         Task {
-            await write(command + "\n")
+            if await write(command + "\r") {
+                input = ""
+            }
             inputFocused = true
         }
     }
 
-    private func write(_ data: String) async {
+    @discardableResult
+    private func write(_ data: String) async -> Bool {
         do {
             try await client.writeTerminal(threadID: threadID, data: data)
+            return true
         } catch {
             errorMessage = error.localizedDescription
+            return false
         }
     }
 }

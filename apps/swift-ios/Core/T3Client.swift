@@ -956,6 +956,15 @@ public actor T3Client {
 
 /// Owns persisted environment selection and constructs scoped clients without
 /// introducing UI-framework state into Core.
+public struct EnvironmentPersistenceError: LocalizedError, Sendable {
+    public let operationError: String
+    public let rollbackErrors: [String]
+
+    public var errorDescription: String? {
+        "\(operationError) Recovery also failed: \(rollbackErrors.joined(separator: "; "))"
+    }
+}
+
 public actor EnvironmentRuntime {
     public let environmentStore: EnvironmentStore
     public let credentialStore: any CredentialStore
@@ -1064,39 +1073,86 @@ public actor EnvironmentRuntime {
             try await environmentStore.upsert(environment)
             try await environmentStore.setActiveEnvironment(id: environment.id)
         } catch {
-            if let previousCredential {
-                try? await credentialStore.setCredential(
-                    previousCredential,
-                    for: environment.id
-                )
-            } else {
-                try? await credentialStore.removeCredential(for: environment.id)
+            let operationError = error
+            var rollbackErrors: [String] = []
+            do {
+                if let previousCredential {
+                    try await credentialStore.setCredential(
+                        previousCredential,
+                        for: environment.id
+                    )
+                } else {
+                    try await credentialStore.removeCredential(for: environment.id)
+                }
+            } catch {
+                rollbackErrors.append("credential: \(error.localizedDescription)")
             }
             // EnvironmentStore's individual mutations are actor-atomic. Undo
             // only this record so a concurrent save for another environment
             // cannot be lost while this actor is reentrant across awaits.
-            let activeIDAfterFailure = try? await environmentStore.activeEnvironmentID()
-            if let previousEnvironment {
-                _ = try? await environmentStore.upsert(previousEnvironment)
-            } else {
-                _ = try? await environmentStore.remove(id: environment.id)
+            do {
+                if let previousEnvironment {
+                    _ = try await environmentStore.upsert(previousEnvironment)
+                } else {
+                    _ = try await environmentStore.remove(id: environment.id)
+                }
+            } catch {
+                rollbackErrors.append("environment catalog: \(error.localizedDescription)")
             }
-            if activeIDAfterFailure == environment.id {
-                try? await environmentStore.setActiveEnvironment(id: previousActiveID)
+            do {
+                let activeIDAfterFailure = try await environmentStore.activeEnvironmentID()
+                if activeIDAfterFailure == environment.id {
+                    try await environmentStore.setActiveEnvironment(id: previousActiveID)
+                }
+            } catch {
+                rollbackErrors.append("active environment: \(error.localizedDescription)")
             }
-            throw error
+            guard rollbackErrors.isEmpty else {
+                throw EnvironmentPersistenceError(
+                    operationError: operationError.localizedDescription,
+                    rollbackErrors: rollbackErrors
+                )
+            }
+            throw operationError
         }
         return await client(for: environment)
     }
 
     public func remove(id: String) async throws {
-        if let client = clients.removeValue(forKey: id) {
-            await client.disconnect()
-        }
+        let previousEnvironment = try await environmentStore.load()
+            .first(where: { $0.id == id })
+        let previousActiveID = try await environmentStore.activeEnvironmentID()
         // Never leave a catalog entry pointing at a credential that was
         // already destroyed when the catalog write itself fails.
         try await environmentStore.remove(id: id)
-        try await credentialStore.removeCredential(for: id)
+        do {
+            try await credentialStore.removeCredential(for: id)
+        } catch {
+            let operationError = error
+            var rollbackErrors: [String] = []
+            if let previousEnvironment {
+                do {
+                    _ = try await environmentStore.upsert(previousEnvironment)
+                } catch {
+                    rollbackErrors.append("environment catalog: \(error.localizedDescription)")
+                }
+            }
+            do {
+                try await environmentStore.setActiveEnvironment(id: previousActiveID)
+            } catch {
+                rollbackErrors.append("active environment: \(error.localizedDescription)")
+            }
+            guard rollbackErrors.isEmpty else {
+                throw EnvironmentPersistenceError(
+                    operationError: operationError.localizedDescription,
+                    rollbackErrors: rollbackErrors
+                )
+            }
+            throw operationError
+        }
+        if let client = clients.removeValue(forKey: id) {
+            await client.disconnect()
+        }
     }
 
     /// Returns the cached client for a saved environment without changing the

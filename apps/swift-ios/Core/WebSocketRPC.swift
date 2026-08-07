@@ -593,12 +593,15 @@ public actor WebSocketRPCClient {
             payload: subscription.payload,
             headers: []
         )
+        // Install ownership before suspending in send. A very fast response can
+        // otherwise arrive before the request is routable, while termination
+        // during the send must be able to remove the exact in-flight mapping.
+        subscription.requestID = requestID
+        subscription.requestConnectionID = connectionID
+        subscriptions[subscriptionID] = subscription
+        subscriptionByRequestID[requestID] = subscriptionID
         do {
             try await connection.send(JSONEncoder.t3.encode(envelope))
-            subscription.requestID = requestID
-            subscription.requestConnectionID = connectionID
-            subscriptions[subscriptionID] = subscription
-            subscriptionByRequestID[requestID] = subscriptionID
         } catch {
             // Retain the subscription for the next socket, but make the send
             // failure visible to the connection loop by closing this socket.

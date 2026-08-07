@@ -8,6 +8,7 @@ public struct SettingsView: View {
     @State private var showingDisconnect = false
     @State private var showingAddEnvironment = false
     @State private var removalTarget: FeatureEnvironment?
+    @State private var saveErrorMessage: String?
 
     public init(model: FeatureRootModel) {
         self.model = model
@@ -70,6 +71,17 @@ public struct SettingsView: View {
                 Button("Cancel", role: .cancel) {}
             } message: { environment in
                 Text("\(environment.name) will need a new pairing code to be added again.")
+            }
+            .alert(
+                "Couldn’t save settings",
+                isPresented: Binding(
+                    get: { saveErrorMessage != nil },
+                    set: { if !$0 { saveErrorMessage = nil } }
+                )
+            ) {
+                Button("OK") { saveErrorMessage = nil }
+            } message: {
+                Text(saveErrorMessage ?? "Something went wrong.")
             }
             .sheet(isPresented: $showingAddEnvironment) {
                 ConnectionOnboardingView(
@@ -149,6 +161,7 @@ public struct SettingsView: View {
                     } label: {
                         Label("Remove", systemImage: "trash")
                     }
+                    .disabled(environment.isActive)
                 }
                 .contextMenu {
                     Button(role: .destructive) {
@@ -156,6 +169,7 @@ public struct SettingsView: View {
                     } label: {
                         Label("Remove saved server", systemImage: "trash")
                     }
+                    .disabled(environment.isActive)
                 }
             }
 
@@ -315,10 +329,12 @@ public struct SettingsView: View {
     private func save() {
         isSaving = true
         Task {
-            await model.saveSettings(settings)
+            let didSave = await model.saveSettings(settings)
             isSaving = false
-            if model.snapshot.settings == settings {
+            if didSave {
                 dismiss()
+            } else {
+                saveErrorMessage = model.errorMessage ?? "Settings could not be saved."
             }
         }
     }

@@ -76,6 +76,11 @@ public final class FeatureRootModel {
         }
     }
 
+    public func reloadAfterConnection() async {
+        clearDetails()
+        await reload()
+    }
+
     public func pair(endpoint: String, token: String?) async -> Bool {
         await perform {
             try await client.pair(endpoint: endpoint, token: token)
@@ -302,11 +307,6 @@ public final class FeatureRootModel {
             mutateThread(id: id) {
                 $0.pinnedAt = pinned ? Date.now : nil
                 if pinned {
-                    if $0.isSettled {
-                        $0.isSettled = false
-                        $0.keepsActive = true
-                        $0.settledAt = nil
-                    }
                     $0.snoozedUntil = nil
                     $0.snoozedAt = nil
                 }
@@ -525,7 +525,8 @@ public final class FeatureRootModel {
         )
     }
 
-    public func saveSettings(_ settings: FeatureSettings) async {
+    @discardableResult
+    public func saveSettings(_ settings: FeatureSettings) async -> Bool {
         await perform {
             try await client.saveSettings(settings)
             snapshot.settings = settings
@@ -687,24 +688,26 @@ public final class FeatureRootModel {
     }
 
     private func store(_ incoming: FeatureThreadDetail) {
+        let incoming = retainingLocalAttachmentPreviews(in: incoming)
         let id = incoming.thread.id
         acknowledgeDeliveredMessages(incoming.messages)
-        let incoming = addingPendingMessages(to: incoming)
+        let prepared = addingPendingMessages(to: incoming)
         let next = details[id].map { current in
             FeatureThreadDetail(
-                thread: incoming.thread,
-                messages: replacingChangedSuffix(current.messages, with: incoming.messages),
-                approvals: replacingChangedSuffix(current.approvals, with: incoming.approvals),
-                userInputs: replacingChangedSuffix(current.userInputs, with: incoming.userInputs),
-                page: incoming.page
+                thread: prepared.thread,
+                messages: replacingChangedSuffix(current.messages, with: prepared.messages),
+                approvals: replacingChangedSuffix(current.approvals, with: prepared.approvals),
+                userInputs: replacingChangedSuffix(current.userInputs, with: prepared.userInputs),
+                page: prepared.page
             )
-        } ?? incoming
+        } ?? prepared
         guard details[id] != next else { return }
         details[id] = next
         bumpDetailRevision(id: id, change: .full)
     }
 
     private func store(_ incoming: FeatureThreadDetail, delta: FeatureDetailDelta) {
+        let incoming = retainingLocalAttachmentPreviews(in: incoming)
         let id = incoming.thread.id
         acknowledgeDeliveredMessages(incoming.messages)
         let next = addingPendingMessages(to: incoming)
@@ -908,6 +911,38 @@ public final class FeatureRootModel {
         result.messages.append(contentsOf: queued.lazy
             .filter { !existing.contains($0.identity.messageID) }
             .map(queuedMessage(for:)))
+        return result
+    }
+
+    private func retainingLocalAttachmentPreviews(
+        in incoming: FeatureThreadDetail
+    ) -> FeatureThreadDetail {
+        guard let current = details[incoming.thread.id] else { return incoming }
+        let currentMessages = current.messages.reduce(into: [String: FeatureMessage]()) {
+            $0[$1.id] = $1
+        }
+        var result = incoming
+        result.messages = incoming.messages.map { message in
+            guard let local = currentMessages[message.id], !message.attachments.isEmpty else {
+                return message
+            }
+            var message = message
+            message.attachments = message.attachments.enumerated().map { index, attachment in
+                guard attachment.previewData == nil else { return attachment }
+                let matching = local.attachments.first { candidate in
+                    candidate.id == attachment.id
+                } ?? (
+                    local.attachments.indices.contains(index)
+                        ? local.attachments[index]
+                        : nil
+                )
+                guard let previewData = matching?.previewData else { return attachment }
+                var attachment = attachment
+                attachment.previewData = previewData
+                return attachment
+            }
+            return message
+        }
         return result
     }
 

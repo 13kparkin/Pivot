@@ -678,6 +678,7 @@ enum FeatureFullDiffHydrator {
 
         var output: [FeatureDiffLine] = []
         var nextNewLine = 1
+        var precedingAnchorOffset: Int?
         for (index, line) in patchLines.enumerated() {
             if let newLine = line.newLine {
                 if nextNewLine < newLine {
@@ -695,11 +696,19 @@ enum FeatureFullDiffHydrator {
                 }
                 output.append(line)
                 nextNewLine = max(nextNewLine, newLine + 1)
+                if let oldLine = line.oldLine {
+                    precedingAnchorOffset = oldLine - newLine
+                }
             } else {
-                let nextPatchLine = patchLines.dropFirst(index + 1).compactMap(\.newLine).first
-                    ?? (newLines.count + 1)
-                if nextNewLine < nextPatchLine {
-                    for number in nextNewLine ..< nextPatchLine
+                let insertionLine: Int
+                if let oldLine = line.oldLine, let precedingAnchorOffset {
+                    insertionLine = oldLine - precedingAnchorOffset
+                } else {
+                    insertionLine = patchLines.dropFirst(index + 1).compactMap(\.newLine).first
+                        ?? (newLines.count + 1)
+                }
+                if nextNewLine < insertionLine {
+                    for number in nextNewLine ..< insertionLine
                     where newLines.indices.contains(number - 1) {
                         output.append(
                             FeatureDiffLine(
@@ -711,7 +720,7 @@ enum FeatureFullDiffHydrator {
                             )
                         )
                     }
-                    nextNewLine = nextPatchLine
+                    nextNewLine = insertionLine
                 }
                 output.append(line)
             }

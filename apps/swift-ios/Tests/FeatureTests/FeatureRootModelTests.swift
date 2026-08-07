@@ -652,7 +652,7 @@ struct FeatureRootModelTests {
     }
 
     @Test
-    func testPinOptimisticallyPromotesAParkedThread() async {
+    func testPinOptimisticallyWakesWithoutInventingSettlementOverride() async {
         let client = FeatureClientStub()
         var thread = FeatureThread(
             id: "thread-1",
@@ -672,9 +672,9 @@ struct FeatureRootModelTests {
 
         let updated = model.snapshot.threads[0]
         #expect(updated.pinnedAt != nil)
-        #expect(!updated.isSettled)
-        #expect(updated.keepsActive)
-        #expect(updated.settledAt == nil)
+        #expect(updated.isSettled)
+        #expect(!updated.keepsActive)
+        #expect(updated.settledAt != nil)
         #expect(updated.snoozedUntil == nil)
     }
 
@@ -842,6 +842,65 @@ struct FeatureRootModelTests {
     }
 
     @Test
+    func authoritativeAttachmentRetainsLocalPreviewUntilURLHydrates() async {
+        let client = FeatureClientStub()
+        let thread = FeatureThread(
+            id: "thread-1",
+            projectID: "project-1",
+            title: "Image preview"
+        )
+        client.snapshot = FeatureSnapshot(threads: [thread])
+        let preview = Data([0x01, 0x02, 0x03])
+        let local = FeatureThreadDetail(
+            thread: thread,
+            messages: [
+                FeatureMessage(
+                    id: "message-1",
+                    role: .user,
+                    text: "See image",
+                    attachments: [
+                        FeatureMessageAttachment(
+                            id: "local-attachment",
+                            name: "image.jpg",
+                            mimeType: "image/jpeg",
+                            sizeBytes: 3,
+                            previewData: preview
+                        ),
+                    ]
+                ),
+            ]
+        )
+        let authoritative = FeatureThreadDetail(
+            thread: thread,
+            messages: [
+                FeatureMessage(
+                    id: "message-1",
+                    role: .user,
+                    text: "See image",
+                    attachments: [
+                        FeatureMessageAttachment(
+                            id: "server-attachment",
+                            name: "image.jpg",
+                            mimeType: "image/jpeg",
+                            sizeBytes: 3
+                        ),
+                    ]
+                ),
+            ]
+        )
+        let model = testRootModel(client: client)
+
+        let run = Task { await model.start() }
+        client.emit(.detail(local))
+        client.emit(.detail(authoritative))
+        client.finishEvents()
+        await run.value
+
+        #expect(model.details[thread.id]?.messages[0].attachments[0].id == "server-attachment")
+        #expect(model.details[thread.id]?.messages[0].attachments[0].previewData == preview)
+    }
+
+    @Test
     func detailDeltaCarriesAContiguousRenderCursor() async {
         let client = FeatureClientStub()
         let thread = FeatureThread(
@@ -934,6 +993,42 @@ struct FeatureRootModelTests {
     }
 
     @Test
+    func detailReducerBindsCheckpointThatArrivedBeforeAssistantMessage() {
+        let checkpoint = CheckpointSummary(
+            turnId: "turn-1",
+            checkpointTurnCount: 1,
+            checkpointRef: "refs/t3/checkpoint-1",
+            status: "completed",
+            files: [],
+            assistantMessageId: nil,
+            completedAt: "2026-07-31T20:00:01Z"
+        )
+        let thread = orchestrationThread(checkpoints: [checkpoint])
+        let event = orchestrationEvent(
+            type: "thread.message-sent",
+            sequence: 12,
+            payload: [
+                "threadId": .string(thread.id),
+                "messageId": .string("assistant-1"),
+                "role": .string("assistant"),
+                "text": .string("Done"),
+                "turnId": .string("turn-1"),
+                "streaming": .bool(false),
+                "createdAt": .string("2026-07-31T20:00:00Z"),
+                "updatedAt": .string("2026-07-31T20:00:02Z"),
+            ]
+        )
+
+        let reduction = NativeThreadDetailReducer.apply(event, to: thread)
+
+        guard case let .updated(updated) = reduction.result else {
+            Issue.record("Expected an assistant message update")
+            return
+        }
+        #expect(updated.checkpoints.first?.assistantMessageId == "assistant-1")
+    }
+
+    @Test
     func activityReducerKeepsLargeSnapshotHistorySharedAndExposesOnlyTheTail() throws {
         let historical = (0..<1_000).map { (index: Int) in
             OrchestrationActivity(
@@ -1023,7 +1118,8 @@ private func orchestrationEvent(
 
 private func orchestrationThread(
     messages: [OrchestrationMessage] = [],
-    activities: [OrchestrationActivity] = []
+    activities: [OrchestrationActivity] = [],
+    checkpoints: [CheckpointSummary] = []
 ) -> OrchestrationThread {
     OrchestrationThread(
         id: "thread-1",
@@ -1046,7 +1142,7 @@ private func orchestrationThread(
         deletedAt: nil,
         messages: messages,
         activities: activities,
-        checkpoints: [],
+        checkpoints: checkpoints,
         session: nil
     )
 }

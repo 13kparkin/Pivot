@@ -90,6 +90,12 @@ public actor T3ConnectManagedEnvironmentAuthorizer {
                 "The managed environment HTTP URL is invalid."
             )
         }
+        let thumbprint = try await signer.thumbprint()
+        guard thumbprint == credential.proofKeyThumbprint else {
+            throw T3ConnectRelayError.invalidConfiguration(
+                "The managed credential is bound to a different device identity."
+            )
+        }
         let target = endpoint(httpBaseURL, path: ["oauth", "token"])
         let proof = try await signer.proof(method: "POST", url: target)
         var fields = [
@@ -125,12 +131,6 @@ public actor T3ConnectManagedEnvironmentAuthorizer {
                 )
             }
             throw T3ConnectRelayError.invalidResponse
-        }
-        let thumbprint = try await signer.thumbprint()
-        guard thumbprint == credential.proofKeyThumbprint else {
-            throw T3ConnectRelayError.invalidConfiguration(
-                "The managed credential is bound to a different device identity."
-            )
         }
         return T3ConnectEnvironmentAccessToken(
             environmentID: credential.environmentID,

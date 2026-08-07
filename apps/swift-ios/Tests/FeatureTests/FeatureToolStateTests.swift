@@ -197,6 +197,32 @@ struct FeatureToolStateTests {
     }
 
     @Test
+    func fullDiffHydrationKeepsDeletionAtItsPreviousAnchor() {
+        let file = FeatureReviewFile(
+            path: "App.swift",
+            change: .modified,
+            additions: 1,
+            deletions: 1,
+            lines: [
+                .init(id: "anchor", kind: .context, oldLine: 2, newLine: 2, text: "two"),
+                .init(id: "deleted", kind: .deletion, oldLine: 3, text: "three"),
+                .init(id: "later", kind: .addition, newLine: 7, text: "added later"),
+            ]
+        )
+
+        let lines = FeatureFullDiffHydrator.lines(
+            for: file,
+            contents: FeatureReviewFileContents(
+                oldContents: "one\ntwo\nthree\nfour\nfive\nsix\nseven\n",
+                newContents: "one\ntwo\nfour\nfive\nsix\nseven\nadded later\n"
+            )
+        )
+
+        #expect(lines.firstIndex { $0.id == "deleted" } == 2)
+        #expect(lines.prefix(3).map(\.text) == ["one", "two", "three"])
+    }
+
+    @Test
     func reviewCommentPromptIncludesActionableFileAndLineContext() {
         let draft = FeatureReviewCommentDraft(
             filePath: "Sources/App.swift",

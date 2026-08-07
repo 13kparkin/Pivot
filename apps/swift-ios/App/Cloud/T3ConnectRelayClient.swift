@@ -118,7 +118,7 @@ public actor T3ConnectRelayClient {
             method: "DELETE"
         )
         request.setValue("Bearer \(clerkToken)", forHTTPHeaderField: "Authorization")
-        _ = try await send(request, as: OKResponse.self)
+        try requireOK(try await send(request, as: OKResponse.self))
     }
 
     public func status(
@@ -184,13 +184,14 @@ public actor T3ConnectRelayClient {
             )
         }
         let body = try JSONEncoder.t3.encode(registration)
-        let _: OKResponse = try await sendDPoP(
+        let response: OKResponse = try await sendDPoP(
             path: ["v1", "mobile", "devices"],
             method: "POST",
             body: body,
             clerkToken: clerkToken,
             scopes: [.mobileRegistration]
         )
+        try requireOK(response)
     }
 
     public func registerLiveActivity(
@@ -198,23 +199,25 @@ public actor T3ConnectRelayClient {
         clerkToken: String
     ) async throws {
         let body = try JSONEncoder.t3.encode(registration)
-        let _: OKResponse = try await sendDPoP(
+        let response: OKResponse = try await sendDPoP(
             path: ["v1", "mobile", "live-activities"],
             method: "POST",
             body: body,
             clerkToken: clerkToken,
             scopes: [.mobileRegistration]
         )
+        try requireOK(response)
     }
 
     public func unregisterDevice(deviceID: String, clerkToken: String) async throws {
-        let _: OKResponse = try await sendDPoP(
+        let response: OKResponse = try await sendDPoP(
             path: ["v1", "mobile", "devices", deviceID],
             method: "DELETE",
             body: nil,
             clerkToken: clerkToken,
             scopes: [.mobileRegistration]
         )
+        try requireOK(response)
     }
 
     public func clearTokenCache() {
@@ -351,9 +354,21 @@ public actor T3ConnectRelayClient {
     }
 
     private func endpoint(_ path: [String]) -> URL {
-        path.reduce(configuration.relayHTTPURL) { partial, component in
+        var components = URLComponents(
+            url: configuration.relayHTTPURL,
+            resolvingAgainstBaseURL: false
+        )
+        components?.path = ""
+        components?.query = nil
+        components?.fragment = nil
+        let origin = components?.url ?? configuration.relayHTTPURL
+        return path.reduce(origin) { partial, component in
             partial.appendingPathComponent(component)
         }
+    }
+
+    private func requireOK(_ response: OKResponse) throws {
+        guard response.ok else { throw T3ConnectRelayError.invalidResponse }
     }
 
     private func send<Response: Decodable & Sendable>(

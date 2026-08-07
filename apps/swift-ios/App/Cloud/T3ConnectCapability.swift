@@ -55,6 +55,7 @@ public final class T3ConnectController {
     private let auth: T3ConnectClerkSession?
     private let relay: T3ConnectRelayClient?
     private var registeredDeviceID: String?
+    private var refreshGeneration: UInt64 = 0
 
     public init(
         resolution: T3ConnectConfigurationResolution = T3ConnectConfiguration.resolve(),
@@ -86,19 +87,26 @@ public final class T3ConnectController {
 
     public func refresh() async {
         guard let auth, let relay else { return }
+        refreshGeneration &+= 1
+        let generation = refreshGeneration
         isRefreshing = true
-        defer { isRefreshing = false }
+        defer {
+            if refreshGeneration == generation { isRefreshing = false }
+        }
         do {
             if !auth.isLoaded { try await auth.refresh() }
+            guard refreshGeneration == generation else { return }
             account = auth.account
             guard account != nil else {
                 environments = []
                 return
             }
             let token = try await auth.relayToken()
+            guard refreshGeneration == generation else { return }
             let records = try await relay.listEnvironments(clerkToken: token)
+            guard refreshGeneration == generation else { return }
             environments = records.map { T3ConnectCloudEnvironment(environment: $0) }
-            environments = await withTaskGroup(
+            let loaded = await withTaskGroup(
                 of: T3ConnectCloudEnvironment.self,
                 returning: [T3ConnectCloudEnvironment].self
             ) { group in
@@ -124,28 +132,43 @@ public final class T3ConnectController {
                     $0.environment.linkedAt > $1.environment.linkedAt
                 }
             }
+            guard refreshGeneration == generation else { return }
+            environments = loaded
         } catch {
-            errorMessage = error.localizedDescription
+            if refreshGeneration == generation {
+                errorMessage = error.localizedDescription
+            }
         }
     }
 
     public func signIn(with provider: T3ConnectSignInProvider) async {
         guard let auth else { return }
+        refreshGeneration &+= 1
+        let generation = refreshGeneration
         isRefreshing = true
-        defer { isRefreshing = false }
+        defer {
+            if refreshGeneration == generation { isRefreshing = false }
+        }
         do {
             try await auth.signIn(with: provider)
+            guard refreshGeneration == generation else { return }
             account = auth.account
             await refresh()
         } catch {
-            errorMessage = error.localizedDescription
+            if refreshGeneration == generation {
+                errorMessage = error.localizedDescription
+            }
         }
     }
 
     public func signOut() async {
         guard let auth, let relay else { return }
+        refreshGeneration &+= 1
+        let generation = refreshGeneration
         isRefreshing = true
-        defer { isRefreshing = false }
+        defer {
+            if refreshGeneration == generation { isRefreshing = false }
+        }
         do {
             if let registeredDeviceID,
                let token = try? await loadedRelayToken(auth) {
@@ -158,12 +181,15 @@ public final class T3ConnectController {
                 )
             }
             try await auth.signOut()
+            guard refreshGeneration == generation else { return }
             await relay.clearTokenCache()
             registeredDeviceID = nil
             account = nil
             environments = []
         } catch {
-            errorMessage = error.localizedDescription
+            if refreshGeneration == generation {
+                errorMessage = error.localizedDescription
+            }
         }
     }
 

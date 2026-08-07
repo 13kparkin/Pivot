@@ -64,6 +64,7 @@ struct MarkdownMessageView: View {
         }
         .task(id: RenderRequest(revision: revision, isStreaming: isStreaming)) {
             if !isStreaming {
+                streamingRenderer.cancel()
                 // Streaming -> complete usually keeps the final text; promote
                 // the last streamed render instead of reparsing synchronously.
                 if let renderedDocument, renderedDocument.revision == revision {
@@ -140,6 +141,7 @@ private final class StreamingMarkdownRenderer {
     }
 
     func cancel() {
+        generation += 1
         renderTask?.cancel()
         renderTask = nil
         pending = nil
@@ -293,7 +295,11 @@ private struct MarkdownTableView: View {
                         width: columnWidths[columnIndex],
                         alignment: alignment(for: columnIndex)
                     )
-                    .frame(minHeight: 44, alignment: alignment(for: columnIndex))
+                    .frame(
+                        minHeight: 44,
+                        maxHeight: .infinity,
+                        alignment: alignment(for: columnIndex)
+                    )
                     .padding(.horizontal, 11)
                     .padding(.vertical, 8)
                     .overlay(alignment: .trailing) {

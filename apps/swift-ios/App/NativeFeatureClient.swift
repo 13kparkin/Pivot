@@ -281,14 +281,16 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
     func activateEnvironment(id: String) async throws {
         let activated = try await runtime.activate(id: id)
         await adoptEnvironment(activated.environment, client: activated)
+        try await refresh(client: activated)
         startPolling(activated)
     }
 
     func removeEnvironment(id: String) async throws {
-        if activeEnvironment?.id == id {
+        let removesActiveEnvironment = activeEnvironment?.id == id
+        try await runtime.remove(id: id)
+        if removesActiveEnvironment {
             await clearActiveEnvironment(disconnectClient: false)
         }
-        try await runtime.remove(id: id)
     }
 
     func disconnect() async {
@@ -1095,6 +1097,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         activeThreadID = route.uiID
         activeThreadEnvironmentID = environment.id
         threadHistoryEpoch &+= 1
+        let historyEpoch = threadHistoryEpoch
         pendingOlderThreadPage = nil
         activeThreadPage = nil
         let supportsPagination = serverConfigsByEnvironmentID[
@@ -1104,7 +1107,10 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             id: route.wireID,
             turnLimit: supportsPagination ? Self.initialThreadUserTurnLimit : nil
         )
-        guard isKnownClient(client, environmentID: environment.id, generation: generation) else {
+        guard isKnownClient(client, environmentID: environment.id, generation: generation),
+              threadHistoryEpoch == historyEpoch,
+              activeThreadID == route.uiID,
+              activeThreadEnvironmentID == environment.id else {
             throw CancellationError()
         }
         activeThreadPage = featurePage(snapshot.page)
@@ -4969,6 +4975,7 @@ enum NativeThreadDetailReducer {
         }
 
         var latestTurn = thread.latestTurn
+        var checkpoints = thread.checkpoints
         if role == "assistant", let turnID,
            latestTurn == nil || latestTurn?.turnId == turnID {
             let turnStillRunning = thread.session?.status == "running"
@@ -4988,9 +4995,28 @@ enum NativeThreadDetailReducer {
                 completedAt: settlesTurn ? updatedAt : previous?.completedAt,
                 assistantMessageId: id
             )
+            checkpoints = checkpoints.map { checkpoint in
+                guard checkpoint.turnId == turnID,
+                      checkpoint.assistantMessageId == nil else { return checkpoint }
+                return CheckpointSummary(
+                    turnId: checkpoint.turnId,
+                    checkpointTurnCount: checkpoint.checkpointTurnCount,
+                    checkpointRef: checkpoint.checkpointRef,
+                    status: checkpoint.status,
+                    files: checkpoint.files,
+                    assistantMessageId: id,
+                    completedAt: checkpoint.completedAt
+                )
+            }
         }
         return .updated(
-            replacing(thread, messages: messages, latestTurn: latestTurn, updatedAt: occurredAt)
+            replacing(
+                thread,
+                messages: messages,
+                checkpoints: checkpoints,
+                latestTurn: latestTurn,
+                updatedAt: occurredAt
+            )
         )
     }
 
