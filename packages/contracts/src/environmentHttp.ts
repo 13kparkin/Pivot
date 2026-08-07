@@ -33,6 +33,7 @@ import {
   OrchestrationShellSnapshot,
   OrchestrationThreadDetailSnapshot,
 } from "./orchestration.ts";
+import { EnvironmentUsageQuery, EnvironmentUsageSnapshot } from "./usage.ts";
 import {
   RelayCloudEnvironmentHealthRequest,
   RelayCloudMintCredentialRequest,
@@ -500,6 +501,15 @@ export class EnvironmentOrchestrationHttpApi extends HttpApiGroup.make("orchestr
     }).middleware(EnvironmentAuthenticatedAuth),
   ) {}
 
+export class EnvironmentUsageHttpApi extends HttpApiGroup.make("usage").add(
+  HttpApiEndpoint.get("snapshot", "/api/usage/snapshot", {
+    headers: OptionalBearerHeaders,
+    payload: EnvironmentUsageQuery,
+    success: EnvironmentUsageSnapshot,
+    error: EnvironmentOrchestrationSnapshotErrors,
+  }).middleware(EnvironmentAuthenticatedAuth),
+) {}
+
 export class EnvironmentConnectHttpApi extends HttpApiGroup.make("connect")
   .add(
     HttpApiEndpoint.post("linkProof", "/api/connect/link-proof", {
@@ -565,4 +575,5 @@ export class EnvironmentHttpApi extends HttpApi.make("environment")
   .add(EnvironmentMetadataHttpApi)
   .add(EnvironmentAuthHttpApi)
   .add(EnvironmentOrchestrationHttpApi)
+  .add(EnvironmentUsageHttpApi)
   .add(EnvironmentConnectHttpApi) {}

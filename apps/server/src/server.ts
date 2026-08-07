@@ -108,6 +108,8 @@ import {
   persistServerRuntimeState,
 } from "./serverRuntimeState.ts";
 import { orchestrationHttpApiLayer } from "./orchestration/http.ts";
+import { usageHttpApiLayer } from "./usage/http.ts";
+import { UsageServiceLayer } from "./usage/UsageService.ts";
 import * as NetService from "@t3tools/shared/Net";
 import * as RelayClient from "@t3tools/shared/relayClient";
 import { disableTailscaleServe, ensureTailscaleServe } from "@t3tools/tailscale";
@@ -431,6 +433,14 @@ export const makeRoutesLayer = Layer.mergeAll(
       Layer.provide(authHttpApiLayer),
       Layer.provide(connectHttpApiLayer),
       Layer.provide(orchestrationHttpApiLayer),
+      // Persistence is provided here rather than left as an outstanding
+      // requirement so the routes layer keeps the same shape it had before
+      // usage reporting existed. Layer memoization shares the one connection.
+      Layer.provide(
+        usageHttpApiLayer.pipe(
+          Layer.provide(UsageServiceLayer.pipe(Layer.provide(PersistenceLayerLive))),
+        ),
+      ),
       Layer.provide(serverEnvironmentHttpApiLayer),
       Layer.provide(environmentAuthenticatedAuthLayer),
     ),
