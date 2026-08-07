@@ -1640,7 +1640,6 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
     reportHeaderMaterialVisibility(false);
   }, [props.threadId, reportHeaderMaterialVisibility]);
 
-<<<<<<< HEAD
   // A thread switch opens pinned to the end; a send explicitly returns to the
   // live edge (ThreadDetailScreen scrolls the new message into place). Both
   // re-arm follow regardless of where the user had scrolled before.
@@ -1655,17 +1654,6 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
     }
   }, [props.anchorMessageId, setEndFollow]);
 
-  const expandedWorkGroupIds = useMemo(() => {
-    const ids = new Set<string>();
-    for (const [groupId, expanded] of Object.entries(expandedWorkGroups)) {
-      if (expanded) {
-        ids.add(groupId);
-      }
-    }
-    return ids;
-  }, [expandedWorkGroups]);
-=======
->>>>>>> 0c15987295 (fix: reconcile rebase with latest main)
   const presentedFeed = useMemo(
     () =>
       deriveThreadFeedPresentation(

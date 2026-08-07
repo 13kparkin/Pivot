@@ -14,13 +14,10 @@ export interface PendingApprovalCardProps {
 }
 
 export function PendingApprovalCard(props: PendingApprovalCardProps) {
-<<<<<<< HEAD
   // Opaque for the same reason as PendingUserInputCard: nothing blurs the feed
   // behind this card, so a translucent surface bleeds messages through it.
-=======
   const canRespond = props.approval.responseCapability === "live";
   const disabled = !canRespond || props.respondingApprovalId === props.approval.requestId;
->>>>>>> 79c36e6204 (Complete orchestration V2 frontend cutover)
   return (
     <View className="gap-2.5 rounded-[20px] border border-neutral-200 bg-neutral-100 p-4 dark:border-white/6 dark:bg-neutral-900">
       <Text className="font-t3-bold text-2xs uppercase tracking-[1.1px] text-sky-700 dark:text-sky-300">
