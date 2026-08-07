@@ -214,6 +214,24 @@ function waitForJsonLogMatch(
   });
 }
 
+function waitForJsonLogCount(
+  filePath: string,
+  predicate: (entry: Record<string, unknown>) => boolean,
+  expectedCount: number,
+  attempts = 40,
+) {
+  return Effect.gen(function* () {
+    for (let attempt = 0; attempt < attempts; attempt += 1) {
+      const entries = yield* Effect.promise(() => readJsonLines(filePath));
+      if (entries.filter(predicate).length >= expectedCount) {
+        return entries;
+      }
+      yield* Effect.yieldNow;
+    }
+    return yield* Effect.promise(() => readJsonLines(filePath));
+  });
+}
+
 // Tests mutate `ServerSettingsService` mid-flight (e.g. setting
 // `providers.cursor.binaryPath` to a mock ACP wrapper). The adapter
 // captures `cursorSettings` once at construction, so without a resolver
@@ -1144,7 +1162,7 @@ cursorAdapterTestLayer("CursorAdapterLive", (it) => {
       yield* Effect.promise(() => NodeFSP.writeFile(requestLogPath, "", "utf8"));
       const wrapperPath = yield* Effect.promise(() =>
         makeProbeWrapper(requestLogPath, argvLogPath, {
-          T3_ACP_HANG_FIRST_PROMPT_FOREVER: "1",
+          T3_ACP_HANG_FIRST_PROMPTS: "2",
         }),
       );
       yield* serverSettings.updateSettings({
@@ -1153,6 +1171,8 @@ cursorAdapterTestLayer("CursorAdapterLive", (it) => {
 
       const events: Array<ProviderRuntimeEvent> = [];
       const firstTurnStarted = yield* Deferred.make<string>();
+      const secondTurnStarted = yield* Deferred.make<string>();
+      const startedCountRef = yield* Ref.make(0);
       const twoTurnsCompleted = yield* Deferred.make<void>();
       const completedCountRef = yield* Ref.make(0);
       const eventFiber = yield* Stream.runForEach(adapter.streamEvents, (event) =>
@@ -1160,7 +1180,13 @@ cursorAdapterTestLayer("CursorAdapterLive", (it) => {
           if (String(event.threadId) !== String(threadId)) return;
           events.push(event);
           if (event.type === "turn.started") {
-            yield* Deferred.succeed(firstTurnStarted, String(event.turnId)).pipe(Effect.ignore);
+            const startedCount = yield* Ref.updateAndGet(startedCountRef, (count) => count + 1);
+            if (startedCount === 1) {
+              yield* Deferred.succeed(firstTurnStarted, String(event.turnId)).pipe(Effect.ignore);
+            }
+            if (startedCount === 2) {
+              yield* Deferred.succeed(secondTurnStarted, String(event.turnId)).pipe(Effect.ignore);
+            }
           }
           if (event.type === "turn.completed") {
             const completedCount = yield* Ref.updateAndGet(completedCountRef, (count) => count + 1);
@@ -1192,14 +1218,37 @@ cursorAdapterTestLayer("CursorAdapterLive", (it) => {
       ).pipe(Effect.timeout("2 seconds"));
 
       yield* adapter.interruptTurn(threadId).pipe(Effect.timeout("2 seconds"));
-      const followUp = yield* adapter
+      const followUpFiber = yield* adapter
         .sendTurn({ threadId, input: "follow up", attachments: [] })
-        .pipe(Effect.timeout("2 seconds"));
+        .pipe(Effect.forkChild);
+      yield* waitForJsonLogCount(
+        requestLogPath,
+        (request) => request.method === "session/prompt",
+        2,
+        80,
+      ).pipe(Effect.timeout("2 seconds"));
+      const secondTurnId = yield* Deferred.await(secondTurnStarted).pipe(
+        Effect.timeout("2 seconds"),
+      );
       yield* Fiber.join(firstSendFiber).pipe(Effect.timeout("2 seconds"));
+      const steeredFollowUpFiber = yield* adapter
+        .sendTurn({ threadId, input: "steer follow up", attachments: [] })
+        .pipe(Effect.forkChild);
+      for (let attempt = 0; attempt < 10; attempt += 1) {
+        yield* Effect.yieldNow;
+      }
+
+      yield* adapter.interruptTurn(threadId).pipe(Effect.timeout("2 seconds"));
+      const steeredFollowUp = yield* Fiber.join(steeredFollowUpFiber).pipe(
+        Effect.timeout("2 seconds"),
+      );
+      const followUp = yield* Fiber.join(followUpFiber).pipe(Effect.timeout("2 seconds"));
+      assert.notEqual(secondTurnId, firstTurnId);
+      assert.equal(String(steeredFollowUp.turnId), secondTurnId);
       yield* Deferred.await(twoTurnsCompleted).pipe(Effect.timeout("2 seconds"));
       yield* Fiber.interrupt(eventFiber);
 
-      assert.notEqual(String(followUp.turnId), firstTurnId);
+      assert.equal(String(followUp.turnId), secondTurnId);
       const completed = events.filter(
         (event) => String(event.threadId) === String(threadId) && event.type === "turn.completed",
       );
@@ -1209,15 +1258,16 @@ cursorAdapterTestLayer("CursorAdapterLive", (it) => {
         assert.equal(completed[0].payload.state, "cancelled");
         assert.equal(completed[0].payload.stopReason, "cancelled");
       }
-      assert.equal(String(completed[1]?.turnId), String(followUp.turnId));
+      assert.equal(String(completed[1]?.turnId), secondTurnId);
       if (completed[1]?.type === "turn.completed") {
-        assert.equal(completed[1].payload.state, "completed");
+        assert.equal(completed[1].payload.state, "cancelled");
+        assert.equal(completed[1].payload.stopReason, "cancelled");
       }
 
       const requests = yield* Effect.promise(() => readJsonLines(requestLogPath));
       assert.lengthOf(
         requests.filter((request) => request.method === "session/prompt"),
-        2,
+        3,
       );
       yield* adapter.stopSession(threadId);
     }).pipe(TestClock.withLive),
