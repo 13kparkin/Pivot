@@ -306,23 +306,31 @@ private struct FeatureSourceTextView: View {
     let lines: [FeatureSourceLine]
 
     var body: some View {
-        ScrollView([.horizontal, .vertical]) {
-            LazyVStack(alignment: .leading, spacing: 0) {
-                ForEach(lines) { line in
-                    HStack(alignment: .top, spacing: 10) {
-                        Text("\(line.number)")
-                            .foregroundStyle(.tertiary)
-                            .frame(width: 44, alignment: .trailing)
-                            .accessibilityHidden(true)
-                        FeatureHighlightedSourceLine(line: line)
+        GeometryReader { proxy in
+            ScrollView([.horizontal, .vertical]) {
+                LazyVStack(alignment: .leading, spacing: 0) {
+                    ForEach(lines) { line in
+                        HStack(alignment: .top, spacing: 10) {
+                            Text("\(line.number)")
+                                .foregroundStyle(.tertiary)
+                                .frame(width: 44, alignment: .trailing)
+                                .accessibilityHidden(true)
+                            FeatureHighlightedSourceLine(line: line)
+                        }
+                        .font(T3Typography.code)
+                        .fixedSize(horizontal: true, vertical: false)
+                        .frame(
+                            minWidth: proxy.size.width,
+                            minHeight: 22,
+                            alignment: .leading
+                        )
                     }
-                    .font(T3Typography.code)
-                    .frame(minHeight: 22)
                 }
+                .frame(minWidth: proxy.size.width, alignment: .leading)
+                .padding(.vertical, 10)
+                .padding(.trailing, 14)
+                .textSelection(.enabled)
             }
-            .padding(.vertical, 10)
-            .padding(.trailing, 14)
-            .textSelection(.enabled)
         }
         .background(Color.black)
         .accessibilityLabel("Source file")

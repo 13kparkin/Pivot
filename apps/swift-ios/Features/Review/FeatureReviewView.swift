@@ -218,20 +218,24 @@ private struct FeatureDiffView: View {
                     description: Text("No line-level preview is available.")
                 )
             } else {
-                ScrollView([.horizontal, .vertical]) {
-                    LazyVStack(alignment: .leading, spacing: 0) {
-                        ForEach(renderedLines) { line in
-                            FeatureDiffLineRow(
-                                line: line,
-                                isSelected: selection(for: line) == selectedLine
-                            ) {
-                                guard let selection = selection(for: line) else { return }
-                                selectedLine = selection
-                                openCommentComposer()
+                GeometryReader { proxy in
+                    ScrollView([.horizontal, .vertical]) {
+                        LazyVStack(alignment: .leading, spacing: 0) {
+                            ForEach(renderedLines) { line in
+                                FeatureDiffLineRow(
+                                    line: line,
+                                    isSelected: selection(for: line) == selectedLine,
+                                    minimumWidth: proxy.size.width
+                                ) {
+                                    guard let selection = selection(for: line) else { return }
+                                    selectedLine = selection
+                                    openCommentComposer()
+                                }
                             }
                         }
+                        .frame(minWidth: proxy.size.width, alignment: .leading)
+                        .padding(.vertical, 8)
                     }
-                    .padding(.vertical, 8)
                 }
             }
         }
@@ -419,6 +423,7 @@ private struct FeatureDiffView: View {
 private struct FeatureDiffLineRow: View {
     let line: FeatureDiffLine
     let isSelected: Bool
+    let minimumWidth: CGFloat
     let select: () -> Void
 
     var body: some View {
@@ -427,6 +432,7 @@ private struct FeatureDiffLineRow: View {
                 Text(line.text)
                     .foregroundStyle(.blue)
                     .padding(.horizontal, 10)
+                    .fixedSize(horizontal: true, vertical: false)
             } else {
                 lineNumber(line.oldLine)
                 lineNumber(line.newLine)
@@ -434,13 +440,18 @@ private struct FeatureDiffLineRow: View {
                     .foregroundStyle(prefixColor)
                     .frame(width: 18)
                 diffText
+                    .fixedSize(horizontal: true, vertical: false)
                     .textSelection(.enabled)
                     .padding(.trailing, 12)
             }
         }
         .font(T3Typography.code)
-        .frame(minHeight: line.kind == .hunk ? 30 : 22, alignment: .leading)
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .fixedSize(horizontal: true, vertical: false)
+        .frame(
+            minWidth: minimumWidth,
+            minHeight: line.kind == .hunk ? 30 : 22,
+            alignment: .leading
+        )
         .background(isSelected ? T3Colors.accent.opacity(0.14) : background)
         .overlay(alignment: .leading) {
             if isSelected {
