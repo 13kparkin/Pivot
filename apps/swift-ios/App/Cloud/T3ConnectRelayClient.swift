@@ -164,6 +164,10 @@ public actor T3ConnectRelayClient {
             response.environmentId == environment.environmentId,
             response.endpoint == environment.endpoint
         else { throw T3ConnectRelayError.environmentMismatch }
+        guard !response.credential.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              !response.expiresAt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw T3ConnectRelayError.invalidResponse
+        }
         return T3ConnectManagedEnvironmentCredential(
             environmentID: response.environmentId,
             label: environment.label,
@@ -325,7 +329,11 @@ public actor T3ConnectRelayClient {
                 granted: response.scope
             )
         }
-        guard response.tokenType == "DPoP" else {
+        guard !response.accessToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              response.issuedTokenType
+                == "urn:ietf:params:oauth:token-type:access_token",
+              response.tokenType == "DPoP",
+              response.expiresIn > 0 else {
             throw T3ConnectRelayError.invalidResponse
         }
         return CachedToken(

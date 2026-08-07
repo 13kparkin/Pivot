@@ -31,9 +31,15 @@ struct FeatureRootModelTests {
             )
         )
         #expect(
-            !FeatureRootPresentation.showsWorkspace(
+            FeatureRootPresentation.showsWorkspace(
                 snapshot: FeatureSnapshot(connection: .init(state: .disconnected)),
                 isManagingConnections: true
+            )
+        )
+        #expect(
+            !FeatureRootPresentation.showsWorkspace(
+                snapshot: FeatureSnapshot(connection: .init(state: .disconnected)),
+                isManagingConnections: false
             )
         )
     }

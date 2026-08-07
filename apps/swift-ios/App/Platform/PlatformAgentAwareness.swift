@@ -184,7 +184,6 @@ final class PlatformAgentAwarenessCoordinator {
     private var activityUpdateTask: Task<Void, Never>?
     private var lastSignature: Signature?
     private var inFlightSignature: Signature?
-    private var latestSynchronization: Synchronization?
     private var synchronizationGeneration = 0
 
     init(
@@ -225,17 +224,23 @@ final class PlatformAgentAwarenessCoordinator {
             enabled: liveActivitiesEnabled,
             now: now
         )
-        latestSynchronization = synchronization
-        guard signature != lastSignature, signature != inFlightSignature else { return }
+        if signature == lastSignature {
+            if inFlightSignature != nil {
+                activityUpdateTask?.cancel()
+                synchronizationGeneration &+= 1
+                inFlightSignature = nil
+                activityUpdateTask = nil
+            }
+            return
+        }
+        guard signature != inFlightSignature else { return }
 
         let widgetSnapshot = T3TaskWidgetSnapshot(
             updatedAt: aggregate.updatedAt,
             tasks: aggregate.activities
         )
-        Task.detached(priority: .utility) {
-            try? T3TaskWidgetSnapshotStore.save(widgetSnapshot)
-            WidgetCenter.shared.reloadTimelines(ofKind: "T3RecentTasksWidget")
-        }
+        try? T3TaskWidgetSnapshotStore.save(widgetSnapshot)
+        WidgetCenter.shared.reloadTimelines(ofKind: "T3RecentTasksWidget")
 
         schedule(synchronization)
     }
@@ -248,7 +253,8 @@ final class PlatformAgentAwarenessCoordinator {
         let generation = synchronizationGeneration
         lastSignature = nil
         inFlightSignature = nil
-        latestSynchronization = nil
+        try? T3TaskWidgetSnapshotStore.save(.empty)
+        WidgetCenter.shared.reloadTimelines(ofKind: "T3RecentTasksWidget")
         activityUpdateTask = Task { @MainActor [weak self] in
             guard let self else { return }
             await endLiveActivities()

@@ -159,13 +159,22 @@ public actor FeatureComposerDraftStore {
     }
 
     public func draft(for key: String) throws -> FeatureComposerDraft? {
-        try loadIfNeeded()[key]?.featureValue
+        guard let draft = try loadIfNeeded()[key]?.featureValue,
+              !draft.isEmpty else { return nil }
+        return draft
     }
 
     public func setDraft(_ draft: FeatureComposerDraft, for key: String) throws {
         var drafts = try loadIfNeeded()
         if draft.isEmpty {
-            drafts.removeValue(forKey: key)
+            if let importedShareIDs = drafts[key]?.importedShareIDs,
+               !importedShareIDs.isEmpty {
+                var persisted = PersistedDraft(draft)
+                persisted.importedShareIDs = importedShareIDs
+                drafts[key] = persisted
+            } else {
+                drafts.removeValue(forKey: key)
+            }
         } else {
             var persisted = PersistedDraft(draft)
             // Preserve the crash-replay ledger while the composer performs its

@@ -141,6 +141,44 @@ struct PlatformAgentAwarenessTests {
         #expect(recorder.endCount == 1)
     }
 
+    @Test
+    @MainActor
+    func latestSnapshotCancelsAnInFlightReversionToOlderState() async {
+        let recorder = GatedPlatformAgentAwarenessRecorder()
+        let coordinator = PlatformAgentAwarenessCoordinator(
+            updateLiveActivity: { _, _, _ in
+                await recorder.recordUpdate()
+            },
+            endLiveActivities: {}
+        )
+        let ready = FeatureSnapshot()
+        let project = FeatureProject(
+            id: "project",
+            environmentID: "environment",
+            name: "t3code",
+            path: "/repo"
+        )
+        let working = FeatureSnapshot(
+            projects: [project],
+            threads: [Self.thread(id: "working", state: .working, updatedAt: .now)]
+        )
+
+        coordinator.synchronize(snapshot: ready, liveActivitiesEnabled: true)
+        await recorder.waitForUpdateCount(1)
+        await Task.yield()
+
+        coordinator.synchronize(snapshot: working, liveActivitiesEnabled: true)
+        await recorder.waitForUpdateCount(2)
+        coordinator.synchronize(snapshot: ready, liveActivitiesEnabled: true)
+        recorder.releaseSecondUpdate()
+        await Task.yield()
+        await Task.yield()
+
+        coordinator.synchronize(snapshot: ready, liveActivitiesEnabled: true)
+        await Task.yield()
+        #expect(recorder.updateCount == 2)
+    }
+
     private static func thread(
         id: String,
         state: FeatureThreadState,
@@ -157,6 +195,37 @@ struct PlatformAgentAwarenessTests {
             providerID: "claude",
             modelID: "claude-opus-5"
         )
+    }
+}
+
+@MainActor
+private final class GatedPlatformAgentAwarenessRecorder {
+    private(set) var updateCount = 0
+    private var secondUpdateContinuation: CheckedContinuation<Void, Never>?
+    private var updateWaiters: [(Int, CheckedContinuation<Void, Never>)] = []
+
+    func recordUpdate() async {
+        updateCount += 1
+        let ready = updateWaiters.filter { updateCount >= $0.0 }
+        updateWaiters.removeAll { updateCount >= $0.0 }
+        ready.forEach { $0.1.resume() }
+        if updateCount == 2 {
+            await withCheckedContinuation { continuation in
+                secondUpdateContinuation = continuation
+            }
+        }
+    }
+
+    func waitForUpdateCount(_ count: Int) async {
+        guard updateCount < count else { return }
+        await withCheckedContinuation { continuation in
+            updateWaiters.append((count, continuation))
+        }
+    }
+
+    func releaseSecondUpdate() {
+        secondUpdateContinuation?.resume()
+        secondUpdateContinuation = nil
     }
 }
 

@@ -190,7 +190,11 @@ public actor T3ConnectManagedEnvironmentAuthorizer {
     ) async throws -> URL {
         guard
             let httpBaseURL = authorization.endpoint.httpBaseURL,
-            let webSocketBaseURL = authorization.endpoint.webSocketBaseURL
+            let webSocketBaseURL = authorization.endpoint.webSocketBaseURL,
+            httpBaseURL.scheme?.lowercased() == "https",
+            httpBaseURL.host?.isEmpty == false,
+            webSocketBaseURL.scheme?.lowercased() == "wss",
+            webSocketBaseURL.host?.isEmpty == false
         else {
             throw T3ConnectRelayError.invalidConfiguration(
                 "The managed environment endpoint is invalid."
@@ -204,6 +208,9 @@ public actor T3ConnectManagedEnvironmentAuthorizer {
         ticketRequest.httpMethod = "POST"
         ticketRequest = try await authorize(ticketRequest, using: authorization)
         let ticket = try await send(ticketRequest, as: WebSocketTicketResponse.self)
+        guard !ticket.ticket.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw T3ConnectRelayError.invalidResponse
+        }
 
         var components = URLComponents(
             url: webSocketBaseURL,
@@ -344,11 +351,14 @@ public actor T3ConnectRuntimeAuthorization: ManagedEnvironmentAuthorizing {
         }
         let refreshID = UUID()
         refreshTasks[environment.id] = InFlightRefresh(id: refreshID, task: task)
-        Task.detached { [weak self] in
-            _ = await task.result
-            await self?.finishRefresh(environmentID: environment.id, id: refreshID)
+        do {
+            let credential = try await task.value
+            finishRefresh(environmentID: environment.id, id: refreshID)
+            return credential
+        } catch {
+            finishRefresh(environmentID: environment.id, id: refreshID)
+            throw error
         }
-        return try await task.value
     }
 
     private func finishRefresh(environmentID: String, id: UUID) {

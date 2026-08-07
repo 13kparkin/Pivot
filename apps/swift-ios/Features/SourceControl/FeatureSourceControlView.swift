@@ -21,13 +21,18 @@ public struct FeatureSourceControlView: View {
             if isLoading, status == nil {
                 ProgressView("Loading repository…")
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else if let status {
+            } else if let status, status.isRepository {
                 statusList(status)
             } else {
                 ContentUnavailableView(
                     "Source control unavailable",
                     systemImage: "arrow.triangle.branch",
-                    description: Text(errorMessage ?? "Repository status could not be loaded.")
+                    description: Text(
+                        errorMessage
+                            ?? (status?.isRepository == false
+                                ? "This workspace is not a Git repository."
+                                : "Repository status could not be loaded.")
+                    )
                 )
             }
         }

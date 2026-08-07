@@ -224,8 +224,6 @@ public final class T3ConnectController {
                 unavailableReason ?? "T3 Connect is unavailable in this build."
             )
         }
-        busyEnvironmentID = environmentID
-        defer { busyEnvironmentID = nil }
         let token = try await loadedRelayToken(auth)
         let records = try await relay.listEnvironments(clerkToken: token)
         guard let environment = records.first(where: { $0.environmentId == environmentID }) else {

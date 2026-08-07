@@ -48,6 +48,33 @@ struct ComposerDraftStoreTests {
         #expect(try await store.draft(for: key) == nil)
     }
 
+    @Test func clearingDraftPreservesImportedShareIdempotency() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = FeatureComposerDraftStore(
+            fileURL: directory.appendingPathComponent("drafts.json")
+        )
+        let key = "environment:test:thread:one"
+
+        _ = try await store.importSharedContent(
+            shareID: "share-1",
+            text: "Imported once",
+            attachments: [],
+            for: key
+        )
+        try await store.setDraft(FeatureComposerDraft(), for: key)
+        let replayed = try await store.importSharedContent(
+            shareID: "share-1",
+            text: "Imported once",
+            attachments: [],
+            for: key
+        )
+
+        #expect(replayed.isEmpty)
+        #expect(try await store.draft(for: key) == nil)
+    }
+
     @Test func environmentRemovalLeavesOtherDraftsAlone() async throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)

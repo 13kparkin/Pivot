@@ -487,6 +487,41 @@ final class T3ConnectRuntimeTests: XCTestCase {
         )
     }
 
+    func testManagedWebSocketRejectsUnencryptedEndpointBeforeMintingTicket() async throws {
+        let signer = try testSigner()
+        let transport = T3ConnectScriptedHTTPTransport { request, _ in
+            throw T3ConnectTestError.unexpectedPath(request.url?.path)
+        }
+        let authorizer = T3ConnectManagedEnvironmentAuthorizer(
+            transport: transport,
+            signer: signer
+        )
+        let authorization = T3ConnectEnvironmentAccessToken(
+            environmentID: "managed-1",
+            label: "Managed Studio",
+            endpoint: T3ConnectManagedEndpoint(
+                httpBaseUrl: "https://managed.example",
+                wsBaseUrl: "ws://managed.example/ws",
+                providerKind: .t3Relay
+            ),
+            accessToken: "access-token",
+            expiresAt: Date().addingTimeInterval(300),
+            scopes: T3ConnectManagedEnvironmentAuthorizer.standardScopes,
+            proofKeyThumbprint: try await signer.thumbprint()
+        )
+
+        do {
+            _ = try await authorizer.webSocketURL(using: authorization)
+            XCTFail("An unencrypted managed WebSocket endpoint was accepted")
+        } catch let error as T3ConnectRelayError {
+            guard case .invalidConfiguration = error else {
+                return XCTFail("Unexpected T3 Connect error: \(error)")
+            }
+        }
+        let requests = await transport.requests
+        XCTAssertTrue(requests.isEmpty)
+    }
+
     func testEnvironmentExchangeRejectsMalformedTokenContracts() async throws {
         let signer = try testSigner()
         let bootstrap = try await bootstrapCredential(signer: signer)
@@ -680,6 +715,87 @@ final class T3ConnectRuntimeTests: XCTestCase {
                 clerkToken: clerkJWT(subject: "mobile-account")
             )
             XCTFail("A false success envelope was accepted")
+        } catch T3ConnectRelayError.invalidResponse {
+            // Expected contract rejection.
+        }
+    }
+
+    func testRelayRejectsMalformedAccessTokenContracts() async throws {
+        let invalidTokens = [
+            Data.relayToken("", scope: "mobile:registration"),
+            Data(
+                #"{"access_token":"token","issued_token_type":"wrong","token_type":"DPoP","expires_in":300,"scope":"mobile:registration"}"#.utf8
+            ),
+            Data(
+                #"{"access_token":"token","issued_token_type":"urn:ietf:params:oauth:token-type:access_token","token_type":"DPoP","expires_in":0,"scope":"mobile:registration"}"#.utf8
+            ),
+        ]
+
+        for token in invalidTokens {
+            let signer = try testSigner()
+            let transport = T3ConnectScriptedHTTPTransport { _, _ in (token, 200) }
+            let relay = T3ConnectRelayClient(
+                configuration: T3ConnectConfiguration(
+                    clerkPublishableKey: "pk_test",
+                    relayHTTPURL: URL(string: "https://relay.example")!
+                ),
+                transport: transport,
+                signer: signer
+            )
+            do {
+                try await relay.registerDevice(
+                    testDeviceRegistration(),
+                    clerkToken: clerkJWT(subject: "mobile-account")
+                )
+                XCTFail("A malformed relay access token was accepted")
+            } catch T3ConnectRelayError.invalidResponse {
+                // Expected contract rejection.
+            }
+        }
+    }
+
+    func testRelayRejectsBlankBootstrapCredential() async throws {
+        let signer = try testSigner()
+        let transport = T3ConnectScriptedHTTPTransport { _, ordinal in
+            switch ordinal {
+            case 1:
+                return (.relayToken("relay-connect", scope: "environment:connect"), 200)
+            case 2:
+                return (
+                    Data(
+                        #"{"environmentId":"managed-1","endpoint":{"httpBaseUrl":"https://managed.example","wsBaseUrl":"wss://managed.example","providerKind":"t3_relay"},"credential":"","expiresAt":""}"#.utf8
+                    ),
+                    200
+                )
+            default:
+                throw T3ConnectTestError.unexpectedPath(nil)
+            }
+        }
+        let relay = T3ConnectRelayClient(
+            configuration: T3ConnectConfiguration(
+                clerkPublishableKey: "pk_test",
+                relayHTTPURL: URL(string: "https://relay.example")!
+            ),
+            transport: transport,
+            signer: signer
+        )
+        let environment = T3ConnectRelayEnvironment(
+            environmentId: "managed-1",
+            label: "Managed Studio",
+            endpoint: T3ConnectManagedEndpoint(
+                httpBaseUrl: "https://managed.example",
+                wsBaseUrl: "wss://managed.example",
+                providerKind: .t3Relay
+            ),
+            linkedAt: "2026-08-01T12:00:00.000Z"
+        )
+
+        do {
+            _ = try await relay.connect(
+                to: environment,
+                clerkToken: clerkJWT(subject: "mobile-account")
+            )
+            XCTFail("A blank environment bootstrap credential was accepted")
         } catch T3ConnectRelayError.invalidResponse {
             // Expected contract rejection.
         }
