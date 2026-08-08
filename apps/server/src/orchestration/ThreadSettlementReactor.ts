@@ -1,37 +1,37 @@
 import {
   CommandId,
-  type ChangeRequestState,
   type OrchestrationProjectShell,
   type OrchestrationThreadShell,
+  type VcsStatusResult,
 } from "@t3tools/contracts";
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
-import * as Cache from "effect/Cache";
 import * as Cause from "effect/Cause";
+import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
-import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import * as Ref from "effect/Ref";
 import type * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 
+import * as BackgroundPolicy from "../background/BackgroundPolicy.ts";
 import { resolveThreadWorkspaceCwd } from "../checkpointing/Utils.ts";
 import { forkParked } from "../serverActivation.ts";
 import { ServerSettingsService } from "../serverSettings.ts";
-import { normalizeSourceBranch } from "../sourceControl/SourceControlProvider.ts";
-import { SourceControlProviderRegistry } from "../sourceControl/SourceControlProviderRegistry.ts";
+import { VcsStatusBroadcaster } from "../vcs/VcsStatusBroadcaster.ts";
 import { OrchestrationEngineService } from "./Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "./Services/ProjectionSnapshotQuery.ts";
-import { resolveAutomaticSettlementReason } from "./threadSettlement.ts";
+import {
+  type AutomaticSettlementChangeRequestState,
+  resolveAutomaticSettlementVerdict,
+} from "./threadSettlement.ts";
 
 const RECONCILE_INTERVAL = Duration.minutes(1);
-const CHANGE_REQUEST_LOOKUP_TTL = Duration.minutes(2);
-const CHANGE_REQUEST_LOOKUP_FAILURE_TTL = Duration.seconds(20);
-const MAX_BRANCH_LOOKUPS_PER_RECONCILE = 20;
-const CHANGE_REQUEST_LOOKUP_FAILED = Symbol("CHANGE_REQUEST_LOOKUP_FAILED");
+const PR_VERIFY_COOLDOWN_MS = Duration.toMillis(Duration.minutes(30));
+const MAX_PR_VERIFICATIONS_PER_RECONCILE = 5;
 
 export class ThreadSettlementReactor extends Context.Service<
   ThreadSettlementReactor,
@@ -51,8 +51,25 @@ function workspaceCwd(
   return resolveThreadWorkspaceCwd({ thread, projects });
 }
 
-function refsMatch(left: string, right: string): boolean {
-  return normalizeSourceBranch(left) === normalizeSourceBranch(right);
+function cachedChangeRequestState(
+  thread: Pick<OrchestrationThreadShell, "branch">,
+  status: VcsStatusResult | null,
+): AutomaticSettlementChangeRequestState {
+  if (thread.branch === null) return null;
+  if (status === null || status.refName !== thread.branch) return "unknown";
+  if (status.pr === null || status.pr.headRef !== thread.branch) return "unknown";
+  if (status.pr.state === "open") return "open-cached";
+  if (status.pr.state === "closed") return "closed-cached";
+  return "merged";
+}
+
+function liveChangeRequestState(
+  thread: Pick<OrchestrationThreadShell, "branch">,
+  status: VcsStatusResult,
+): AutomaticSettlementChangeRequestState {
+  if (thread.branch === null) return null;
+  if (status.refName !== thread.branch || status.pr?.headRef !== thread.branch) return null;
+  return status.pr.state;
 }
 
 export const make = Effect.gen(function* () {
@@ -60,40 +77,9 @@ export const make = Effect.gen(function* () {
   const orchestrationEngine = yield* OrchestrationEngineService;
   const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
   const serverSettings = yield* ServerSettingsService;
-  const sourceControlProviders = yield* SourceControlProviderRegistry;
-  const branchCursor = yield* Ref.make(0);
-
-  const branchLookupCache = yield* Cache.makeWith(
-    (key: string) => {
-      const [cwd = "", branch = ""] = key.split("\u0000");
-      return sourceControlProviders.resolve({ cwd }).pipe(
-        Effect.flatMap((provider) =>
-          provider.listChangeRequests({
-            cwd,
-            headSelector: branch,
-            state: "all",
-            limit: 20,
-          }),
-        ),
-        Effect.map((changeRequests): ChangeRequestState | null => {
-          const matching = changeRequests.filter((changeRequest) =>
-            refsMatch(changeRequest.headRefName, branch),
-          );
-          return (
-            matching.find((changeRequest) => changeRequest.state === "open")?.state ??
-            matching.find((changeRequest) => changeRequest.state === "merged")?.state ??
-            matching[0]?.state ??
-            null
-          );
-        }),
-      );
-    },
-    {
-      capacity: 2_048,
-      timeToLive: (exit) =>
-        Exit.isSuccess(exit) ? CHANGE_REQUEST_LOOKUP_TTL : CHANGE_REQUEST_LOOKUP_FAILURE_TTL,
-    },
-  );
+  const vcsStatusBroadcaster = yield* VcsStatusBroadcaster;
+  const backgroundPolicy = yield* BackgroundPolicy.BackgroundPolicy;
+  const lastPrVerifyAtByCwd = yield* Ref.make(new Map<string, number>());
 
   const dispatchSettlement = Effect.fn("ThreadSettlementReactor.dispatchSettlement")(function* (
     thread: OrchestrationThreadShell,
@@ -124,95 +110,82 @@ export const make = Effect.gen(function* () {
       }),
     );
 
-  const lookupBranchChangeRequestState = (cwd: string, branch: string) =>
-    Cache.get(branchLookupCache, `${cwd}\u0000${branch}`).pipe(
-      Effect.catch((error) =>
-        Effect.logDebug("automatic thread settlement could not read change request state", {
-          cwdLength: cwd.length,
-          branch,
-          errorTag: error._tag,
-        }).pipe(Effect.as(CHANGE_REQUEST_LOOKUP_FAILED)),
-      ),
-    );
+  const verifyChangeRequestState = Effect.fn("ThreadSettlementReactor.verifyChangeRequestState")(
+    function* (input: {
+      readonly thread: OrchestrationThreadShell;
+      readonly cwd: string;
+    }): Effect.fn.Return<{
+      readonly state: AutomaticSettlementChangeRequestState;
+      readonly verified: boolean;
+    }> {
+      const now = yield* Clock.currentTimeMillis;
+      const mayVerify = yield* Ref.modify(lastPrVerifyAtByCwd, (byCwd) => {
+        const lastAt = byCwd.get(input.cwd);
+        if (lastAt !== undefined && now - lastAt < PR_VERIFY_COOLDOWN_MS) {
+          return [false, byCwd] as const;
+        }
+        const next = new Map(byCwd);
+        next.set(input.cwd, now);
+        return [true, next] as const;
+      });
+      if (!mayVerify) return { state: "unknown", verified: false };
 
-  const resolveThreadChangeRequestState = Effect.fn(
-    "ThreadSettlementReactor.resolveThreadChangeRequestState",
-  )(function* (input: {
-    readonly thread: OrchestrationThreadShell;
-    readonly cwd: string | undefined;
-  }): Effect.fn.Return<ChangeRequestState | null | typeof CHANGE_REQUEST_LOOKUP_FAILED> {
-    const branch = input.thread.branch;
-    if (branch === null || input.cwd === undefined) return null;
-    return yield* lookupBranchChangeRequestState(input.cwd, branch);
-  });
+      const status = yield* vcsStatusBroadcaster.pollStatus(input.cwd).pipe(
+        Effect.catch((error) =>
+          Effect.logDebug("automatic thread settlement could not verify change request state", {
+            threadId: input.thread.id,
+            cwdLength: input.cwd.length,
+            errorTag: error._tag,
+          }).pipe(Effect.as(null)),
+        ),
+      );
+      return status === null
+        ? { state: "unknown", verified: true }
+        : { state: liveChangeRequestState(input.thread, status), verified: true };
+    },
+  );
 
   const reconcile = Effect.fn("ThreadSettlementReactor.reconcile")(function* () {
-    const [snapshot, settings, now] = yield* Effect.all([
+    const [snapshot, settings, now, mayVerifyPr] = yield* Effect.all([
       projectionSnapshotQuery.getShellSnapshot(),
       serverSettings.getSettings,
       DateTime.now,
+      backgroundPolicy.shouldRunOpportunisticWork,
     ]);
     const nowIso = DateTime.formatIso(now);
-    const eligibleThreads = snapshot.threads.filter((thread) => thread.settledOverride === null);
-    const cwdByThreadId = new Map(
-      eligibleThreads.map(
-        (thread) => [thread.id, workspaceCwd(thread, snapshot.projects)] as const,
-      ),
-    );
-    const threadsWithoutChangeRequestLookup = eligibleThreads.filter(
-      (thread) => thread.branch === null || cwdByThreadId.get(thread.id) === undefined,
-    );
-    const branchThreads = eligibleThreads.filter(
-      (thread) => thread.branch !== null && cwdByThreadId.get(thread.id) !== undefined,
-    );
-    const branchStart =
-      branchThreads.length === 0 ? 0 : (yield* Ref.get(branchCursor)) % branchThreads.length;
-    const branchCount = Math.min(MAX_BRANCH_LOOKUPS_PER_RECONCILE, branchThreads.length);
-    const selectedBranchThreads = Array.from(
-      { length: branchCount },
-      (_, offset) => branchThreads[(branchStart + offset) % branchThreads.length]!,
-    );
-    if (branchThreads.length > 0) {
-      yield* Ref.set(branchCursor, (branchStart + branchCount) % branchThreads.length);
+    let verifyBudget = MAX_PR_VERIFICATIONS_PER_RECONCILE;
+
+    for (const thread of snapshot.threads) {
+      const cwd = workspaceCwd(thread, snapshot.projects);
+      const changeRequestState =
+        thread.branch === null
+          ? null
+          : cwd === undefined
+            ? "unknown"
+            : cachedChangeRequestState(thread, yield* vcsStatusBroadcaster.peekStatus({ cwd }));
+      const verdict = resolveAutomaticSettlementVerdict(thread, {
+        now: nowIso,
+        autoSettleAfterDays: settings.threadAutoSettleAfterDays,
+        changeRequestState,
+      });
+      if (verdict.kind === "skip") continue;
+      if (verdict.kind === "settle") {
+        yield* dispatchSettlementSafely(thread, verdict.reason);
+        continue;
+      }
+      if (!mayVerifyPr || cwd === undefined || verifyBudget <= 0) continue;
+
+      const verification = yield* verifyChangeRequestState({ thread, cwd });
+      if (verification.verified) verifyBudget -= 1;
+      const verifiedVerdict = resolveAutomaticSettlementVerdict(thread, {
+        now: nowIso,
+        autoSettleAfterDays: settings.threadAutoSettleAfterDays,
+        changeRequestState: verification.state,
+      });
+      if (verifiedVerdict.kind === "settle") {
+        yield* dispatchSettlementSafely(thread, verifiedVerdict.reason);
+      }
     }
-
-    yield* Effect.forEach(
-      threadsWithoutChangeRequestLookup,
-      (thread) => {
-        const reason = resolveAutomaticSettlementReason(thread, {
-          now: nowIso,
-          autoSettleAfterDays: settings.threadAutoSettleAfterDays,
-          changeRequestState: null,
-        });
-        return reason === null ? Effect.void : dispatchSettlementSafely(thread, reason);
-      },
-      { concurrency: 4, discard: true },
-    );
-
-    // Branch state is remote provider work. Bound each pass and rotate the
-    // cursor so a large first-run history converges without launching one CLI
-    // process per thread at startup.
-    yield* Effect.forEach(
-      selectedBranchThreads,
-      (thread) =>
-        resolveThreadChangeRequestState({
-          thread,
-          cwd: cwdByThreadId.get(thread.id),
-        }).pipe(
-          Effect.flatMap((changeRequestState) => {
-            // A failed lookup is unknown, not evidence that no PR exists.
-            // Fail closed so a transient provider outage cannot hide live work.
-            if (changeRequestState === CHANGE_REQUEST_LOOKUP_FAILED) return Effect.void;
-            const reason = resolveAutomaticSettlementReason(thread, {
-              now: nowIso,
-              autoSettleAfterDays: settings.threadAutoSettleAfterDays,
-              changeRequestState,
-            });
-            return reason === null ? Effect.void : dispatchSettlementSafely(thread, reason);
-          }),
-        ),
-      { concurrency: 4, discard: true },
-    );
   });
 
   const reconcileSafely = reconcile().pipe(

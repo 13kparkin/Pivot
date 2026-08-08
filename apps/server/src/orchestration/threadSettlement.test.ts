@@ -9,6 +9,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   resolveAutomaticSettlementReason,
+  resolveAutomaticSettlementVerdict,
   shellHasQueuedTurnStart,
   threadLastActivityAt,
 } from "./threadSettlement.ts";
@@ -157,6 +158,47 @@ describe("resolveAutomaticSettlementReason", () => {
         mergedOptions,
       ),
     ).toBeNull();
+  });
+});
+
+describe("resolveAutomaticSettlementVerdict", () => {
+  it("re-verifies cached or unknown PR state even for pinned threads", () => {
+    const pinned = makeShell({
+      activityAt: FRESH,
+      pinnedAt: "2026-04-07T00:00:00.000Z",
+    });
+
+    for (const changeRequestState of ["unknown", "open-cached", "closed-cached"] as const) {
+      expect(
+        resolveAutomaticSettlementVerdict(pinned, {
+          now: NOW,
+          autoSettleAfterDays: 3,
+          changeRequestState,
+        }),
+      ).toEqual({ kind: "verify-pr" });
+    }
+  });
+
+  it("does not re-verify terminal live states", () => {
+    const pinned = makeShell({
+      activityAt: STALE,
+      pinnedAt: "2026-04-07T00:00:00.000Z",
+    });
+
+    expect(
+      resolveAutomaticSettlementVerdict(pinned, {
+        now: NOW,
+        autoSettleAfterDays: 3,
+        changeRequestState: "closed",
+      }),
+    ).toEqual({ kind: "skip" });
+    expect(
+      resolveAutomaticSettlementVerdict(pinned, {
+        now: NOW,
+        autoSettleAfterDays: 3,
+        changeRequestState: "merged",
+      }),
+    ).toEqual({ kind: "settle", reason: "pr-merged" });
   });
 });
 

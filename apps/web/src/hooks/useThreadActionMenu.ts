@@ -5,10 +5,7 @@ import {
   settlePromise,
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
-import {
-  canSnooze,
-  effectiveSnoozed,
-} from "@t3tools/client-runtime/state/thread-settled";
+import { canSnooze, effectiveSnoozed } from "@t3tools/client-runtime/state/thread-settled";
 import type { ScopedThreadRef } from "@t3tools/contracts";
 import { useCallback } from "react";
 

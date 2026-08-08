@@ -11,6 +11,16 @@ const DAY_MS = 24 * 60 * 60 * 1_000;
 export const QUEUED_TURN_START_GRACE_MS = 2 * 60 * 1_000;
 
 export type AutomaticSettlementReason = "inactivity" | "pr-merged";
+export type AutomaticSettlementChangeRequestState =
+  | ChangeRequestState
+  | "open-cached"
+  | "closed-cached"
+  | "unknown"
+  | null;
+export type AutomaticSettlementVerdict =
+  | { readonly kind: "skip" }
+  | { readonly kind: "verify-pr" }
+  | { readonly kind: "settle"; readonly reason: AutomaticSettlementReason };
 
 export function threadLastActivityAt(shell: OrchestrationThreadShell): string | null {
   const candidates = [
@@ -57,6 +67,44 @@ export function shellHasQueuedTurnStart(
  * inactivity only. A merged PR is the one automatic signal allowed to settle
  * and unpin a pinned thread.
  */
+export function resolveAutomaticSettlementVerdict(
+  shell: OrchestrationThreadShell,
+  options: {
+    readonly now: string;
+    readonly autoSettleAfterDays: ThreadAutoSettleAfterDays | null;
+    readonly changeRequestState: AutomaticSettlementChangeRequestState;
+  },
+): AutomaticSettlementVerdict {
+  if (shell.settledOverride !== null) return { kind: "skip" };
+  if (shell.hasPendingApprovals || shell.hasPendingUserInput) return { kind: "skip" };
+  if (shell.session?.status === "starting" || shell.session?.status === "running") {
+    return { kind: "skip" };
+  }
+  if (shellHasQueuedTurnStart(shell, options.now)) return { kind: "skip" };
+
+  if (options.changeRequestState === "merged") {
+    return { kind: "settle", reason: "pr-merged" };
+  }
+  // Cached non-terminal states can hide a later merge. Re-verify them on the
+  // reactor's bounded cooldown even for fresh or pinned threads.
+  if (
+    options.changeRequestState === "unknown" ||
+    options.changeRequestState === "open-cached" ||
+    options.changeRequestState === "closed-cached"
+  ) {
+    return { kind: "verify-pr" };
+  }
+  if (shell.pinnedAt != null) return { kind: "skip" };
+  if (options.changeRequestState === "open") return { kind: "skip" };
+  if (options.autoSettleAfterDays === null) return { kind: "skip" };
+
+  const lastActivityAt = threadLastActivityAt(shell);
+  if (lastActivityAt === null) return { kind: "skip" };
+  return Date.parse(lastActivityAt) < Date.parse(options.now) - options.autoSettleAfterDays * DAY_MS
+    ? { kind: "settle", reason: "inactivity" }
+    : { kind: "skip" };
+}
+
 export function resolveAutomaticSettlementReason(
   shell: OrchestrationThreadShell,
   options: {
@@ -65,19 +113,6 @@ export function resolveAutomaticSettlementReason(
     readonly changeRequestState: ChangeRequestState | null;
   },
 ): AutomaticSettlementReason | null {
-  if (shell.settledOverride !== null) return null;
-  if (shell.hasPendingApprovals || shell.hasPendingUserInput) return null;
-  if (shell.session?.status === "starting" || shell.session?.status === "running") return null;
-  if (shellHasQueuedTurnStart(shell, options.now)) return null;
-
-  if (options.changeRequestState === "merged") return "pr-merged";
-  if (shell.pinnedAt != null) return null;
-  if (options.changeRequestState === "open") return null;
-  if (options.autoSettleAfterDays === null) return null;
-
-  const lastActivityAt = threadLastActivityAt(shell);
-  if (lastActivityAt === null) return null;
-  return Date.parse(lastActivityAt) < Date.parse(options.now) - options.autoSettleAfterDays * DAY_MS
-    ? "inactivity"
-    : null;
+  const verdict = resolveAutomaticSettlementVerdict(shell, options);
+  return verdict.kind === "settle" ? verdict.reason : null;
 }

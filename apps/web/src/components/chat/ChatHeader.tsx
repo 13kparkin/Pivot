@@ -44,7 +44,6 @@ interface ChatHeaderProps {
   activeThreadTitle: string;
   /** Drafts have no server thread yet, so the title carries no action menu. */
   isServerThread: boolean;
-  /** PR state feeding the settled classification, resolved by ChatView. */
   activeProjectName: string | undefined;
   activeProjectCwd: string | null;
   openInCwd: string | null;
