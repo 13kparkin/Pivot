@@ -15,6 +15,7 @@ import {
   makeWindow,
 } from "../../usage/usageFormat";
 import { ScrollArea } from "../ui/scroll-area";
+import { AccountLimitsSection } from "./AccountLimits";
 import { UsageChartLegend, UsageProviderChart, type UsageChartMetric } from "./UsageProviderChart";
 import { PROVIDER_COLOR, PROVIDER_LABEL, PROVIDER_MARK, PROVIDER_ORDER } from "./usageProviders";
 
@@ -116,6 +117,10 @@ export function UsagePage() {
             </button>
           </div>
         </header>
+
+        {/* Limits come from the live limits cache, not the transcript scan,
+            so they render even while the scan below settles. */}
+        <AccountLimitsSection />
 
         {settling ? (
           <>
