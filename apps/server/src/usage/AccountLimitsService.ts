@@ -116,28 +116,28 @@ export const make = Effect.gen(function* () {
     }),
   );
 
-  // A cache we cannot write is a colder next start, not a failure. The
-  // ingestion worker and the RPC-path transcript seed can persist
-  // concurrently, so writes are atomic (no torn JSON) and serialized: the
-  // snapshot map is read inside the permit, so a slow earlier write can
-  // never land after - and clobber - a newer one.
-  const persistLock = yield* Semaphore.make(1);
+  /**
+   * All snapshot mutations - event ingest (worker fiber) and the transcript
+   * seed (RPC fiber) - run under this one permit, so each ordering guard,
+   * map write, and persist is atomic with respect to the others. Without it
+   * a concurrent pair can both pass their guard against the same prior
+   * snapshot and land in either order, rolling the state backwards. Reads
+   * stay lock-free.
+   */
+  const stateLock = yield* Semaphore.make(1);
+
+  // A cache we cannot write is a colder next start, not a failure. Only
+  // called while holding `stateLock`, which is what serializes writes; the
+  // temp-file + rename keeps a crashed write from tearing the file.
   const persist = Effect.fn("AccountLimitsService.persist")(function* () {
-    yield* persistLock
-      .withPermits(1)(
-        Effect.suspend(() =>
-          encodeLimitsCache([...snapshots.values()]).pipe(
-            Effect.flatMap((serialized) =>
-              writeFileStringAtomically({ filePath: cachePath, contents: serialized }),
-            ),
-          ),
-        ),
-      )
-      .pipe(
-        Effect.provideService(FileSystem.FileSystem, fileSystem),
-        Effect.provideService(Path.Path, path),
-        Effect.catchCause(() => Effect.void),
-      );
+    yield* encodeLimitsCache([...snapshots.values()]).pipe(
+      Effect.flatMap((serialized) =>
+        writeFileStringAtomically({ filePath: cachePath, contents: serialized }),
+      ),
+      Effect.provideService(FileSystem.FileSystem, fileSystem),
+      Effect.provideService(Path.Path, path),
+      Effect.catchCause(() => Effect.void),
+    );
   });
 
   const store = Effect.fn("AccountLimitsService.store")(function* (
@@ -208,15 +208,19 @@ export const make = Effect.gen(function* () {
     const provider = providerFromDriver(input.provider);
     if (provider === null) return;
     yield* ensureLoaded;
-    // Guard against out-of-order delivery: an event older than what is
-    // already stored must not roll the snapshot backwards.
-    const existing = snapshots.get(provider);
-    if (existing !== undefined && input.createdAt < existing.asOf) return;
-    if (provider === "claude") {
-      yield* ingestClaude(input.payload, input.createdAt);
-    } else {
-      yield* ingestCodex(input.payload, input.createdAt);
-    }
+    yield* stateLock.withPermits(1)(
+      Effect.gen(function* () {
+        // Guard against out-of-order delivery: an event older than what is
+        // already stored must not roll the snapshot backwards.
+        const existing = snapshots.get(provider);
+        if (existing !== undefined && input.createdAt < existing.asOf) return;
+        if (provider === "claude") {
+          yield* ingestClaude(input.payload, input.createdAt);
+        } else {
+          yield* ingestCodex(input.payload, input.createdAt);
+        }
+      }),
+    );
   });
 
   /**
@@ -242,16 +246,22 @@ export const make = Effect.gen(function* () {
     if (found === null) return;
 
     const asOf = DateTime.formatIso(DateTime.makeUnsafe(found.asOfMs));
-    const existing = snapshots.get("codex");
-    // ISO-8601 strings order lexicographically.
-    if (existing !== undefined && existing.asOf >= asOf) return;
-    yield* store({
-      provider: "codex",
-      plan: found.snapshot.plan ?? existing?.plan ?? null,
-      windows: found.snapshot.windows,
-      asOf,
-      source: "transcript",
-    });
+    // The slow transcript read happened outside the lock; only the
+    // guard-and-store is serialized against live ingests.
+    yield* stateLock.withPermits(1)(
+      Effect.gen(function* () {
+        const existing = snapshots.get("codex");
+        // ISO-8601 strings order lexicographically.
+        if (existing !== undefined && existing.asOf >= asOf) return;
+        yield* store({
+          provider: "codex",
+          plan: found.snapshot.plan ?? existing?.plan ?? null,
+          windows: found.snapshot.windows,
+          asOf,
+          source: "transcript",
+        });
+      }),
+    );
   });
 
   const readSummary = Effect.fn("AccountLimitsService.readSummary")(function* () {
