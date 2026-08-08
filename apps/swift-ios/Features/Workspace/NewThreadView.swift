@@ -14,7 +14,6 @@ public struct NewThreadView: View {
     @State private var selection: FeatureSelection?
     @State private var selectionIsExplicit = false
     @State private var preferredSelection: FeatureSelection?
-    @State private var recentProjectByEnvironment: [String: String] = [:]
     @State private var attachments: [FeatureDraftAttachment] = []
     @State private var workspaceMode: FeatureWorkspaceMode = .local
     @State private var workspaceSelectionIsExplicit = false
@@ -90,9 +89,16 @@ public struct NewThreadView: View {
         }
         .onAppear {
             if projectID.isEmpty {
-                let initialID = creationProjects.first(where: { $0.id == initialProjectID })?.id
-                    ?? creationProjects.first?.id
-                    ?? ""
+                let initialProject = creationProjects.first { $0.id == initialProjectID }
+                let initialGroup = initialProject.flatMap {
+                    DailyUXProjectGrouping.group(
+                        containing: $0.id,
+                        in: creationProjectGroups
+                    )
+                }
+                let initialID = initialGroup?.preferredProject(
+                    environmentID: initialProject?.environmentID
+                )?.id ?? creationProjectGroups.first?.projects.first?.id ?? ""
                 selectInitialProject(initialID)
             }
         }
@@ -100,7 +106,14 @@ public struct NewThreadView: View {
         .onChange(of: creationProjectIDs) { _, ids in
             guard !ids.contains(projectID) else { return }
             persistCurrentDraftImmediately()
-            selectInitialProject(ids.first ?? "")
+            let previousProject = model.snapshot.projects.first { $0.id == projectID }
+            let previousGroupID = previousProject.map {
+                DailyUXCreationContext.logicalProjectID(for: $0, in: model.snapshot)
+            }
+            let replacement = creationProjectGroups.first { $0.id == previousGroupID }?
+                .preferredProject(environmentID: previousProject?.environmentID)
+                ?? creationProjectGroups.first?.projects.first
+            selectInitialProject(replacement?.id ?? "")
         }
         .onChange(of: prompt) { scheduleDraftSave() }
         .onChange(of: selection) { scheduleDraftSave() }
@@ -155,19 +168,19 @@ public struct NewThreadView: View {
             HStack(spacing: 0) {
                 Text("in")
                 Menu {
-                    ForEach(creationProjects) { project in
+                    ForEach(creationProjectGroups) { group in
                         Button {
-                            selectProject(project.id)
+                            selectProjectGroup(group)
                         } label: {
-                            if project.id == projectID {
-                                Label(project.name, systemImage: "checkmark")
+                            if group.id == selectedProjectGroup?.id {
+                                Label(group.name, systemImage: "checkmark")
                             } else {
-                                Text(project.name)
+                                Text(group.name)
                             }
                         }
                     }
                 } label: {
-                    Text(selectedProject?.name ?? "a project")
+                    Text(selectedProjectGroup?.name ?? selectedProject?.name ?? "a project")
                         .foregroundStyle(T3Colors.textPrimary)
                         .overlay(alignment: .bottom) {
                             DottedUnderline()
@@ -256,6 +269,14 @@ public struct NewThreadView: View {
 
     private var selectedProject: FeatureProject? {
         creationProjects.first { $0.id == projectID }
+    }
+
+    private var creationProjectGroups: [DailyUXProjectGroup] {
+        DailyUXCreationContext.projectGroups(in: model.snapshot)
+    }
+
+    private var selectedProjectGroup: DailyUXProjectGroup? {
+        DailyUXProjectGrouping.group(containing: projectID, in: creationProjectGroups)
     }
 
     private var workspaceControls: some View {
@@ -359,11 +380,11 @@ public struct NewThreadView: View {
     }
 
     private var creationProjectIDs: [String] {
-        creationProjects.map(\.id)
+        creationProjectGroups.flatMap(\.projects).map(\.id)
     }
 
     private var creationEnvironments: [FeatureEnvironment] {
-        let environmentIDs = Set(creationProjects.map(\.environmentID))
+        let environmentIDs = Set(selectedProjectGroup?.projects.map(\.environmentID) ?? [])
         return model.snapshot.environments.filter { environmentIDs.contains($0.id) }
     }
 
@@ -536,11 +557,17 @@ public struct NewThreadView: View {
         prepareProjectIfNeeded(id)
     }
 
+    private func selectProjectGroup(_ group: DailyUXProjectGroup) {
+        guard group.id != selectedProjectGroup?.id else { return }
+        let target = group.preferredProject(environmentID: selectedProject?.environmentID)
+            ?? group.projects.first
+        guard let target else { return }
+        selectProject(target.id)
+    }
+
     private func selectEnvironment(_ id: String) {
         guard selectedProject?.environmentID != id else { return }
-        let project = recentProjectByEnvironment[id].flatMap { recentID in
-            creationProjects.first { $0.id == recentID && $0.environmentID == id }
-        } ?? creationProjects.first { $0.environmentID == id }
+        let project = selectedProjectGroup?.project(in: id)
         guard let project else { return }
         selectProject(project.id)
     }
@@ -576,8 +603,6 @@ public struct NewThreadView: View {
             draftRestoreContext = nil
             return
         }
-
-        recentProjectByEnvironment[project.environmentID] = project.id
 
         let providers = ProviderModelCatalogNormalizer.normalized(
             DailyUXCreationContext.providers(for: project, in: model.snapshot)
@@ -656,7 +681,7 @@ public struct NewThreadView: View {
               !requestedProjectID.isEmpty else {
             return
         }
-        let key = FeatureComposerDraftStore.newTaskKey(project: project)
+        let key = draftKey(for: project)
         let pendingImmediateSave = immediateDraftSaveTasks[key]
         await NewTaskDraftWriteFence.wait(pendingImmediateSave)
         guard !Task.isCancelled,
@@ -714,7 +739,18 @@ public struct NewThreadView: View {
 
     private var currentDraftKey: String? {
         guard let project = selectedProject else { return nil }
-        return FeatureComposerDraftStore.newTaskKey(project: project)
+        return draftKey(for: project)
+    }
+
+    private func draftKey(for project: FeatureProject) -> String {
+        guard project.repositoryIdentity != nil,
+              let group = DailyUXProjectGrouping.group(
+                  containing: project.id,
+                  in: creationProjectGroups
+              ) else {
+            return FeatureComposerDraftStore.newTaskKey(project: project)
+        }
+        return FeatureComposerDraftStore.newTaskKey(logicalProjectID: group.id)
     }
 
     private var composerDraft: FeatureComposerDraft {

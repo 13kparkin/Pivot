@@ -3527,7 +3527,17 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
                     name: project.title,
                     path: project.workspaceRoot,
                     threadCount: threadCountByProjectID[uiID, default: 0],
-                    defaultSelection: project.defaultModelSelection.map(mapSelection)
+                    defaultSelection: project.defaultModelSelection.map(mapSelection),
+                    repositoryIdentity: project.repositoryIdentity.map {
+                        FeatureRepositoryIdentity(
+                            canonicalKey: $0.canonicalKey,
+                            rootPath: $0.rootPath,
+                            displayName: $0.displayName,
+                            name: $0.name
+                        )
+                    },
+                    createdAt: project.createdAt,
+                    updatedAt: project.updatedAt
                 )
             }
         }
@@ -3552,9 +3562,25 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
                 case .local: .local
                 case .worktree: .worktree
                 }
+            let groupingMode: FeatureEnvironmentPreferences.ProjectGroupingMode =
+                switch serverSettings.sidebarProjectGroupingMode {
+                case .repositoryPath: .repositoryPath
+                case .separate: .separate
+                case .repository, nil: .repository
+                }
+            let groupingOverrides = serverSettings.sidebarProjectGroupingOverrides?
+                .mapValues { mode -> FeatureEnvironmentPreferences.ProjectGroupingMode in
+                    switch mode {
+                    case .repository: return .repository
+                    case .repositoryPath: return .repositoryPath
+                    case .separate: return .separate
+                    }
+                } ?? [:]
             preferences[environment.id] = FeatureEnvironmentPreferences(
                 defaultWorkspaceMode: defaultWorkspaceMode,
-                newWorktreesStartFromOrigin: serverSettings.newWorktreesStartFromOrigin
+                newWorktreesStartFromOrigin: serverSettings.newWorktreesStartFromOrigin,
+                projectGroupingMode: groupingMode,
+                projectGroupingOverrides: groupingOverrides
             )
         }
         return FeatureSnapshot(

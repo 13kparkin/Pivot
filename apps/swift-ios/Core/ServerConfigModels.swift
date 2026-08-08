@@ -132,18 +132,30 @@ public enum ServerThreadEnvironmentMode: String, Codable, Equatable, Sendable {
     case worktree
 }
 
+public enum ServerProjectGroupingMode: String, Codable, Equatable, Sendable {
+    case repository
+    case repositoryPath = "repository_path"
+    case separate
+}
+
 /// New-thread preferences are server-authoritative, so every saved environment
 /// can resolve these differently even though they share one mobile client.
 public struct ServerSettingsSnapshot: Codable, Equatable, Sendable {
     public let defaultThreadEnvMode: ServerThreadEnvironmentMode
     public let newWorktreesStartFromOrigin: Bool
+    public let sidebarProjectGroupingMode: ServerProjectGroupingMode?
+    public let sidebarProjectGroupingOverrides: [String: ServerProjectGroupingMode]?
 
     public init(
         defaultThreadEnvMode: ServerThreadEnvironmentMode = .local,
-        newWorktreesStartFromOrigin: Bool = true
+        newWorktreesStartFromOrigin: Bool = true,
+        sidebarProjectGroupingMode: ServerProjectGroupingMode? = nil,
+        sidebarProjectGroupingOverrides: [String: ServerProjectGroupingMode]? = nil
     ) {
         self.defaultThreadEnvMode = defaultThreadEnvMode
         self.newWorktreesStartFromOrigin = newWorktreesStartFromOrigin
+        self.sidebarProjectGroupingMode = sidebarProjectGroupingMode
+        self.sidebarProjectGroupingOverrides = sidebarProjectGroupingOverrides
     }
 }
 

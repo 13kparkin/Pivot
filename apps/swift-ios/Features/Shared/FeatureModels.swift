@@ -53,6 +53,25 @@ public struct FeatureEnvironment: Identifiable, Sendable, Equatable, Hashable, C
     }
 }
 
+public struct FeatureRepositoryIdentity: Sendable, Equatable, Hashable, Codable {
+    public var canonicalKey: String
+    public var rootPath: String?
+    public var displayName: String?
+    public var name: String?
+
+    public init(
+        canonicalKey: String,
+        rootPath: String? = nil,
+        displayName: String? = nil,
+        name: String? = nil
+    ) {
+        self.canonicalKey = canonicalKey
+        self.rootPath = rootPath
+        self.displayName = displayName
+        self.name = name
+    }
+}
+
 public struct FeatureProject: Identifiable, Sendable, Equatable, Hashable, Codable {
     public let id: String
     /// The environment-local identifier sent over the wire. Native aggregate
@@ -63,6 +82,9 @@ public struct FeatureProject: Identifiable, Sendable, Equatable, Hashable, Codab
     public var path: String
     public var threadCount: Int
     public var defaultSelection: FeatureSelection?
+    public var repositoryIdentity: FeatureRepositoryIdentity?
+    public var createdAt: String?
+    public var updatedAt: String?
 
     public init(
         id: String,
@@ -71,7 +93,10 @@ public struct FeatureProject: Identifiable, Sendable, Equatable, Hashable, Codab
         name: String,
         path: String,
         threadCount: Int = 0,
-        defaultSelection: FeatureSelection? = nil
+        defaultSelection: FeatureSelection? = nil,
+        repositoryIdentity: FeatureRepositoryIdentity? = nil,
+        createdAt: String? = nil,
+        updatedAt: String? = nil
     ) {
         self.id = id
         self.wireID = wireID
@@ -80,6 +105,9 @@ public struct FeatureProject: Identifiable, Sendable, Equatable, Hashable, Codab
         self.path = path
         self.threadCount = threadCount
         self.defaultSelection = defaultSelection
+        self.repositoryIdentity = repositoryIdentity
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
     }
 }
 
@@ -786,15 +814,62 @@ public struct FeatureSettings: Sendable, Equatable, Codable {
 }
 
 public struct FeatureEnvironmentPreferences: Sendable, Equatable, Codable {
+    public enum ProjectGroupingMode: String, Sendable, Equatable, Codable {
+        case repository
+        case repositoryPath = "repository_path"
+        case separate
+    }
+
     public var defaultWorkspaceMode: FeatureWorkspaceMode
     public var newWorktreesStartFromOrigin: Bool
+    public var projectGroupingMode: ProjectGroupingMode
+    public var projectGroupingOverrides: [String: ProjectGroupingMode]
 
     public init(
         defaultWorkspaceMode: FeatureWorkspaceMode = .local,
-        newWorktreesStartFromOrigin: Bool = true
+        newWorktreesStartFromOrigin: Bool = true,
+        projectGroupingMode: ProjectGroupingMode = .repository,
+        projectGroupingOverrides: [String: ProjectGroupingMode] = [:]
     ) {
         self.defaultWorkspaceMode = defaultWorkspaceMode
         self.newWorktreesStartFromOrigin = newWorktreesStartFromOrigin
+        self.projectGroupingMode = projectGroupingMode
+        self.projectGroupingOverrides = projectGroupingOverrides
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case defaultWorkspaceMode
+        case newWorktreesStartFromOrigin
+        case projectGroupingMode
+        case projectGroupingOverrides
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        defaultWorkspaceMode = try container.decodeIfPresent(
+            FeatureWorkspaceMode.self,
+            forKey: .defaultWorkspaceMode
+        ) ?? .local
+        newWorktreesStartFromOrigin = try container.decodeIfPresent(
+            Bool.self,
+            forKey: .newWorktreesStartFromOrigin
+        ) ?? true
+        projectGroupingMode = try container.decodeIfPresent(
+            ProjectGroupingMode.self,
+            forKey: .projectGroupingMode
+        ) ?? .repository
+        projectGroupingOverrides = try container.decodeIfPresent(
+            [String: ProjectGroupingMode].self,
+            forKey: .projectGroupingOverrides
+        ) ?? [:]
+    }
+
+    public func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(defaultWorkspaceMode, forKey: .defaultWorkspaceMode)
+        try container.encode(newWorktreesStartFromOrigin, forKey: .newWorktreesStartFromOrigin)
+        try container.encode(projectGroupingMode, forKey: .projectGroupingMode)
+        try container.encode(projectGroupingOverrides, forKey: .projectGroupingOverrides)
     }
 }
 

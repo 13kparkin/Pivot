@@ -254,6 +254,10 @@ public actor FeatureComposerDraftStore {
         return "environment:\(project.environmentID):new-task:\(projectID)"
     }
 
+    public static func newTaskKey(logicalProjectID: String) -> String {
+        "logical-project:\(logicalProjectID):new-task"
+    }
+
     private func loadIfNeeded() throws -> [String: PersistedDraft] {
         if let loadedDrafts { return loadedDrafts }
         guard FileManager.default.fileExists(atPath: fileURL.path) else {

@@ -112,6 +112,34 @@ final class NativeMultiEnvironmentTests: XCTestCase {
         await fixture.client.disconnect()
     }
 
+    func testSnapshotKeepsRepositoryIdentityForCrossComputerProjectGrouping() async throws {
+        let identity = RepositoryIdentity(
+            canonicalKey: "github.com/t3/example",
+            locator: .init(
+                source: "git-remote",
+                remoteName: "origin",
+                remoteUrl: "https://github.com/t3/example.git"
+            ),
+            rootPath: "/work/example",
+            displayName: "Example",
+            provider: "github",
+            owner: "t3",
+            name: "example"
+        )
+        let fixture = try await makeFixture(repositoryIdentity: identity)
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+
+        let snapshot = try await fixture.client.initialSnapshot()
+        let groups = DailyUXCreationContext.projectGroups(in: snapshot)
+
+        XCTAssertEqual(Set(snapshot.projects.compactMap(\.repositoryIdentity?.canonicalKey)), [
+            identity.canonicalKey,
+        ])
+        XCTAssertEqual(groups.count, 1)
+        XCTAssertEqual(Set(groups[0].projects.map(\.environmentID)), ["one", "two"])
+        await fixture.client.disconnect()
+    }
+
     func testFailedEnvironmentKeepsItsLastKnownRowsWithoutHidingHealthyDevices() async throws {
         let fixture = try await makeFixture()
         defer { try? FileManager.default.removeItem(at: fixture.directory) }
@@ -351,6 +379,7 @@ final class NativeMultiEnvironmentTests: XCTestCase {
 
     private func makeFixture(
         duplicateIDs: Bool = false,
+        repositoryIdentity: RepositoryIdentity? = nil,
         fallbackPollingInitialDelay: Duration = .seconds(3),
         fallbackPollingInterval: Duration = .seconds(2),
         aggregateRefreshInterval: Duration = .seconds(20),
@@ -384,14 +413,16 @@ final class NativeMultiEnvironmentTests: XCTestCase {
                 "one.example": multiEnvironmentShell(
                     projectID: duplicateIDs ? "project-shared" : "project-one",
                     threadID: duplicateIDs ? "thread-shared" : "thread-one",
-                    title: "Local work"
+                    title: "Local work",
+                    repositoryIdentity: repositoryIdentity
                 ),
                 "two.example": multiEnvironmentShell(
                     projectID: duplicateIDs ? "project-shared" : "project-two",
                     threadID: duplicateIDs ? "thread-shared" : "thread-two",
                     title: "Remote work",
                     providerID: "claudeAgent",
-                    modelID: "claude-opus-4-1"
+                    modelID: "claude-opus-4-1",
+                    repositoryIdentity: repositoryIdentity
                 ),
             ]
         )
@@ -660,7 +691,8 @@ private func multiEnvironmentShell(
     threadID: String,
     title: String,
     providerID: String = "codex",
-    modelID: String = "gpt-5.6-sol"
+    modelID: String = "gpt-5.6-sol",
+    repositoryIdentity: RepositoryIdentity? = nil
 ) -> OrchestrationShellSnapshot {
     let timestamp = "2026-07-31T12:00:00.000Z"
     let model = ModelSelection(instanceId: providerID, model: modelID)
@@ -671,7 +703,7 @@ private func multiEnvironmentShell(
                 id: projectID,
                 title: title,
                 workspaceRoot: "/work/\(projectID)",
-                repositoryIdentity: nil,
+                repositoryIdentity: repositoryIdentity,
                 defaultModelSelection: model,
                 scripts: [],
                 createdAt: timestamp,

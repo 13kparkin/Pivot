@@ -227,6 +227,149 @@ struct DailyUXNewTaskTests {
     }
 
     @Test
+    func projectGroupsOnlyOfferComputersThatContainTheSelectedRepository() throws {
+        let identity = FeatureRepositoryIdentity(
+            canonicalKey: "github.com/t3/example",
+            displayName: "Example"
+        )
+        let studio = FeatureProject(
+            id: "example-studio",
+            environmentID: "studio",
+            name: "example",
+            path: "/code/example",
+            repositoryIdentity: identity
+        )
+        let laptop = FeatureProject(
+            id: "example-laptop",
+            environmentID: "laptop",
+            name: "example-copy",
+            path: "/Users/test/example",
+            repositoryIdentity: identity
+        )
+        let unrelated = FeatureProject(
+            id: "other-laptop",
+            environmentID: "laptop",
+            name: "other",
+            path: "/Users/test/other",
+            repositoryIdentity: .init(canonicalKey: "github.com/t3/other")
+        )
+
+        let groups = DailyUXProjectGrouping.groups(projects: [studio, unrelated, laptop])
+        let group = try #require(
+            DailyUXProjectGrouping.group(containing: studio.id, in: groups)
+        )
+
+        #expect(group.name == "Example")
+        #expect(Set(group.projects.map(\.environmentID)) == ["studio", "laptop"])
+        #expect(group.project(in: "laptop")?.id == laptop.id)
+        #expect(!group.memberProjectIDs.contains(unrelated.id))
+        #expect(DailyUXProjectGrouping.logicalProjectID(for: studio) == group.id)
+    }
+
+    @Test
+    func projectsWithoutRepositoryIdentityNeverGroupAcrossComputers() {
+        let studio = FeatureProject(
+            id: "studio",
+            environmentID: "studio",
+            name: "Same name",
+            path: "/code/project"
+        )
+        let laptop = FeatureProject(
+            id: "laptop",
+            environmentID: "laptop",
+            name: "Same name",
+            path: "/code/project"
+        )
+
+        let groups = DailyUXProjectGrouping.groups(projects: [studio, laptop])
+
+        #expect(groups.count == 2)
+        #expect(groups.allSatisfy { $0.projects.count == 1 })
+    }
+
+    @Test
+    func projectGroupingUsesFreshestPhysicalRowAndNormalizesTrailingSlash() throws {
+        let identity = FeatureRepositoryIdentity(canonicalKey: "github.com/t3/example")
+        let stale = FeatureProject(
+            id: "stale",
+            environmentID: "studio",
+            name: "stale",
+            path: "/code/example/",
+            repositoryIdentity: nil,
+            updatedAt: "2026-01-01T00:00:00.000Z"
+        )
+        let current = FeatureProject(
+            id: "current",
+            environmentID: "studio",
+            name: "current",
+            path: "/code/example",
+            repositoryIdentity: identity,
+            updatedAt: "2026-01-02T00:00:00.000Z"
+        )
+        let remote = FeatureProject(
+            id: "remote",
+            environmentID: "remote",
+            name: "remote",
+            path: "/srv/example",
+            repositoryIdentity: identity
+        )
+
+        let groups = DailyUXProjectGrouping.groups(projects: [stale, current, remote])
+        let group = try #require(
+            DailyUXProjectGrouping.group(containing: stale.id, in: groups)
+        )
+
+        #expect(group.projects.map(\.id) == ["remote", "current"])
+        #expect(group.memberProjectIDs == ["stale", "current", "remote"])
+    }
+
+    @Test
+    func logicalProjectDraftKeyDoesNotChangeWithComputer() {
+        let projectKey = "github.com/t3/example"
+
+        #expect(
+            FeatureComposerDraftStore.newTaskKey(logicalProjectID: projectKey)
+                == "logical-project:github.com/t3/example:new-task"
+        )
+    }
+
+    @Test
+    func projectGroupingHonorsRepositoryPathAndSeparateModes() {
+        let identity = FeatureRepositoryIdentity(
+            canonicalKey: "github.com/t3/mono",
+            rootPath: "/code/mono"
+        )
+        let app = FeatureProject(
+            id: "app",
+            environmentID: "studio",
+            name: "app",
+            path: "/code/mono/apps/app",
+            repositoryIdentity: identity
+        )
+        let docs = FeatureProject(
+            id: "docs",
+            environmentID: "studio",
+            name: "docs",
+            path: "/code/mono/apps/docs",
+            repositoryIdentity: identity
+        )
+
+        #expect(DailyUXProjectGrouping.groups(projects: [app, docs]).count == 1)
+        #expect(
+            DailyUXProjectGrouping.groups(
+                projects: [app, docs],
+                mode: .repositoryPath
+            ).count == 2
+        )
+        #expect(
+            DailyUXProjectGrouping.groups(
+                projects: [app, docs],
+                mode: .separate
+            ).count == 2
+        )
+    }
+
+    @Test
     func appDefaultWinsAndExplicitModelCarriesAcrossCompatibleProjects() throws {
         let appDefault = FeatureSelection(providerID: "codex", modelID: "gpt-5.6-sol")
         let explicit = FeatureSelection(providerID: "codex", modelID: "gpt-5.6-luna")

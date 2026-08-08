@@ -110,6 +110,42 @@ enum DailyUXCreationContext {
         }
     }
 
+    static func projectGroups(in snapshot: FeatureSnapshot) -> [DailyUXProjectGroup] {
+        let preferences = projectGroupingPreferences(in: snapshot)
+        return DailyUXProjectGrouping.groups(
+            projects: projects(in: snapshot),
+            mode: preferences.projectGroupingMode,
+            overrides: preferences.projectGroupingOverrides
+        )
+    }
+
+    static func logicalProjectID(
+        for project: FeatureProject,
+        in snapshot: FeatureSnapshot
+    ) -> String {
+        let preferences = projectGroupingPreferences(in: snapshot)
+        let groups = DailyUXProjectGrouping.groups(
+            projects: snapshot.projects,
+            mode: preferences.projectGroupingMode,
+            overrides: preferences.projectGroupingOverrides
+        )
+        return DailyUXProjectGrouping.group(containing: project.id, in: groups)?.id
+            ?? DailyUXProjectGrouping.logicalProjectID(
+                for: project,
+                mode: preferences.projectGroupingMode,
+                overrides: preferences.projectGroupingOverrides
+            )
+    }
+
+    private static func projectGroupingPreferences(
+        in snapshot: FeatureSnapshot
+    ) -> FeatureEnvironmentPreferences {
+        let activeEnvironmentID = snapshot.environments.first(where: \.isActive)?.id
+        return activeEnvironmentID.flatMap {
+            snapshot.preferencesByEnvironment?[$0]
+        } ?? FeatureEnvironmentPreferences()
+    }
+
     static func providers(
         for project: FeatureProject?,
         in snapshot: FeatureSnapshot
@@ -170,6 +206,174 @@ enum DailyUXCreationContext {
         guard let environmentID else { return FeatureEnvironmentPreferences() }
         return snapshot.preferencesByEnvironment?[environmentID]
             ?? FeatureEnvironmentPreferences()
+    }
+}
+
+struct DailyUXProjectGroup: Identifiable, Equatable {
+    let id: String
+    let name: String
+    let projects: [FeatureProject]
+    let memberProjectIDs: Set<String>
+
+    func project(in environmentID: String) -> FeatureProject? {
+        projects.first { $0.environmentID == environmentID }
+    }
+
+    func preferredProject(environmentID: String?) -> FeatureProject? {
+        environmentID.flatMap(project(in:)) ?? projects.first
+    }
+}
+
+enum DailyUXProjectGrouping {
+    static func logicalProjectID(
+        for project: FeatureProject,
+        mode: FeatureEnvironmentPreferences.ProjectGroupingMode = .repository,
+        overrides: [String: FeatureEnvironmentPreferences.ProjectGroupingMode] = [:]
+    ) -> String {
+        logicalKey(project, mode: resolvedMode(project, mode: mode, overrides: overrides))
+    }
+
+    static func groups(
+        projects: [FeatureProject],
+        mode: FeatureEnvironmentPreferences.ProjectGroupingMode = .repository,
+        overrides: [String: FeatureEnvironmentPreferences.ProjectGroupingMode] = [:]
+    ) -> [DailyUXProjectGroup] {
+        var projectsByLogicalKey: [String: [FeatureProject]] = [:]
+        var memberIDsByLogicalKey: [String: Set<String>] = [:]
+        for physicalProjects in Dictionary(grouping: projects, by: physicalKey).values {
+            guard let winner = physicalWinner(physicalProjects) else { continue }
+            let identitySource = identitySource(projects: physicalProjects, winner: winner)
+            let groupingMode = resolvedMode(winner, mode: mode, overrides: overrides)
+            let key = logicalKey(identitySource, mode: groupingMode)
+            projectsByLogicalKey[key, default: []].append(winner)
+            memberIDsByLogicalKey[key, default: []].formUnion(physicalProjects.map(\.id))
+        }
+
+        return projectsByLogicalKey
+            .map { key, members in
+                let sorted = members.sorted(by: projectOrder)
+                return DailyUXProjectGroup(
+                    id: key,
+                    name: groupName(projects: sorted),
+                    projects: sorted,
+                    memberProjectIDs: memberIDsByLogicalKey[key] ?? []
+                )
+            }
+            .sorted { lhs, rhs in
+                let comparison = lhs.name.localizedCaseInsensitiveCompare(rhs.name)
+                return comparison == .orderedSame ? lhs.id < rhs.id : comparison == .orderedAscending
+            }
+    }
+
+    static func group(containing projectID: String, in groups: [DailyUXProjectGroup])
+        -> DailyUXProjectGroup?
+    {
+        groups.first { $0.memberProjectIDs.contains(projectID) }
+    }
+
+    private static func physicalKey(_ project: FeatureProject) -> String {
+        "\(project.environmentID):\(normalizedPath(project.path))"
+    }
+
+    private static func logicalKey(
+        _ project: FeatureProject,
+        mode: FeatureEnvironmentPreferences.ProjectGroupingMode
+    ) -> String {
+        if mode == .separate { return physicalKey(project) }
+        guard let key = project.repositoryIdentity?.canonicalKey.trimmingCharacters(
+            in: .whitespacesAndNewlines
+        ), !key.isEmpty else {
+            return physicalKey(project)
+        }
+        if mode == .repositoryPath,
+           let relativePath = repositoryRelativePath(project),
+           !relativePath.isEmpty {
+            return "\(key)::\(relativePath)"
+        }
+        return key
+    }
+
+    private static func resolvedMode(
+        _ project: FeatureProject,
+        mode: FeatureEnvironmentPreferences.ProjectGroupingMode,
+        overrides: [String: FeatureEnvironmentPreferences.ProjectGroupingMode]
+    ) -> FeatureEnvironmentPreferences.ProjectGroupingMode {
+        overrides[physicalKey(project)] ?? mode
+    }
+
+    private static func repositoryRelativePath(_ project: FeatureProject) -> String? {
+        guard let rootPath = project.repositoryIdentity?.rootPath else { return nil }
+        let projectPath = normalizedPath(project.path)
+        let repositoryPath = normalizedPath(rootPath)
+        guard !projectPath.isEmpty, !repositoryPath.isEmpty else { return nil }
+        if projectPath == repositoryPath { return "" }
+        let separator = repositoryPath.contains("\\") ? "\\" : "/"
+        let prefix = repositoryPath + separator
+        guard projectPath.hasPrefix(prefix) else { return nil }
+        return String(projectPath.dropFirst(prefix.count)).replacingOccurrences(of: "\\", with: "/")
+    }
+
+    private static func physicalWinner(_ projects: [FeatureProject]) -> FeatureProject? {
+        projects.max { lhs, rhs in
+            let lhsFreshness = freshness(lhs)
+            let rhsFreshness = freshness(rhs)
+            if lhsFreshness != rhsFreshness { return lhsFreshness < rhsFreshness }
+            return lhs.id < rhs.id
+        }
+    }
+
+    private static func identitySource(
+        projects: [FeatureProject],
+        winner: FeatureProject
+    ) -> FeatureProject {
+        guard winner.repositoryIdentity == nil else { return winner }
+        return physicalWinner(projects.filter { $0.repositoryIdentity != nil }) ?? winner
+    }
+
+    private static func freshness(_ project: FeatureProject) -> String {
+        project.updatedAt ?? project.createdAt ?? ""
+    }
+
+    private static func groupName(projects: [FeatureProject]) -> String {
+        let displayNames = uniqueNonEmpty(projects.compactMap(\.repositoryIdentity?.displayName))
+        if displayNames.count == 1, let name = displayNames.first { return name }
+        let repositoryNames = uniqueNonEmpty(projects.compactMap(\.repositoryIdentity?.name))
+        if repositoryNames.count == 1, let name = repositoryNames.first { return name }
+        return projects.first?.name ?? "Project"
+    }
+
+    private static func uniqueNonEmpty(_ values: [String]) -> [String] {
+        var seen = Set<String>()
+        return values.compactMap { value in
+            let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty, seen.insert(trimmed).inserted else { return nil }
+            return trimmed
+        }
+    }
+
+    private static func normalizedPath(_ path: String) -> String {
+        var normalized = path.trimmingCharacters(in: .whitespacesAndNewlines)
+        let isWindowsPath = normalized.range(
+            of: #"^[a-zA-Z]:([/\\]|$)"#,
+            options: .regularExpression
+        ) != nil || normalized.hasPrefix("\\\\")
+        let separators = isWindowsPath
+            ? CharacterSet(charactersIn: "/\\")
+            : CharacterSet(charactersIn: "/")
+        while normalized.count > 1,
+              let scalar = normalized.unicodeScalars.last,
+              separators.contains(scalar) {
+            normalized.removeLast()
+        }
+        if isWindowsPath {
+            return normalized.replacingOccurrences(of: "/", with: "\\").lowercased()
+        }
+        return normalized
+    }
+
+    private static func projectOrder(_ lhs: FeatureProject, _ rhs: FeatureProject) -> Bool {
+        if lhs.environmentID != rhs.environmentID { return lhs.environmentID < rhs.environmentID }
+        return lhs.id < rhs.id
     }
 }
 
