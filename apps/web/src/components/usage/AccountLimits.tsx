@@ -4,6 +4,10 @@
  * window a provider adds or brings back (Codex's paused 5-hour) appears
  * without a client change.
  *
+ * Every percentage is labelled `used` inline - a bare number cannot say
+ * whether it is used or remaining. Snapshot age only renders once the data
+ * is actually stale; fresh data needs no caption.
+ *
  * @module AccountLimits
  */
 import type { AccountLimitsSnapshot, AccountLimitsWindow } from "@t3tools/contracts";
@@ -13,6 +17,9 @@ import { cn } from "../../lib/utils";
 import { useAccountLimits } from "../../state/accountLimits";
 import { formatAgo, formatResetAt, formatResetIn } from "../../usage/limitsFormat";
 import { PROVIDER_COLOR, PROVIDER_LABEL, PROVIDER_MARK, PROVIDER_ORDER } from "./usageProviders";
+
+/** Age past which a snapshot stops being "current" and earns a caption. */
+const STALE_AFTER_MS = 15 * 60_000;
 
 /**
  * Reset countdowns and snapshot ages drift as time passes, not as data
@@ -25,19 +32,6 @@ function useNowMs(intervalMs = 30_000): number {
     return () => window.clearInterval(timer);
   }, [intervalMs]);
   return nowMs;
-}
-
-const PLAN_LABEL: Record<string, string> = {
-  max: "Max",
-  pro: "Pro",
-  plus: "Plus",
-  team: "Team",
-  enterprise: "Enterprise",
-};
-
-function formatPlan(plan: string | null): string | null {
-  if (plan === null) return null;
-  return PLAN_LABEL[plan] ?? plan.charAt(0).toUpperCase() + plan.slice(1);
 }
 
 function usageTone(usedPercent: number): string | undefined {
@@ -60,18 +54,12 @@ function LimitMeter({ window, color }: { window: AccountLimitsWindow; color: str
   );
 }
 
-function SnapshotFreshness({
-  snapshot,
-  nowMs,
-}: {
-  snapshot: AccountLimitsSnapshot;
-  nowMs: number;
-}) {
+/** `6h ago`, and only once the snapshot is old enough to matter. */
+function SnapshotAge({ snapshot, nowMs }: { snapshot: AccountLimitsSnapshot; nowMs: number }) {
+  const ageMs = nowMs - Date.parse(snapshot.asOf);
+  if (!Number.isFinite(ageMs) || ageMs < STALE_AFTER_MS) return null;
   return (
-    <span className="text-[10px] text-muted-foreground">
-      {snapshot.source === "transcript" ? "last session · " : ""}
-      {formatAgo(snapshot.asOf, nowMs)}
-    </span>
+    <span className="text-[10px] text-muted-foreground">{formatAgo(snapshot.asOf, nowMs)}</span>
   );
 }
 
@@ -89,11 +77,10 @@ export function AccountLimitsHoverCard() {
   }
 
   return (
-    <div className="flex w-60 flex-col gap-2.5 p-1.5">
+    <div className="flex w-64 flex-col gap-2.5 p-1.5">
       {PROVIDER_ORDER.map((provider) => {
         const snapshot = snapshots.get(provider);
         const Mark = PROVIDER_MARK[provider];
-        const plan = formatPlan(snapshot?.plan ?? null);
         return (
           <div key={provider} className="flex flex-col gap-1">
             <div className="flex items-baseline gap-1.5">
@@ -101,13 +88,8 @@ export function AccountLimitsHoverCard() {
               <span className="text-xs font-medium text-foreground">
                 {PROVIDER_LABEL[provider]}
               </span>
-              {plan !== null ? (
-                <span className="text-[10px] text-muted-foreground">{plan}</span>
-              ) : null}
               <span className="ml-auto">
-                {snapshot !== undefined ? (
-                  <SnapshotFreshness snapshot={snapshot} nowMs={nowMs} />
-                ) : null}
+                {snapshot !== undefined ? <SnapshotAge snapshot={snapshot} nowMs={nowMs} /> : null}
               </span>
             </div>
             {snapshot === undefined || snapshot.windows.length === 0 ? (
@@ -115,19 +97,19 @@ export function AccountLimitsHoverCard() {
             ) : (
               snapshot.windows.map((window) => (
                 <div key={window.id} className="flex items-center gap-2">
-                  <span className="w-8 shrink-0 text-[10px] text-muted-foreground">
+                  <span className="w-9 shrink-0 text-[10px] text-muted-foreground">
                     {window.label}
                   </span>
                   <LimitMeter window={window} color={PROVIDER_COLOR[provider]} />
                   <span
                     className={cn(
-                      "w-8 shrink-0 text-right text-[11px] tabular-nums text-foreground",
+                      "w-15 shrink-0 text-right text-[11px] tabular-nums text-foreground",
                       usageTone(window.usedPercent),
                     )}
                   >
-                    {Math.round(window.usedPercent)}%
+                    {Math.round(window.usedPercent)}% used
                   </span>
-                  <span className="w-14 shrink-0 text-right text-[10px] tabular-nums text-muted-foreground">
+                  <span className="w-13 shrink-0 text-right text-[10px] tabular-nums text-muted-foreground">
                     {formatResetAt(window.resetsAt, nowMs) ?? ""}
                   </span>
                 </div>
@@ -136,9 +118,6 @@ export function AccountLimitsHoverCard() {
           </div>
         );
       })}
-      <p className="border-t border-border pt-1.5 text-[10px] text-muted-foreground">
-        % used · click for details
-      </p>
     </div>
   );
 }
@@ -159,7 +138,6 @@ export function AccountLimitsSection() {
         {PROVIDER_ORDER.map((provider) => {
           const snapshot = snapshots.get(provider);
           const Mark = PROVIDER_MARK[provider];
-          const plan = formatPlan(snapshot?.plan ?? null);
           return (
             <div key={provider} className="flex flex-col gap-1.5">
               <div className="flex items-baseline gap-2">
@@ -167,20 +145,15 @@ export function AccountLimitsSection() {
                 <span className="text-sm font-medium text-foreground">
                   {PROVIDER_LABEL[provider]}
                 </span>
-                {plan !== null ? (
-                  <span className="text-xs text-muted-foreground">{plan}</span>
-                ) : null}
                 <span className="ml-auto">
                   {snapshot !== undefined ? (
-                    <SnapshotFreshness snapshot={snapshot} nowMs={nowMs} />
+                    <SnapshotAge snapshot={snapshot} nowMs={nowMs} />
                   ) : null}
                 </span>
               </div>
               {snapshot === undefined || snapshot.windows.length === 0 ? (
                 <p className="text-xs text-muted-foreground">
-                  {isPending && snapshot === undefined
-                    ? "Loading…"
-                    : `No limit data yet. Run a ${PROVIDER_LABEL[provider]} session.`}
+                  {isPending && snapshot === undefined ? "Loading…" : "No limit data yet"}
                 </p>
               ) : (
                 snapshot.windows.map((window) => {
@@ -194,15 +167,15 @@ export function AccountLimitsSection() {
                       <LimitMeter window={window} color={PROVIDER_COLOR[provider]} />
                       <span
                         className={cn(
-                          "w-9 shrink-0 text-right text-xs font-medium tabular-nums text-foreground",
+                          "w-18 shrink-0 text-right text-xs font-medium tabular-nums text-foreground",
                           usageTone(window.usedPercent),
                         )}
                       >
-                        {Math.round(window.usedPercent)}%
+                        {Math.round(window.usedPercent)}% used
                       </span>
-                      <span className="w-36 shrink-0 text-right text-xs tabular-nums text-muted-foreground">
+                      <span className="w-32 shrink-0 text-right text-xs tabular-nums text-muted-foreground">
                         {resetAt === null
-                          ? "no traffic yet"
+                          ? ""
                           : `resets ${resetAt}${resetIn === null ? "" : ` · ${resetIn}`}`}
                       </span>
                     </div>

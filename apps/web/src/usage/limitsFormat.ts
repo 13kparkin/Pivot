@@ -4,15 +4,21 @@
  * @module limitsFormat
  */
 
-const TIME = new Intl.DateTimeFormat("en-US", { hour: "numeric", minute: "2-digit" });
-const WEEKDAY_TIME = new Intl.DateTimeFormat("en-US", {
-  weekday: "short",
-  hour: "numeric",
+const TIME = new Intl.DateTimeFormat("en-US", {
+  hourCycle: "h23",
+  hour: "2-digit",
+  minute: "2-digit",
+});
+const DATE_TIME = new Intl.DateTimeFormat("en-US", {
+  month: "numeric",
+  day: "numeric",
+  hourCycle: "h23",
+  hour: "2-digit",
   minute: "2-digit",
 });
 
 /**
- * When a window resets: `4:00 PM` inside 24 hours, `Tue 10:00 AM` beyond.
+ * When a window resets: `16:00` inside 24 hours, `8/12 16:00` beyond.
  * Null for windows with no reset clock yet, "now" once the moment has passed
  * (the provider refreshes lazily, so a stale timestamp lingers briefly).
  */
@@ -21,7 +27,8 @@ export function formatResetAt(resetsAt: string | null, nowMs: number): string | 
   const at = Date.parse(resetsAt);
   if (Number.isNaN(at)) return null;
   if (at <= nowMs) return "now";
-  return at - nowMs < 24 * 60 * 60 * 1000 ? TIME.format(at) : WEEKDAY_TIME.format(at);
+  if (at - nowMs < 24 * 60 * 60 * 1000) return TIME.format(at);
+  return DATE_TIME.format(at).replace(", ", " ");
 }
 
 /** Coarse time-until-reset: `in 45m`, `in 2h`, `in 3d`. */
