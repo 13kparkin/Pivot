@@ -2,6 +2,7 @@ import SwiftUI
 
 struct FeatureComposerView: View {
     @State private var isManuallyExpanded = false
+    @State private var isAttachmentFlowActive = false
     @State private var attachmentPreparation = FeatureAttachmentPreparationState()
     @State private var pathEntries: [FeatureComposerPathEntry] = []
     @State private var isPathSearchLoading = false
@@ -102,10 +103,13 @@ struct FeatureComposerView: View {
                 .ignoresSafeArea()
             }
             .onChange(of: focused.wrappedValue) {
-                if !focused.wrappedValue,
-                   textIsEmpty,
-                   attachments.isEmpty,
-                   !attachmentPreparation.isPreparing {
+                if FeatureComposerCollapsePolicy.shouldCollapse(
+                    isFocused: focused.wrappedValue,
+                    textIsEmpty: textIsEmpty,
+                    attachmentsAreEmpty: attachments.isEmpty,
+                    isAttachmentFlowActive: isAttachmentFlowActive,
+                    isPreparingAttachments: attachmentPreparation.isPreparing
+                ) {
                     isManuallyExpanded = false
                 }
             }
@@ -231,6 +235,7 @@ struct FeatureComposerView: View {
             FeatureImageAttachmentPicker(
                 attachments: $attachments,
                 preparationState: $attachmentPreparation,
+                isFlowActive: $isAttachmentFlowActive,
                 isEnabled: imagesAllowed
             )
 
@@ -441,7 +446,22 @@ struct FeatureComposerView: View {
             onSend()
         }
     }
+}
 
+enum FeatureComposerCollapsePolicy {
+    static func shouldCollapse(
+        isFocused: Bool,
+        textIsEmpty: Bool,
+        attachmentsAreEmpty: Bool,
+        isAttachmentFlowActive: Bool,
+        isPreparingAttachments: Bool
+    ) -> Bool {
+        !isFocused
+            && textIsEmpty
+            && attachmentsAreEmpty
+            && !isAttachmentFlowActive
+            && !isPreparingAttachments
+    }
 }
 
 private struct FeatureComposerPathSearchRequest: Hashable {

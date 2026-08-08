@@ -71,4 +71,23 @@ struct AttachmentPreparationTests {
             preparationState: state
         ))
     }
+
+    @Test
+    func attachmentPickerKeepsExistingThreadComposerMountedWhenFocusResigns() {
+        #expect(!FeatureComposerCollapsePolicy.shouldCollapse(
+            isFocused: false,
+            textIsEmpty: true,
+            attachmentsAreEmpty: true,
+            isAttachmentFlowActive: true,
+            isPreparingAttachments: false
+        ))
+
+        #expect(FeatureComposerCollapsePolicy.shouldCollapse(
+            isFocused: false,
+            textIsEmpty: true,
+            attachmentsAreEmpty: true,
+            isAttachmentFlowActive: false,
+            isPreparingAttachments: false
+        ))
+    }
 }

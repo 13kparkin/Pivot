@@ -44,6 +44,7 @@ struct FeatureImageAttachmentPicker: View {
 
     @Binding var attachments: [FeatureDraftAttachment]
     @Binding var preparationState: FeatureAttachmentPreparationState
+    @Binding var isFlowActive: Bool
     let maximumCount: Int
     let isEnabled: Bool
 
@@ -58,17 +59,20 @@ struct FeatureImageAttachmentPicker: View {
     init(
         attachments: Binding<[FeatureDraftAttachment]>,
         preparationState: Binding<FeatureAttachmentPreparationState>,
+        isFlowActive: Binding<Bool>,
         maximumCount: Int = 8,
         isEnabled: Bool = true
     ) {
         _attachments = attachments
         _preparationState = preparationState
+        _isFlowActive = isFlowActive
         self.maximumCount = maximumCount
         self.isEnabled = isEnabled
     }
 
     var body: some View {
         Button {
+            isFlowActive = true
             isAttachmentSourcePresented = true
         } label: {
             Image(systemName: preparationState.isPreparing ? "hourglass" : "paperclip")
@@ -88,7 +92,9 @@ struct FeatureImageAttachmentPicker: View {
             Button("Camera") { present(.camera) }
                 .disabled(!UIImagePickerController.isSourceTypeAvailable(.camera))
             Button("Files") { present(.files) }
-            Button("Cancel", role: .cancel) {}
+            Button("Cancel", role: .cancel) {
+                isFlowActive = false
+            }
         }
         .fullScreenCover(
             isPresented: $isPhotoLibraryPresented,
@@ -106,7 +112,10 @@ struct FeatureImageAttachmentPicker: View {
         .fullScreenCover(isPresented: $isCameraPresented) {
             FeatureCameraPicker(
                 onCapture: loadCapturedImage,
-                onCancel: { isCameraPresented = false }
+                onCancel: {
+                    isCameraPresented = false
+                    isFlowActive = false
+                }
             )
             .ignoresSafeArea()
         }
@@ -160,7 +169,10 @@ struct FeatureImageAttachmentPicker: View {
             // runs. Wait for its dismissal animation before presenting another
             // controller or UIKit can reject (or race) the new presentation.
             try? await Task.sleep(for: .milliseconds(300))
-            guard !Task.isCancelled, canAdd else { return }
+            guard !Task.isCancelled, canAdd else {
+                isFlowActive = false
+                return
+            }
             switch source {
             case .photoLibrary:
                 isPhotoLibraryPresented = true
@@ -180,6 +192,7 @@ struct FeatureImageAttachmentPicker: View {
             await Task.yield()
             guard !isPhotoLibraryPresented, !pendingPhotoLibraryItems.isEmpty, canAdd else {
                 pendingPhotoLibraryItems = []
+                isFlowActive = false
                 return
             }
 
@@ -190,6 +203,7 @@ struct FeatureImageAttachmentPicker: View {
 
             defer {
                 preparationState.finish(operation)
+                isFlowActive = false
             }
 
             for (offset, item) in selected.enumerated() {
@@ -208,11 +222,17 @@ struct FeatureImageAttachmentPicker: View {
 
     private func loadCapturedImage(_ image: UIImage) {
         isCameraPresented = false
-        guard canAdd else { return }
+        guard canAdd else {
+            isFlowActive = false
+            return
+        }
         let operation = preparationState.begin(itemCount: 1)
 
         Task {
-            defer { preparationState.finish(operation) }
+            defer {
+                preparationState.finish(operation)
+                isFlowActive = false
+            }
             do {
                 let data = try await Task.detached(priority: .userInitiated) {
                     guard let data = image.jpegData(compressionQuality: 0.94) else {
@@ -228,6 +248,7 @@ struct FeatureImageAttachmentPicker: View {
     }
 
     private func loadFiles(_ result: Result<[URL], Error>) {
+        defer { isFlowActive = false }
         switch result {
         case .failure(let error):
             errorMessage = error.localizedDescription
@@ -319,12 +340,11 @@ private struct FeaturePhotoLibraryPicker: UIViewControllerRepresentable {
             self.onFinish = onFinish
         }
 
-        func picker(_ picker: PHPickerViewController, didFinishPicking results: [PHPickerResult]) {
+        func picker(_: PHPickerViewController, didFinishPicking results: [PHPickerResult]) {
             guard !didFinish else { return }
             didFinish = true
 
             let items = results.map { FeaturePhotoLibraryItem(provider: $0.itemProvider) }
-            picker.dismiss(animated: true)
             Task { @MainActor in
                 onFinish(items)
             }
