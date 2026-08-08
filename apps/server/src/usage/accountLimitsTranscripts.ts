@@ -13,7 +13,7 @@
  *
  * @module accountLimitsTranscripts
  */
-import * as NodeFs from "node:fs/promises";
+import * as NodeFSP from "node:fs/promises";
 
 import {
   codexSnapshotFromUnknown,
@@ -61,9 +61,9 @@ async function readTailRateLimits(
   filePath: string,
   mtimeMs: number,
 ): Promise<CodexTranscriptRateLimits | null> {
-  let handle: NodeFs.FileHandle;
+  let handle: NodeFSP.FileHandle;
   try {
-    handle = await NodeFs.open(filePath, "r");
+    handle = await NodeFSP.open(filePath, "r");
   } catch {
     return null;
   }
