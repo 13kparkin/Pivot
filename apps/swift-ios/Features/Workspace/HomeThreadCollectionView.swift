@@ -5,6 +5,7 @@ import UIKit
 /// while UIKit keeps row creation and updates proportional to visible threads.
 struct HomeThreadCollectionView: UIViewRepresentable {
     let presentation: HomePresentation
+    let projectFaviconClient: any FeatureClient
     let query: String
     let selectedThreadID: String?
     let forceRichRows: Bool
@@ -252,6 +253,7 @@ struct HomeThreadCollectionView: UIViewRepresentable {
             cell.contentConfiguration = UIHostingConfiguration {
                 HomeCollectionCellContent(
                     item: item,
+                    projectFaviconClient: parent.projectFaviconClient,
                     isSelected: identifier.threadID == selectedThreadID,
                     now: now
                 )
@@ -640,6 +642,7 @@ private enum HomeCollectionItem: Equatable {
 
 private struct HomeCollectionCellContent: View {
     let item: HomeCollectionItem
+    let projectFaviconClient: any FeatureClient
     let isSelected: Bool
     let now: Date
 
@@ -650,12 +653,12 @@ private struct HomeCollectionCellContent: View {
             FeatureThreadRow(
                 thread: thread,
                 context: context,
+                projectFaviconClient: projectFaviconClient,
                 isSelected: isSelected,
                 style: style,
                 now: now,
                 allowsMultilineTitle: allowsMultilineTitle
             )
-            .equatable()
         case let .shelfHeader(shelf, count, isExpanded):
             HomeShelfHeader(
                 title: shelf.title,

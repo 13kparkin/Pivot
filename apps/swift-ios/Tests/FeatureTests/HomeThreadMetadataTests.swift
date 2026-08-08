@@ -164,6 +164,8 @@ struct HomeThreadMetadataTests {
         let custom = try #require(contexts[customThread.id])
 
         #expect(known.providerID == "work-claude")
+        #expect(known.projectEnvironmentID == "device")
+        #expect(known.projectWorkspaceRoot == "/work/t3code")
         #expect(known.providerDriver == "custom")
         #expect(known.providerName == "Claude Code")
         #expect(

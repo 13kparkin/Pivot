@@ -86,6 +86,15 @@ public protocol FeatureClient: AnyObject {
 
     func saveSettings(_ settings: FeatureSettings) async throws
 
+    func cachedProjectFavicon(
+        environmentID: String,
+        workspaceRoot: String
+    ) async -> Data?
+    func refreshProjectFavicon(
+        environmentID: String,
+        workspaceRoot: String
+    ) async -> Data?
+
     func listFiles(threadID: String, path: String?) async throws -> [FeatureFileEntry]
     func searchProjectFiles(
         projectID: String,
@@ -145,6 +154,12 @@ public extension FeatureClient {
     func removeEnvironment(id: String) async throws {}
     func disconnect() async {}
     func addProject(path: String) async throws {}
+    func cachedProjectFavicon(environmentID: String, workspaceRoot: String) async -> Data? {
+        nil
+    }
+    func refreshProjectFavicon(environmentID: String, workspaceRoot: String) async -> Data? {
+        nil
+    }
     func releaseThread(id: String) {}
     func resolveUserInput(id: String, answers: [String: FeatureInputAnswer]) async throws {}
 

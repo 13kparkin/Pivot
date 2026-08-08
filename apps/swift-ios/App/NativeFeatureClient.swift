@@ -33,11 +33,14 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
     )
     private static let initialThreadUserTurnLimit = 10
     private static let olderThreadPageUserTurnLimit = 20
+    private static let projectFaviconRefreshInterval: TimeInterval = 15 * 60
+    private static let projectFaviconFallbackMarker = "project-favicon-missing"
 
     private let runtime: EnvironmentRuntime
     let t3ConnectController: T3ConnectController
     private let hasMatchingT3ConnectController: Bool
     private let settingsStore: UserDefaults
+    private let projectFaviconStore: FeatureProjectFaviconStore
     private let fallbackPollingInitialDelay: Duration
     private let fallbackPollingInterval: Duration
     private let aggregateRefreshInterval: Duration
@@ -71,6 +74,9 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
     private var detailRenderCaches: [String: NativeDetailRenderCache] = [:]
     private var detailCacheRecency: [String] = []
     private var attachmentURLs: [AttachmentCacheKey: CachedAttachmentURL] = [:]
+    private var projectFaviconRefreshTasks: [
+        FeatureProjectFaviconCacheKey: Task<Data?, Never>
+    ] = [:]
     private var pendingBootstrapSubmissions: [PendingBootstrapSubmission] = []
     private var pendingTurnSubmissions: [String: PendingTurnSubmission] = [:]
     private var attachmentHydrationTasks: [
@@ -111,6 +117,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         runtime: EnvironmentRuntime? = nil,
         t3ConnectController: T3ConnectController? = nil,
         settingsStore: UserDefaults = .standard,
+        projectFaviconStore: FeatureProjectFaviconStore = FeatureProjectFaviconStore(),
         fallbackPollingInitialDelay: Duration = .seconds(3),
         fallbackPollingInterval: Duration = .seconds(2),
         aggregateRefreshInterval: Duration = .seconds(20),
@@ -139,6 +146,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             managedAuthorization: T3ConnectRuntimeAuthorization(controller: controller)
         )
         self.settingsStore = settingsStore
+        self.projectFaviconStore = projectFaviconStore
         self.fallbackPollingInitialDelay = fallbackPollingInitialDelay
         self.fallbackPollingInterval = fallbackPollingInterval
         self.aggregateRefreshInterval = aggregateRefreshInterval
@@ -161,6 +169,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         detailPublishTask?.cancel()
         passiveDetailPollingTask?.cancel()
         attachmentHydrationTasks.values.forEach { $0.task.cancel() }
+        projectFaviconRefreshTasks.values.forEach { $0.cancel() }
         continuation.finish()
     }
 
@@ -519,6 +528,86 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         return try await route.client.resolvedAssetURL(
             resource: .workspaceFile(threadID: route.wireID, path: path)
         )
+    }
+
+    func cachedProjectFavicon(
+        environmentID: String,
+        workspaceRoot: String
+    ) async -> Data? {
+        let key = FeatureProjectFaviconCacheKey(
+            environmentID: environmentID,
+            workspaceRoot: workspaceRoot
+        )
+        return try? await projectFaviconStore.value(for: key)?.data
+    }
+
+    func refreshProjectFavicon(
+        environmentID: String,
+        workspaceRoot: String
+    ) async -> Data? {
+        let key = FeatureProjectFaviconCacheKey(
+            environmentID: environmentID,
+            workspaceRoot: workspaceRoot
+        )
+        let cached = try? await projectFaviconStore.value(for: key)
+        if let cached,
+           Date.now.timeIntervalSince(cached.lastCheckedAt)
+               < Self.projectFaviconRefreshInterval {
+            return cached.data
+        }
+        if let task = projectFaviconRefreshTasks[key] {
+            return await task.value
+        }
+
+        guard let client = environmentClients[environmentID] else {
+            try? await projectFaviconStore.record(
+                data: nil,
+                revision: nil,
+                for: key
+            )
+            return cached?.data
+        }
+
+        let store = projectFaviconStore
+        let task = Task<Data?, Never> {
+            do {
+                let resolved = try await client.resolvedAsset(
+                    resource: .projectFavicon(cwd: key.workspaceRoot)
+                )
+                let revision = resolved.url.lastPathComponent.removingPercentEncoding
+                    ?? resolved.url.lastPathComponent
+                if revision == Self.projectFaviconFallbackMarker {
+                    try await store.record(data: nil, revision: nil, for: key)
+                    return cached?.data
+                }
+                if cached?.revision == revision, cached?.data != nil {
+                    try await store.record(data: nil, revision: revision, for: key)
+                    return cached?.data
+                }
+
+                let (data, response) = try await URLSession.shared.data(from: resolved.url)
+                guard let response = response as? HTTPURLResponse,
+                      (200..<300).contains(response.statusCode),
+                      !data.isEmpty,
+                      data.count <= FeatureProjectFaviconStore.maximumDataSize else {
+                    throw CocoaError(.fileReadCorruptFile)
+                }
+                guard let renderable = await FeatureProjectFaviconImageDecoder.renderableData(
+                    from: data
+                ) else {
+                    throw CocoaError(.fileReadCorruptFile)
+                }
+                try await store.record(data: renderable, revision: revision, for: key)
+                return renderable
+            } catch {
+                try? await store.record(data: nil, revision: nil, for: key)
+                return cached?.data
+            }
+        }
+        projectFaviconRefreshTasks[key] = task
+        let value = await task.value
+        projectFaviconRefreshTasks[key] = nil
+        return value
     }
 
     func discoverProjectSources(

@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 struct FeatureWorkspaceNavigationRequest: Equatable, Sendable {
     enum Destination: Equatable, Sendable {
@@ -222,6 +223,7 @@ public struct WorkspaceView: View {
             projectFilter
             HomeThreadCollectionView(
                 presentation: presentation,
+                projectFaviconClient: model.client,
                 query: searchText,
                 selectedThreadID: selectedThreadID,
                 forceRichRows: dynamicTypeSize.isAccessibilitySize,
@@ -775,6 +777,8 @@ struct HomeShelfHeader: View {
 
 struct HomeThreadRowContext: Equatable {
     let projectName: String
+    let projectEnvironmentID: String?
+    let projectWorkspaceRoot: String?
     let environmentLabel: String?
     let providerID: String
     let providerDriver: String
@@ -783,6 +787,8 @@ struct HomeThreadRowContext: Equatable {
 
     static let fallback = HomeThreadRowContext(
         projectName: "Project",
+        projectEnvironmentID: nil,
+        projectWorkspaceRoot: nil,
         environmentLabel: nil,
         providerID: "agent",
         providerDriver: "",
@@ -839,6 +845,8 @@ struct HomeThreadRowContext: Equatable {
 
             result[thread.id] = HomeThreadRowContext(
                 projectName: project?.name ?? "Project",
+                projectEnvironmentID: project?.environmentID,
+                projectWorkspaceRoot: project?.path,
                 environmentLabel: environmentLabel?.isEmpty == false ? environmentLabel : nil,
                 providerID: providerID,
                 providerDriver: providerDriver,
@@ -849,7 +857,7 @@ struct HomeThreadRowContext: Equatable {
     }
 }
 
-struct FeatureThreadRow: View, Equatable {
+struct FeatureThreadRow: View {
     enum Style: Equatable {
         case rich
         case slim
@@ -857,6 +865,7 @@ struct FeatureThreadRow: View, Equatable {
 
     let thread: FeatureThread
     private let context: HomeThreadRowContext
+    private let projectFaviconClient: (any FeatureClient)?
     let isSelected: Bool
     let style: Style
     let now: Date
@@ -865,6 +874,7 @@ struct FeatureThreadRow: View, Equatable {
     init(
         thread: FeatureThread,
         context: HomeThreadRowContext,
+        projectFaviconClient: (any FeatureClient)? = nil,
         isSelected: Bool = false,
         style: Style = .rich,
         now: Date = .now,
@@ -872,6 +882,7 @@ struct FeatureThreadRow: View, Equatable {
     ) {
         self.thread = thread
         self.context = context
+        self.projectFaviconClient = projectFaviconClient
         self.isSelected = isSelected
         self.style = style
         self.now = now
@@ -902,7 +913,7 @@ struct FeatureThreadRow: View, Equatable {
     private func richRow(at now: Date) -> some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 6) {
-                ProjectBadge(name: context.projectName)
+                projectBadge
                 Text(context.projectName)
                     .lineLimit(1)
                     .foregroundStyle(T3Colors.textSecondary)
@@ -963,7 +974,7 @@ struct FeatureThreadRow: View, Equatable {
 
     private func slimRow(at now: Date) -> some View {
         HStack(spacing: 9) {
-            ProjectBadge(name: context.projectName)
+            projectBadge
                 .saturation(0)
                 .opacity(0.48)
             Text(thread.title)
@@ -1074,6 +1085,15 @@ struct FeatureThreadRow: View, Equatable {
         context.environmentLabel
     }
 
+    private var projectBadge: some View {
+        ProjectBadge(
+            name: context.projectName,
+            environmentID: context.projectEnvironmentID,
+            workspaceRoot: context.projectWorkspaceRoot,
+            client: projectFaviconClient
+        )
+    }
+
     private func providerIcon(size: CGFloat) -> some View {
         ProviderIcon(
             driver: context.providerDriver,
@@ -1103,14 +1123,88 @@ struct FeatureThreadRow: View, Equatable {
 
 private struct ProjectBadge: View {
     let name: String
+    let environmentID: String?
+    let workspaceRoot: String?
+    let client: (any FeatureClient)?
+    @State private var favicon: UIImage?
+
+    init(
+        name: String,
+        environmentID: String?,
+        workspaceRoot: String?,
+        client: (any FeatureClient)?
+    ) {
+        self.name = name
+        self.environmentID = environmentID
+        self.workspaceRoot = workspaceRoot
+        self.client = client
+        let initialKey = environmentID.flatMap { environmentID in
+            workspaceRoot.map { workspaceRoot in
+                FeatureProjectFaviconCacheKey(
+                    environmentID: environmentID,
+                    workspaceRoot: workspaceRoot
+                ).fingerprint
+            }
+        }
+        _favicon = State(initialValue: initialKey.flatMap {
+            FeatureProjectFaviconImageCache.shared.image(for: $0)
+        })
+    }
 
     var body: some View {
-        Text(label)
-            .font(.system(size: 8, weight: .heavy))
-            .foregroundStyle(foreground)
+        Group {
+            if let favicon {
+                Image(uiImage: favicon)
+                    .resizable()
+                    .scaledToFit()
+                    .clipShape(RoundedRectangle(cornerRadius: 3))
+            } else {
+                Text(label)
+                    .font(.system(size: 8, weight: .heavy))
+                    .foregroundStyle(foreground)
+                    .frame(width: 16, height: 16)
+                    .background(background, in: RoundedRectangle(cornerRadius: 4))
+            }
+        }
             .frame(width: 16, height: 16)
-            .background(background, in: RoundedRectangle(cornerRadius: 4))
             .accessibilityHidden(true)
+            .task(id: faviconKey) {
+                await loadFavicon()
+            }
+    }
+
+    private var faviconKey: String? {
+        guard let environmentID, let workspaceRoot else { return nil }
+        return FeatureProjectFaviconCacheKey(
+            environmentID: environmentID,
+            workspaceRoot: workspaceRoot
+        ).fingerprint
+    }
+
+    private func loadFavicon() async {
+        guard let environmentID, let workspaceRoot, let client, let faviconKey else {
+            return
+        }
+        favicon = FeatureProjectFaviconImageCache.shared.image(for: faviconKey)
+        if let cached = await client.cachedProjectFavicon(
+            environmentID: environmentID,
+            workspaceRoot: workspaceRoot
+        ) {
+            apply(cached, key: faviconKey)
+        }
+        guard !Task.isCancelled else { return }
+        if let refreshed = await client.refreshProjectFavicon(
+            environmentID: environmentID,
+            workspaceRoot: workspaceRoot
+        ) {
+            apply(refreshed, key: faviconKey)
+        }
+    }
+
+    private func apply(_ data: Data, key: String) {
+        guard let image = UIImage(data: data) else { return }
+        FeatureProjectFaviconImageCache.shared.set(image, for: key)
+        favicon = image
     }
 
     private var label: String {
@@ -1141,5 +1235,24 @@ private struct ProjectBadge: View {
         case 2: Color(red: 1, green: 0.95, blue: 0.78)
         default: Color(red: 0.82, green: 0.9, blue: 1)
         }
+    }
+}
+
+@MainActor
+private final class FeatureProjectFaviconImageCache {
+    static let shared = FeatureProjectFaviconImageCache()
+
+    private let images = NSCache<NSString, UIImage>()
+
+    private init() {
+        images.countLimit = FeatureProjectFaviconStore.maximumEntryCount
+    }
+
+    func image(for key: String) -> UIImage? {
+        images.object(forKey: key as NSString)
+    }
+
+    func set(_ image: UIImage, for key: String) {
+        images.setObject(image, forKey: key as NSString)
     }
 }
