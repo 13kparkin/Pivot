@@ -112,6 +112,7 @@ export type ThemeFile = Readonly<{
   appearance: ThemeAppearance;
   colors: ThemeColorOverrides;
   variants?: ThemeVariantOverrides;
+  collection?: ThemeCollection;
   sidebarArtwork?: boolean;
   managed?: boolean;
 }>;
@@ -175,6 +176,15 @@ function isThemeLabel(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0 && value.trim().length <= 48;
 }
 
+function parseThemeCollection(value: unknown): ThemeCollection | undefined {
+  return isRecord(value) &&
+    typeof value.id === "string" &&
+    /^[a-z0-9][a-z0-9.:-]{0,127}$/i.test(value.id) &&
+    isThemeLabel(value.label)
+    ? { id: value.id, label: value.label.trim() }
+    : undefined;
+}
+
 function parseStoredThemeColors(value: unknown, appearance: ThemeAppearance): ThemeColors | null {
   if (!isRecord(value)) return null;
 
@@ -219,13 +229,7 @@ function parseStoredTheme(value: unknown): ThemeDefinition | null {
   if (!colors) return null;
   const variants = parseStoredThemeVariants(value.variants, value.appearance);
   if (value.variants !== undefined && variants === null) return null;
-  const collection =
-    isRecord(value.collection) &&
-    typeof value.collection.id === "string" &&
-    /^[a-z0-9][a-z0-9.:-]{0,127}$/i.test(value.collection.id) &&
-    isThemeLabel(value.collection.label)
-      ? { id: value.collection.id, label: value.collection.label.trim() }
-      : undefined;
+  const collection = parseThemeCollection(value.collection);
 
   return {
     id: value.id,
@@ -1547,6 +1551,10 @@ export function parseThemeFile(value: unknown): ThemeDefinition {
   }
 
   const overrides = parseThemeColorOverrides(rawColors);
+  const collection = parseThemeCollection(value.collection);
+  if (value.collection !== undefined && !collection) {
+    throw new Error("Theme collections need a valid id and label.");
+  }
 
   const fallback = getDefaultThemeColors(appearance);
   const variants: Partial<Record<ThemeAppearance, ThemeColors>> = {};
@@ -1573,6 +1581,7 @@ export function parseThemeFile(value: unknown): ThemeDefinition {
     appearance,
     colors: { ...fallback, ...overrides },
     ...(Object.keys(variants).length > 0 ? { variants } : {}),
+    ...(collection ? { collection } : {}),
     ...(value.sidebarArtwork === true ? { sidebarArtwork: true } : {}),
     ...(value.managed === true ? { managed: true } : {}),
   };
@@ -1586,6 +1595,7 @@ export function serializeThemeFile(theme: ThemeDefinition): string {
     appearance: theme.appearance,
     colors: theme.colors,
     ...(theme.variants ? { variants: theme.variants } : {}),
+    ...(theme.collection ? { collection: theme.collection } : {}),
     ...(theme.sidebarArtwork ? { sidebarArtwork: true } : {}),
     ...(theme.managed ? { managed: true } : {}),
   };

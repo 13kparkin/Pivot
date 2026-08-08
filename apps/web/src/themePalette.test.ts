@@ -195,13 +195,25 @@ describe("theme files", () => {
   });
 
   it("serializes a theme back into the importable file shape", () => {
-    const serialized = serializeThemeFile(T3_CHAT_THEME);
+    const theme = {
+      ...parseThemeFile({
+        version: THEME_FILE_VERSION,
+        id: "community-demo",
+        name: "Community Demo",
+        appearance: "dark",
+        colors: { canvas: "#111111" },
+      }),
+      collection: { id: "open-vsx:demo.theme", label: "Demo Theme" },
+    };
+    const serialized = serializeThemeFile(theme);
     expect(JSON.parse(serialized)).toMatchObject({
       version: THEME_FILE_VERSION,
-      id: T3_CHAT_THEME.id,
-      name: T3_CHAT_THEME.label,
-      appearance: "light",
+      id: theme.id,
+      name: theme.label,
+      appearance: "dark",
+      collection: theme.collection,
     });
+    expect(parseThemeFile(JSON.parse(serialized)).collection).toEqual(theme.collection);
   });
 
   it("keeps sidebar artwork opt-in through theme files", () => {
