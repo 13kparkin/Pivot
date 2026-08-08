@@ -526,19 +526,25 @@ public struct FeatureThreadDetail: Sendable, Equatable, Codable {
     public var approvals: [FeatureApproval]
     public var userInputs: [FeatureUserInput]
     public var page: FeatureThreadPage?
+    public var activeSubagentCount: Int
+    public var backgroundWorkIsActive: Bool
 
     public init(
         thread: FeatureThread,
         messages: [FeatureMessage] = [],
         approvals: [FeatureApproval] = [],
         userInputs: [FeatureUserInput] = [],
-        page: FeatureThreadPage? = nil
+        page: FeatureThreadPage? = nil,
+        activeSubagentCount: Int = 0,
+        backgroundWorkIsActive: Bool = false
     ) {
         self.thread = thread
         self.messages = messages
         self.approvals = approvals
         self.userInputs = userInputs
         self.page = page
+        self.activeSubagentCount = activeSubagentCount
+        self.backgroundWorkIsActive = backgroundWorkIsActive
     }
 }
 

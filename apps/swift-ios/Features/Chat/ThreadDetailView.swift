@@ -321,6 +321,8 @@ public struct ThreadDetailView: View {
                     renderUpdate: model.detailRenderUpdates[thread.id],
                     dynamicTypeSize: dynamicTypeSize,
                     isWorking: isWorking,
+                    activeSubagentCount: detail.activeSubagentCount,
+                    backgroundWorkIsActive: detail.backgroundWorkIsActive,
                     canLoadEarlier: detail.page?.hasMore == true,
                     isLoadingEarlier: detail.page?.isLoading == true,
                     onLoadEarlier: {
@@ -630,6 +632,8 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
     let renderUpdate: FeatureDetailRenderUpdate?
     let dynamicTypeSize: DynamicTypeSize
     let isWorking: Bool
+    let activeSubagentCount: Int
+    let backgroundWorkIsActive: Bool
     let canLoadEarlier: Bool
     let isLoadingEarlier: Bool
     let onLoadEarlier: () -> Void
@@ -662,6 +666,8 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
             renderUpdate: renderUpdate,
             dynamicTypeSize: dynamicTypeSize,
             isWorking: isWorking,
+            activeSubagentCount: activeSubagentCount,
+            backgroundWorkIsActive: backgroundWorkIsActive,
             canLoadEarlier: canLoadEarlier,
             isLoadingEarlier: isLoadingEarlier,
             onLoadEarlier: onLoadEarlier,
@@ -709,6 +715,8 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
         private var currentDetailRevision: UInt64?
         private var currentDynamicTypeSize: DynamicTypeSize?
         private var currentIsWorking = false
+        private var currentActiveSubagentCount = 0
+        private var currentBackgroundWorkIsActive = false
         private var currentCanLoadEarlier = false
         private var currentIsLoadingEarlier = false
         private var markdownPrefetches: [String: MarkdownPrefetch] = [:]
@@ -736,7 +744,10 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
                 }
                 if messageID == FeatureTranscriptCollectionView.workingIndicatorID {
                     cell.contentConfiguration = UIHostingConfiguration {
-                        FeatureThreadWorkingIndicator()
+                        FeatureThreadWorkingIndicator(
+                            activeSubagentCount: self?.currentActiveSubagentCount ?? 0,
+                            backgroundWorkIsActive: self?.currentBackgroundWorkIsActive == true
+                        )
                     }
                     .margins(.all, 0)
                     cell.backgroundConfiguration = UIBackgroundConfiguration.clear()
@@ -776,6 +787,8 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
             renderUpdate: FeatureDetailRenderUpdate?,
             dynamicTypeSize: DynamicTypeSize,
             isWorking: Bool,
+            activeSubagentCount: Int,
+            backgroundWorkIsActive: Bool,
             canLoadEarlier: Bool,
             isLoadingEarlier: Bool,
             onLoadEarlier: @escaping () -> Void,
@@ -790,10 +803,12 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
             let typeSizeChanged = currentDynamicTypeSize != dynamicTypeSize
             let revisionChanged = currentDetailRevision != renderUpdate?.revision
             let workingChanged = currentIsWorking != isWorking
+            let workingDetailChanged = currentActiveSubagentCount != activeSubagentCount
+                || currentBackgroundWorkIsActive != backgroundWorkIsActive
             let loadEarlierChanged = currentCanLoadEarlier != canLoadEarlier
                 || currentIsLoadingEarlier != isLoadingEarlier
             guard threadChanged || typeSizeChanged || revisionChanged || workingChanged
-                || loadEarlierChanged else { return }
+                || workingDetailChanged || loadEarlierChanged else { return }
 
             let incremental = !threadChanged
                 ? incrementalState(messages: messages, renderUpdate: renderUpdate)
@@ -808,10 +823,12 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
             currentDetailRevision = renderUpdate?.revision
             currentDynamicTypeSize = dynamicTypeSize
             currentIsWorking = isWorking
+            currentActiveSubagentCount = activeSubagentCount
+            currentBackgroundWorkIsActive = backgroundWorkIsActive
             currentCanLoadEarlier = canLoadEarlier
             currentIsLoadingEarlier = isLoadingEarlier
             guard threadChanged || idsChanged || !changedIDs.isEmpty || workingChanged
-                || loadEarlierChanged else { return }
+                || workingDetailChanged || loadEarlierChanged else { return }
 
             if threadChanged {
                 cancelAllMarkdownPrefetches()
@@ -888,6 +905,10 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
             if loadEarlierChanged,
                snapshot.indexOfItem(FeatureTranscriptCollectionView.loadEarlierID) != nil {
                 reconfiguredIDs.append(FeatureTranscriptCollectionView.loadEarlierID)
+            }
+            if workingDetailChanged,
+               snapshot.indexOfItem(FeatureTranscriptCollectionView.workingIndicatorID) != nil {
+                reconfiguredIDs.append(FeatureTranscriptCollectionView.workingIndicatorID)
             }
             if !reconfiguredIDs.isEmpty {
                 snapshot.reconfigureItems(reconfiguredIDs)
@@ -1168,6 +1189,25 @@ private struct FeatureLoadEarlierTurnsButton: View {
 }
 
 private struct FeatureThreadWorkingIndicator: View {
+    let activeSubagentCount: Int
+    let backgroundWorkIsActive: Bool
+
+    private var title: String {
+        if activeSubagentCount == 1 {
+            return "1 subagent is working"
+        }
+        if activeSubagentCount > 1 {
+            return "\(activeSubagentCount) subagents are working"
+        }
+        return backgroundWorkIsActive ? "Background work is running" : "Agent is working"
+    }
+
+    private var detail: String {
+        backgroundWorkIsActive
+            ? "Work continues after the main turn"
+            : "New output will appear here"
+    }
+
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
             Image(systemName: "circle.dotted")
@@ -1176,10 +1216,10 @@ private struct FeatureThreadWorkingIndicator: View {
                 .frame(width: 22, height: 22)
 
             VStack(alignment: .leading, spacing: 2) {
-                Text("Agent is working")
+                Text(title)
                     .font(T3Typography.supportingStrong)
                     .foregroundStyle(T3Colors.statusRunning)
-                Text("New output will appear here")
+                Text(detail)
                     .font(T3Typography.supporting)
                     .foregroundStyle(T3Colors.textTertiary)
             }
@@ -1187,7 +1227,7 @@ private struct FeatureThreadWorkingIndicator: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.vertical, 4)
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("Agent is working. New output will appear here.")
+        .accessibilityLabel("\(title). \(detail).")
     }
 }
 

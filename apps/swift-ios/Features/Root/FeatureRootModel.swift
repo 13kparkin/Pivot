@@ -743,7 +743,9 @@ public final class FeatureRootModel {
                 messages: replacingChangedSuffix(current.messages, with: prepared.messages),
                 approvals: replacingChangedSuffix(current.approvals, with: prepared.approvals),
                 userInputs: replacingChangedSuffix(current.userInputs, with: prepared.userInputs),
-                page: prepared.page
+                page: prepared.page,
+                activeSubagentCount: prepared.activeSubagentCount,
+                backgroundWorkIsActive: prepared.backgroundWorkIsActive
             )
         } ?? prepared
         guard details[id] != next else { return }

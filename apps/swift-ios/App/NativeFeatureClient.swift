@@ -2134,7 +2134,8 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             latestUserMessageAt: thread.latestUserMessageAt,
             hasPendingApprovals: thread.hasPendingApprovals,
             hasPendingUserInput: thread.hasPendingUserInput,
-            hasActionableProposedPlan: thread.hasActionableProposedPlan
+            hasActionableProposedPlan: thread.hasActionableProposedPlan,
+            backgroundLiveness: thread.backgroundLiveness
         )
     }
 
@@ -3259,6 +3260,10 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             latestShell = shell
         }
         rebuildEntityIndexes(environments)
+        synchronizeActiveDetail(
+            with: shell,
+            environment: sourceEnvironment
+        )
         let connectionState: FeatureConnection.State
         let connectionDetail: String?
         if sourceEnvironment.id == environment.id, markSourceConnected {
@@ -3277,6 +3282,44 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             connectionDetail: connectionDetail
         )
         publish(snapshot)
+    }
+
+    /// The detail stream does not carry shell-only background liveness. Merge
+    /// that small state directly so a settled parent turn still reads as live.
+    private func synchronizeActiveDetail(
+        with shell: OrchestrationShellSnapshot,
+        environment: Environment
+    ) {
+        guard activeThreadEnvironmentID == environment.id,
+              let threadID = activeThreadID,
+              let wireID = threadWireIDs[threadID],
+              let shellThread = shell.threads.first(where: { $0.id == wireID }),
+              var detail = latestDetails[threadID] else {
+            return
+        }
+
+        let backgroundWorkIsActive = shellThread.backgroundLiveness == .working
+        let sessionIsLive = shellThread.session?.status == "starting"
+            || shellThread.session?.status == "running"
+        detail.thread.state = mapThreadState(
+            latestTurn: shellThread.latestTurn,
+            session: shellThread.session,
+            hasApprovals: !detail.approvals.isEmpty,
+            hasUserInput: !detail.userInputs.isEmpty,
+            backgroundWorkIsActive: backgroundWorkIsActive
+        )
+        detail.thread.workingStartedAt = workingStartedAt(
+            latestTurn: shellThread.latestTurn,
+            session: shellThread.session,
+            backgroundWorkIsActive: backgroundWorkIsActive,
+            fallbackUpdatedAt: shellThread.updatedAt
+        )
+        detail.backgroundWorkIsActive = backgroundWorkIsActive
+        detail.activeSubagentCount = backgroundWorkIsActive || sessionIsLive
+            ? detailRenderCaches[threadID]?.subagents.activeCount ?? 0
+            : 0
+        guard latestDetails[threadID] != detail else { return }
+        publish(detail, threadID: threadID, renderCacheIsSource: true)
     }
 
     /// Thread-only shell changes stay granular so Home does not replace and
@@ -3438,7 +3481,9 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             messages: replacingChangedSuffix(current.messages, with: incoming.messages),
             approvals: replacingChangedSuffix(current.approvals, with: incoming.approvals),
             userInputs: replacingChangedSuffix(current.userInputs, with: incoming.userInputs),
-            page: incoming.page
+            page: incoming.page,
+            activeSubagentCount: incoming.activeSubagentCount,
+            backgroundWorkIsActive: incoming.backgroundWorkIsActive
         )
     }
 
@@ -3617,7 +3662,8 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         _ thread: OrchestrationThreadShell,
         environment: Environment
     ) -> FeatureThread {
-        FeatureThread(
+        let backgroundWorkIsActive = thread.backgroundLiveness == .working
+        return FeatureThread(
             id: FeatureScopedID.thread(environmentID: environment.id, wireID: thread.id),
             wireID: thread.id,
             projectID: FeatureScopedID.project(
@@ -3635,7 +3681,8 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
                 latestTurn: thread.latestTurn,
                 session: thread.session,
                 hasApprovals: thread.hasPendingApprovals,
-                hasUserInput: thread.hasPendingUserInput
+                hasUserInput: thread.hasPendingUserInput,
+                backgroundWorkIsActive: backgroundWorkIsActive
             ),
             providerID: thread.modelSelection.instanceId,
             providerName: threadProviderName(
@@ -3665,7 +3712,9 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             ),
             workingStartedAt: workingStartedAt(
                 latestTurn: thread.latestTurn,
-                session: thread.session
+                session: thread.session,
+                backgroundWorkIsActive: backgroundWorkIsActive,
+                fallbackUpdatedAt: thread.updatedAt
             ),
             latestTurnCompletedAt: thread.latestTurn?.completedAt.map(parseDate),
             runtimeMode: mapRuntimeMode(thread.runtimeMode),
@@ -3677,7 +3726,11 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         _ thread: OrchestrationThread,
         environment: Environment
     ) -> FeatureThread {
-        FeatureThread(
+        let backgroundWorkIsActive = backgroundLiveness(
+            threadID: thread.id,
+            environmentID: environment.id
+        ) == .working
+        return FeatureThread(
             id: FeatureScopedID.thread(environmentID: environment.id, wireID: thread.id),
             wireID: thread.id,
             projectID: FeatureScopedID.project(
@@ -3696,7 +3749,8 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
                 latestTurn: thread.latestTurn,
                 session: thread.session,
                 hasApprovals: false,
-                hasUserInput: false
+                hasUserInput: false,
+                backgroundWorkIsActive: backgroundWorkIsActive
             ),
             providerID: thread.modelSelection.instanceId,
             providerName: threadProviderName(
@@ -3726,7 +3780,9 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             ),
             workingStartedAt: workingStartedAt(
                 latestTurn: thread.latestTurn,
-                session: thread.session
+                session: thread.session,
+                backgroundWorkIsActive: backgroundWorkIsActive,
+                fallbackUpdatedAt: thread.updatedAt
             ),
             latestTurnCompletedAt: thread.latestTurn?.completedAt.map(parseDate),
             runtimeMode: mapRuntimeMode(thread.runtimeMode),
@@ -3758,6 +3814,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             let activityMessages = (errors + collapsedWorkLogs(thread.activities))
                 .sorted { $0.createdAt < $1.createdAt }
             seedWorkLogs(thread.activities, cache: cache)
+            cache.subagents.reset(with: thread.activities)
             let messages = thread.messages.compactMap { cache.messagesByID[$0.id] }
             cache.mergedMessages = (messages + activityMessages)
                 .sorted { $0.createdAt < $1.createdAt }
@@ -3782,19 +3839,42 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         }
 
         var mappedThread = mapThread(thread, environment: environment)
+        let backgroundWorkIsActive = backgroundLiveness(
+            threadID: thread.id,
+            environmentID: environment.id
+        ) == .working
+        let sessionIsLive = thread.session?.status == "starting"
+            || thread.session?.status == "running"
         mappedThread.state = mapThreadState(
             latestTurn: thread.latestTurn,
             session: thread.session,
             hasApprovals: !cache.approvals.isEmpty,
-            hasUserInput: !cache.userInputs.isEmpty
+            hasUserInput: !cache.userInputs.isEmpty,
+            backgroundWorkIsActive: backgroundWorkIsActive
         )
         return FeatureThreadDetail(
             thread: mappedThread,
             messages: cache.mergedMessages,
             approvals: cache.approvals,
             userInputs: cache.userInputs,
-            page: page
+            page: page,
+            activeSubagentCount: backgroundWorkIsActive || sessionIsLive
+                ? cache.subagents.activeCount
+                : 0,
+            backgroundWorkIsActive: backgroundWorkIsActive
         )
+    }
+
+    private func backgroundLiveness(
+        threadID: String,
+        environmentID: String
+    ) -> OrchestrationBackgroundLiveness? {
+        if let live = shellsByEnvironmentID[environmentID]?.threads
+            .first(where: { $0.id == threadID })?.backgroundLiveness {
+            return live
+        }
+        return archivedShellThreadsByEnvironmentID[environmentID]?[threadID]?
+            .backgroundLiveness
     }
 
     private func markThreadCacheRecentlyUsed(_ threadID: String) {
@@ -3901,7 +3981,9 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             messages: mergedMessages,
             approvals: currentDetail.approvals,
             userInputs: currentDetail.userInputs,
-            page: activeThreadPage
+            page: activeThreadPage,
+            activeSubagentCount: currentDetail.activeSubagentCount,
+            backgroundWorkIsActive: currentDetail.backgroundWorkIsActive
         )
         publish(detail, threadID: route.uiID, renderCacheIsSource: true)
         scheduleAttachmentHydration(
@@ -4000,6 +4082,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         environment: Environment,
         cache: NativeDetailRenderCache
     ) {
+        cache.subagents.apply(activity)
         applyApprovalActivity(
             activity,
             threadID: threadID,
@@ -4378,13 +4461,15 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         latestTurn: OrchestrationLatestTurn?,
         session: OrchestrationSession?,
         hasApprovals: Bool,
-        hasUserInput: Bool
+        hasUserInput: Bool,
+        backgroundWorkIsActive: Bool
     ) -> FeatureThreadState {
         if hasApprovals { return .waitingForApproval }
         if hasUserInput { return .waitingForInput }
         if session?.status == "starting" { return .queued }
         if session?.status == "running" || latestTurn?.state == "running" { return .working }
         if session?.status == "error" || latestTurn?.state == "error" { return .failed }
+        if backgroundWorkIsActive { return .working }
         if latestTurn?.state == "completed" { return .completed }
         return .idle
     }
@@ -4946,19 +5031,29 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
 
     private func workingStartedAt(
         latestTurn: OrchestrationLatestTurn?,
-        session: OrchestrationSession?
+        session: OrchestrationSession?,
+        backgroundWorkIsActive: Bool = false,
+        fallbackUpdatedAt: String? = nil
     ) -> Date? {
-        guard session?.status == "starting"
-                || session?.status == "running"
-                || latestTurn?.state == "running" else {
+        let directSessionIsLive = session?.status == "starting"
+            || session?.status == "running"
+            || latestTurn?.state == "running"
+        guard directSessionIsLive || backgroundWorkIsActive else {
             return nil
         }
         let candidates: [String?]
-        if let latestTurn, latestTurn.completedAt == nil {
+        if directSessionIsLive, let latestTurn, latestTurn.completedAt == nil {
             candidates = [
                 latestTurn.startedAt,
                 latestTurn.requestedAt,
                 session?.updatedAt,
+            ]
+        } else if backgroundWorkIsActive {
+            candidates = [
+                latestTurn?.startedAt,
+                latestTurn?.requestedAt,
+                session?.updatedAt,
+                fallbackUpdatedAt,
             ]
         } else {
             candidates = [session?.updatedAt]
@@ -5104,6 +5199,7 @@ private final class NativeDetailRenderCache {
     var workLogActivityIDs: Set<String> = []
     var approvals: [FeatureApproval] = []
     var userInputs: [FeatureUserInput] = []
+    var subagents = FeatureActiveSubagentTracker()
 }
 
 private struct NativeWorkLogAccumulator {

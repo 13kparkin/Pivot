@@ -435,7 +435,8 @@ private func retryShellSnapshot() -> OrchestrationShellSnapshot {
                 latestUserMessageAt: nil,
                 hasPendingApprovals: false,
                 hasPendingUserInput: false,
-                hasActionableProposedPlan: false
+                hasActionableProposedPlan: false,
+                backgroundLiveness: nil
             ),
         ],
         updatedAt: timestamp

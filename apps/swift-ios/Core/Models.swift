@@ -354,6 +354,11 @@ public struct OrchestrationSession: Codable, Equatable, Sendable {
     public let updatedAt: String
 }
 
+public enum OrchestrationBackgroundLiveness: String, Codable, Equatable, Sendable {
+    case working
+    case monitoring
+}
+
 public struct OrchestrationThreadShell: Codable, Identifiable, Equatable, Sendable {
     public let id: String
     public let projectId: String
@@ -377,6 +382,7 @@ public struct OrchestrationThreadShell: Codable, Identifiable, Equatable, Sendab
     public let hasPendingApprovals: Bool
     public let hasPendingUserInput: Bool
     public let hasActionableProposedPlan: Bool
+    public let backgroundLiveness: OrchestrationBackgroundLiveness?
 }
 
 public struct OrchestrationMessage: Codable, Identifiable, Equatable, Sendable {
