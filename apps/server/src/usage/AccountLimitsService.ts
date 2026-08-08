@@ -27,6 +27,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
+import * as Semaphore from "effect/Semaphore";
 
 import { writeFileStringAtomically } from "../atomicWrite.ts";
 import { ServerConfig } from "../config.ts";
@@ -115,19 +116,28 @@ export const make = Effect.gen(function* () {
     }),
   );
 
-  // A cache we cannot write is a colder next start, not a failure. Written
-  // atomically: the ingestion worker and the RPC-path transcript seed can
-  // persist concurrently, and an interleaved plain write would corrupt the
-  // file - which on restart silently drops the Claude snapshot.
+  // A cache we cannot write is a colder next start, not a failure. The
+  // ingestion worker and the RPC-path transcript seed can persist
+  // concurrently, so writes are atomic (no torn JSON) and serialized: the
+  // snapshot map is read inside the permit, so a slow earlier write can
+  // never land after - and clobber - a newer one.
+  const persistLock = yield* Semaphore.make(1);
   const persist = Effect.fn("AccountLimitsService.persist")(function* () {
-    yield* encodeLimitsCache([...snapshots.values()]).pipe(
-      Effect.flatMap((serialized) =>
-        writeFileStringAtomically({ filePath: cachePath, contents: serialized }),
-      ),
-      Effect.provideService(FileSystem.FileSystem, fileSystem),
-      Effect.provideService(Path.Path, path),
-      Effect.catchCause(() => Effect.void),
-    );
+    yield* persistLock
+      .withPermits(1)(
+        Effect.suspend(() =>
+          encodeLimitsCache([...snapshots.values()]).pipe(
+            Effect.flatMap((serialized) =>
+              writeFileStringAtomically({ filePath: cachePath, contents: serialized }),
+            ),
+          ),
+        ),
+      )
+      .pipe(
+        Effect.provideService(FileSystem.FileSystem, fileSystem),
+        Effect.provideService(Path.Path, path),
+        Effect.catchCause(() => Effect.void),
+      );
   });
 
   const store = Effect.fn("AccountLimitsService.store")(function* (
