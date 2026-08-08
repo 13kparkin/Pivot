@@ -94,6 +94,7 @@ struct FeatureImageAttachmentPicker: View {
             isPresented: $isPhotoLibraryPresented,
             selection: $photoSelections,
             maxSelectionCount: max(1, remainingCount),
+            selectionBehavior: .ordered,
             matching: .images,
             preferredItemEncoding: .compatible
         )
@@ -124,8 +125,16 @@ struct FeatureImageAttachmentPicker: View {
         .onDisappear {
             sourcePresentationTask?.cancel()
         }
+        .onChange(of: isPhotoLibraryPresented) { wasPresented, isPresented in
+            guard wasPresented, !isPresented else { return }
+            finishPhotoLibrarySelection()
+        }
         .onChange(of: photoSelections) { _, selections in
-            loadPhotoSelections(selections)
+            // Some PhotosUI versions publish the final binding value one turn
+            // after the presentation flag. This fallback still waits until the
+            // picker no longer owns the binding before beginning the import.
+            guard !isPhotoLibraryPresented, !selections.isEmpty else { return }
+            finishPhotoLibrarySelection()
         }
     }
 
@@ -169,21 +178,31 @@ struct FeatureImageAttachmentPicker: View {
         }
     }
 
-    private func loadPhotoSelections(_ selections: [PhotosPickerItem]) {
-        guard !selections.isEmpty, canAdd else { return }
-        let selected = Array(selections.prefix(remainingCount))
-        photoSelections = []
-        let firstOrdinal = attachments.count + preparationState.pendingItemCount + 1
-        let operation = preparationState.begin(itemCount: selected.count)
+    private func finishPhotoLibrarySelection() {
+        Task { @MainActor in
+            // PhotosUI owns the selection binding while its controller is on-screen.
+            // Let dismissal finish before reading or mutating that binding; clearing it
+            // from its change callback can tear down the picker during a selection tap.
+            await Task.yield()
+            guard !isPhotoLibraryPresented, !photoSelections.isEmpty, canAdd else { return }
 
-        Task {
-            defer { preparationState.finish(operation) }
+            let selected = Array(photoSelections.prefix(remainingCount))
+            let firstOrdinal = attachments.count + preparationState.pendingItemCount + 1
+            let operation = preparationState.begin(itemCount: selected.count)
+
+            defer {
+                photoSelections = []
+                preparationState.finish(operation)
+            }
+
             for (offset, item) in selected.enumerated() {
                 do {
-                    guard let data = try await item.loadTransferable(type: Data.self) else {
+                    guard let photo = try await item.loadTransferable(
+                        type: FeatureImportedPhoto.self
+                    ) else {
                         throw FeatureImageAttachmentError.invalidImage
                     }
-                    try await appendImage(data, ordinal: firstOrdinal + offset)
+                    try await appendImage(photo.data, ordinal: firstOrdinal + offset)
                 } catch {
                     errorMessage = error.localizedDescription
                 }
@@ -247,6 +266,16 @@ struct FeatureImageAttachmentPicker: View {
             try FeatureImageProcessor.attachment(from: data, ordinal: ordinal)
         }.value
         attachments.append(attachment)
+    }
+}
+
+private struct FeatureImportedPhoto: Transferable {
+    let data: Data
+
+    static var transferRepresentation: some TransferRepresentation {
+        DataRepresentation(importedContentType: .image) { data in
+            FeatureImportedPhoto(data: data)
+        }
     }
 }
 
