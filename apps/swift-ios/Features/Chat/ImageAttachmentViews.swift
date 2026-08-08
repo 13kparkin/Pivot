@@ -49,7 +49,7 @@ struct FeatureImageAttachmentPicker: View {
 
     @State private var isAttachmentSourcePresented = false
     @State private var isPhotoLibraryPresented = false
-    @State private var photoSelections: [PhotosPickerItem] = []
+    @State private var pendingPhotoLibraryItems: [FeaturePhotoLibraryItem] = []
     @State private var isCameraPresented = false
     @State private var isFileImporterPresented = false
     @State private var sourcePresentationTask: Task<Void, Never>?
@@ -90,14 +90,19 @@ struct FeatureImageAttachmentPicker: View {
             Button("Files") { present(.files) }
             Button("Cancel", role: .cancel) {}
         }
-        .photosPicker(
+        .fullScreenCover(
             isPresented: $isPhotoLibraryPresented,
-            selection: $photoSelections,
-            maxSelectionCount: max(1, remainingCount),
-            selectionBehavior: .ordered,
-            matching: .images,
-            preferredItemEncoding: .compatible
-        )
+            onDismiss: finishPhotoLibrarySelection
+        ) {
+            FeaturePhotoLibraryPicker(
+                maximumCount: max(1, remainingCount),
+                onFinish: { items in
+                    pendingPhotoLibraryItems = items
+                    isPhotoLibraryPresented = false
+                }
+            )
+            .ignoresSafeArea()
+        }
         .fullScreenCover(isPresented: $isCameraPresented) {
             FeatureCameraPicker(
                 onCapture: loadCapturedImage,
@@ -124,17 +129,6 @@ struct FeatureImageAttachmentPicker: View {
         }
         .onDisappear {
             sourcePresentationTask?.cancel()
-        }
-        .onChange(of: isPhotoLibraryPresented) { wasPresented, isPresented in
-            guard wasPresented, !isPresented else { return }
-            finishPhotoLibrarySelection()
-        }
-        .onChange(of: photoSelections) { _, selections in
-            // Some PhotosUI versions publish the final binding value one turn
-            // after the presentation flag. This fallback still waits until the
-            // picker no longer owns the binding before beginning the import.
-            guard !isPhotoLibraryPresented, !selections.isEmpty else { return }
-            finishPhotoLibrarySelection()
         }
     }
 
@@ -180,29 +174,31 @@ struct FeatureImageAttachmentPicker: View {
 
     private func finishPhotoLibrarySelection() {
         Task { @MainActor in
-            // PhotosUI owns the selection binding while its controller is on-screen.
-            // Let dismissal finish before reading or mutating that binding; clearing it
-            // from its change callback can tear down the picker during a selection tap.
+            // Keep PhotosUI presentation and asset materialization in separate turns.
+            // Some OS versions become stuck or dismiss mid-selection when the picker
+            // and its selection are driven by the same SwiftUI binding transaction.
             await Task.yield()
-            guard !isPhotoLibraryPresented, !photoSelections.isEmpty, canAdd else { return }
+            guard !isPhotoLibraryPresented, !pendingPhotoLibraryItems.isEmpty, canAdd else {
+                pendingPhotoLibraryItems = []
+                return
+            }
 
-            let selected = Array(photoSelections.prefix(remainingCount))
+            let selected = Array(pendingPhotoLibraryItems.prefix(remainingCount))
+            pendingPhotoLibraryItems = []
             let firstOrdinal = attachments.count + preparationState.pendingItemCount + 1
             let operation = preparationState.begin(itemCount: selected.count)
 
             defer {
-                photoSelections = []
                 preparationState.finish(operation)
             }
 
             for (offset, item) in selected.enumerated() {
                 do {
-                    guard let photo = try await item.loadTransferable(
-                        type: FeatureImportedPhoto.self
-                    ) else {
-                        throw FeatureImageAttachmentError.invalidImage
-                    }
-                    try await appendImage(photo.data, ordinal: firstOrdinal + offset)
+                    let data = try await item.loadData()
+                    try await appendImage(
+                        data,
+                        ordinal: firstOrdinal + offset
+                    )
                 } catch {
                     errorMessage = error.localizedDescription
                 }
@@ -269,12 +265,69 @@ struct FeatureImageAttachmentPicker: View {
     }
 }
 
-private struct FeatureImportedPhoto: Transferable {
-    let data: Data
+private struct FeaturePhotoLibraryItem: @unchecked Sendable {
+    let provider: NSItemProvider
 
-    static var transferRepresentation: some TransferRepresentation {
-        DataRepresentation(importedContentType: .image) { data in
-            FeatureImportedPhoto(data: data)
+    func loadData() async throws -> Data {
+        guard let typeIdentifier = provider.registeredTypeIdentifiers.first(where: { identifier in
+            UTType(identifier)?.conforms(to: .image) == true
+        }) else {
+            throw FeatureImageAttachmentError.invalidImage
+        }
+
+        return try await withCheckedThrowingContinuation { continuation in
+            provider.loadDataRepresentation(forTypeIdentifier: typeIdentifier) { data, error in
+                if let data {
+                    continuation.resume(returning: data)
+                } else {
+                    continuation.resume(
+                        throwing: error ?? FeatureImageAttachmentError.encodingFailed
+                    )
+                }
+            }
+        }
+    }
+}
+
+private struct FeaturePhotoLibraryPicker: UIViewControllerRepresentable {
+    let maximumCount: Int
+    let onFinish: @MainActor ([FeaturePhotoLibraryItem]) -> Void
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(onFinish: onFinish)
+    }
+
+    func makeUIViewController(context: Context) -> PHPickerViewController {
+        var configuration = PHPickerConfiguration()
+        configuration.filter = .images
+        configuration.selectionLimit = maximumCount
+        configuration.selection = .ordered
+        configuration.preferredAssetRepresentationMode = .compatible
+
+        let picker = PHPickerViewController(configuration: configuration)
+        picker.delegate = context.coordinator
+        return picker
+    }
+
+    func updateUIViewController(_ picker: PHPickerViewController, context: Context) {}
+
+    final class Coordinator: NSObject, PHPickerViewControllerDelegate {
+        private let onFinish: @MainActor ([FeaturePhotoLibraryItem]) -> Void
+        private var didFinish = false
+
+        init(onFinish: @escaping @MainActor ([FeaturePhotoLibraryItem]) -> Void) {
+            self.onFinish = onFinish
+        }
+
+        func picker(_ picker: PHPickerViewController, didFinishPicking results: [PHPickerResult]) {
+            guard !didFinish else { return }
+            didFinish = true
+
+            let items = results.map { FeaturePhotoLibraryItem(provider: $0.itemProvider) }
+            picker.dismiss(animated: true)
+            Task { @MainActor in
+                onFinish(items)
+            }
         }
     }
 }
