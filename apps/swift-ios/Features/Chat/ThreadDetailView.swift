@@ -1202,10 +1202,8 @@ private struct FeatureThreadWorkingIndicator: View {
         return backgroundWorkIsActive ? "Background work is running" : "Agent is working"
     }
 
-    private var detail: String {
-        backgroundWorkIsActive
-            ? "Work continues after the main turn"
-            : "New output will appear here"
+    private var detail: String? {
+        backgroundWorkIsActive ? nil : "New output will appear here"
     }
 
     var body: some View {
@@ -1219,15 +1217,17 @@ private struct FeatureThreadWorkingIndicator: View {
                 Text(title)
                     .font(T3Typography.supportingStrong)
                     .foregroundStyle(T3Colors.statusRunning)
-                Text(detail)
-                    .font(T3Typography.supporting)
-                    .foregroundStyle(T3Colors.textTertiary)
+                if let detail {
+                    Text(detail)
+                        .font(T3Typography.supporting)
+                        .foregroundStyle(T3Colors.textTertiary)
+                }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.vertical, 4)
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(title). \(detail).")
+        .accessibilityLabel(detail.map { "\(title). \($0)." } ?? "\(title).")
     }
 }
 
