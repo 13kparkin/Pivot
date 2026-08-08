@@ -157,7 +157,15 @@ export const make = (options?: ThreadAutoSettleReactorOptions) =>
         );
         if (status === null) return { state: "unknown", verified: true };
         if (status.refName !== thread.branch) return { state: "none", verified: true };
-        return { state: status.pr?.state ?? "none", verified: true };
+        const pr = status.pr ?? null;
+        if (pr === null) return { state: "none", verified: true };
+        // Same coherence guard as the cached path: the refresh loads the
+        // local and remote halves concurrently, so a checkout switch racing
+        // the refresh can still pair this branch's refName with another
+        // branch's PR. Never settle (or block) on a PR that is not for this
+        // thread's branch — report undetermined and let a later sweep retry.
+        if (pr.headRef !== thread.branch) return { state: "unknown", verified: true };
+        return { state: pr.state, verified: true };
       },
     );
 
