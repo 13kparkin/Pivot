@@ -28,6 +28,7 @@ import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 
+import { writeFileStringAtomically } from "../atomicWrite.ts";
 import { ServerConfig } from "../config.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import { resolveCodexHomeLayout } from "../provider/Drivers/CodexHomeLayout.ts";
@@ -114,10 +115,17 @@ export const make = Effect.gen(function* () {
     }),
   );
 
-  // A cache we cannot write is a colder next start, not a failure.
+  // A cache we cannot write is a colder next start, not a failure. Written
+  // atomically: the ingestion worker and the RPC-path transcript seed can
+  // persist concurrently, and an interleaved plain write would corrupt the
+  // file - which on restart silently drops the Claude snapshot.
   const persist = Effect.fn("AccountLimitsService.persist")(function* () {
     yield* encodeLimitsCache([...snapshots.values()]).pipe(
-      Effect.flatMap((serialized) => fileSystem.writeFileString(cachePath, serialized)),
+      Effect.flatMap((serialized) =>
+        writeFileStringAtomically({ filePath: cachePath, contents: serialized }),
+      ),
+      Effect.provideService(FileSystem.FileSystem, fileSystem),
+      Effect.provideService(Path.Path, path),
       Effect.catchCause(() => Effect.void),
     );
   });

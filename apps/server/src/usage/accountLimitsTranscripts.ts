@@ -25,10 +25,12 @@ import { listTranscriptFiles } from "./usageTranscriptReader.ts";
 const TAIL_BYTES = 256 * 1024;
 const SCAN_WINDOW_DAYS = 14;
 /**
- * Newest-first cutoff. The newest file almost always hits; the rest cover a
- * newest file that happens to be a side-meter-only session (Spark).
+ * Newest-first cutoff bounding the scan on the RPC path. The newest file
+ * almost always hits; the margin covers runs of files without a main-meter
+ * snapshot (Spark-only sessions, sessions abandoned before any token count).
+ * If this many consecutive files lack one, the data is genuinely absent.
  */
-const MAX_FILES = 8;
+const MAX_FILES = 32;
 
 export interface CodexTranscriptRateLimits {
   readonly snapshot: CodexRateLimitsSnapshot;
