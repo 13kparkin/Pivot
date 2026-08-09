@@ -91,7 +91,7 @@ class TerminalSubprocessCheckError extends Schema.TaggedErrorClass<TerminalSubpr
   {
     cause: Schema.optional(Schema.Defect()),
     terminalPid: Schema.Number,
-    command: Schema.String,
+    command: Schema.Literals(["powershell", "ps"]),
   },
 ) {
   override get message(): string {
@@ -2048,24 +2048,29 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
       { session, pid: terminalPid }: RunningSessionPoll,
       next: TerminalSubprocessInspectResult,
     ) {
-      yield* registerTerminalProcesses({
-        threadId: session.threadId,
-        terminalId: session.terminalId,
-        processIds: next.processIds,
-      });
       const nextChildLabel = next.hasRunningSubprocess ? next.childCommand : null;
-      const event = yield* modifyManagerState((state) => {
+      const outcome = yield* modifyManagerState<{
+        readonly live: boolean;
+        readonly event: Option.Option<TerminalEvent>;
+      }>((state) => {
         const liveSession: Option.Option<TerminalSessionState> = Option.fromNullishOr(
           state.sessions.get(toSessionKey(session.threadId, session.terminalId)),
         );
+        // Liveness is decided here, before process registration, so a
+        // terminal that exited or restarted mid-tick cannot get its old
+        // process tree re-registered with port discovery.
         if (
           Option.isNone(liveSession) ||
           liveSession.value.status !== "running" ||
-          liveSession.value.pid !== terminalPid ||
-          (liveSession.value.hasRunningSubprocess === next.hasRunningSubprocess &&
-            liveSession.value.childCommandLabel === nextChildLabel)
+          liveSession.value.pid !== terminalPid
         ) {
-          return [Option.none(), state] as const;
+          return [{ live: false, event: Option.none<TerminalEvent>() }, state] as const;
+        }
+        if (
+          liveSession.value.hasRunningSubprocess === next.hasRunningSubprocess &&
+          liveSession.value.childCommandLabel === nextChildLabel
+        ) {
+          return [{ live: true, event: Option.none<TerminalEvent>() }, state] as const;
         }
 
         liveSession.value.hasRunningSubprocess = next.hasRunningSubprocess;
@@ -2073,18 +2078,32 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
         const eventStamp = advanceEventSequence(liveSession.value);
 
         return [
-          Option.some({
-            type: "activity" as const,
-            threadId: liveSession.value.threadId,
-            terminalId: liveSession.value.terminalId,
-            sequence: eventStamp.sequence,
-            hasRunningSubprocess: next.hasRunningSubprocess,
-            label: terminalWireLabel(liveSession.value),
-          }),
+          {
+            live: true,
+            event: Option.some({
+              type: "activity" as const,
+              threadId: liveSession.value.threadId,
+              terminalId: liveSession.value.terminalId,
+              sequence: eventStamp.sequence,
+              hasRunningSubprocess: next.hasRunningSubprocess,
+              label: terminalWireLabel(liveSession.value),
+            }),
+          },
           state,
         ] as const;
       });
 
+      if (!outcome.live) {
+        return;
+      }
+
+      yield* registerTerminalProcesses({
+        threadId: session.threadId,
+        terminalId: session.terminalId,
+        processIds: next.processIds,
+      });
+
+      const event = outcome.event;
       if (Option.isSome(event)) {
         // The poll tick runs with tracing suppressed; an actual state flip is
         // the only part worth a span, so tracing is re-enabled just for it.
