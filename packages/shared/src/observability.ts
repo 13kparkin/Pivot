@@ -584,6 +584,9 @@ export const makeLocalFileTracer = Effect.fn("makeLocalFileTracer")(function* (
       maxFiles: options.maxFiles,
       batchWindowMs: options.batchWindowMs,
       ...(options.onFlush ? { onFlush: options.onFlush } : {}),
+      ...(options.compressBackups !== undefined
+        ? { compressBackups: options.compressBackups }
+        : {}),
     }));
 
   const delegate =

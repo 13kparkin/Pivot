@@ -90,15 +90,28 @@ class TerminalSubprocessCheckError extends Schema.TaggedErrorClass<TerminalSubpr
   "TerminalSubprocessCheckError",
   {
     cause: Schema.optional(Schema.Defect()),
-    // 0 when a whole-table snapshot failed rather than a single terminal.
     terminalPid: Schema.Number,
-    command: Schema.Literals(["powershell", "ps"]),
+    command: Schema.String,
   },
 ) {
   override get message(): string {
-    return this.terminalPid > 0
-      ? `Failed to inspect terminal subprocesses for PID ${this.terminalPid} with ${this.command}`
-      : `Failed to capture the process table with ${this.command}`;
+    return `Failed to inspect terminal subprocesses for PID ${this.terminalPid} with ${this.command}`;
+  }
+}
+
+// The whole-table snapshot has no per-terminal identity, so its failure is a
+// separate error rather than a TerminalSubprocessCheckError with a sentinel
+// pid.
+class TerminalProcessTableCaptureError extends Schema.TaggedErrorClass<TerminalProcessTableCaptureError>()(
+  "TerminalProcessTableCaptureError",
+  {
+    cause: Schema.optional(Schema.Defect()),
+    command: Schema.Literals(["powershell", "ps"]),
+    truncated: Schema.optional(Schema.Boolean),
+  },
+) {
+  override get message(): string {
+    return `Failed to capture the process table with ${this.command}`;
   }
 }
 
@@ -637,11 +650,11 @@ export function processTableFromRows(
   return { commandByPid, childrenByParent };
 }
 
-const PROCESS_TABLE_MAX_OUTPUT_BYTES = 1_048_576;
+const PROCESS_TABLE_MAX_OUTPUT_BYTES = 4 * 1_048_576;
 
 function captureWindowsProcessTable(): Effect.Effect<
   ProcessTableSnapshot,
-  TerminalSubprocessCheckError,
+  TerminalProcessTableCaptureError,
   ProcessRunner.ProcessRunner
 > {
   const command =
@@ -662,12 +675,19 @@ function captureWindowsProcessTable(): Effect.Effect<
       })
       .pipe(
         Effect.mapError(
-          (cause) =>
-            new TerminalSubprocessCheckError({ cause, terminalPid: 0, command: "powershell" }),
+          (cause) => new TerminalProcessTableCaptureError({ cause, command: "powershell" }),
         ),
       );
     if (result.code !== 0) {
-      return yield* new TerminalSubprocessCheckError({ terminalPid: 0, command: "powershell" });
+      return yield* new TerminalProcessTableCaptureError({ command: "powershell" });
+    }
+    // A truncated table silently loses the sessions past the cutoff — they
+    // would read as "no subprocesses" and drop out of resource registration.
+    if (result.stdoutTruncated) {
+      return yield* new TerminalProcessTableCaptureError({
+        command: "powershell",
+        truncated: true,
+      });
     }
     const rows: Array<readonly [number, number, string]> = [];
     for (const line of result.stdout.split(/\r?\n/g)) {
@@ -683,7 +703,7 @@ function captureWindowsProcessTable(): Effect.Effect<
 
 function capturePosixProcessTable(): Effect.Effect<
   ProcessTableSnapshot,
-  TerminalSubprocessCheckError,
+  TerminalProcessTableCaptureError,
   ProcessRunner.ProcessRunner
 > {
   return Effect.gen(function* () {
@@ -698,12 +718,13 @@ function capturePosixProcessTable(): Effect.Effect<
         timeoutBehavior: "timedOutResult",
       })
       .pipe(
-        Effect.mapError(
-          (cause) => new TerminalSubprocessCheckError({ cause, terminalPid: 0, command: "ps" }),
-        ),
+        Effect.mapError((cause) => new TerminalProcessTableCaptureError({ cause, command: "ps" })),
       );
     if (result.code !== 0) {
-      return yield* new TerminalSubprocessCheckError({ terminalPid: 0, command: "ps" });
+      return yield* new TerminalProcessTableCaptureError({ command: "ps" });
+    }
+    if (result.stdoutTruncated) {
+      return yield* new TerminalProcessTableCaptureError({ command: "ps", truncated: true });
     }
     const rows: Array<readonly [number, number, string]> = [];
     for (const line of result.stdout.split(/\r?\n/g)) {
@@ -719,7 +740,11 @@ function capturePosixProcessTable(): Effect.Effect<
 
 function captureProcessTableSnapshot(
   platform: NodeJS.Platform,
-): Effect.Effect<ProcessTableSnapshot, TerminalSubprocessCheckError, ProcessRunner.ProcessRunner> {
+): Effect.Effect<
+  ProcessTableSnapshot,
+  TerminalProcessTableCaptureError,
+  ProcessRunner.ProcessRunner
+> {
   return platform === "win32" ? captureWindowsProcessTable() : capturePosixProcessTable();
 }
 
@@ -1952,25 +1977,33 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
     }
   });
 
+  // The session objects are mutable and a restart can swap pid mid-tick, so
+  // every poll entry carries the pid it was inspected under; downstream guards
+  // compare against this captured pid, never a re-read of session.pid.
+  interface RunningSessionPoll {
+    readonly session: TerminalSessionState;
+    readonly pid: number;
+  }
+
   const inspectRunningSubprocesses = Effect.fn("terminal.inspectRunningSubprocesses")(function* (
-    sessions: ReadonlyArray<TerminalSessionState & { pid: number }>,
+    entries: ReadonlyArray<RunningSessionPoll>,
   ) {
     const results = new Map<number, TerminalSubprocessInspectResult>();
     if (subprocessInspector !== null) {
-      for (const session of sessions) {
-        const inspectResult = yield* subprocessInspector(session.pid).pipe(
+      for (const { session, pid } of entries) {
+        const inspectResult = yield* subprocessInspector(pid).pipe(
           Effect.map(Option.some),
           Effect.catch((reason) =>
             Effect.logWarning("failed to check terminal subprocess activity", {
               threadId: session.threadId,
               terminalId: session.terminalId,
-              terminalPid: session.pid,
+              terminalPid: pid,
               reason,
             }).pipe(Effect.as(Option.none<TerminalSubprocessInspectResult>())),
           ),
         );
         if (Option.isSome(inspectResult)) {
-          results.set(session.pid, inspectResult.value);
+          results.set(pid, inspectResult.value);
         }
       }
       return results;
@@ -1990,21 +2023,20 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
     if (Option.isNone(snapshot)) {
       return results;
     }
-    for (const session of sessions) {
-      results.set(
-        session.pid,
-        inspectSubprocessFromSnapshot(session.pid, snapshot.value, platform),
-      );
+    for (const { pid } of entries) {
+      results.set(pid, inspectSubprocessFromSnapshot(pid, snapshot.value, platform));
     }
     return results;
   });
 
   const pollSubprocessActivity = Effect.fn("terminal.pollSubprocessActivity")(function* () {
     const state = yield* readManagerState;
-    const runningSessions = [...state.sessions.values()].filter(
-      (session): session is TerminalSessionState & { pid: number } =>
-        session.status === "running" && Number.isInteger(session.pid),
-    );
+    const runningSessions: Array<RunningSessionPoll> = [];
+    for (const session of state.sessions.values()) {
+      if (session.status === "running" && session.pid !== null && Number.isInteger(session.pid)) {
+        runningSessions.push({ session, pid: session.pid });
+      }
+    }
 
     if (runningSessions.length === 0) {
       return;
@@ -2013,10 +2045,9 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
     const inspections = yield* inspectRunningSubprocesses(runningSessions);
 
     const applySubprocessActivity = Effect.fn("terminal.applySubprocessActivity")(function* (
-      session: TerminalSessionState & { pid: number },
+      { session, pid: terminalPid }: RunningSessionPoll,
       next: TerminalSubprocessInspectResult,
     ) {
-      const terminalPid = session.pid;
       yield* registerTerminalProcesses({
         threadId: session.threadId,
         terminalId: session.terminalId,
@@ -2071,12 +2102,12 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
       }
     });
 
-    for (const session of runningSessions) {
-      const next = inspections.get(session.pid);
+    for (const entry of runningSessions) {
+      const next = inspections.get(entry.pid);
       if (next === undefined) {
         continue;
       }
-      yield* applySubprocessActivity(session, next);
+      yield* applySubprocessActivity(entry, next);
     }
   });
 

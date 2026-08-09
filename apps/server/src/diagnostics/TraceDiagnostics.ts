@@ -472,7 +472,13 @@ export const make = Effect.gen(function* () {
       const aggregator = createTraceDiagnosticsAggregator(slowSpanThresholdMs);
       let loadedFileCount = 0;
       let readFailureError: TraceDiagnosticsErrorSummary | undefined;
+      const loadedPaths = new Set<string>();
       for (const path of paths) {
+        // A plain backup next to its own .gz copy is a crash leftover with
+        // identical content — counting both would double every span in it.
+        if (!path.endsWith(".gz") && loadedPaths.has(`${path}.gz`)) {
+          continue;
+        }
         const result = yield* readTraceFile(fileSystem, path).pipe(
           Effect.tapError((cause) =>
             Effect.logWarning("Failed to read local trace file.").pipe(
@@ -494,6 +500,7 @@ export const make = Effect.gen(function* () {
         }
         if (result.success._tag === "Loaded") {
           loadedFileCount += 1;
+          loadedPaths.add(path);
           aggregator.addFileText(result.success.text);
         }
       }

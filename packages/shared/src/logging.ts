@@ -127,27 +127,35 @@ export class RotatingFileSink {
       }
 
       // Backups written before compressBackups was enabled keep their plain
-      // suffix and age along the chain unchanged.
+      // suffix and age along the chain unchanged. When both variants exist at
+      // one index, the plain file is a leftover from a crash between the gz
+      // publish and the plain unlink below — the gz copy holds the same
+      // content, so the duplicate is dropped instead of aged.
       for (let index = this.maxFiles - 1; index >= 1; index -= 1) {
         const compressedSource = this.withSuffix(index, "gz");
+        const source = this.withSuffix(index);
         if (NodeFS.existsSync(compressedSource)) {
           NodeFS.renameSync(compressedSource, this.withSuffix(index + 1, "gz"));
-        }
-        const source = this.withSuffix(index);
-        if (NodeFS.existsSync(source)) {
+          NodeFS.rmSync(source, { force: true });
+        } else if (NodeFS.existsSync(source)) {
           NodeFS.renameSync(source, this.withSuffix(index + 1));
         }
       }
 
       if (NodeFS.existsSync(this.filePath)) {
+        // Rename first so the live file is moved atomically and never coexists
+        // with a compressed copy of itself; the gz lands via a tmp file +
+        // rename so a partial write can't publish a corrupt backup.
+        NodeFS.renameSync(this.filePath, this.withSuffix(1));
         if (this.compressBackups) {
+          const compressed = this.withSuffix(1, "gz");
+          const temporary = `${compressed}.tmp`;
           NodeFS.writeFileSync(
-            this.withSuffix(1, "gz"),
-            NodeZlib.gzipSync(NodeFS.readFileSync(this.filePath)),
+            temporary,
+            NodeZlib.gzipSync(NodeFS.readFileSync(this.withSuffix(1))),
           );
-          NodeFS.rmSync(this.filePath, { force: true });
-        } else {
-          NodeFS.renameSync(this.filePath, this.withSuffix(1));
+          NodeFS.renameSync(temporary, compressed);
+          NodeFS.rmSync(this.withSuffix(1), { force: true });
         }
       }
 
@@ -171,6 +179,11 @@ export class RotatingFileSink {
       for (const entry of NodeFS.readdirSync(dir)) {
         if (!entry.startsWith(`${baseName}.`)) continue;
         const rawSuffix = entry.slice(baseName.length + 1);
+        // An orphaned .gz.tmp is a compression interrupted mid-write.
+        if (rawSuffix.endsWith(".gz.tmp")) {
+          NodeFS.rmSync(NodePath.join(dir, entry), { force: true });
+          continue;
+        }
         const suffix = Number(
           rawSuffix.endsWith(".gz") ? rawSuffix.slice(0, -".gz".length) : rawSuffix,
         );
