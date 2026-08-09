@@ -87,6 +87,14 @@ describe("usage environment scope", () => {
     ).toEqual({ isPending: true, isPartial: false });
   });
 
+  it("keeps the first connection attempt pending", () => {
+    expect(
+      getEnvironmentUsageLoadingState([
+        { phase: "connecting", isPending: true, summary: null, error: null },
+      ]),
+    ).toEqual({ isPending: true, isPartial: false });
+  });
+
   it("keeps a selected offline environment terminal and isolated", () => {
     const scope = resolveEnvironmentUsageScope(
       [environment("healthy", "connected"), environment("down", "offline")],

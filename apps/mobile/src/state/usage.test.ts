@@ -43,6 +43,14 @@ describe("mobile usage environment scope", () => {
     ).toEqual({ isPending: true, isPartial: false });
   });
 
+  it("waits for the first connection attempt", () => {
+    expect(
+      getEnvironmentUsageLoadingState([
+        { phase: "connecting", isPending: true, summary: null, error: null },
+      ]),
+    ).toEqual({ isPending: true, isPartial: false });
+  });
+
   it("isolates a selected environment and falls back when it disappears", () => {
     const options = [environment("healthy", "connected"), environment("down", "offline")];
 

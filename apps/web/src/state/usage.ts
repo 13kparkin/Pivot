@@ -67,13 +67,15 @@ const usageByWindowAtom = Atom.family((key: string) =>
       const { environmentId } = option;
       const connectionResult = get(environmentCatalog.stateAtom(environmentId));
       // Keep reading the environment-scoped atom while disconnected so a prior
-      // successful value remains visible. Only a connected query can keep the UI loading.
+      // successful value remains visible. Wait through the first connection attempt,
+      // then treat retries as terminal coverage so a down machine cannot block the UI.
       const result = get(serverEnvironment.usageSummary({ environmentId, input }));
       const failed = option.phase === "connected" && result._tag === "Failure";
       environments.push({
         ...option,
         isPending:
           (option.phase === "available" && connectionResult.waiting) ||
+          option.phase === "connecting" ||
           (option.phase === "connected" && result.waiting),
         error: failed ? "This environment could not report usage." : null,
         summary: Option.getOrNull(AsyncResult.value(result)),
