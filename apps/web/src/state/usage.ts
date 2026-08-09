@@ -42,17 +42,15 @@ interface UsageAtomValue {
   readonly isCatalogReady: boolean;
   readonly options: readonly EnvironmentUsageOption[];
   readonly environments: readonly EnvironmentUsageStatus[];
-  readonly selectedEnvironmentId: EnvironmentId | null;
 }
 
 interface UsageAtomKey {
   readonly input: UsageSummaryInput;
-  readonly selectedEnvironmentId: EnvironmentId | null;
 }
 
 const usageByWindowAtom = Atom.family((key: string) =>
   Atom.make((get): UsageAtomValue => {
-    const { input, selectedEnvironmentId } = JSON.parse(key) as UsageAtomKey;
+    const { input } = JSON.parse(key) as UsageAtomKey;
     const catalog = get(environmentCatalog.catalogValueAtom);
     const presentations = get(environmentPresentations.presentationsAtom);
     const options = Array.from(presentations, ([environmentId, presentation]) => ({
@@ -60,10 +58,11 @@ const usageByWindowAtom = Atom.family((key: string) =>
       label: presentation.entry.target.label,
       phase: presentation.connection.phase,
     }));
-    const scope = resolveEnvironmentUsageScope(options, selectedEnvironmentId);
 
+    // Keep every environment subscribed while this time window is mounted. Filtering
+    // only the view avoids evicting sibling usage caches when switching scopes.
     const environments: EnvironmentUsageStatus[] = [];
-    for (const option of scope.environments) {
+    for (const option of options) {
       const { environmentId } = option;
       const connectionResult = get(environmentCatalog.stateAtom(environmentId));
       // Keep reading the environment-scoped atom while disconnected so a prior
@@ -86,7 +85,6 @@ const usageByWindowAtom = Atom.family((key: string) =>
       isCatalogReady: catalog.isReady,
       options,
       environments,
-      selectedEnvironmentId: scope.selectedEnvironmentId,
     };
   }).pipe(Atom.withLabel(`web-usage:${key}`)),
 );
@@ -116,25 +114,31 @@ export function useUsage(
           untilDay: input.untilDay,
           timeZone: input.timeZone,
         },
-        selectedEnvironmentId,
       }),
-    [input.sinceDay, input.untilDay, input.timeZone, selectedEnvironmentId],
+    [input.sinceDay, input.untilDay, input.timeZone],
   );
   const atom = usageByWindowAtom(key);
   const value = useAtomValue(atom);
+  const scope = resolveEnvironmentUsageScope(value.options, selectedEnvironmentId);
+  const environments = useMemo(() => {
+    if (scope.selectedEnvironmentId === null) return value.environments;
+    return value.environments.filter(
+      (environment) => environment.environmentId === scope.selectedEnvironmentId,
+    );
+  }, [scope.selectedEnvironmentId, value.environments]);
 
   const refresh = useCallback(() => {
     const { input } = JSON.parse(key) as UsageAtomKey;
-    for (const environment of value.environments) {
+    for (const environment of environments) {
       if (environment.phase !== "connected") continue;
       appAtomRegistry.refresh(
         serverEnvironment.usageSummary({ environmentId: environment.environmentId, input }),
       );
     }
-  }, [key, value.environments]);
+  }, [environments, key]);
 
   const merged = useMemo(() => {
-    const answered: EnvironmentUsage[] = value.environments.flatMap((environment) =>
+    const answered: EnvironmentUsage[] = environments.flatMap((environment) =>
       environment.summary === null
         ? []
         : [
@@ -146,15 +150,15 @@ export function useUsage(
           ],
     );
     return mergeUsage(answered, USAGE_CONTRACT_VERSION);
-  }, [value.environments]);
+  }, [environments]);
 
-  const loadingState = getEnvironmentUsageLoadingState(value.environments);
+  const loadingState = getEnvironmentUsageLoadingState(environments);
 
   return {
     merged,
     options: value.options,
-    environments: value.environments,
-    selectedEnvironmentId: value.selectedEnvironmentId,
+    environments,
+    selectedEnvironmentId: scope.selectedEnvironmentId,
     isPending: !value.isCatalogReady || loadingState.isPending,
     isPartial: loadingState.isPartial,
     refresh,

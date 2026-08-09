@@ -89,7 +89,9 @@ export function UsageRouteScreen() {
 
   // The pull spinner tracks re-scans of connected environments that have
   // answered before. The initial scan renders its own placeholder.
-  const refreshing = environments.some((entry) => entry.isPending && entry.summary !== null);
+  const refreshing = environments.some(
+    (entry) => entry.phase === "connected" && entry.isPending && entry.summary !== null,
+  );
 
   return (
     <View collapsable={false} className="flex-1 bg-sheet">
