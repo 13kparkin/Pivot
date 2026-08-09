@@ -330,7 +330,29 @@ private struct MarkdownBlockParser {
                 let runLength = runEnd - cursor
                 for _ in cursor..<runEnd { cell.append("`") }
                 if codeFenceLength == nil {
-                    codeFenceLength = runLength
+                    // An unmatched backtick run is literal text. Do not let it
+                    // swallow every later pipe in the row.
+                    var probe = runEnd
+                    while probe < characters.count {
+                        if characters[probe] == "\\", probe + 1 < characters.count {
+                            probe += 2
+                            continue
+                        }
+                        guard characters[probe] == "`" else {
+                            probe += 1
+                            continue
+                        }
+                        var closingRunEnd = probe
+                        while closingRunEnd < characters.count,
+                              characters[closingRunEnd] == "`" {
+                            closingRunEnd += 1
+                        }
+                        if closingRunEnd - probe == runLength {
+                            codeFenceLength = runLength
+                            break
+                        }
+                        probe = closingRunEnd
+                    }
                 } else if codeFenceLength == runLength {
                     codeFenceLength = nil
                 }

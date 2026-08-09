@@ -26,7 +26,7 @@ enum PlatformAgentAwarenessProjection {
             guard !thread.isArchived else { return false }
             if isActive(thread.state) { return true }
             guard thread.state == .completed || thread.state == .failed else { return false }
-            return now.timeIntervalSince(thread.updatedAt) <= terminalVisibilityWindow
+            return now.timeIntervalSince(thread.updatedAt) < terminalVisibilityWindow
         }
         let rows = eligible.compactMap { thread -> T3RelayAgentActivityAggregateRow? in
             guard let project = projects[thread.projectID] else { return nil }
@@ -95,6 +95,19 @@ enum PlatformAgentAwarenessProjection {
             updatedAt: aggregate.updatedAt,
             tasks: aggregate.activities
         )
+    }
+
+    static func nextTerminalExpiry(
+        snapshot: FeatureSnapshot,
+        now: Date = .now
+    ) -> Date? {
+        snapshot.threads.lazy
+            .filter {
+                !$0.isArchived && ($0.state == .completed || $0.state == .failed)
+            }
+            .map { $0.updatedAt.addingTimeInterval(terminalVisibilityWindow) }
+            .filter { $0 > now }
+            .min()
     }
 
     private static func isActive(_ state: FeatureThreadState) -> Bool {
@@ -186,10 +199,12 @@ final class PlatformAgentAwarenessCoordinator {
 
     private var activityUpdateTask: Task<Void, Never>?
     private var widgetUpdateTask: Task<Void, Never>?
+    private var terminalExpiryTask: Task<Void, Never>?
     private var lastSignature: Signature?
     private var inFlightSignature: Signature?
     private var synchronizationGeneration = 0
     private var widgetGeneration = 0
+    private var terminalExpiryGeneration = 0
 
     init(
         updateLiveActivity: @escaping @MainActor (
@@ -213,6 +228,11 @@ final class PlatformAgentAwarenessCoordinator {
 
     func synchronize(snapshot: FeatureSnapshot, liveActivitiesEnabled: Bool) {
         let now = Date.now
+        scheduleTerminalExpiry(
+            snapshot: snapshot,
+            liveActivitiesEnabled: liveActivitiesEnabled,
+            now: now
+        )
         let aggregate = PlatformAgentAwarenessProjection.aggregate(
             snapshot: snapshot,
             now: now
@@ -263,6 +283,9 @@ final class PlatformAgentAwarenessCoordinator {
     /// removing its activity. Only a later snapshot may publish new content.
     func resetAndResynchronizeLiveActivity() {
         activityUpdateTask?.cancel()
+        terminalExpiryTask?.cancel()
+        terminalExpiryGeneration &+= 1
+        terminalExpiryTask = nil
         synchronizationGeneration &+= 1
         let generation = synchronizationGeneration
         lastSignature = nil
@@ -318,6 +341,38 @@ final class PlatformAgentAwarenessCoordinator {
             guard let self, saved, widgetGeneration == generation else { return }
             WidgetCenter.shared.reloadTimelines(ofKind: "T3RecentTasksWidget")
             widgetUpdateTask = nil
+        }
+    }
+
+    private func scheduleTerminalExpiry(
+        snapshot: FeatureSnapshot,
+        liveActivitiesEnabled: Bool,
+        now: Date
+    ) {
+        terminalExpiryTask?.cancel()
+        terminalExpiryGeneration &+= 1
+        let generation = terminalExpiryGeneration
+        guard let expiry = PlatformAgentAwarenessProjection.nextTerminalExpiry(
+            snapshot: snapshot,
+            now: now
+        ) else {
+            terminalExpiryTask = nil
+            return
+        }
+        let delay = max(0, expiry.timeIntervalSince(now))
+        terminalExpiryTask = Task { @MainActor [weak self] in
+            do {
+                try await Task.sleep(for: .seconds(delay))
+            } catch {
+                return
+            }
+            guard let self,
+                  terminalExpiryGeneration == generation else { return }
+            terminalExpiryTask = nil
+            synchronize(
+                snapshot: snapshot,
+                liveActivitiesEnabled: liveActivitiesEnabled
+            )
         }
     }
 

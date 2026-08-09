@@ -55,10 +55,8 @@ public actor LocalNetworkProbe {
         } catch {
             throw ConnectionProbeError.invalidURL
         }
-        guard let baseURL = URL(string: fields.host),
-              let host = baseURL.host,
-              ["http", "https"].contains(baseURL.scheme?.lowercased() ?? "")
-        else {
+        guard let baseURL = try? PairingURL.httpBaseURL(for: fields.host),
+              let host = baseURL.host else {
             throw ConnectionProbeError.invalidURL
         }
 

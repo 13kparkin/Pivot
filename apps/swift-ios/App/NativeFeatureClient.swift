@@ -63,6 +63,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
     private var threadEnvironmentIDs: [String: String] = [:]
     private var threadWireIDs: [String: String] = [:]
     private var provisionalThreadRoutes: [String: ProvisionalThreadRoute] = [:]
+    private var pendingThreadCreations: [PendingThreadCreation] = []
     private var environmentConnectionStates: [String: FeatureConnection.State] = [:]
     private var environmentConnectionDetails: [String: String] = [:]
     private var latestServerConfig: ServerConfigSnapshot?
@@ -341,13 +342,28 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
                 .map(\.id)
             var failureCount = 0
             for id in managedIDs {
+                var cleanupFailed = false
+                do {
+                    try await runtime.revokeCredential(id: id)
+                } catch {
+                    cleanupFailed = true
+                    Self.t3ConnectLogger.error(
+                        "Managed credential revocation failed: \(error.localizedDescription, privacy: .private)"
+                    )
+                }
                 do {
                     try await removeEnvironment(id: id)
+                    // `remove` retries credential deletion, so its success
+                    // supersedes an earlier revocation error.
+                    cleanupFailed = false
                 } catch {
-                    failureCount += 1
+                    cleanupFailed = true
                     Self.t3ConnectLogger.error(
                         "Managed environment removal failed: \(error.localizedDescription, privacy: .private)"
                     )
+                }
+                if cleanupFailed {
+                    failureCount += 1
                 }
             }
             guard failureCount == 0 else {
@@ -572,7 +588,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         let task = Task<Data?, Never> {
             do {
                 let resolved = try await client.resolvedAsset(
-                    resource: .projectFavicon(cwd: key.workspaceRoot)
+                    resource: .projectFavicon(cwd: workspaceRoot)
                 )
                 let revision = resolved.url.lastPathComponent.removingPercentEncoding
                     ?? resolved.url.lastPathComponent
@@ -782,7 +798,6 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         let client = route.client
         let environment = client.environment
         let generation = environmentGeneration
-        let threadID = UUID().uuidString
         let model = modelSelection(
             selection,
             projectID: route.wireID,
@@ -791,18 +806,53 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         )
         let resolvedTitle = title?.trimmingCharacters(in: .whitespacesAndNewlines)
         let threadTitle = resolvedTitle?.isEmpty == false ? resolvedTitle! : "New thread"
-        _ = try await client.createThread(
-            threadID: threadID,
-            projectID: route.wireID,
+        let signature = ThreadCreationSignature(
+            projectID: projectID,
             title: threadTitle,
-            model: model,
-            runtimeMode: .fullAccess
+            model: model
         )
+        let pending: PendingThreadCreation
+        if let existing = pendingThreadCreations.first(where: { $0.signature == signature }) {
+            pending = existing
+        } else {
+            pending = PendingThreadCreation(signature: signature, threadID: UUID().uuidString)
+            pendingThreadCreations.append(pending)
+        }
+        var recoveredShell: OrchestrationShellSnapshot?
+        do {
+            _ = try await client.createThread(
+                threadID: pending.threadID,
+                projectID: route.wireID,
+                title: threadTitle,
+                model: model,
+                runtimeMode: .fullAccess
+            )
+        } catch {
+            guard Self.isAmbiguousDispatchFailure(error) else {
+                removePendingThreadCreation(threadID: pending.threadID)
+                throw error
+            }
+            if let shell = try? await client.shellSnapshot(),
+               shell.threads.contains(where: { $0.id == pending.threadID }) {
+                recoveredShell = shell
+            } else {
+                // Keep this ID while the outcome is ambiguous. A retry of the
+                // same creation attempt must not make another thread.
+                throw error
+            }
+        }
         guard isKnownClient(client, environmentID: environment.id, generation: generation) else {
             throw CancellationError()
         }
-        registerProvisionalThread(wireID: threadID, environmentID: environment.id)
-        if let shell = try? await client.shellSnapshot() {
+        removePendingThreadCreation(threadID: pending.threadID)
+        registerProvisionalThread(wireID: pending.threadID, environmentID: environment.id)
+        let refreshedShell: OrchestrationShellSnapshot?
+        if let recoveredShell {
+            refreshedShell = recoveredShell
+        } else {
+            refreshedShell = try? await client.shellSnapshot()
+        }
+        if let shell = refreshedShell {
             guard isKnownClient(client, environmentID: environment.id, generation: generation) else {
                 throw CancellationError()
             }
@@ -811,17 +861,20 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
                 latestShell = shell
             }
             await emitSnapshot(shell, environment: environment)
-            if let created = shell.threads.first(where: { $0.id == threadID }) {
+            if let created = shell.threads.first(where: { $0.id == pending.threadID }) {
                 provisionalThreadRoutes[FeatureScopedID.thread(
                     environmentID: environment.id,
-                    wireID: threadID
+                    wireID: pending.threadID
                 )] = nil
                 return mapThread(created, environment: environment)
             }
         }
         return FeatureThread(
-            id: FeatureScopedID.thread(environmentID: environment.id, wireID: threadID),
-            wireID: threadID,
+            id: FeatureScopedID.thread(
+                environmentID: environment.id,
+                wireID: pending.threadID
+            ),
+            wireID: pending.threadID,
             projectID: route.uiID,
             environmentID: environment.id,
             environmentName: environment.label,
@@ -1159,6 +1212,33 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
 
     private func removePendingBootstrap(identity: CommandIdentity) {
         pendingBootstrapSubmissions.removeAll { $0.identity == identity }
+    }
+
+    private func removePendingThreadCreation(threadID: String) {
+        pendingThreadCreations.removeAll { $0.threadID == threadID }
+    }
+
+    private static func isAmbiguousDispatchFailure(_ error: any Error) -> Bool {
+        if let error = error as? RPCError {
+            switch error {
+            case .connectionUnavailable, .disconnected, .responseTimedOut:
+                return true
+            case .remote, .protocolViolation:
+                return false
+            }
+        }
+        if let error = error as? HTTPError {
+            switch error {
+            case .invalidResponse:
+                return true
+            case .status, .missingCredential, .incompatibleCredential,
+                 .managedAuthorizationUnavailable:
+                return false
+            }
+        }
+        // URL loading errors and cancellation can happen after the request
+        // body crossed the network. Reusing the ID is safe in either case.
+        return true
     }
 
     func renameThread(id: String, title: String) async throws {
@@ -5695,6 +5775,17 @@ private struct PendingBootstrapSubmission {
     let threadID: String
     let identity: CommandIdentity
     let worktreeBranchName: String?
+}
+
+private struct ThreadCreationSignature: Equatable {
+    let projectID: String
+    let title: String
+    let model: ModelSelection
+}
+
+private struct PendingThreadCreation {
+    let signature: ThreadCreationSignature
+    let threadID: String
 }
 
 private struct TurnSubmissionSignature: Equatable {

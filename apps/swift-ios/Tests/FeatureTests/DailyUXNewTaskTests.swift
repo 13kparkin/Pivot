@@ -227,6 +227,33 @@ struct DailyUXNewTaskTests {
     }
 
     @Test
+    func explicitEmptyProviderCatalogDoesNotRestoreAStaleProjectDefault() {
+        let project = FeatureProject(
+            id: "remote-project",
+            environmentID: "remote",
+            name: "Remote",
+            path: "/remote",
+            defaultSelection: .init(providerID: "claude", modelID: "old-model")
+        )
+        let snapshot = FeatureSnapshot(
+            environments: [
+                .init(
+                    id: "remote",
+                    name: "Remote",
+                    endpoint: "https://remote.example",
+                    isActive: false,
+                    connectionState: .connected
+                ),
+            ],
+            projects: [project],
+            providers: [],
+            providersByEnvironment: ["remote": []]
+        )
+
+        #expect(DailyUXCreationContext.providers(for: project, in: snapshot).isEmpty)
+    }
+
+    @Test
     func projectGroupsOnlyOfferComputersThatContainTheSelectedRepository() throws {
         let identity = FeatureRepositoryIdentity(
             canonicalKey: "github.com/t3/example",

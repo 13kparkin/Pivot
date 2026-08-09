@@ -132,6 +132,44 @@ struct PlatformAgentAwarenessTests {
     }
 
     @Test
+    func terminalRowsExposeTheirExpiryAndDisappearAtTheBoundary() throws {
+        let now = Date(timeIntervalSince1970: 2_000_000_000)
+        let updatedAt = now.addingTimeInterval(-60)
+        let expiry = updatedAt.addingTimeInterval(
+            PlatformAgentAwarenessProjection.terminalVisibilityWindow
+        )
+        let project = FeatureProject(
+            id: "project",
+            environmentID: "environment",
+            name: "t3code",
+            path: "/repo"
+        )
+        let snapshot = FeatureSnapshot(
+            projects: [project],
+            threads: [Self.thread(id: "done", state: .completed, updatedAt: updatedAt)]
+        )
+
+        #expect(
+            PlatformAgentAwarenessProjection.nextTerminalExpiry(
+                snapshot: snapshot,
+                now: now
+            ) == expiry
+        )
+        #expect(
+            PlatformAgentAwarenessProjection.aggregate(
+                snapshot: snapshot,
+                now: expiry.addingTimeInterval(-0.001)
+            ).activities.count == 1
+        )
+        #expect(
+            PlatformAgentAwarenessProjection.aggregate(
+                snapshot: snapshot,
+                now: expiry
+            ).activities.isEmpty
+        )
+    }
+
+    @Test
     @MainActor
     func signOutEndsActivitiesWithoutRepublishingTheCachedProjection() async {
         let recorder = PlatformAgentAwarenessOperationRecorder()

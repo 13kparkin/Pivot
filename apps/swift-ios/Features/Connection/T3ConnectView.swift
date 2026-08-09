@@ -7,6 +7,7 @@ public struct T3ConnectView: View {
     @Bindable private var controller: T3ConnectController
     @State private var isAuthPresented = false
     @State private var didFinishInitialRefresh = false
+    @State private var connectingEnvironmentID: String?
     private let connectEnvironment:
         @MainActor (T3ConnectManagedEnvironmentCredential) async throws -> Void
     private let signOut: @MainActor () async -> Void
@@ -104,7 +105,7 @@ public struct T3ConnectView: View {
     private var authenticationView: some View {
         if let clerk = controller.clerk {
             T3ConnectAuthenticationView {
-                await controller.refresh()
+                await controller.refreshAfterAuthentication()
                 if controller.account != nil {
                     isAuthPresented = false
                     return true
@@ -234,7 +235,8 @@ public struct T3ConnectView: View {
             Button {
                 Task { await handleConnect(item.environment) }
             } label: {
-                if controller.busyEnvironmentID == item.id {
+                if controller.busyEnvironmentID == item.id
+                    || connectingEnvironmentID == item.id {
                     ProgressView()
                         .frame(width: 54)
                 } else {
@@ -243,12 +245,23 @@ public struct T3ConnectView: View {
                 }
             }
             .buttonStyle(.borderless)
-            .disabled(controller.busyEnvironmentID != nil || item.status?.status == .offline)
+            .disabled(
+                controller.busyEnvironmentID != nil
+                    || connectingEnvironmentID != nil
+                    || item.status?.status == .offline
+            )
         }
         .padding(.vertical, 5)
     }
 
     private func handleConnect(_ environment: T3ConnectRelayEnvironment) async {
+        guard connectingEnvironmentID == nil else { return }
+        connectingEnvironmentID = environment.environmentId
+        defer {
+            if connectingEnvironmentID == environment.environmentId {
+                connectingEnvironmentID = nil
+            }
+        }
         do {
             let credential = try await controller.credential(for: environment)
             try await connectEnvironment(credential)

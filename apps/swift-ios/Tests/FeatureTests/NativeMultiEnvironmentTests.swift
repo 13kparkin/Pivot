@@ -320,6 +320,31 @@ final class NativeMultiEnvironmentTests: XCTestCase {
         await fixture.client.disconnect()
     }
 
+    func testPassiveCreateRecoversACommittedThreadAfterItsReplyIsLost() async throws {
+        let fixture = try await makeFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+        let snapshot = try await fixture.client.initialSnapshot()
+        let project = try XCTUnwrap(
+            snapshot.projects.first(where: { $0.environmentID == "two" })
+        )
+        await fixture.transport.dropNextCreateReply(host: "two.example")
+
+        let created = try await fixture.client.createThread(
+            projectID: project.id,
+            title: "Recovered task",
+            selection: nil
+        )
+
+        XCTAssertEqual(created.title, "Recovered task")
+        XCTAssertEqual(created.environmentID, "two")
+        let creates = await fixture.transport.dispatchRecords().filter {
+            $0.command["type"]?.stringValue == "thread.create"
+        }
+        XCTAssertEqual(creates.count, 1)
+        XCTAssertEqual(creates.first?.command["threadId"]?.stringValue, created.wireID)
+        await fixture.client.disconnect()
+    }
+
     func testUnarchiveImmediatelyRestoresLiveThreadWhenRefreshIsUnavailable() async throws {
         let fixture = try await makeFixture()
         defer { try? FileManager.default.removeItem(at: fixture.directory) }
@@ -614,6 +639,7 @@ private actor MultiEnvironmentHTTPTransport: HTTPTransport {
     private var reachableHosts: Set<String>
     private var shellReadsEnabledHosts: Set<String>
     private var dispatched: [MultiEnvironmentDispatchRecord] = []
+    private var hostsDroppingNextCreateReply = Set<String>()
 
     init(shells: [String: OrchestrationShellSnapshot]) {
         self.shells = shells
@@ -650,6 +676,10 @@ private actor MultiEnvironmentHTTPTransport: HTTPTransport {
         dispatched
     }
 
+    func dropNextCreateReply(host: String) {
+        hostsDroppingNextCreateReply.insert(host)
+    }
+
     func data(for request: URLRequest) throws -> (Data, HTTPURLResponse) {
         let host = request.url?.host ?? ""
         guard reachableHosts.contains(host) else {
@@ -675,12 +705,26 @@ private actor MultiEnvironmentHTTPTransport: HTTPTransport {
         }
         if path == "/api/orchestration/dispatch" {
             guard let body = request.httpBody else { throw URLError(.badServerResponse) }
+            let command = try JSONDecoder.t3.decode(JSONValue.self, from: body)
             dispatched.append(
-                MultiEnvironmentDispatchRecord(
-                    host: host,
-                    command: try JSONDecoder.t3.decode(JSONValue.self, from: body)
-                )
+                MultiEnvironmentDispatchRecord(host: host, command: command)
             )
+            if command["type"]?.stringValue == "thread.create",
+               hostsDroppingNextCreateReply.remove(host) != nil,
+               let projectID = command["projectId"]?.stringValue,
+               let threadID = command["threadId"]?.stringValue {
+                let model = command["modelSelection"]
+                shellData[host] = try JSONEncoder.t3.encode(
+                    multiEnvironmentShell(
+                        projectID: projectID,
+                        threadID: threadID,
+                        title: command["title"]?.stringValue ?? "New thread",
+                        providerID: model?["instanceId"]?.stringValue ?? "codex",
+                        modelID: model?["model"]?.stringValue ?? "gpt-5.6-sol"
+                    )
+                )
+                throw URLError(.networkConnectionLost)
+            }
             return (
                 try JSONEncoder.t3.encode(DispatchResult(sequence: 2)),
                 multiEnvironmentResponse(request)

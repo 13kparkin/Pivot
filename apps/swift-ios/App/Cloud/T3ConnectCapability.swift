@@ -66,6 +66,8 @@ public final class T3ConnectController {
     private let relay: T3ConnectRelayClient?
     private var registeredDeviceID: String?
     private var refreshGeneration: UInt64 = 0
+    private var authorizationGeneration: UInt64 = 0
+    private var isLocalAuthorizationInvalidated = false
     private var signOutOperation: (@MainActor @Sendable () async throws -> Void)?
 
     public convenience init(
@@ -132,24 +134,32 @@ public final class T3ConnectController {
 
     public func refresh() async {
         guard let auth, let relay else { return }
+        guard !isLocalAuthorizationInvalidated else { return }
         refreshGeneration &+= 1
         let generation = refreshGeneration
+        let authGeneration = authorizationGeneration
         isRefreshing = true
         defer {
             if refreshGeneration == generation { isRefreshing = false }
         }
         do {
             if !auth.isLoaded { try await auth.refresh() }
-            guard refreshGeneration == generation else { return }
-            account = auth.account
+            guard refreshGeneration == generation,
+                  authorizationGeneration == authGeneration,
+                  !isLocalAuthorizationInvalidated else { return }
+            await adoptAccount(auth.account, relay: relay)
             guard account != nil else {
                 environments = []
                 return
             }
             let token = try await auth.relayToken()
-            guard refreshGeneration == generation else { return }
+            guard refreshGeneration == generation,
+                  authorizationGeneration == authGeneration,
+                  !isLocalAuthorizationInvalidated else { return }
             let records = try await relay.listEnvironments(clerkToken: token)
-            guard refreshGeneration == generation else { return }
+            guard refreshGeneration == generation,
+                  authorizationGeneration == authGeneration,
+                  !isLocalAuthorizationInvalidated else { return }
             environments = records.map { T3ConnectCloudEnvironment(environment: $0) }
             let loaded = await withTaskGroup(
                 of: T3ConnectCloudEnvironment.self,
@@ -177,7 +187,9 @@ public final class T3ConnectController {
                     $0.environment.linkedAt > $1.environment.linkedAt
                 }
             }
-            guard refreshGeneration == generation else { return }
+            guard refreshGeneration == generation,
+                  authorizationGeneration == authGeneration,
+                  !isLocalAuthorizationInvalidated else { return }
             environments = loaded
         } catch {
             if refreshGeneration == generation {
@@ -186,34 +198,46 @@ public final class T3ConnectController {
         }
     }
 
+    /// A successful authentication flow is the only action that may restore a
+    /// locally signed-out Clerk session.
+    public func refreshAfterAuthentication() async {
+        isLocalAuthorizationInvalidated = false
+        authorizationGeneration &+= 1
+        await refresh()
+    }
+
     public func signOut() async {
         guard let relay else { return }
+        let deviceID = registeredDeviceID
+        isLocalAuthorizationInvalidated = true
+        authorizationGeneration &+= 1
         refreshGeneration &+= 1
         let generation = refreshGeneration
         isRefreshing = true
         defer {
             if refreshGeneration == generation { isRefreshing = false }
         }
+        account = nil
+        environments = []
+        registeredDeviceID = nil
+        await relay.clearTokenCache()
+
         if let auth,
-           let registeredDeviceID,
-           let token = try? await loadedRelayToken(auth) {
+           let deviceID,
+           let token = try? await auth.relayToken() {
             // Remote delivery must not outlive the signed-in session on this
             // install. A failed best-effort unregister must not trap the user
             // in an account they are trying to leave.
             try? await relay.unregisterDevice(
-                deviceID: registeredDeviceID,
+                deviceID: deviceID,
                 clerkToken: token
             )
         }
+        await relay.clearTokenCache()
 
         // Local authorization state is security-sensitive and must be cleared
         // before Clerk performs network work. A failed remote sign-out can be
         // reported, but it cannot leave relay tokens or managed state usable.
-        await relay.clearTokenCache()
-        registeredDeviceID = nil
-        account = nil
-        environments = []
-
         do {
             if let signOutOperation {
                 try await signOutOperation()
@@ -319,10 +343,34 @@ public final class T3ConnectController {
     }
 
     private func loadedRelayToken(_ auth: T3ConnectClerkSession) async throws -> String {
+        guard !isLocalAuthorizationInvalidated else { throw T3ConnectAuthError.noSession }
+        let generation = authorizationGeneration
         if !auth.isLoaded {
             try await auth.refresh()
         }
-        account = auth.account
-        return try await auth.relayToken()
+        guard authorizationGeneration == generation,
+              !isLocalAuthorizationInvalidated else { throw T3ConnectAuthError.noSession }
+        if let relay {
+            await adoptAccount(auth.account, relay: relay)
+        } else {
+            account = auth.account
+        }
+        guard account != nil else { throw T3ConnectAuthError.noSession }
+        let token = try await auth.relayToken()
+        guard authorizationGeneration == generation,
+              !isLocalAuthorizationInvalidated else { throw T3ConnectAuthError.noSession }
+        return token
+    }
+
+    private func adoptAccount(
+        _ nextAccount: T3ConnectAccount?,
+        relay: T3ConnectRelayClient
+    ) async {
+        if account?.id != nextAccount?.id {
+            environments = []
+            registeredDeviceID = nil
+            await relay.clearTokenCache()
+        }
+        account = nextAccount
     }
 }

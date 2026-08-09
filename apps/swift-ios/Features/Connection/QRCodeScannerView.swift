@@ -207,6 +207,10 @@ private final class QRScannerViewController: UIViewController {
     private let captureSession = AVCaptureSession()
     private let sessionQueue = DispatchQueue(label: "codes.t3.swift-ios.qr-scanner")
     private var previewLayer: AVCaptureVideoPreviewLayer?
+    private var metadataDelegate: AVCaptureMetadataOutputObjectsDelegate?
+    private var availabilityChanged: (@MainActor (QRScannerAvailability) -> Void)?
+    private var isConfiguring = false
+    private var isRequestingAuthorization = false
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -223,7 +227,10 @@ private final class QRScannerViewController: UIViewController {
 
     override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
-        guard previewLayer != nil else { return }
+        guard previewLayer != nil else {
+            refreshAuthorization()
+            return
+        }
         let session = captureSession
         sessionQueue.async {
             if !session.isRunning {
@@ -239,23 +246,30 @@ private final class QRScannerViewController: UIViewController {
 
     func prepare(
         delegate: AVCaptureMetadataOutputObjectsDelegate,
-        availabilityChanged: @escaping (QRScannerAvailability) -> Void
+        availabilityChanged: @escaping @MainActor (QRScannerAvailability) -> Void
     ) {
+        metadataDelegate = delegate
+        self.availabilityChanged = availabilityChanged
+        refreshAuthorization()
+    }
+
+    private func refreshAuthorization() {
+        guard let metadataDelegate, let availabilityChanged else { return }
         switch AVCaptureDevice.authorizationStatus(for: .video) {
         case .authorized:
-            configure(delegate: delegate, availabilityChanged: availabilityChanged)
+            configure(delegate: metadataDelegate, availabilityChanged: availabilityChanged)
         case .notDetermined:
+            guard !isRequestingAuthorization else { return }
+            isRequestingAuthorization = true
             AVCaptureDevice.requestAccess(for: .video) { [weak self] granted in
                 Task { @MainActor in
                     guard let self else { return }
-                    if granted {
-                        self.configure(
-                            delegate: delegate,
-                            availabilityChanged: availabilityChanged
-                        )
-                    } else {
-                        availabilityChanged(.denied)
+                    self.isRequestingAuthorization = false
+                    guard granted else {
+                        self.availabilityChanged?(.denied)
+                        return
                     }
+                    self.refreshAuthorization()
                 }
             }
         case .denied, .restricted:
@@ -276,8 +290,11 @@ private final class QRScannerViewController: UIViewController {
 
     private func configure(
         delegate: AVCaptureMetadataOutputObjectsDelegate,
-        availabilityChanged: @escaping (QRScannerAvailability) -> Void
+        availabilityChanged: @escaping @MainActor (QRScannerAvailability) -> Void
     ) {
+        guard previewLayer == nil, !isConfiguring else { return }
+        isConfiguring = true
+        defer { isConfiguring = false }
         guard let camera = AVCaptureDevice.default(for: .video),
               let input = try? AVCaptureDeviceInput(device: camera),
               captureSession.canAddInput(input)

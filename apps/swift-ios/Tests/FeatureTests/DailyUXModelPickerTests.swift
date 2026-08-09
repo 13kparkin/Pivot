@@ -52,6 +52,28 @@ struct DailyUXModelPickerTests {
     }
 
     @Test
+    func catalogDeduplicatesRepeatedProviderAndModelIDs() {
+        let repeated = FeatureProvider(
+            id: "codex",
+            name: "Codex",
+            models: [
+                FeatureModel(id: "gpt-5.6-sol", name: "Sol"),
+                FeatureModel(id: "gpt-5.6-sol", name: "Sol again"),
+            ]
+        )
+        let catalog = DailyUXModelCatalog(
+            providers: [repeated, repeated],
+            query: "",
+            favoriteIDs: [],
+            recentIDs: []
+        )
+
+        #expect(catalog.all.map(\.id) == ["codex::gpt-5.6-sol"])
+        #expect(catalog.providerGroups.map(\.provider.id) == ["codex"])
+        #expect(catalog.providerGroups.first?.models.count == 1)
+    }
+
+    @Test
     func searchIncludesCapabilitiesAndProviderNames() {
         let providers = [
             FeatureProvider(

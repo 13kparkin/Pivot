@@ -231,6 +231,60 @@ final class T3ConnectNativeCapabilityTests: XCTestCase {
         )
     }
 
+    func testSignOutRevokesManagedCredentialWhenCatalogRemovalFails() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("t3-connect-revoke-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let catalogURL = directory.appendingPathComponent("environments.json")
+        let managed = Environment(
+            id: "managed-1",
+            label: "Managed Studio",
+            httpBaseURL: URL(string: "https://managed.example")!,
+            webSocketBaseURL: URL(string: "wss://managed.example")!,
+            kind: .managedDPoP
+        )
+        let store = EnvironmentStore(fileURL: catalogURL)
+        try await store.save([managed])
+        let credentials = InMemoryCredentialStore(credentials: [
+            managed.id: .managedDPoP(
+                accessToken: "managed-secret",
+                expiresAt: Date().addingTimeInterval(300),
+                scopes: T3ConnectManagedEnvironmentAuthorizer.standardScopes,
+                environmentID: managed.id,
+                proofKeyThumbprint: "proof-key"
+            ),
+        ])
+        let signer = try testSigner()
+        let transport = T3ConnectNativeHTTPTransport(descriptorEnvironmentID: managed.id)
+        let controller = T3ConnectController(
+            resolution: .available(
+                T3ConnectConfiguration(
+                    clerkPublishableKey: "pk_test",
+                    relayHTTPURL: URL(string: "https://relay.example")!
+                )
+            ),
+            transport: transport,
+            signer: signer,
+            signOutOperation: {}
+        )
+        let runtime = EnvironmentRuntime(
+            environmentStore: store,
+            credentialStore: credentials,
+            httpTransport: transport,
+            webSocketConnector: T3ConnectBlockingConnector(),
+            managedAuthorization: T3ConnectRuntimeAuthorization(controller: controller)
+        )
+        let client = NativeFeatureClient(runtime: runtime, t3ConnectController: controller)
+
+        try FileManager.default.removeItem(at: catalogURL)
+        try FileManager.default.createDirectory(at: catalogURL, withIntermediateDirectories: true)
+        await client.signOutT3Connect()
+
+        let remainingCredential = await credentials.credential(for: managed.id)
+        XCTAssertNil(remainingCredential)
+        XCTAssertNotNil(controller.errorMessage)
+    }
+
     func testInjectedManagedRuntimeRequiresItsMatchingController() async throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("t3-connect-controller-mismatch-\(UUID().uuidString)")

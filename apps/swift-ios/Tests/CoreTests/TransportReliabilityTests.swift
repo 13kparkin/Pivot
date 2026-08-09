@@ -361,6 +361,30 @@ final class TransportReliabilityTests: XCTestCase {
         )
     }
 
+    func testLocalNetworkProbeAcceptsWebSocketPairingSchemes() async throws {
+        let transport = RecordingHTTPTransport { request in
+            let body = """
+            {
+              "environmentId": "environment-1",
+              "label": "Studio",
+              "platform": {"os": "darwin", "arch": "arm64"},
+              "serverVersion": "1.0.0",
+              "capabilities": {}
+            }
+            """
+            return (Data(body.utf8), transportResponse(request))
+        }
+        let result = try await LocalNetworkProbe(transport: transport).probe(
+            address: "wss://studio.example"
+        )
+
+        XCTAssertEqual(result.baseURL.absoluteString, "https://studio.example/")
+        let requests = await transport.requests
+        let request = try XCTUnwrap(requests.first)
+        XCTAssertEqual(request.url?.scheme, "https")
+        XCTAssertEqual(request.url?.path, "/.well-known/t3/environment")
+    }
+
 }
 
 private func paginationThreadFixture() -> OrchestrationThread {

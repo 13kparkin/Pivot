@@ -1155,6 +1155,16 @@ public actor EnvironmentRuntime {
         }
     }
 
+    /// Revokes local access before best-effort catalog cleanup. Account
+    /// sign-out uses this so a failed file write cannot leave a managed DPoP
+    /// credential usable.
+    public func revokeCredential(id: String) async throws {
+        try await credentialStore.removeCredential(for: id)
+        if let client = clients.removeValue(forKey: id) {
+            await client.disconnect()
+        }
+    }
+
     /// Returns the cached client for a saved environment without changing the
     /// environment used for new projects and threads.
     public func client(for environment: Environment) async -> T3Client {

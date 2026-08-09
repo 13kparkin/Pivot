@@ -151,8 +151,7 @@ enum DailyUXCreationContext {
         in snapshot: FeatureSnapshot
     ) -> [FeatureProvider] {
         if let project,
-           let providers = snapshot.providersByEnvironment?[project.environmentID],
-           !providers.isEmpty {
+           let providers = snapshot.providersByEnvironment?[project.environmentID] {
             return providers
         }
         guard let project,
@@ -721,9 +720,11 @@ struct DailyUXModelCatalog {
         recentIDs: [String]
     ) {
         let available = providers.filter(\.isAvailable)
-        let unfiltered = available.flatMap { provider in
+        let rawOptions = available.flatMap { provider in
             provider.models.map { DailyUXModelOption(provider: provider, model: $0) }
         }
+        var seenOptionIDs = Set<String>()
+        let unfiltered = rawOptions.filter { seenOptionIDs.insert($0.id).inserted }
         let normalizedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
         let matches = normalizedQuery.isEmpty
             ? unfiltered
@@ -747,7 +748,9 @@ struct DailyUXModelCatalog {
         }
         recents = recentIDs.compactMap { byID[$0] }.filter { !favoriteIDs.contains($0.id) }
 
-        providerGroups = available.compactMap { provider in
+        var seenProviderIDs = Set<String>()
+        let uniqueProviders = available.filter { seenProviderIDs.insert($0.id).inserted }
+        providerGroups = uniqueProviders.compactMap { provider in
             let options = matches.filter { $0.provider.id == provider.id }
             return options.isEmpty ? nil : (provider, options)
         }

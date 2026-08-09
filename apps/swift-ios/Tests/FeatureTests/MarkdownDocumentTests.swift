@@ -120,6 +120,29 @@ struct MarkdownDocumentTests {
     }
 
     @Test
+    func unmatchedBacktickDoesNotHideLaterTableSeparators() {
+        let document = MarkdownDocument(
+            parsing: """
+            Left | Middle | Right
+            --- | --- | ---
+            x | `y | z
+            """
+        )
+
+        #expect(
+            document.blocks == [
+                .table(
+                    MarkdownTable(
+                        header: ["Left", "Middle", "Right"],
+                        alignments: [.natural, .natural, .natural],
+                        rows: [["x", "`y", "z"]]
+                    )
+                ),
+            ]
+        )
+    }
+
+    @Test
     func rejectsTableDelimiterCellsWithFewerThanThreeDashes() {
         let document = MarkdownDocument(
             parsing: """

@@ -134,6 +134,12 @@ public enum PairingURL {
         return value
     }
 
+    /// Converts any supported pairing transport into the HTTP origin used by
+    /// onboarding's environment probe.
+    static func httpBaseURL(for rawValue: String) throws -> URL {
+        try httpBaseURL(from: normalizedBaseURL(rawValue))
+    }
+
     private static func extractPairingURL(
         from rawValue: String,
         qrInput: Bool
@@ -258,6 +264,20 @@ public enum PairingURL {
             httpBaseURL: httpURL,
             webSocketBaseURL: socketURL
         )
+    }
+
+    private static func httpBaseURL(from baseURL: URL) throws -> URL {
+        guard var components = URLComponents(url: baseURL, resolvingAgainstBaseURL: false)
+        else {
+            throw PairingURLError.invalidURL
+        }
+        switch components.scheme?.lowercased() {
+        case "ws": components.scheme = "http"
+        case "wss": components.scheme = "https"
+        default: break
+        }
+        guard let url = components.url else { throw PairingURLError.invalidURL }
+        return url
     }
 
     private static func requireSupportedScheme(_ scheme: String?) throws {
