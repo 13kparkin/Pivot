@@ -12,6 +12,7 @@ struct HomeThreadMetadataTests {
             (.idle, .ready, nil),
             (.queued, .working, "Working"),
             (.working, .working, "Working"),
+            (.monitoring, .monitoring, "Monitoring"),
             (.waitingForApproval, .approval, "Approval"),
             (.waitingForInput, .input, "Input"),
             (.failed, .failed, "Failed"),
@@ -53,10 +54,18 @@ struct HomeThreadMetadataTests {
             state: .idle,
             workingStartedAt: now.addingTimeInterval(-10)
         )
+        let monitoring = FeatureThread(
+            id: "monitoring",
+            projectID: "project",
+            title: "Watch",
+            state: .monitoring,
+            workingStartedAt: now.addingTimeInterval(-10)
+        )
 
         #expect(thread.homeWorkingDuration(at: now) == "1h 31m")
         #expect(future.homeWorkingDuration(at: now) == "0s")
         #expect(idle.homeWorkingDuration(at: now) == nil)
+        #expect(monitoring.homeWorkingDuration(at: now) == nil)
     }
 
     @Test

@@ -99,7 +99,7 @@ enum PlatformAgentAwarenessProjection {
 
     private static func isActive(_ state: FeatureThreadState) -> Bool {
         switch state {
-        case .queued, .working, .waitingForApproval, .waitingForInput:
+        case .queued, .working, .monitoring, .waitingForApproval, .waitingForInput:
             true
         case .idle, .failed, .completed:
             false
@@ -110,6 +110,7 @@ enum PlatformAgentAwarenessProjection {
         switch state {
         case .queued: .starting
         case .working: .running
+        case .monitoring: .running
         case .waitingForApproval: .waitingForApproval
         case .waitingForInput: .waitingForInput
         case .failed: .failed
@@ -122,6 +123,7 @@ enum PlatformAgentAwarenessProjection {
         switch state {
         case .queued: "Starting"
         case .working: "Working"
+        case .monitoring: "Monitoring"
         case .waitingForApproval: "Approval"
         case .waitingForInput: "Input"
         case .failed: "Failed"

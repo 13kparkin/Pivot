@@ -3298,15 +3298,16 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             return
         }
 
-        let backgroundWorkIsActive = shellThread.backgroundLiveness == .working
+        let backgroundLiveness = shellThread.backgroundLiveness
+        let backgroundWorkIsActive = backgroundLiveness == .working
         let sessionIsLive = shellThread.session?.status == "starting"
             || shellThread.session?.status == "running"
-        detail.thread.state = mapThreadState(
+        detail.thread.state = Self.resolveThreadState(
             latestTurn: shellThread.latestTurn,
             session: shellThread.session,
             hasApprovals: !detail.approvals.isEmpty,
             hasUserInput: !detail.userInputs.isEmpty,
-            backgroundWorkIsActive: backgroundWorkIsActive
+            backgroundLiveness: backgroundLiveness
         )
         detail.thread.workingStartedAt = workingStartedAt(
             latestTurn: shellThread.latestTurn,
@@ -3662,7 +3663,8 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         _ thread: OrchestrationThreadShell,
         environment: Environment
     ) -> FeatureThread {
-        let backgroundWorkIsActive = thread.backgroundLiveness == .working
+        let backgroundLiveness = thread.backgroundLiveness
+        let backgroundWorkIsActive = backgroundLiveness == .working
         return FeatureThread(
             id: FeatureScopedID.thread(environmentID: environment.id, wireID: thread.id),
             wireID: thread.id,
@@ -3677,12 +3679,12 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             worktreePath: thread.worktreePath,
             createdAt: parseDate(thread.createdAt),
             updatedAt: parseDate(thread.updatedAt),
-            state: mapThreadState(
+            state: Self.resolveThreadState(
                 latestTurn: thread.latestTurn,
                 session: thread.session,
                 hasApprovals: thread.hasPendingApprovals,
                 hasUserInput: thread.hasPendingUserInput,
-                backgroundWorkIsActive: backgroundWorkIsActive
+                backgroundLiveness: backgroundLiveness
             ),
             providerID: thread.modelSelection.instanceId,
             providerName: threadProviderName(
@@ -3726,10 +3728,11 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         _ thread: OrchestrationThread,
         environment: Environment
     ) -> FeatureThread {
-        let backgroundWorkIsActive = backgroundLiveness(
+        let backgroundLiveness = backgroundLiveness(
             threadID: thread.id,
             environmentID: environment.id
-        ) == .working
+        )
+        let backgroundWorkIsActive = backgroundLiveness == .working
         return FeatureThread(
             id: FeatureScopedID.thread(environmentID: environment.id, wireID: thread.id),
             wireID: thread.id,
@@ -3745,12 +3748,12 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             worktreePath: thread.worktreePath,
             createdAt: parseDate(thread.createdAt),
             updatedAt: parseDate(thread.updatedAt),
-            state: mapThreadState(
+            state: Self.resolveThreadState(
                 latestTurn: thread.latestTurn,
                 session: thread.session,
                 hasApprovals: false,
                 hasUserInput: false,
-                backgroundWorkIsActive: backgroundWorkIsActive
+                backgroundLiveness: backgroundLiveness
             ),
             providerID: thread.modelSelection.instanceId,
             providerName: threadProviderName(
@@ -3839,18 +3842,19 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         }
 
         var mappedThread = mapThread(thread, environment: environment)
-        let backgroundWorkIsActive = backgroundLiveness(
+        let backgroundLiveness = backgroundLiveness(
             threadID: thread.id,
             environmentID: environment.id
-        ) == .working
+        )
+        let backgroundWorkIsActive = backgroundLiveness == .working
         let sessionIsLive = thread.session?.status == "starting"
             || thread.session?.status == "running"
-        mappedThread.state = mapThreadState(
+        mappedThread.state = Self.resolveThreadState(
             latestTurn: thread.latestTurn,
             session: thread.session,
             hasApprovals: !cache.approvals.isEmpty,
             hasUserInput: !cache.userInputs.isEmpty,
-            backgroundWorkIsActive: backgroundWorkIsActive
+            backgroundLiveness: backgroundLiveness
         )
         return FeatureThreadDetail(
             thread: mappedThread,
@@ -4457,19 +4461,20 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         }
     }
 
-    private func mapThreadState(
+    nonisolated static func resolveThreadState(
         latestTurn: OrchestrationLatestTurn?,
         session: OrchestrationSession?,
         hasApprovals: Bool,
         hasUserInput: Bool,
-        backgroundWorkIsActive: Bool
+        backgroundLiveness: OrchestrationBackgroundLiveness?
     ) -> FeatureThreadState {
         if hasApprovals { return .waitingForApproval }
         if hasUserInput { return .waitingForInput }
         if session?.status == "starting" { return .queued }
         if session?.status == "running" || latestTurn?.state == "running" { return .working }
         if session?.status == "error" || latestTurn?.state == "error" { return .failed }
-        if backgroundWorkIsActive { return .working }
+        if backgroundLiveness == .working { return .working }
+        if backgroundLiveness == .monitoring { return .monitoring }
         if latestTurn?.state == "completed" { return .completed }
         return .idle
     }

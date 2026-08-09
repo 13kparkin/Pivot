@@ -27,7 +27,9 @@ enum PlatformThreadTransitionClassifier {
                 .warning
             case .failed:
                 .error
-            case .completed where oldState == .working || oldState == .queued:
+            case .completed where oldState == .working
+                || oldState == .queued
+                || oldState == .monitoring:
                 .success
             default:
                 nil

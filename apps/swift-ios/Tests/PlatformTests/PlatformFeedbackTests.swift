@@ -17,19 +17,21 @@ struct PlatformFeedbackTests {
             "approval": .working,
             "failure": .working,
             "complete": .working,
+            "monitor-complete": .monitoring,
             "idle-complete": .idle,
         ]
         let current = [
             thread(id: "approval", state: .waitingForApproval),
             thread(id: "failure", state: .failed),
             thread(id: "complete", state: .completed),
+            thread(id: "monitor-complete", state: .completed),
             thread(id: "idle-complete", state: .completed),
         ]
 
         let signals = PlatformThreadTransitionClassifier.signals(previous: previous, current: current)
 
-        #expect(signals.map(\.thread.id) == ["approval", "failure", "complete"])
-        #expect(signals.map(\.kind) == [.warning, .error, .success])
+        #expect(signals.map(\.thread.id) == ["approval", "failure", "complete", "monitor-complete"])
+        #expect(signals.map(\.kind) == [.warning, .error, .success, .success])
     }
 
     @Test

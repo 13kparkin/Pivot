@@ -517,7 +517,7 @@ enum DailyUXSidebarRefresh {
         switch thread.state {
         case .idle, .failed, .completed:
             break
-        case .queued, .working, .waitingForApproval, .waitingForInput:
+        case .queued, .working, .monitoring, .waitingForApproval, .waitingForInput:
             return nil
         }
         let boundary = lastActivityAt.addingTimeInterval(3 * 24 * 60 * 60)
@@ -571,6 +571,7 @@ enum HomeThreadStatus: String, Sendable, Equatable {
     case approval
     case input
     case working
+    case monitoring
     case failed
     case done
     case ready
@@ -591,6 +592,8 @@ extension FeatureThread {
         switch state {
         case .queued, .working:
             .working
+        case .monitoring:
+            .monitoring
         case .waitingForApproval:
             .approval
         case .waitingForInput:
@@ -609,6 +612,7 @@ extension FeatureThread {
         case .approval: "Approval"
         case .input: "Input"
         case .working: "Working"
+        case .monitoring: "Monitoring"
         case .failed: "Failed"
         case .done: "Done"
         case .ready: nil
@@ -652,7 +656,7 @@ extension FeatureThread {
 
     func isEffectivelySettled(at now: Date) -> Bool {
         switch state {
-        case .queued, .working, .waitingForApproval, .waitingForInput:
+        case .queued, .working, .monitoring, .waitingForApproval, .waitingForInput:
             return false
         case .idle, .failed, .completed:
             break

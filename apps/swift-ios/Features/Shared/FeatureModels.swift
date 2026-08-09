@@ -115,6 +115,7 @@ public enum FeatureThreadState: String, Sendable, Codable {
     case idle
     case queued
     case working
+    case monitoring
     case waitingForApproval
     case waitingForInput
     case failed

@@ -291,13 +291,14 @@ public struct ThreadDetailView: View {
         case .working: "circle.dotted"
         case .done: "checkmark.circle"
         case .failed: "exclamationmark.circle"
-        case .approval, .input, .ready: nil
+        case .approval, .input, .monitoring, .ready: nil
         }
     }
 
     private var headerStatusColor: Color {
         switch currentThread.homeStatus {
         case .working: T3Colors.statusRunning
+        case .monitoring: T3Colors.statusRunning
         case .approval: T3Colors.warning
         case .input: T3Colors.statusInput
         case .failed: T3Colors.danger
@@ -307,7 +308,9 @@ public struct ThreadDetailView: View {
     }
 
     private func timeline(_ detail: FeatureThreadDetail) -> some View {
-        let isWorking = detail.thread.state == .working || detail.thread.state == .queued
+        let isWorking = detail.thread.state == .working
+            || detail.thread.state == .queued
+            || detail.thread.state == .monitoring
         return Group {
             if detail.messages.isEmpty, !isWorking {
                 ContentUnavailableView(
@@ -325,6 +328,7 @@ public struct ThreadDetailView: View {
                     isWorking: isWorking,
                     activeSubagentCount: detail.activeSubagentCount,
                     backgroundWorkIsActive: detail.backgroundWorkIsActive,
+                    isMonitoring: detail.thread.state == .monitoring,
                     canLoadEarlier: detail.page?.hasMore == true,
                     isLoadingEarlier: detail.page?.isLoading == true,
                     onLoadEarlier: {
@@ -636,6 +640,7 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
     let isWorking: Bool
     let activeSubagentCount: Int
     let backgroundWorkIsActive: Bool
+    let isMonitoring: Bool
     let canLoadEarlier: Bool
     let isLoadingEarlier: Bool
     let onLoadEarlier: () -> Void
@@ -670,6 +675,7 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
             isWorking: isWorking,
             activeSubagentCount: activeSubagentCount,
             backgroundWorkIsActive: backgroundWorkIsActive,
+            isMonitoring: isMonitoring,
             canLoadEarlier: canLoadEarlier,
             isLoadingEarlier: isLoadingEarlier,
             onLoadEarlier: onLoadEarlier,
@@ -719,6 +725,7 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
         private var currentIsWorking = false
         private var currentActiveSubagentCount = 0
         private var currentBackgroundWorkIsActive = false
+        private var currentIsMonitoring = false
         private var currentCanLoadEarlier = false
         private var currentIsLoadingEarlier = false
         private var markdownPrefetches: [String: MarkdownPrefetch] = [:]
@@ -748,7 +755,8 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
                     cell.contentConfiguration = UIHostingConfiguration {
                         FeatureThreadWorkingIndicator(
                             activeSubagentCount: self?.currentActiveSubagentCount ?? 0,
-                            backgroundWorkIsActive: self?.currentBackgroundWorkIsActive == true
+                            backgroundWorkIsActive: self?.currentBackgroundWorkIsActive == true,
+                            isMonitoring: self?.currentIsMonitoring == true
                         )
                     }
                     .margins(.all, 0)
@@ -791,6 +799,7 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
             isWorking: Bool,
             activeSubagentCount: Int,
             backgroundWorkIsActive: Bool,
+            isMonitoring: Bool,
             canLoadEarlier: Bool,
             isLoadingEarlier: Bool,
             onLoadEarlier: @escaping () -> Void,
@@ -807,6 +816,7 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
             let workingChanged = currentIsWorking != isWorking
             let workingDetailChanged = currentActiveSubagentCount != activeSubagentCount
                 || currentBackgroundWorkIsActive != backgroundWorkIsActive
+                || currentIsMonitoring != isMonitoring
             let loadEarlierChanged = currentCanLoadEarlier != canLoadEarlier
                 || currentIsLoadingEarlier != isLoadingEarlier
             guard threadChanged || typeSizeChanged || revisionChanged || workingChanged
@@ -827,6 +837,7 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
             currentIsWorking = isWorking
             currentActiveSubagentCount = activeSubagentCount
             currentBackgroundWorkIsActive = backgroundWorkIsActive
+            currentIsMonitoring = isMonitoring
             currentCanLoadEarlier = canLoadEarlier
             currentIsLoadingEarlier = isLoadingEarlier
             guard threadChanged || idsChanged || !changedIDs.isEmpty || workingChanged
@@ -1193,8 +1204,12 @@ private struct FeatureLoadEarlierTurnsButton: View {
 private struct FeatureThreadWorkingIndicator: View {
     let activeSubagentCount: Int
     let backgroundWorkIsActive: Bool
+    let isMonitoring: Bool
 
     private var title: String {
+        if isMonitoring {
+            return "Monitoring in the background"
+        }
         if activeSubagentCount == 1 {
             return "1 subagent is working"
         }
@@ -1205,7 +1220,7 @@ private struct FeatureThreadWorkingIndicator: View {
     }
 
     private var detail: String? {
-        backgroundWorkIsActive ? nil : "New output will appear here"
+        backgroundWorkIsActive || isMonitoring ? nil : "New output will appear here"
     }
 
     var body: some View {

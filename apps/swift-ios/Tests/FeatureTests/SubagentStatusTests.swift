@@ -80,7 +80,33 @@ struct SubagentStatusTests {
     }
 
     @Test
-    func threadShellDecodesBackgroundLiveness() throws {
+    func monitoringRemainsDistinctFromActiveAgentWork() {
+        let working = NativeFeatureClient.resolveThreadState(
+            latestTurn: nil,
+            session: nil,
+            hasApprovals: false,
+            hasUserInput: false,
+            backgroundLiveness: .working
+        )
+        let monitoring = NativeFeatureClient.resolveThreadState(
+            latestTurn: nil,
+            session: nil,
+            hasApprovals: false,
+            hasUserInput: false,
+            backgroundLiveness: .monitoring
+        )
+
+        #expect(working == .working)
+        #expect(monitoring == .monitoring)
+    }
+
+    @Test(arguments: [
+        OrchestrationBackgroundLiveness.working,
+        OrchestrationBackgroundLiveness.monitoring,
+    ])
+    func threadShellDecodesBackgroundLiveness(
+        _ backgroundLiveness: OrchestrationBackgroundLiveness
+    ) throws {
         let shell = OrchestrationThreadShell(
             id: "thread-1",
             projectId: "project-1",
@@ -104,7 +130,7 @@ struct SubagentStatusTests {
             hasPendingApprovals: false,
             hasPendingUserInput: false,
             hasActionableProposedPlan: false,
-            backgroundLiveness: .working
+            backgroundLiveness: backgroundLiveness
         )
 
         let decoded = try JSONDecoder.t3.decode(
@@ -112,7 +138,7 @@ struct SubagentStatusTests {
             from: JSONEncoder.t3.encode(shell)
         )
 
-        #expect(decoded.backgroundLiveness == .working)
+        #expect(decoded.backgroundLiveness == backgroundLiveness)
     }
 
     private func activity(

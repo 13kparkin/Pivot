@@ -1026,13 +1026,14 @@ struct FeatureThreadRow: View {
         case .working: "circle.dotted"
         case .done: "checkmark.circle"
         case .failed: "exclamationmark.circle"
-        case .approval, .input, .ready: nil
+        case .approval, .input, .monitoring, .ready: nil
         }
     }
 
     private var statusColor: Color {
         switch thread.homeStatus {
         case .working: T3Colors.statusRunning
+        case .monitoring: T3Colors.statusRunning
         case .approval: T3Colors.warning
         case .input: T3Colors.statusInput
         case .failed: T3Colors.danger
