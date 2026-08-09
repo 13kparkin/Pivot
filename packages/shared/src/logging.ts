@@ -1,6 +1,7 @@
 // @effect-diagnostics nodeBuiltinImport:off
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
+import * as NodeZlib from "node:zlib";
 import * as Schema from "effect/Schema";
 
 export interface RotatingFileSinkOptions {
@@ -8,6 +9,13 @@ export interface RotatingFileSinkOptions {
   readonly maxBytes: number;
   readonly maxFiles: number;
   readonly throwOnError?: boolean;
+  /**
+   * Gzip backups as they rotate out (`file.1.gz`, `file.2.gz`, ...). Span
+   * NDJSON compresses ~10x, so the same maxFiles budget covers an order of
+   * magnitude more history. Compression is synchronous but rare (once per
+   * maxBytes of writes) and costs ~60ms per 10 MB.
+   */
+  readonly compressBackups?: boolean;
 }
 
 export class RotatingFileSinkConfigurationError extends Schema.TaggedErrorClass<RotatingFileSinkConfigurationError>()(
@@ -46,6 +54,7 @@ export class RotatingFileSink {
   private readonly maxBytes: number;
   private readonly maxFiles: number;
   private readonly throwOnError: boolean;
+  private readonly compressBackups: boolean;
   private currentSize = 0;
 
   constructor(options: RotatingFileSinkOptions) {
@@ -68,6 +77,7 @@ export class RotatingFileSink {
     this.maxBytes = options.maxBytes;
     this.maxFiles = options.maxFiles;
     this.throwOnError = options.throwOnError ?? false;
+    this.compressBackups = options.compressBackups ?? false;
 
     try {
       NodeFS.mkdirSync(NodePath.dirname(this.filePath), { recursive: true });
@@ -110,21 +120,35 @@ export class RotatingFileSink {
 
   private rotate(): void {
     try {
-      const oldest = this.withSuffix(this.maxFiles);
-      if (NodeFS.existsSync(oldest)) {
-        NodeFS.rmSync(oldest, { force: true });
+      for (const oldest of [this.withSuffix(this.maxFiles), this.withSuffix(this.maxFiles, "gz")]) {
+        if (NodeFS.existsSync(oldest)) {
+          NodeFS.rmSync(oldest, { force: true });
+        }
       }
 
+      // Backups written before compressBackups was enabled keep their plain
+      // suffix and age along the chain unchanged.
       for (let index = this.maxFiles - 1; index >= 1; index -= 1) {
+        const compressedSource = this.withSuffix(index, "gz");
+        if (NodeFS.existsSync(compressedSource)) {
+          NodeFS.renameSync(compressedSource, this.withSuffix(index + 1, "gz"));
+        }
         const source = this.withSuffix(index);
-        const target = this.withSuffix(index + 1);
         if (NodeFS.existsSync(source)) {
-          NodeFS.renameSync(source, target);
+          NodeFS.renameSync(source, this.withSuffix(index + 1));
         }
       }
 
       if (NodeFS.existsSync(this.filePath)) {
-        NodeFS.renameSync(this.filePath, this.withSuffix(1));
+        if (this.compressBackups) {
+          NodeFS.writeFileSync(
+            this.withSuffix(1, "gz"),
+            NodeZlib.gzipSync(NodeFS.readFileSync(this.filePath)),
+          );
+          NodeFS.rmSync(this.filePath, { force: true });
+        } else {
+          NodeFS.renameSync(this.filePath, this.withSuffix(1));
+        }
       }
 
       this.currentSize = 0;
@@ -146,7 +170,10 @@ export class RotatingFileSink {
       const baseName = NodePath.basename(this.filePath);
       for (const entry of NodeFS.readdirSync(dir)) {
         if (!entry.startsWith(`${baseName}.`)) continue;
-        const suffix = Number(entry.slice(baseName.length + 1));
+        const rawSuffix = entry.slice(baseName.length + 1);
+        const suffix = Number(
+          rawSuffix.endsWith(".gz") ? rawSuffix.slice(0, -".gz".length) : rawSuffix,
+        );
         if (!Number.isInteger(suffix) || suffix <= this.maxFiles) continue;
         NodeFS.rmSync(NodePath.join(dir, entry), { force: true });
       }
@@ -176,7 +203,9 @@ export class RotatingFileSink {
     }
   }
 
-  private withSuffix(index: number): string {
-    return `${this.filePath}.${index}`;
+  private withSuffix(index: number, extension?: "gz"): string {
+    return extension === undefined
+      ? `${this.filePath}.${index}`
+      : `${this.filePath}.${index}.${extension}`;
   }
 }
