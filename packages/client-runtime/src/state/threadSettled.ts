@@ -3,6 +3,14 @@ import type { OrchestrationThreadShell } from "@t3tools/contracts";
 
 export type ChangeRequestStateLike = "open" | "closed" | "merged";
 
+/** Returns whether the change request state settles the thread immediately. */
+export function changeRequestAutoSettles(
+  state: ChangeRequestStateLike | null | undefined,
+  autoSettleOnMerge = true,
+): boolean {
+  return state === "closed" || (state === "merged" && autoSettleOnMerge);
+}
+
 const DAY_MS = 24 * 60 * 60 * 1_000;
 
 export function threadLastActivityAt(shell: OrchestrationThreadShell): string | null {
@@ -259,8 +267,9 @@ export function effectiveSettled(
   // "active" is the explicit keep-active pin: it suppresses auto-settle
   // until real activity clears it server-side.
   if (shell.settledOverride === "active") return false;
-  if (options.changeRequestState === "closed") return true;
-  if (options.changeRequestState === "merged" && options.autoSettleOnMerge !== false) return true;
+  if (changeRequestAutoSettles(options.changeRequestState, options.autoSettleOnMerge !== false)) {
+    return true;
+  }
   // An open PR is unfinished business regardless of how long the thread has
   // been quiet: review can take days, and hiding the thread would bury the
   // work waiting on it. A configured merge, a close, or an explicit user

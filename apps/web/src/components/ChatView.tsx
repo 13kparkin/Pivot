@@ -27,6 +27,7 @@ import {
   type EnvironmentConnectionPresentation,
 } from "@t3tools/client-runtime/connection";
 import {
+  changeRequestAutoSettles,
   effectiveSettled,
   effectiveSnoozed,
   threadWokeAt,
@@ -4059,15 +4060,14 @@ function ChatViewContent(props: ChatViewProps) {
     if (activeThreadRef === null || activeThreadWokeAt === null) return;
     markThreadVisited(scopedThreadKey(activeThreadRef), activeThreadWokeAt);
   }, [activeThreadRef, activeThreadWokeAt, markThreadVisited]);
-  // Mirror of the sidebar's Woke pill for the open thread: same visit
-  // comparison, same merged/closed-PR suppression (finished work needs no
-  // wake-up call). Drives the dismissible composer banner below.
+  // Mirror of the sidebar's Woke pill for the open thread. It uses the same
+  // visit comparison and change request settle rule.
   const activeThreadLastVisitedAt = useUiStateStore((store) =>
     activeThreadKey === null ? undefined : store.threadLastVisitedAtById[activeThreadKey],
   );
   const activeThreadWokeVisible = useMemo(() => {
     if (activeThreadWokeAt === null) return false;
-    if (activeThreadPr?.state === "merged" || activeThreadPr?.state === "closed") return false;
+    if (changeRequestAutoSettles(activeThreadPr?.state, autoSettleOnMerge)) return false;
     const wokeAtMs = Date.parse(activeThreadWokeAt);
     if (Number.isNaN(wokeAtMs)) return false;
     // Having the thread open counts as a visit at completedAt (the effect
@@ -4089,6 +4089,7 @@ function ChatViewContent(props: ChatViewProps) {
     activeThreadLastVisitedAt,
     activeThreadPr?.state,
     activeThreadWokeAt,
+    autoSettleOnMerge,
   ]);
   const activeThreadSettled = useMemo(() => {
     if (activeThreadShell === null || !supportsSettlement) return false;
