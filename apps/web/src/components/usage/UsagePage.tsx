@@ -1,7 +1,7 @@
-import type { UsageProviderKind } from "@t3tools/contracts";
+import type { EnvironmentId, UsageProviderKind } from "@t3tools/contracts";
 import { useCanGoBack, useNavigate, useRouter } from "@tanstack/react-router";
 import { ArrowLeftIcon, CheckIcon, RefreshCwIcon, XIcon } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import { cn } from "../../lib/utils";
 import { useUsage, type EnvironmentUsageStatus } from "../../state/usage";
@@ -15,6 +15,7 @@ import {
   makeWindow,
 } from "@t3tools/shared/usageFormat";
 import { ScrollArea } from "../ui/scroll-area";
+import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { UsageChartLegend, UsageProviderChart, type UsageChartMetric } from "./UsageProviderChart";
 import { PROVIDER_COLOR, PROVIDER_LABEL, PROVIDER_MARK, PROVIDER_ORDER } from "./usageProviders";
 
@@ -28,6 +29,7 @@ export function UsagePage() {
   const [windowDays, setWindowDays] = useState<number>(30);
   const [metric, setMetric] = useState<UsageChartMetric>("cost");
   const [breakdown, setBreakdown] = useState<"model" | "day">("model");
+  const [environmentFilter, setEnvironmentFilter] = useState<EnvironmentId | null>(null);
   const canGoBack = useCanGoBack();
   const navigate = useNavigate();
   const router = useRouter();
@@ -35,12 +37,18 @@ export function UsagePage() {
   // Recomputed only when the window length changes, so a re-render does not
   // shift the range and refetch every environment.
   const window = useMemo(() => makeWindow(windowDays), [windowDays]);
-  const { merged, environments, isPending, isPartial, refresh } = useUsage(window);
+  const { merged, options, environments, selectedEnvironmentId, isPending, isPartial, refresh } =
+    useUsage(window, environmentFilter);
+  useEffect(() => {
+    if (environmentFilter !== null && selectedEnvironmentId === null) {
+      setEnvironmentFilter(null);
+    }
+  }, [environmentFilter, selectedEnvironmentId]);
 
-  // Hold the content until every environment is terminal. Rendering merged
-  // totals while devices are still answering makes every number on the page
-  // jump as each one lands.
-  const settling = isPending || isPartial;
+  const usableEnvironmentCount = environments.filter(
+    (environment) =>
+      environment.summary !== null && !merged.staleEnvironments.includes(environment.environmentId),
+  ).length;
 
   const days = useMemo(
     () => enumerateDays(window.sinceDay, window.untilDay),
@@ -88,7 +96,40 @@ export function UsagePage() {
               </p>
             </div>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            <Select
+              value={
+                selectedEnvironmentId === null ? "all" : `environment:${selectedEnvironmentId}`
+              }
+              onValueChange={(value) => {
+                if (value === null) return;
+                setEnvironmentFilter(
+                  value === "all" ? null : (value.slice("environment:".length) as EnvironmentId),
+                );
+              }}
+              items={[
+                { value: "all", label: "All environments" },
+                ...options.map((environment) => ({
+                  value: `environment:${environment.environmentId}`,
+                  label: environment.label,
+                })),
+              ]}
+            >
+              <SelectTrigger size="sm" className="w-44" aria-label="Filter environments">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectPopup align="end" alignItemWithTrigger={false}>
+                <SelectItem value="all">All environments</SelectItem>
+                {options.map((environment) => (
+                  <SelectItem
+                    key={environment.environmentId}
+                    value={`environment:${environment.environmentId}`}
+                  >
+                    {environment.label}
+                  </SelectItem>
+                ))}
+              </SelectPopup>
+            </Select>
             <div className="flex overflow-hidden rounded-md border border-border">
               {WINDOW_OPTIONS.map((option) => (
                 <button
@@ -117,10 +158,26 @@ export function UsagePage() {
           </div>
         </header>
 
-        {settling ? (
+        {isPending || (usableEnvironmentCount === 0 && isPartial) ? (
           <>
             {environments.length > 1 ? <UsageDeviceStrip environments={environments} /> : null}
             <UsageSkeleton />
+          </>
+        ) : options.length === 0 ? (
+          <UsageEmptyState>Connect an environment to see usage.</UsageEmptyState>
+        ) : usableEnvironmentCount === 0 ? (
+          <>
+            <UsageCoverageNotice
+              environments={environments}
+              duplicateSources={merged.duplicateSources}
+              staleEnvironments={merged.staleEnvironments}
+              isPartial={isPartial}
+            />
+            <UsageEmptyState>
+              {selectedEnvironmentId === null
+                ? "No connected environment could report usage."
+                : "This environment is unavailable for usage."}
+            </UsageEmptyState>
           </>
         ) : (
           <>
@@ -128,6 +185,7 @@ export function UsagePage() {
               environments={environments}
               duplicateSources={merged.duplicateSources}
               staleEnvironments={merged.staleEnvironments}
+              isPartial={isPartial}
             />
 
             {/* Cost first: the financial answer, then the provider split. */}
@@ -396,35 +454,67 @@ function Metric({
 }
 
 /**
- * Says plainly when the totals are incomplete: an environment that failed, or
- * one whose transcripts another environment already reported. Environments
- * that are still answering never reach this notice; the page shows the
- * loading skeleton until every one is terminal.
+ * Explains incomplete totals without hiding healthy environment data.
  */
 function UsageCoverageNotice({
   environments,
   duplicateSources,
   staleEnvironments,
+  isPartial,
 }: {
   readonly environments: readonly EnvironmentUsageStatus[];
   readonly duplicateSources: readonly string[];
   readonly staleEnvironments: readonly string[];
+  readonly isPartial: boolean;
 }) {
+  const settling = environments.filter(
+    (environment) => environment.phase === "connecting" || environment.phase === "reconnecting",
+  );
+  const unavailable = environments.filter(
+    (environment) =>
+      environment.phase === "available" ||
+      environment.phase === "offline" ||
+      environment.phase === "error",
+  );
   const failed = environments.filter((environment) => environment.error !== null);
   const stale = environments.filter((environment) =>
     staleEnvironments.includes(environment.environmentId),
   );
-  if (failed.length === 0 && stale.length === 0 && duplicateSources.length === 0) {
+  if (
+    settling.length === 0 &&
+    unavailable.length === 0 &&
+    failed.length === 0 &&
+    stale.length === 0 &&
+    duplicateSources.length === 0 &&
+    !isPartial
+  ) {
     return null;
   }
 
   return (
     <div className="flex flex-col gap-1 border border-border px-3 py-2 text-xs text-muted-foreground">
+      {isPartial ? <span>Some environments are still reporting. Totals are partial.</span> : null}
+      {settling.map((environment) => (
+        <span key={environment.environmentId}>
+          {environment.label} is {environment.phase}.
+        </span>
+      ))}
+      {unavailable.map((environment) => (
+        <span key={environment.environmentId}>
+          {environment.label} is{" "}
+          {environment.phase === "available"
+            ? "not connected"
+            : environment.phase === "error"
+              ? "unavailable"
+              : environment.phase}
+          .
+        </span>
+      ))}
       {failed.map((environment) => (
-        <span key={environment.label}>{environment.label} could not report usage.</span>
+        <span key={environment.environmentId}>{environment.label} could not report usage.</span>
       ))}
       {stale.map((environment) => (
-        <span key={environment.label}>
+        <span key={environment.environmentId}>
           {environment.label} runs an older server version and is excluded from totals.
         </span>
       ))}
@@ -438,10 +528,16 @@ function UsageCoverageNotice({
   );
 }
 
+function UsageEmptyState({ children }: { readonly children: string }) {
+  return (
+    <div className="border border-border px-6 py-16 text-center text-sm text-muted-foreground">
+      {children}
+    </div>
+  );
+}
+
 /**
- * Per-device progress while the page waits for every environment to answer.
- * Only rendered with two or more devices; a lone device has nothing to
- * enumerate.
+ * Per-device progress while connected environments answer.
  */
 function UsageDeviceStrip({
   environments,
@@ -449,7 +545,7 @@ function UsageDeviceStrip({
   readonly environments: readonly EnvironmentUsageStatus[];
 }) {
   const scanning = environments.filter(
-    (environment) => environment.summary === null && environment.error === null,
+    (environment) => environment.isPending && environment.summary === null,
   );
   return (
     <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1 border border-border px-3 py-2 text-xs">
@@ -465,7 +561,12 @@ function UsageDeviceStrip({
             </span>
           );
         }
-        if (environment.error !== null) {
+        if (
+          environment.error !== null ||
+          environment.phase === "available" ||
+          environment.phase === "offline" ||
+          environment.phase === "error"
+        ) {
           return (
             <span
               key={environment.environmentId}
