@@ -219,8 +219,7 @@ final class NativeMultiEnvironmentTests: XCTestCase {
     }
 
     func testAggregateRefreshRetriesTransientEnvironmentLoadFailures() async throws {
-        let retryObserved = expectation(description: "aggregate refresh retried")
-        let loader = FailOnceAggregateEnvironmentLoader(retryObserved: retryObserved)
+        let loader = FailOnceAggregateEnvironmentLoader()
         let fixture = try await makeFixture(
             aggregateRefreshInterval: .milliseconds(5),
             aggregateEnvironmentLoader: { runtime in
@@ -231,19 +230,14 @@ final class NativeMultiEnvironmentTests: XCTestCase {
 
         _ = try await fixture.client.initialSnapshot()
 
-        await fulfillment(of: [retryObserved], timeout: 1)
+        await loader.waitForCallCount(2)
         let retryCallCount = await loader.callCount
         XCTAssertGreaterThanOrEqual(retryCallCount, 2)
         await fixture.client.disconnect()
     }
 
     func testSameClientSnapshotRestartsAggregateRefresh() async throws {
-        let firstLoadStarted = expectation(description: "first aggregate load started")
-        let restartedLoadObserved = expectation(description: "restarted aggregate load observed")
-        let loader = BlockingFirstAggregateEnvironmentLoader(
-            firstLoadStarted: firstLoadStarted,
-            restartedLoadObserved: restartedLoadObserved
-        )
+        let loader = BlockingFirstAggregateEnvironmentLoader()
         let fixture = try await makeFixture(
             aggregateRefreshInterval: .milliseconds(5),
             aggregateEnvironmentLoader: { runtime in
@@ -253,11 +247,11 @@ final class NativeMultiEnvironmentTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: fixture.directory) }
 
         _ = try await fixture.client.initialSnapshot()
-        await fulfillment(of: [firstLoadStarted], timeout: 1)
+        await loader.waitForCallCount(1)
 
         _ = try await fixture.client.initialSnapshot()
 
-        await fulfillment(of: [restartedLoadObserved], timeout: 1)
+        await loader.waitForCallCount(2)
         let restartedCallCount = await loader.callCount
         XCTAssertGreaterThanOrEqual(restartedCallCount, 2)
         await fixture.client.disconnect()
@@ -485,7 +479,8 @@ final class NativeMultiEnvironmentTests: XCTestCase {
                 ]
             ),
             httpTransport: transport,
-            webSocketConnector: UnavailableMultiEnvironmentWebSocketConnector()
+            webSocketConnector: UnavailableMultiEnvironmentWebSocketConnector(),
+            rpcConnectionWaitTimeout: .milliseconds(5)
         )
         let settings = UserDefaults(
             suiteName: "t3-native-multi-\(UUID().uuidString)"
@@ -506,20 +501,34 @@ final class NativeMultiEnvironmentTests: XCTestCase {
 }
 
 private actor FailOnceAggregateEnvironmentLoader {
-    private let retryObserved: XCTestExpectation
     private(set) var callCount = 0
-
-    init(retryObserved: XCTestExpectation) {
-        self.retryObserved = retryObserved
-    }
+    private var callCountWaiters: [(
+        target: Int,
+        continuation: CheckedContinuation<Void, Never>
+    )] = []
 
     func load(from runtime: EnvironmentRuntime) async throws -> [Environment] {
         callCount += 1
+        resumeSatisfiedWaiters()
         if callCount == 1 {
             throw URLError(.cannotOpenFile)
         }
-        retryObserved.fulfill()
         return try await runtime.environments()
+    }
+
+    func waitForCallCount(_ target: Int) async {
+        guard callCount < target else { return }
+        await withCheckedContinuation { continuation in
+            callCountWaiters.append((target, continuation))
+        }
+    }
+
+    private func resumeSatisfiedWaiters() {
+        let satisfied = callCountWaiters.filter { callCount >= $0.target }
+        callCountWaiters.removeAll { callCount >= $0.target }
+        for waiter in satisfied {
+            waiter.continuation.resume()
+        }
     }
 }
 
@@ -532,26 +541,34 @@ private actor CountingAggregateEnvironmentLoader {
 }
 
 private actor BlockingFirstAggregateEnvironmentLoader {
-    private let firstLoadStarted: XCTestExpectation
-    private let restartedLoadObserved: XCTestExpectation
     private(set) var callCount = 0
-
-    init(
-        firstLoadStarted: XCTestExpectation,
-        restartedLoadObserved: XCTestExpectation
-    ) {
-        self.firstLoadStarted = firstLoadStarted
-        self.restartedLoadObserved = restartedLoadObserved
-    }
+    private var callCountWaiters: [(
+        target: Int,
+        continuation: CheckedContinuation<Void, Never>
+    )] = []
 
     func load(from runtime: EnvironmentRuntime) async throws -> [Environment] {
         callCount += 1
+        resumeSatisfiedWaiters()
         if callCount == 1 {
-            firstLoadStarted.fulfill()
             try await Task.sleep(for: .seconds(60))
         }
-        restartedLoadObserved.fulfill()
         return try await runtime.environments()
+    }
+
+    func waitForCallCount(_ target: Int) async {
+        guard callCount < target else { return }
+        await withCheckedContinuation { continuation in
+            callCountWaiters.append((target, continuation))
+        }
+    }
+
+    private func resumeSatisfiedWaiters() {
+        let satisfied = callCountWaiters.filter { callCount >= $0.target }
+        callCountWaiters.removeAll { callCount >= $0.target }
+        for waiter in satisfied {
+            waiter.continuation.resume()
+        }
     }
 }
 

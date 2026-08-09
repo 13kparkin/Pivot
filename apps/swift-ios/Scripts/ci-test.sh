@@ -54,5 +54,10 @@ xcodebuild test \
   -destination "platform=iOS Simulator,id=${SIMULATOR_ID}" \
   -derivedDataPath "${DERIVED_DATA_PATH}" \
   -maximum-concurrent-test-simulator-destinations 1 \
+  -parallel-testing-enabled NO \
+  -collect-test-diagnostics never \
+  -test-timeouts-enabled YES \
+  -default-test-execution-time-allowance 30 \
+  -maximum-test-execution-time-allowance 60 \
   -only-testing:T3CodeTests \
   CODE_SIGNING_ALLOWED=NO

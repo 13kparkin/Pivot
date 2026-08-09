@@ -972,6 +972,7 @@ public actor EnvironmentRuntime {
     private let httpTransport: any HTTPTransport
     private let webSocketConnector: any WebSocketConnecting
     private let managedAuthorization: (any ManagedEnvironmentAuthorizing)?
+    private let rpcConnectionWaitTimeout: Duration
     private var clients: [String: T3Client] = [:]
 
     public init(
@@ -979,13 +980,15 @@ public actor EnvironmentRuntime {
         credentialStore: any CredentialStore = KeychainCredentialStore(),
         httpTransport: any HTTPTransport = URLSessionHTTPTransport(),
         webSocketConnector: any WebSocketConnecting = URLSessionWebSocketConnector(),
-        managedAuthorization: (any ManagedEnvironmentAuthorizing)? = nil
+        managedAuthorization: (any ManagedEnvironmentAuthorizing)? = nil,
+        rpcConnectionWaitTimeout: Duration = .seconds(4)
     ) {
         self.environmentStore = environmentStore
         self.credentialStore = credentialStore
         self.httpTransport = httpTransport
         self.webSocketConnector = webSocketConnector
         self.managedAuthorization = managedAuthorization
+        self.rpcConnectionWaitTimeout = rpcConnectionWaitTimeout
         supportsManagedAuthorization = managedAuthorization != nil
     }
 
@@ -1180,7 +1183,8 @@ public actor EnvironmentRuntime {
                 credentialStore: credentialStore,
                 httpTransport: httpTransport,
                 webSocketConnector: webSocketConnector,
-                managedAuthorization: managedAuthorization
+                managedAuthorization: managedAuthorization,
+                rpcConnectionWaitTimeout: rpcConnectionWaitTimeout
             )
             clients[environment.id] = replacement
             Task { await existing.disconnect() }
@@ -1191,7 +1195,8 @@ public actor EnvironmentRuntime {
             credentialStore: credentialStore,
             httpTransport: httpTransport,
             webSocketConnector: webSocketConnector,
-            managedAuthorization: managedAuthorization
+            managedAuthorization: managedAuthorization,
+            rpcConnectionWaitTimeout: rpcConnectionWaitTimeout
         )
         clients[environment.id] = client
         return client
@@ -1206,7 +1211,8 @@ public actor EnvironmentRuntime {
             credentialStore: credentialStore,
             httpTransport: httpTransport,
             webSocketConnector: webSocketConnector,
-            managedAuthorization: managedAuthorization
+            managedAuthorization: managedAuthorization,
+            rpcConnectionWaitTimeout: rpcConnectionWaitTimeout
         )
     }
 }
