@@ -7,11 +7,6 @@ export interface EnvironmentUsageOption {
   readonly phase: EnvironmentConnectionPhase;
 }
 
-/** Connection phases where a usage answer may still arrive without user action. */
-export function isEnvironmentUsageSettling(phase: EnvironmentConnectionPhase): boolean {
-  return phase === "connecting" || phase === "reconnecting" || phase === "connected";
-}
-
 export function resolveEnvironmentUsageScope(
   options: readonly EnvironmentUsageOption[],
   selectedEnvironmentId: EnvironmentId | null,
@@ -35,6 +30,7 @@ export function resolveEnvironmentUsageScope(
 
 interface EnvironmentUsageLoadingEntry {
   readonly phase: EnvironmentConnectionPhase;
+  readonly isPending: boolean;
   readonly summary: unknown | null;
   readonly error: string | null;
 }
@@ -42,11 +38,7 @@ interface EnvironmentUsageLoadingEntry {
 export function isEnvironmentUsageStillReporting(
   environment: EnvironmentUsageLoadingEntry,
 ): boolean {
-  return (
-    isEnvironmentUsageSettling(environment.phase) &&
-    environment.summary === null &&
-    environment.error === null
-  );
+  return environment.isPending && environment.summary === null && environment.error === null;
 }
 
 export function getEnvironmentUsageLoadingState(

@@ -473,9 +473,10 @@ function UsageCoverageNotice(props: {
   );
   const unavailable = props.environments.filter(
     (environment) =>
-      environment.phase === "available" ||
-      environment.phase === "offline" ||
-      environment.phase === "error",
+      !environment.isPending &&
+      (environment.phase === "available" ||
+        environment.phase === "offline" ||
+        environment.phase === "error"),
   );
   const failed = props.environments.filter((environment) => environment.error !== null);
   const stale = props.environments.filter((environment) =>

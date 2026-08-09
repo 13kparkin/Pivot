@@ -19,12 +19,12 @@ import { AsyncResult, Atom } from "effect/unstable/reactivity";
 import { useCallback, useMemo } from "react";
 
 import { mergeUsage, type EnvironmentUsage, type MergedUsage } from "@t3tools/shared/usageMerge";
+import { environmentCatalog } from "../connection/catalog";
 import { appAtomRegistry } from "../rpc/atomRegistry";
 import { environmentPresentations } from "./presentation";
 import { serverEnvironment } from "./server";
 import {
   getEnvironmentUsageLoadingState,
-  isEnvironmentUsageSettling,
   resolveEnvironmentUsageScope,
   type EnvironmentUsageOption,
 } from "./usageEnvironmentScope";
@@ -39,6 +39,7 @@ export interface EnvironmentUsageStatus extends EnvironmentUsageOption {
 }
 
 interface UsageAtomValue {
+  readonly isCatalogReady: boolean;
   readonly options: readonly EnvironmentUsageOption[];
   readonly environments: readonly EnvironmentUsageStatus[];
   readonly selectedEnvironmentId: EnvironmentId | null;
@@ -52,6 +53,7 @@ interface UsageAtomKey {
 const usageByWindowAtom = Atom.family((key: string) =>
   Atom.make((get): UsageAtomValue => {
     const { input, selectedEnvironmentId } = JSON.parse(key) as UsageAtomKey;
+    const catalog = get(environmentCatalog.catalogValueAtom);
     const presentations = get(environmentPresentations.presentationsAtom);
     const options = Array.from(presentations, ([environmentId, presentation]) => ({
       environmentId,
@@ -63,20 +65,27 @@ const usageByWindowAtom = Atom.family((key: string) =>
     const environments: EnvironmentUsageStatus[] = [];
     for (const option of scope.environments) {
       const { environmentId } = option;
+      const connectionResult = get(environmentCatalog.stateAtom(environmentId));
       // Keep reading the environment-scoped atom while disconnected so a prior
-      // successful value remains visible. Its waiting state only affects the UI
-      // while the connection is actively settling.
+      // successful value remains visible. Only a connected query can keep the UI loading.
       const result = get(serverEnvironment.usageSummary({ environmentId, input }));
       const failed = option.phase === "connected" && result._tag === "Failure";
       environments.push({
         ...option,
-        isPending: isEnvironmentUsageSettling(option.phase) && result.waiting,
+        isPending:
+          (option.phase === "available" && connectionResult.waiting) ||
+          (option.phase === "connected" && result.waiting),
         error: failed ? "This environment could not report usage." : null,
         summary: Option.getOrNull(AsyncResult.value(result)),
       });
     }
 
-    return { options, environments, selectedEnvironmentId: scope.selectedEnvironmentId };
+    return {
+      isCatalogReady: catalog.isReady,
+      options,
+      environments,
+      selectedEnvironmentId: scope.selectedEnvironmentId,
+    };
   }).pipe(Atom.withLabel(`web-usage:${key}`)),
 );
 
@@ -144,7 +153,7 @@ export function useUsage(
     options: value.options,
     environments: value.environments,
     selectedEnvironmentId: value.selectedEnvironmentId,
-    isPending: loadingState.isPending,
+    isPending: !value.isCatalogReady || loadingState.isPending,
     isPartial: loadingState.isPartial,
     refresh,
   };

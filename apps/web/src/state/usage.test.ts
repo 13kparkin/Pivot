@@ -4,7 +4,6 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   getEnvironmentUsageLoadingState,
-  isEnvironmentUsageSettling,
   isEnvironmentUsageStillReporting,
   resolveEnvironmentUsageScope,
   type EnvironmentUsageOption,
@@ -25,38 +24,47 @@ describe("usage environment scope", () => {
     const scope = resolveEnvironmentUsageScope(options, null);
 
     expect(scope.environments).toEqual(options);
-    expect(isEnvironmentUsageSettling(scope.environments[0]!.phase)).toBe(true);
-    expect(isEnvironmentUsageSettling(scope.environments[1]!.phase)).toBe(false);
   });
 
   it("finishes with healthy totals when another environment is offline", () => {
     expect(
       getEnvironmentUsageLoadingState([
-        { phase: "connected", summary: {}, error: null },
-        { phase: "offline", summary: null, error: null },
+        { phase: "connected", isPending: false, summary: {}, error: null },
+        { phase: "offline", isPending: false, summary: null, error: null },
       ]),
     ).toEqual({ isPending: false, isPartial: false });
   });
 
   it("returns immediately when the only environment is offline", () => {
     expect(
-      getEnvironmentUsageLoadingState([{ phase: "offline", summary: null, error: null }]),
+      getEnvironmentUsageLoadingState([
+        { phase: "offline", isPending: false, summary: null, error: null },
+      ]),
     ).toEqual({ isPending: false, isPartial: false });
   });
 
   it("keeps healthy totals visible while another environment reconnects", () => {
     expect(
       getEnvironmentUsageLoadingState([
-        { phase: "connected", summary: {}, error: null },
-        { phase: "reconnecting", summary: null, error: null },
+        { phase: "connected", isPending: false, summary: {}, error: null },
+        { phase: "reconnecting", isPending: false, summary: null, error: null },
       ]),
-    ).toEqual({ isPending: false, isPartial: true });
+    ).toEqual({ isPending: false, isPartial: false });
+  });
+
+  it("does not wait indefinitely for a reconnecting environment", () => {
+    expect(
+      getEnvironmentUsageLoadingState([
+        { phase: "reconnecting", isPending: false, summary: null, error: null },
+      ]),
+    ).toEqual({ isPending: false, isPartial: false });
   });
 
   it("uses the same reporting state for loading and device progress", () => {
     expect(
       isEnvironmentUsageStillReporting({
-        phase: "reconnecting",
+        phase: "connected",
+        isPending: true,
         summary: null,
         error: null,
       }),
@@ -64,19 +72,19 @@ describe("usage environment scope", () => {
     expect(
       isEnvironmentUsageStillReporting({
         phase: "connected",
+        isPending: false,
         summary: null,
         error: "failed",
       }),
     ).toBe(false);
   });
 
-  it("shows connection transitions as settling but leaves idle entries terminal", () => {
-    expect(isEnvironmentUsageSettling("available")).toBe(false);
-    expect(isEnvironmentUsageSettling("connecting")).toBe(true);
-    expect(isEnvironmentUsageSettling("reconnecting")).toBe(true);
-    expect(isEnvironmentUsageSettling("connected")).toBe(true);
-    expect(isEnvironmentUsageSettling("offline")).toBe(false);
-    expect(isEnvironmentUsageSettling("error")).toBe(false);
+  it("keeps an initial available connection pending until its state resolves", () => {
+    expect(
+      getEnvironmentUsageLoadingState([
+        { phase: "available", isPending: true, summary: null, error: null },
+      ]),
+    ).toEqual({ isPending: true, isPartial: false });
   });
 
   it("keeps a selected offline environment terminal and isolated", () => {
@@ -87,7 +95,6 @@ describe("usage environment scope", () => {
 
     expect(scope.selectedEnvironmentId).toBe("down");
     expect(scope.environments).toEqual([environment("down", "offline")]);
-    expect(isEnvironmentUsageSettling(scope.environments[0]!.phase)).toBe(false);
   });
 
   it("falls back to all environments when the selection disappears", () => {

@@ -473,9 +473,10 @@ function UsageCoverageNotice({
   );
   const unavailable = environments.filter(
     (environment) =>
-      environment.phase === "available" ||
-      environment.phase === "offline" ||
-      environment.phase === "error",
+      !environment.isPending &&
+      (environment.phase === "available" ||
+        environment.phase === "offline" ||
+        environment.phase === "error"),
   );
   const failed = environments.filter((environment) => environment.error !== null);
   const stale = environments.filter((environment) =>
@@ -560,15 +561,19 @@ function UsageDeviceStrip({
             </span>
           );
         }
-        if (
-          environment.error !== null ||
-          environment.phase === "available" ||
-          environment.phase === "offline" ||
-          environment.phase === "error"
-        ) {
+        if (environment.error !== null || !environment.isPending) {
+          const status =
+            environment.error !== null
+              ? "could not report usage"
+              : environment.phase === "available"
+                ? "not connected"
+                : environment.phase === "error"
+                  ? "unavailable"
+                  : environment.phase;
           return (
             <span
               key={environment.environmentId}
+              aria-label={`${environment.label}, ${status}`}
               className="flex items-center gap-1 text-destructive"
             >
               <XIcon className="size-3" aria-hidden />

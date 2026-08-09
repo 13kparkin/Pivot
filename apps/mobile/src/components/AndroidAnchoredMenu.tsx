@@ -279,7 +279,12 @@ export function AndroidAnchoredMenu(props: AndroidAnchoredMenuProps) {
                         key={action.id ?? `${index}-${action.title}`}
                         android_ripple={{ color: rippleColor }}
                         accessibilityRole="menuitem"
-                        accessibilityState={{ disabled, selected: action.state === "on" }}
+                        accessibilityState={{
+                          disabled,
+                          ...(action.state === undefined
+                            ? {}
+                            : { selected: action.state === "on" }),
+                        }}
                         disabled={disabled}
                         className={cn(
                           "min-h-11 flex-row items-center gap-2.5 px-3.5 py-2.5",
