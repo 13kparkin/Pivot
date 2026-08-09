@@ -238,8 +238,13 @@ struct FeatureRootModelTests {
             ]
         )
         client.activateEnvironmentError = FeatureCapabilityUnavailable("Activation")
+        client.threadDetail = FeatureThreadDetail(
+            thread: FeatureThread(id: "old-thread", projectID: "old-project", title: "Old"),
+            messages: [FeatureMessage(id: "message", role: .assistant, text: "Keep me")]
+        )
         let model = testRootModel(client: client)
         await model.reload()
+        _ = await model.detail(for: "old-thread")
 
         let activated = await model.activateEnvironment("target")
 
@@ -248,6 +253,7 @@ struct FeatureRootModelTests {
         #expect(model.snapshot.connection.state == .connected)
         #expect(model.snapshot.environments.first(where: { $0.id == "old" })?.isActive == true)
         #expect(model.snapshot.environments.first(where: { $0.id == "target" })?.isActive == false)
+        #expect(model.details["old-thread"] != nil)
     }
 
     @Test
@@ -291,6 +297,49 @@ struct FeatureRootModelTests {
         #expect(model.snapshot.connection.state == .disconnected)
         #expect(model.snapshot.environments.first?.id == "target")
         #expect(model.snapshot.environments.first?.isActive == true)
+    }
+
+    @Test
+    func connectedRecoveryCompletesPartialActivation() async {
+        let client = FeatureClientStub()
+        client.snapshot = FeatureSnapshot(
+            connection: .init(state: .connected),
+            environments: [
+                .init(
+                    id: "old",
+                    name: "Old studio",
+                    endpoint: "https://old.example",
+                    isActive: true,
+                    connectionState: .connected
+                ),
+            ]
+        )
+        client.snapshotAfterActivation = FeatureSnapshot(
+            connection: .init(
+                state: .connected,
+                environmentName: "Target studio",
+                endpoint: "https://target.example"
+            ),
+            environments: [
+                .init(
+                    id: "target",
+                    name: "Target studio",
+                    endpoint: "https://target.example",
+                    isActive: true,
+                    connectionState: .connected
+                ),
+            ]
+        )
+        client.activateEnvironmentError = FeatureCapabilityUnavailable("Activation refresh")
+        let model = testRootModel(client: client)
+        await model.reload()
+
+        let activated = await model.activateEnvironment("target")
+
+        #expect(activated)
+        #expect(model.errorMessage == nil)
+        #expect(model.snapshot.connection.state == .connected)
+        #expect(model.snapshot.environments.first?.id == "target")
     }
 
     @Test

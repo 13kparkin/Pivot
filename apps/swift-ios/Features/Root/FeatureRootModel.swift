@@ -120,14 +120,14 @@ public final class FeatureRootModel {
     public func activateEnvironment(_ id: String) async -> Bool {
         isPerformingAction = true
         defer { isPerformingAction = false }
+        let previousActiveID = snapshot.environments.first(where: \.isActive)?.id
         var installedActivationSnapshot = false
         do {
             try await client.activateEnvironment(id: id)
             let next = try await client.initialSnapshot()
-            clearDetails()
-            install(next)
+            installActivationSnapshot(next, previousActiveID: previousActiveID)
             installedActivationSnapshot = true
-            guard next.connection.state != .disconnected else {
+            guard Self.isUsableActivation(next, targetID: id) else {
                 throw FeatureConnectionUnavailableError()
             }
             return true
@@ -137,14 +137,36 @@ public final class FeatureRootModel {
             // environment while the client already targets the new one.
             if !installedActivationSnapshot,
                let recovered = try? await client.initialSnapshot() {
-                clearDetails()
-                install(recovered)
+                installActivationSnapshot(recovered, previousActiveID: previousActiveID)
+                if Self.isUsableActivation(recovered, targetID: id) {
+                    errorMessage = nil
+                    return true
+                }
             }
             if !Self.isBenignCancellation(error) {
                 errorMessage = error.localizedDescription
             }
             return false
         }
+    }
+
+    private func installActivationSnapshot(
+        _ next: FeatureSnapshot,
+        previousActiveID: String?
+    ) {
+        let nextActiveID = next.environments.first(where: \.isActive)?.id
+        if nextActiveID != previousActiveID {
+            clearDetails()
+        }
+        install(next)
+    }
+
+    private static func isUsableActivation(
+        _ next: FeatureSnapshot,
+        targetID: String
+    ) -> Bool {
+        next.connection.state != .disconnected
+            && next.environments.contains { $0.id == targetID && $0.isActive }
     }
 
     public func removeEnvironment(_ id: String) async {
