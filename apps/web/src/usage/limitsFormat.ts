@@ -31,18 +31,6 @@ export function formatResetAt(resetsAt: string | null, nowMs: number): string | 
   return DATE_TIME.format(at).replace(", ", " ");
 }
 
-/** Coarse time-until-reset: `in 45m`, `in 2h`, `in 3d`. */
-export function formatResetIn(resetsAt: string | null, nowMs: number): string | null {
-  if (resetsAt === null) return null;
-  const at = Date.parse(resetsAt);
-  if (Number.isNaN(at) || at <= nowMs) return null;
-  const minutes = Math.round((at - nowMs) / 60_000);
-  if (minutes < 60) return `in ${Math.max(1, minutes)}m`;
-  const hours = Math.round(minutes / 60);
-  if (hours < 48) return `in ${hours}h`;
-  return `in ${Math.round(hours / 24)}d`;
-}
-
 /** Age of a snapshot: `just now`, `5m ago`, `6h ago`, `3d ago`. */
 export function formatAgo(asOf: string, nowMs: number): string {
   const at = Date.parse(asOf);

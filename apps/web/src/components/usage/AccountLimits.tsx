@@ -15,7 +15,7 @@ import { useEffect, useState } from "react";
 
 import { cn } from "../../lib/utils";
 import { useAccountLimits } from "../../state/accountLimits";
-import { formatAgo, formatResetAt, formatResetIn } from "../../usage/limitsFormat";
+import { formatAgo, formatResetAt } from "../../usage/limitsFormat";
 import { PROVIDER_COLOR, PROVIDER_LABEL, PROVIDER_MARK, PROVIDER_ORDER } from "./usageProviders";
 
 /** Age past which a snapshot stops being "current" and earns a caption. */
@@ -103,13 +103,13 @@ export function AccountLimitsHoverCard() {
                   <LimitMeter window={window} color={PROVIDER_COLOR[provider]} />
                   <span
                     className={cn(
-                      "w-15 shrink-0 text-right text-[11px] tabular-nums text-foreground",
+                      "shrink-0 whitespace-nowrap text-right text-[11px] tabular-nums text-foreground",
                       usageTone(window.usedPercent),
                     )}
                   >
                     {Math.round(window.usedPercent)}% used
                   </span>
-                  <span className="w-13 shrink-0 text-right text-[10px] tabular-nums text-muted-foreground">
+                  <span className="shrink-0 whitespace-nowrap text-right text-[10px] tabular-nums text-muted-foreground">
                     {formatResetAt(window.resetsAt, nowMs) ?? ""}
                   </span>
                 </div>
@@ -158,7 +158,6 @@ export function AccountLimitsSection() {
               ) : (
                 snapshot.windows.map((window) => {
                   const resetAt = formatResetAt(window.resetsAt, nowMs);
-                  const resetIn = formatResetIn(window.resetsAt, nowMs);
                   return (
                     <div key={window.id} className="flex items-center gap-3">
                       <span className="w-10 shrink-0 text-xs text-muted-foreground">
@@ -167,16 +166,14 @@ export function AccountLimitsSection() {
                       <LimitMeter window={window} color={PROVIDER_COLOR[provider]} />
                       <span
                         className={cn(
-                          "w-18 shrink-0 text-right text-xs font-medium tabular-nums text-foreground",
+                          "shrink-0 whitespace-nowrap text-right text-xs font-medium tabular-nums text-foreground",
                           usageTone(window.usedPercent),
                         )}
                       >
                         {Math.round(window.usedPercent)}% used
                       </span>
-                      <span className="w-32 shrink-0 text-right text-xs tabular-nums text-muted-foreground">
-                        {resetAt === null
-                          ? ""
-                          : `resets ${resetAt}${resetIn === null ? "" : ` · ${resetIn}`}`}
+                      <span className="shrink-0 whitespace-nowrap text-right text-xs tabular-nums text-muted-foreground">
+                        {resetAt === null ? "" : `resets ${resetAt}`}
                       </span>
                     </div>
                   );
