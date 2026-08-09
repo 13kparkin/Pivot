@@ -69,7 +69,7 @@ function SnapshotAge({ snapshot, nowMs }: { snapshot: AccountLimitsSnapshot; now
 
 /** Compact per-provider availability, shown on hovering the Usage button. */
 export function AccountLimitsHoverCard() {
-  const { snapshots, isPending } = useAccountLimits();
+  const { snapshots, isPending, isSettling } = useAccountLimits();
   const nowMs = useNowMs();
 
   if (isPending && snapshots.size === 0) {
@@ -93,7 +93,9 @@ export function AccountLimitsHoverCard() {
               </span>
             </div>
             {snapshot === undefined || snapshot.windows.length === 0 ? (
-              <p className="text-[11px] text-muted-foreground">No limit data yet</p>
+              <p className="text-[11px] text-muted-foreground">
+                {snapshot === undefined && isSettling ? "Loading…" : "No limit data yet"}
+              </p>
             ) : (
               snapshot.windows.map((window) => (
                 <div key={window.id} className="flex items-center gap-2">
@@ -128,7 +130,7 @@ export function AccountLimitsHoverCard() {
 
 /** The "Limits" strip above the analytics: one column per provider. */
 export function AccountLimitsSection() {
-  const { snapshots, isPending } = useAccountLimits();
+  const { snapshots, isSettling } = useAccountLimits();
   const nowMs = useNowMs();
 
   return (
@@ -153,7 +155,7 @@ export function AccountLimitsSection() {
               </div>
               {snapshot === undefined || snapshot.windows.length === 0 ? (
                 <p className="text-xs text-muted-foreground">
-                  {isPending && snapshot === undefined ? "Loading…" : "No limit data yet"}
+                  {snapshot === undefined && isSettling ? "Loading…" : "No limit data yet"}
                 </p>
               ) : (
                 snapshot.windows.map((window) => {

@@ -51,6 +51,12 @@ export interface AccountLimitsView {
   readonly snapshots: ReadonlyMap<UsageProviderKind, AccountLimitsSnapshot>;
   /** True until at least one environment has answered. */
   readonly isPending: boolean;
+  /**
+   * True while any environment is still answering. A provider with no
+   * snapshot is "loading" while this holds and "no data" once it clears -
+   * the first environment to answer must not decide that for the rest.
+   */
+  readonly isSettling: boolean;
   readonly refresh: () => void;
 }
 
@@ -87,6 +93,7 @@ export function useAccountLimits(): AccountLimitsView {
   return {
     snapshots,
     isPending: answered === 0 && stillReporting > 0,
+    isSettling: stillReporting > 0,
     refresh,
   };
 }

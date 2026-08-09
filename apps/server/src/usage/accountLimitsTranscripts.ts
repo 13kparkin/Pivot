@@ -48,11 +48,18 @@ export async function readLatestCodexRateLimits(
     return null;
   }
   const newestFirst = [...files].sort((a, b) => b.mtimeMs - a.mtimeMs).slice(0, MAX_FILES);
+  // The newest-mtime file does not necessarily hold the newest snapshot: a
+  // session can keep appending non-token events after its last rate-limit
+  // line. A file's snapshot can never be newer than the file's mtime, so
+  // keep scanning only while a remaining file's mtime could still beat the
+  // best snapshot found - which usually stops after one or two files.
+  let best: CodexTranscriptRateLimits | null = null;
   for (const file of newestFirst) {
+    if (best !== null && file.mtimeMs <= best.asOfMs) break;
     const found = await readTailRateLimits(file.path, file.mtimeMs);
-    if (found) return found;
+    if (found !== null && (best === null || found.asOfMs > best.asOfMs)) best = found;
   }
-  return null;
+  return best;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

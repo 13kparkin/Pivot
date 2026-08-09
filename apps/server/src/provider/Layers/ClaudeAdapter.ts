@@ -3434,15 +3434,19 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
   const emitAccountUsageSnapshot = Effect.fn("emitAccountUsageSnapshot")(function* (
     context: ClaudeSessionContext,
   ) {
-    const fetchUsage = context.query.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET;
-    if (!fetchUsage) return;
+    if (!context.query.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET) return;
     const now = yield* Clock.currentTimeMillis;
-    if (now - lastAccountUsageFetchAtMs < ACCOUNT_USAGE_MIN_INTERVAL_MS) return;
+    const elapsed = now - lastAccountUsageFetchAtMs;
+    // A negative elapsed means the wall clock stepped backwards; treat it as
+    // expired rather than freezing refreshes until the clock catches up.
+    if (elapsed >= 0 && elapsed < ACCOUNT_USAGE_MIN_INTERVAL_MS) return;
     lastAccountUsageFetchAtMs = now;
 
     const usage = yield* Effect.promise(async () => {
       try {
-        return await fetchUsage();
+        // Called through the query object so the SDK method keeps its
+        // receiver; an extracted reference loses `this` and throws.
+        return await context.query.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET?.();
       } catch {
         return undefined;
       }
