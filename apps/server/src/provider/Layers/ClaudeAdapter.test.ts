@@ -54,8 +54,6 @@ class FakeClaudeQuery implements AsyncIterable<SDKMessage> {
   private done = false;
   private failure: unknown | undefined;
 
-  public readonly interruptCalls: Array<void> = [];
-  public readonly stopTaskCalls: Array<string> = [];
   public readonly setModelCalls: Array<string | undefined> = [];
   public readonly setPermissionModeCalls: Array<string> = [];
   public readonly setMaxThinkingTokensCalls: Array<number | null> = [];
@@ -94,14 +92,6 @@ class FakeClaudeQuery implements AsyncIterable<SDKMessage> {
       waiter.resolve({ done: true, value: undefined });
     }
   }
-
-  readonly interrupt = async (): Promise<void> => {
-    this.interruptCalls.push(undefined);
-  };
-
-  readonly stopTask = async (taskId: string): Promise<void> => {
-    this.stopTaskCalls.push(taskId);
-  };
 
   readonly setModel = async (model?: string): Promise<void> => {
     this.setModelCalls.push(model);
@@ -1580,7 +1570,7 @@ describe("ClaudeAdapterLive", () => {
     );
   });
 
-  it.effect("interruptTurn settles every acknowledged live task before interrupting", () => {
+  it.effect("interruptTurn settles live tasks and closes the provider session", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {
       const adapter = yield* ClaudeAdapter;
@@ -1645,9 +1635,12 @@ describe("ClaudeAdapterLive", () => {
       );
       yield* adapter.interruptTurn(session.threadId);
 
-      // Only the still-live task is stopped; interrupt always fires after.
-      assert.deepEqual(harness.query.stopTaskCalls, ["task-live"]);
-      assert.equal(harness.query.interruptCalls.length, 1);
+      // Closing the session is the hard stop because SDK interrupt can leave
+      // resumed background work alive.
+      assert.equal(harness.query.closeCalls, 1);
+
+      const sessions = yield* adapter.listSessions();
+      assert.equal(sessions.length, 0);
 
       const stoppedTaskEvents = Array.from(yield* Fiber.join(stoppedTaskEventFiber));
       assert.equal(stoppedTaskEvents.length, 1);
@@ -1662,6 +1655,100 @@ describe("ClaudeAdapterLive", () => {
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
       Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("keeps a resumed replacement session during slow stop cleanup", () => {
+    const queries: FakeClaudeQuery[] = [];
+    let signalUsageStarted: () => void = () => undefined;
+    let releaseUsage: () => void = () => undefined;
+    const usageStarted = new Promise<void>((resolve) => {
+      signalUsageStarted = resolve;
+    });
+    const usageGate = new Promise<void>((resolve) => {
+      releaseUsage = resolve;
+    });
+    const layer = Layer.effect(
+      ClaudeAdapter,
+      Effect.gen(function* () {
+        const claudeConfig = decodeClaudeSettings({});
+        return yield* makeClaudeAdapter(claudeConfig, {
+          createQuery: () => {
+            const query = new FakeClaudeQuery();
+            if (queries.length === 0) {
+              Object.assign(query, {
+                getContextUsage: async () => {
+                  signalUsageStarted();
+                  await usageGate;
+                  throw new Error("query closed");
+                },
+              });
+            }
+            queries.push(query);
+            return query;
+          },
+        });
+      }),
+    ).pipe(
+      Layer.provideMerge(ServerConfig.layerTest("/tmp/claude-adapter-test", "/tmp")),
+      Layer.provideMerge(ServerSettingsService.layerTest()),
+      Layer.provideMerge(NodeServices.layer),
+    );
+
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const runtimeEventsFiber = yield* Stream.take(adapter.streamEvents, 8).pipe(
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+      const firstSession = yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: ProviderDriverKind.make("claudeAgent"),
+        runtimeMode: "full-access",
+      });
+      yield* adapter.sendTurn({
+        threadId: firstSession.threadId,
+        input: "hello",
+        attachments: [],
+      });
+
+      const interruptFiber = yield* adapter
+        .interruptTurn(firstSession.threadId)
+        .pipe(Effect.forkChild);
+      yield* Effect.promise(() => usageStarted);
+      assert.equal(queries[0]?.closeCalls, 1);
+
+      const replacement = yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: ProviderDriverKind.make("claudeAgent"),
+        runtimeMode: "full-access",
+        resumeCursor: firstSession.resumeCursor,
+      });
+      releaseUsage();
+      yield* Fiber.join(interruptFiber);
+
+      const activeSessions = yield* adapter.listSessions();
+      const runtimeEvents = Array.from(yield* Fiber.join(runtimeEventsFiber));
+      assert.equal(queries.length, 2);
+      assert.equal(queries[1]?.closeCalls, 0);
+      assert.equal(activeSessions.length, 1);
+      assert.deepEqual(activeSessions[0]?.resumeCursor, replacement.resumeCursor);
+      assert.deepEqual(
+        runtimeEvents
+          .filter((event) => event.type.startsWith("session."))
+          .map((event) => event.type),
+        [
+          "session.started",
+          "session.configured",
+          "session.state.changed",
+          "session.started",
+          "session.configured",
+          "session.state.changed",
+        ],
+      );
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(layer),
     );
   });
 
