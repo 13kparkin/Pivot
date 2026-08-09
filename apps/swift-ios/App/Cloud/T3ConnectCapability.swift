@@ -204,7 +204,6 @@ public final class T3ConnectController {
     /// A successful authentication flow is the only action that may restore a
     /// locally signed-out Clerk session.
     public func refreshAfterAuthentication() async {
-        guard !isSignOutInProgress else { return }
         isLocalAuthorizationInvalidated = false
         authorizationGeneration &+= 1
         await refresh()
@@ -231,9 +230,13 @@ public final class T3ConnectController {
         await relay.clearTokenCache()
         await waitForAuthorizationOperations()
 
+        guard authorizationGeneration == signOutAuthorizationGeneration,
+              isLocalAuthorizationInvalidated else { return }
         if let auth,
            let deviceID,
            let token = try? await auth.relayToken() {
+            guard authorizationGeneration == signOutAuthorizationGeneration,
+                  isLocalAuthorizationInvalidated else { return }
             // Remote delivery must not outlive the signed-in session on this
             // install. A failed best-effort unregister must not trap the user
             // in an account they are trying to leave.

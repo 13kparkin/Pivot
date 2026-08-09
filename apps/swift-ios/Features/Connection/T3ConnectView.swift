@@ -8,6 +8,7 @@ public struct T3ConnectView: View {
     @State private var isAuthPresented = false
     @State private var didFinishInitialRefresh = false
     @State private var connectingEnvironmentID: String?
+    @State private var isSigningOut = false
     private let connectEnvironment:
         @MainActor (T3ConnectManagedEnvironmentCredential) async throws -> Void
     private let signOut: @MainActor () async -> Void
@@ -31,9 +32,15 @@ public struct T3ConnectView: View {
                 if controller.account != nil {
                     ToolbarItem(placement: .topBarTrailing) {
                         Button("Sign out", role: .destructive) {
-                            Task { await signOut() }
+                            guard !isSigningOut else { return }
+                            isSigningOut = true
+                            Task {
+                                await signOut()
+                                isSigningOut = false
+                                presentAuthenticationIfNeeded()
+                            }
                         }
-                        .disabled(controller.isRefreshing)
+                        .disabled(controller.isRefreshing || isSigningOut)
                     }
                 }
             }
@@ -47,6 +54,7 @@ public struct T3ConnectView: View {
             }
             .onChange(of: controller.account?.id) { _, accountID in
                 guard didFinishInitialRefresh,
+                      !isSigningOut,
                       accountID == nil,
                       controller.unavailableReason == nil else { return }
                 isAuthPresented = true
