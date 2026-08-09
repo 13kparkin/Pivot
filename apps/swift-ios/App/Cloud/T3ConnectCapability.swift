@@ -68,6 +68,9 @@ public final class T3ConnectController {
     private var refreshGeneration: UInt64 = 0
     private var authorizationGeneration: UInt64 = 0
     private var isLocalAuthorizationInvalidated = false
+    private var isSignOutInProgress = false
+    private var authorizationOperationCount = 0
+    private var authorizationOperationWaiters: [CheckedContinuation<Void, Never>] = []
     private var signOutOperation: (@MainActor @Sendable () async throws -> Void)?
 
     public convenience init(
@@ -201,6 +204,7 @@ public final class T3ConnectController {
     /// A successful authentication flow is the only action that may restore a
     /// locally signed-out Clerk session.
     public func refreshAfterAuthentication() async {
+        guard !isSignOutInProgress else { return }
         isLocalAuthorizationInvalidated = false
         authorizationGeneration &+= 1
         await refresh()
@@ -208,19 +212,24 @@ public final class T3ConnectController {
 
     public func signOut() async {
         guard let relay else { return }
+        guard !isSignOutInProgress else { return }
+        isSignOutInProgress = true
         let deviceID = registeredDeviceID
         isLocalAuthorizationInvalidated = true
         authorizationGeneration &+= 1
+        let signOutAuthorizationGeneration = authorizationGeneration
         refreshGeneration &+= 1
         let generation = refreshGeneration
         isRefreshing = true
         defer {
+            isSignOutInProgress = false
             if refreshGeneration == generation { isRefreshing = false }
         }
         account = nil
         environments = []
         registeredDeviceID = nil
         await relay.clearTokenCache()
+        await waitForAuthorizationOperations()
 
         if let auth,
            let deviceID,
@@ -239,6 +248,8 @@ public final class T3ConnectController {
         // before Clerk performs network work. A failed remote sign-out can be
         // reported, but it cannot leave relay tokens or managed state usable.
         do {
+            guard authorizationGeneration == signOutAuthorizationGeneration,
+                  isLocalAuthorizationInvalidated else { return }
             if let signOutOperation {
                 try await signOutOperation()
             } else if let auth {
@@ -266,11 +277,16 @@ public final class T3ConnectController {
         busyEnvironmentID = environment.environmentId
         defer { busyEnvironmentID = nil }
         let token = try await loadedRelayToken(auth)
-        return try await relay.connect(
+        let generation = authorizationGeneration
+        try beginAuthorizationOperation(generation)
+        defer { endAuthorizationOperation() }
+        let credential = try await relay.connect(
             to: environment,
             clerkToken: token,
             deviceID: deviceID ?? registeredDeviceID
         )
+        try requireCurrentAuthorization(generation)
+        return credential
     }
 
     /// Reacquires the one-use bootstrap credential needed to refresh a saved
@@ -286,17 +302,23 @@ public final class T3ConnectController {
             )
         }
         let token = try await loadedRelayToken(auth)
+        let generation = authorizationGeneration
+        try beginAuthorizationOperation(generation)
+        defer { endAuthorizationOperation() }
         let records = try await relay.listEnvironments(clerkToken: token)
+        try requireCurrentAuthorization(generation)
         guard let environment = records.first(where: { $0.environmentId == environmentID }) else {
             throw T3ConnectRelayError.invalidConfiguration(
                 "This environment is no longer linked to your T3 account."
             )
         }
-        return try await relay.connect(
+        let credential = try await relay.connect(
             to: environment,
             clerkToken: token,
             deviceID: deviceID ?? registeredDeviceID
         )
+        try requireCurrentAuthorization(generation)
+        return credential
     }
 
     public func unlink(_ environment: T3ConnectRelayEnvironment) async {
@@ -305,10 +327,14 @@ public final class T3ConnectController {
         defer { busyEnvironmentID = nil }
         do {
             let token = try await loadedRelayToken(auth)
+            let generation = authorizationGeneration
+            try beginAuthorizationOperation(generation)
+            defer { endAuthorizationOperation() }
             try await relay.unlinkEnvironment(
                 environmentID: environment.environmentId,
                 clerkToken: token
             )
+            guard isAuthorizationCurrent(generation) else { return }
             environments.removeAll { $0.id == environment.environmentId }
         } catch {
             errorMessage = error.localizedDescription
@@ -322,7 +348,18 @@ public final class T3ConnectController {
             )
         }
         let token = try await loadedRelayToken(auth)
+        let generation = authorizationGeneration
+        try beginAuthorizationOperation(generation)
+        defer { endAuthorizationOperation() }
         try await relay.registerDevice(registration, clerkToken: token)
+        guard isAuthorizationCurrent(generation) else {
+            try? await relay.unregisterDevice(
+                deviceID: registration.deviceId,
+                clerkToken: token
+            )
+            await relay.clearTokenCache()
+            throw T3ConnectAuthError.noSession
+        }
         registeredDeviceID = registration.deviceId
     }
 
@@ -339,7 +376,20 @@ public final class T3ConnectController {
             )
         }
         let token = try await loadedRelayToken(auth)
+        let generation = authorizationGeneration
+        try beginAuthorizationOperation(generation)
+        defer { endAuthorizationOperation() }
         try await relay.registerLiveActivity(registration, clerkToken: token)
+        guard isAuthorizationCurrent(generation) else {
+            // Live activity registrations are device-scoped. Removing the
+            // device compensates for a registration that crossed sign-out.
+            try? await relay.unregisterDevice(
+                deviceID: registration.deviceId,
+                clerkToken: token
+            )
+            await relay.clearTokenCache()
+            throw T3ConnectAuthError.noSession
+        }
     }
 
     private func loadedRelayToken(_ auth: T3ConnectClerkSession) async throws -> String {
@@ -372,5 +422,35 @@ public final class T3ConnectController {
             await relay.clearTokenCache()
         }
         account = nextAccount
+    }
+
+    private func isAuthorizationCurrent(_ generation: UInt64) -> Bool {
+        authorizationGeneration == generation && !isLocalAuthorizationInvalidated
+    }
+
+    private func requireCurrentAuthorization(_ generation: UInt64) throws {
+        guard isAuthorizationCurrent(generation) else {
+            throw T3ConnectAuthError.noSession
+        }
+    }
+
+    private func beginAuthorizationOperation(_ generation: UInt64) throws {
+        try requireCurrentAuthorization(generation)
+        authorizationOperationCount += 1
+    }
+
+    private func endAuthorizationOperation() {
+        authorizationOperationCount -= 1
+        guard authorizationOperationCount == 0 else { return }
+        let waiters = authorizationOperationWaiters
+        authorizationOperationWaiters.removeAll()
+        waiters.forEach { $0.resume() }
+    }
+
+    private func waitForAuthorizationOperations() async {
+        guard authorizationOperationCount > 0 else { return }
+        await withCheckedContinuation { continuation in
+            authorizationOperationWaiters.append(continuation)
+        }
     }
 }
