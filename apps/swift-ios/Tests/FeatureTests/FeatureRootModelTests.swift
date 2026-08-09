@@ -251,6 +251,54 @@ struct FeatureRootModelTests {
     }
 
     @Test
+    func disconnectedActivationDoesNotReportConnectionSuccess() async {
+        let client = FeatureClientStub()
+        client.snapshot = FeatureSnapshot(
+            connection: .init(
+                state: .disconnected,
+                environmentName: "Target studio",
+                endpoint: "https://target.example"
+            ),
+            environments: [
+                .init(
+                    id: "target",
+                    name: "Target studio",
+                    endpoint: "https://target.example",
+                    isActive: true,
+                    connectionState: .disconnected
+                ),
+            ]
+        )
+        let model = testRootModel(client: client)
+
+        let activated = await model.activateEnvironment("target")
+
+        #expect(!activated)
+        #expect(client.activatedEnvironmentID == "target")
+        #expect(model.snapshot.connection.state == .disconnected)
+        #expect(model.errorMessage?.contains("Could not connect") == true)
+    }
+
+    @Test
+    func disconnectedPairDoesNotReportConnectionSuccess() async {
+        let client = FeatureClientStub()
+        client.snapshotAfterPair = FeatureSnapshot(
+            connection: .init(
+                state: .disconnected,
+                environmentName: "New studio",
+                endpoint: "https://new.example"
+            )
+        )
+        let model = testRootModel(client: client)
+
+        let paired = await model.pair(endpoint: "https://new.example", token: "pair-token")
+
+        #expect(!paired)
+        #expect(model.snapshot.connection.state == .disconnected)
+        #expect(model.errorMessage?.contains("Could not connect") == true)
+    }
+
+    @Test
     func testCreateThreadOptimisticallyUpsertsIt() async {
         let client = FeatureClientStub()
         let created = FeatureThread(

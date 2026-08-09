@@ -1,6 +1,12 @@
 import Foundation
 import Observation
 
+private struct FeatureConnectionUnavailableError: LocalizedError {
+    var errorDescription: String? {
+        "Could not connect to the selected computer."
+    }
+}
+
 enum FeatureDetailRenderChange: Equatable {
     case full
     case delta(FeatureDetailDelta)
@@ -101,8 +107,12 @@ public final class FeatureRootModel {
     public func pair(endpoint: String, token: String?) async -> Bool {
         await perform {
             try await client.pair(endpoint: endpoint, token: token)
+            let next = try await client.initialSnapshot()
             clearDetails()
-            install(try await client.initialSnapshot())
+            install(next)
+            guard next.connection.state != .disconnected else {
+                throw FeatureConnectionUnavailableError()
+            }
         }
     }
 
@@ -110,8 +120,12 @@ public final class FeatureRootModel {
     public func activateEnvironment(_ id: String) async -> Bool {
         await perform {
             try await client.activateEnvironment(id: id)
-            install(try await client.initialSnapshot())
+            let next = try await client.initialSnapshot()
             clearDetails()
+            install(next)
+            guard next.connection.state != .disconnected else {
+                throw FeatureConnectionUnavailableError()
+            }
         }
     }
 

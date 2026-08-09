@@ -251,6 +251,7 @@ final class NativeMultiEnvironmentTests: XCTestCase {
 
         _ = try await fixture.client.initialSnapshot()
 
+        await loader.waitForFirstLoadCancellation()
         await loader.waitForCallCount(2)
         let restartedCallCount = await loader.callCount
         XCTAssertGreaterThanOrEqual(restartedCallCount, 2)
@@ -546,12 +547,26 @@ private actor BlockingFirstAggregateEnvironmentLoader {
         target: Int,
         continuation: CheckedContinuation<Void, Never>
     )] = []
+    private var firstLoadContinuation: CheckedContinuation<Void, Never>?
+    private var firstLoadCancellationObserved = false
+    private var firstLoadCancellationWaiters: [CheckedContinuation<Void, Never>] = []
 
     func load(from runtime: EnvironmentRuntime) async throws -> [Environment] {
         callCount += 1
         resumeSatisfiedWaiters()
         if callCount == 1 {
-            try await Task.sleep(for: .seconds(60))
+            await withTaskCancellationHandler {
+                await withCheckedContinuation { continuation in
+                    firstLoadContinuation = continuation
+                    if Task.isCancelled {
+                        firstLoadContinuation = nil
+                        continuation.resume()
+                    }
+                }
+            } onCancel: {
+                Task { await self.recordFirstLoadCancellation() }
+            }
+            try Task.checkCancellation()
         }
         return try await runtime.environments()
     }
@@ -560,6 +575,24 @@ private actor BlockingFirstAggregateEnvironmentLoader {
         guard callCount < target else { return }
         await withCheckedContinuation { continuation in
             callCountWaiters.append((target, continuation))
+        }
+    }
+
+    func waitForFirstLoadCancellation() async {
+        guard !firstLoadCancellationObserved else { return }
+        await withCheckedContinuation { continuation in
+            firstLoadCancellationWaiters.append(continuation)
+        }
+    }
+
+    private func recordFirstLoadCancellation() {
+        firstLoadCancellationObserved = true
+        firstLoadContinuation?.resume()
+        firstLoadContinuation = nil
+        let waiters = firstLoadCancellationWaiters
+        firstLoadCancellationWaiters.removeAll()
+        for waiter in waiters {
+            waiter.resume()
         }
     }
 
