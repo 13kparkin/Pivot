@@ -304,8 +304,7 @@ struct PlatformRootView: View {
             return false
         }
         guard !environment.isActive else { return true }
-        await model.activateEnvironment(id)
-        return model.snapshot.environments.contains { $0.id == id && $0.isActive }
+        return await model.activateEnvironment(id)
     }
 
     /// Home revisions are coalesced by FeatureRootModel, so this performs one

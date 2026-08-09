@@ -118,14 +118,32 @@ public final class FeatureRootModel {
 
     @discardableResult
     public func activateEnvironment(_ id: String) async -> Bool {
-        await perform {
+        isPerformingAction = true
+        defer { isPerformingAction = false }
+        var installedActivationSnapshot = false
+        do {
             try await client.activateEnvironment(id: id)
             let next = try await client.initialSnapshot()
             clearDetails()
             install(next)
+            installedActivationSnapshot = true
             guard next.connection.state != .disconnected else {
                 throw FeatureConnectionUnavailableError()
             }
+            return true
+        } catch {
+            // Activation can persist the new selection before its first refresh
+            // fails. Reconcile once so UI routing never keeps the previous
+            // environment while the client already targets the new one.
+            if !installedActivationSnapshot,
+               let recovered = try? await client.initialSnapshot() {
+                clearDetails()
+                install(recovered)
+            }
+            if !Self.isBenignCancellation(error) {
+                errorMessage = error.localizedDescription
+            }
+            return false
         }
     }
 

@@ -251,6 +251,49 @@ struct FeatureRootModelTests {
     }
 
     @Test
+    func partialActivationFailureReconcilesTheRuntimeSelection() async {
+        let client = FeatureClientStub()
+        client.snapshot = FeatureSnapshot(
+            connection: .init(state: .connected),
+            environments: [
+                .init(
+                    id: "old",
+                    name: "Old studio",
+                    endpoint: "https://old.example",
+                    isActive: true,
+                    connectionState: .connected
+                ),
+            ]
+        )
+        client.snapshotAfterActivation = FeatureSnapshot(
+            connection: .init(
+                state: .disconnected,
+                environmentName: "Target studio",
+                endpoint: "https://target.example"
+            ),
+            environments: [
+                .init(
+                    id: "target",
+                    name: "Target studio",
+                    endpoint: "https://target.example",
+                    isActive: true,
+                    connectionState: .disconnected
+                ),
+            ]
+        )
+        client.activateEnvironmentError = FeatureCapabilityUnavailable("Activation refresh")
+        let model = testRootModel(client: client)
+        await model.reload()
+
+        let activated = await model.activateEnvironment("target")
+
+        #expect(!activated)
+        #expect(model.snapshot.connection.state == .disconnected)
+        #expect(model.snapshot.environments.first?.id == "target")
+        #expect(model.snapshot.environments.first?.isActive == true)
+    }
+
+    @Test
     func disconnectedActivationDoesNotReportConnectionSuccess() async {
         let client = FeatureClientStub()
         client.snapshot = FeatureSnapshot(
@@ -1236,6 +1279,7 @@ private final class FeatureClientStub: FeatureClient {
     private let eventContinuation: AsyncStream<FeatureEvent>.Continuation
     var snapshot = FeatureSnapshot()
     var backgroundSnapshotValue: FeatureSnapshot?
+    var snapshotAfterActivation: FeatureSnapshot?
     var initialSnapshotCallCount = 0
     var backgroundSnapshotCallCount = 0
     var snapshotAfterPair: FeatureSnapshot?
@@ -1291,6 +1335,9 @@ private final class FeatureClientStub: FeatureClient {
         }
         if pairEndpoint != nil, let snapshotAfterPair {
             return snapshotAfterPair
+        }
+        if activatedEnvironmentID != nil, let snapshotAfterActivation {
+            return snapshotAfterActivation
         }
         return snapshot
     }
