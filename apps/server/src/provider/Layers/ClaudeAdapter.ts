@@ -65,6 +65,7 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
 import * as Fiber from "effect/Fiber";
+import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
@@ -2069,13 +2070,13 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
       } catch {
         return undefined;
       }
-    });
-    if (!usage) {
+    }).pipe(Effect.timeoutOption("1 second"));
+    if (Option.isNone(usage) || !usage.value) {
       return undefined;
     }
 
-    context.lastKnownContextWindow = usage.maxTokens;
-    return normalizeClaudeContextUsageApiSnapshot(usage, totalProcessedTokens);
+    context.lastKnownContextWindow = usage.value.maxTokens;
+    return normalizeClaudeContextUsageApiSnapshot(usage.value, totalProcessedTokens);
   });
 
   const emitProposedPlanCompleted = Effect.fn("emitProposedPlanCompleted")(function* (

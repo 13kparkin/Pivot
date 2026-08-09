@@ -1661,12 +1661,8 @@ describe("ClaudeAdapterLive", () => {
   it.effect("keeps a resumed replacement session during slow stop cleanup", () => {
     const queries: FakeClaudeQuery[] = [];
     let signalUsageStarted: () => void = () => undefined;
-    let releaseUsage: () => void = () => undefined;
     const usageStarted = new Promise<void>((resolve) => {
       signalUsageStarted = resolve;
-    });
-    const usageGate = new Promise<void>((resolve) => {
-      releaseUsage = resolve;
     });
     const layer = Layer.effect(
       ClaudeAdapter,
@@ -1679,8 +1675,7 @@ describe("ClaudeAdapterLive", () => {
               Object.assign(query, {
                 getContextUsage: async () => {
                   signalUsageStarted();
-                  await usageGate;
-                  throw new Error("query closed");
+                  return await new Promise<never>(() => undefined);
                 },
               });
             }
@@ -1724,7 +1719,7 @@ describe("ClaudeAdapterLive", () => {
         runtimeMode: "full-access",
         resumeCursor: firstSession.resumeCursor,
       });
-      releaseUsage();
+      yield* TestClock.adjust("1 second");
       yield* Fiber.join(interruptFiber);
 
       const activeSessions = yield* adapter.listSessions();
