@@ -5,6 +5,7 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   getEnvironmentUsageLoadingState,
   isEnvironmentUsageSettling,
+  isEnvironmentUsageStillReporting,
   resolveEnvironmentUsageScope,
   type EnvironmentUsageOption,
 } from "./usageEnvironmentScope";
@@ -50,6 +51,23 @@ describe("usage environment scope", () => {
         { phase: "reconnecting", summary: null, error: null },
       ]),
     ).toEqual({ isPending: false, isPartial: true });
+  });
+
+  it("uses the same reporting state for loading and device progress", () => {
+    expect(
+      isEnvironmentUsageStillReporting({
+        phase: "reconnecting",
+        summary: null,
+        error: null,
+      }),
+    ).toBe(true);
+    expect(
+      isEnvironmentUsageStillReporting({
+        phase: "connected",
+        summary: null,
+        error: "failed",
+      }),
+    ).toBe(false);
   });
 
   it("shows connection transitions as settling but leaves idle entries terminal", () => {

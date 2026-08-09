@@ -5,6 +5,7 @@ import { useEffect, useMemo, useState } from "react";
 
 import { cn } from "../../lib/utils";
 import { useUsage, type EnvironmentUsageStatus } from "../../state/usage";
+import { isEnvironmentUsageStillReporting } from "../../state/usageEnvironmentScope";
 import {
   enumerateDays,
   formatCount,
@@ -544,9 +545,7 @@ function UsageDeviceStrip({
 }: {
   readonly environments: readonly EnvironmentUsageStatus[];
 }) {
-  const scanning = environments.filter(
-    (environment) => environment.isPending && environment.summary === null,
-  );
+  const scanning = environments.filter(isEnvironmentUsageStillReporting);
   return (
     <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1 border border-border px-3 py-2 text-xs">
       {environments.map((environment) => {

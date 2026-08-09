@@ -39,16 +39,21 @@ interface EnvironmentUsageLoadingEntry {
   readonly error: string | null;
 }
 
+export function isEnvironmentUsageStillReporting(
+  environment: EnvironmentUsageLoadingEntry,
+): boolean {
+  return (
+    isEnvironmentUsageSettling(environment.phase) &&
+    environment.summary === null &&
+    environment.error === null
+  );
+}
+
 export function getEnvironmentUsageLoadingState(
   environments: readonly EnvironmentUsageLoadingEntry[],
 ): { readonly isPending: boolean; readonly isPartial: boolean } {
   const answeredCount = environments.filter((environment) => environment.summary !== null).length;
-  const stillReporting = environments.filter(
-    (environment) =>
-      isEnvironmentUsageSettling(environment.phase) &&
-      environment.summary === null &&
-      environment.error === null,
-  ).length;
+  const stillReporting = environments.filter(isEnvironmentUsageStillReporting).length;
 
   return {
     isPending: answeredCount === 0 && stillReporting > 0,
