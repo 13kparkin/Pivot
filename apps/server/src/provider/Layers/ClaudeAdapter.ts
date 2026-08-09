@@ -4493,25 +4493,26 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
       return context !== undefined && !context.stopped;
     });
 
-  const stopAll: ClaudeAdapterShape["stopAll"] = () =>
-    Effect.forEach(
-      sessions,
-      ([, context]) =>
-        stopSessionInternal(context, {
-          emitExitEvent: true,
-        }),
-      { discard: true },
+  const stopSessions = Effect.fn("stopSessions")(function* (
+    contexts: ReadonlyArray<ClaudeSessionContext>,
+    emitExitEvent: boolean,
+  ) {
+    const results = yield* Effect.forEach(contexts, (context) =>
+      stopSessionInternal(context, { emitExitEvent }).pipe(Effect.result),
     );
 
+    for (const result of results) {
+      if (result._tag === "Failure") {
+        return yield* Effect.fail(result.failure);
+      }
+    }
+  });
+
+  const stopAll: ClaudeAdapterShape["stopAll"] = () =>
+    stopSessions(Array.from(sessions.values()), true);
+
   yield* Effect.addFinalizer(() =>
-    Effect.forEach(
-      sessions,
-      ([, context]) =>
-        stopSessionInternal(context, {
-          emitExitEvent: false,
-        }),
-      { discard: true },
-    ).pipe(
+    stopSessions(Array.from(sessions.values()), false).pipe(
       Effect.catch((cause) =>
         Effect.logError("Failed to emit Claude session shutdown event.", { cause }),
       ),

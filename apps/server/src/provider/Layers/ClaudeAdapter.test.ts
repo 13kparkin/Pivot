@@ -1688,6 +1688,57 @@ describe("ClaudeAdapterLive", () => {
     );
   });
 
+  it.effect("stopAll attempts every session when one process close fails", () => {
+    const queries: FakeClaudeQuery[] = [];
+    const layer = Layer.effect(
+      ClaudeAdapter,
+      Effect.gen(function* () {
+        const claudeConfig = decodeClaudeSettings({});
+        return yield* makeClaudeAdapter(claudeConfig, {
+          createQuery: () => {
+            const query = new FakeClaudeQuery();
+            queries.push(query);
+            return query;
+          },
+        });
+      }),
+    ).pipe(
+      Layer.provideMerge(ServerConfig.layerTest("/tmp/claude-adapter-test", "/tmp")),
+      Layer.provideMerge(ServerSettingsService.layerTest()),
+      Layer.provideMerge(NodeServices.layer),
+    );
+
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: ProviderDriverKind.make("claudeAgent"),
+        runtimeMode: "full-access",
+      });
+      yield* adapter.startSession({
+        threadId: RESUME_THREAD_ID,
+        provider: ProviderDriverKind.make("claudeAgent"),
+        runtimeMode: "full-access",
+      });
+      const firstQuery = queries[0];
+      if (!firstQuery) {
+        return;
+      }
+      firstQuery.closeError = new Error("close failed");
+
+      const result = yield* adapter.stopAll().pipe(Effect.result);
+
+      assert.equal(result._tag, "Failure");
+      assert.equal(queries[0]?.closeCalls, 1);
+      assert.equal(queries[1]?.closeCalls, 1);
+      assert.equal(yield* adapter.hasSession(THREAD_ID), true);
+      assert.equal(yield* adapter.hasSession(RESUME_THREAD_ID), false);
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(layer),
+    );
+  });
+
   it.effect("keeps a resumed replacement session during slow stop cleanup", () => {
     const queries: FakeClaudeQuery[] = [];
     let signalUsageStarted: () => void = () => undefined;
