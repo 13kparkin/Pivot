@@ -31,6 +31,11 @@ import { appAtomRegistry } from "../state/atom-registry";
 import { clearThreadOutboxEnvironment } from "../state/thread-outbox";
 import { clearComposerDraftsEnvironment } from "../state/use-composer-drafts";
 import { mobileApplicationActiveWakeup } from "./app-state-wakeups";
+import {
+  observeNetworkPath,
+  seedNetworkPathBaseline,
+  UNKNOWN_NETWORK_PATH,
+} from "./network-path-change";
 import { connectionStorageLayer } from "./storage";
 
 function networkStatus(state: Network.NetworkState): "unknown" | "offline" | "online" {
@@ -110,20 +115,17 @@ const wakeupsLayer = Wakeups.layer({
           // it, which keeps flapping paths cheap. Seed the current type so
           // the first flip after startup is detected; the listener only
           // reports changes.
-          let networkType: string | null = null;
+          let networkPath = UNKNOWN_NETWORK_PATH;
           void Network.getNetworkStateAsync()
             .then((current) => {
-              networkType ??= current.type ?? null;
+              networkPath = seedNetworkPathBaseline(networkPath, current.type ?? null);
             })
             .catch(() => undefined);
           const networkSubscription = Network.addNetworkStateListener((state) => {
-            const nextType = state.type ?? null;
-            const previousType = networkType;
-            networkType = nextType;
+            const observation = observeNetworkPath(networkPath, state.type ?? null);
+            networkPath = observation.baseline;
             if (
-              previousType !== null &&
-              nextType !== null &&
-              nextType !== previousType &&
+              observation.shouldProbe &&
               state.isConnected === true &&
               AppState.currentState === "active"
             ) {

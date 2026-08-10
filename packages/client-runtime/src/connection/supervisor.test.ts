@@ -5,6 +5,7 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
@@ -122,13 +123,10 @@ const makeHarness = Effect.fn("TestConnectionHarness.make")(function* (options?:
   const prepareCount = yield* Ref.make(0);
   const sessionCount = yield* Ref.make(0);
   const releaseCount = yield* Ref.make(0);
-  const wakeups = yield* SubscriptionRef.make<{
-    readonly sequence: number;
+  const wakeups = yield* Queue.unbounded<{
     readonly reason: ConnectionWakeups.ConnectionWakeup;
-  }>({
-    sequence: 0,
-    reason: "application-active",
-  });
+    readonly consumed: Deferred.Deferred<void>;
+  }>();
   const closedSessions = yield* Ref.make<
     ReadonlyArray<Deferred.Deferred<never, ConnectionTransientError>>
   >([]);
@@ -180,8 +178,8 @@ const makeHarness = Effect.fn("TestConnectionHarness.make")(function* (options?:
     Layer.succeed(
       ConnectionWakeups.ConnectionWakeups,
       ConnectionWakeups.ConnectionWakeups.of({
-        changes: SubscriptionRef.changes(wakeups).pipe(
-          Stream.drop(1),
+        changes: Stream.fromQueue(wakeups).pipe(
+          Stream.tap((event) => Deferred.succeed(event.consumed, undefined)),
           Stream.map((event) => event.reason),
         ),
       }),
@@ -198,11 +196,13 @@ const makeHarness = Effect.fn("TestConnectionHarness.make")(function* (options?:
     sessionCount,
     releaseCount,
     setNetworkStatus: (status: NetworkStatus) => SubscriptionRef.set(networkStatus, status),
-    wake: (reason: ConnectionWakeups.ConnectionWakeup) =>
-      SubscriptionRef.update(wakeups, (event) => ({
-        sequence: event.sequence + 1,
-        reason,
-      })),
+    wake: Effect.fn("TestConnectionHarness.wake")(function* (
+      reason: ConnectionWakeups.ConnectionWakeup,
+    ) {
+      const consumed = yield* Deferred.make<void>();
+      yield* Queue.offer(wakeups, { reason, consumed });
+      yield* Deferred.await(consumed);
+    }),
     closeLatestSession: Effect.fn("TestConnectionHarness.closeLatestSession")(function* (
       error = transient("Session closed."),
     ) {
@@ -1071,8 +1071,12 @@ describe("EnvironmentSupervisor", () => {
 
   it.effect("uses the full tolerance window for a stalled desktop foreground probe", () =>
     Effect.gen(function* () {
+      const probeStarted = yield* Deferred.make<void>();
       const harness = yield* makeHarness({
-        probe: (attempt) => (attempt === 1 ? Effect.never : Effect.void),
+        probe: (attempt) =>
+          attempt === 1
+            ? Deferred.succeed(probeStarted, undefined).pipe(Effect.andThen(Effect.never))
+            : Effect.void,
       });
       const supervisor = yield* EnvironmentSupervisor.make(TARGET_ENTRY, {
         initiallyDesired: true,
@@ -1080,6 +1084,7 @@ describe("EnvironmentSupervisor", () => {
 
       yield* awaitState(supervisor.state, (state) => state.phase === "connected");
       yield* harness.wake("application-active");
+      yield* Deferred.await(probeStarted);
       yield* TestClock.adjust("14999 millis");
       expect(yield* Ref.get(harness.sessionCount)).toBe(1);
       yield* TestClock.adjust("1 milli");
@@ -1094,8 +1099,12 @@ describe("EnvironmentSupervisor", () => {
 
   it.effect("quickly times out a stalled mobile foreground liveness probe", () =>
     Effect.gen(function* () {
+      const probeStarted = yield* Deferred.make<void>();
       const harness = yield* makeHarness({
-        probe: (attempt) => (attempt === 1 ? Effect.never : Effect.void),
+        probe: (attempt) =>
+          attempt === 1
+            ? Deferred.succeed(probeStarted, undefined).pipe(Effect.andThen(Effect.never))
+            : Effect.void,
       });
       const supervisor = yield* EnvironmentSupervisor.make(TARGET_ENTRY, {
         initiallyDesired: true,
@@ -1103,6 +1112,7 @@ describe("EnvironmentSupervisor", () => {
 
       yield* awaitState(supervisor.state, (state) => state.phase === "connected");
       yield* harness.wake("application-active-probe");
+      yield* Deferred.await(probeStarted);
       yield* TestClock.adjust("3 seconds");
       // The timed-out wake probe reconnects immediately without a backoff
       // sleep: no further clock advance is needed.
