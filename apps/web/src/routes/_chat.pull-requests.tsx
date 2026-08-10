@@ -7,20 +7,26 @@ import type {
   PullRequestListEntry,
   PullRequestListResult,
   PullRequestListState,
+  PullRequestReviewStatus,
   SourceControlProviderKind,
 } from "@t3tools/contracts";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import {
   ChevronDownIcon,
+  CircleCheckBigIcon,
+  CircleDashedIcon,
   EyeIcon,
+  GaugeIcon,
   GitMergeIcon,
   GitPullRequestClosedIcon,
   GitPullRequestIcon,
   LayersIcon,
   PenLineIcon,
   LoaderIcon,
+  MessageSquareWarningIcon,
   RefreshCwIcon,
   SearchIcon,
+  TagIcon,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
@@ -92,6 +98,9 @@ export interface PullRequestsSearch {
    * accounts, and their shared provider kind cannot tell them apart. Absent means every host.
    */
   readonly host?: string;
+  readonly reviewStatus?: PullRequestReviewStatus;
+  readonly label?: string;
+  readonly maxSize?: "m";
   readonly repository?: string;
   readonly number?: number;
   readonly selectedProjectId?: ProjectId;
@@ -111,6 +120,19 @@ const STATE_TABS = [
   { value: "closed", label: "Closed", Icon: GitPullRequestClosedIcon },
   { value: "merged", label: "Merged", Icon: GitMergeIcon },
 ] as const satisfies ReadonlyArray<PullRequestFilterOption<PullRequestListState>>;
+
+const REVIEW_OPTIONS = [
+  { value: "", label: "Any review status", Icon: LayersIcon },
+  { value: "approved", label: "Approved", Icon: CircleCheckBigIcon },
+  { value: "changes-requested", label: "Changes requested", Icon: MessageSquareWarningIcon },
+  { value: "review-required", label: "Review required", Icon: CircleDashedIcon },
+  { value: "none", label: "No review decision", Icon: CircleDashedIcon },
+] as const satisfies ReadonlyArray<PullRequestFilterOption<string>>;
+
+const SIZE_OPTIONS = [
+  { value: "", label: "Any size", Icon: LayersIcon },
+  { value: "m", label: "Size ≤ M", Icon: GaugeIcon },
+] as const satisfies ReadonlyArray<PullRequestFilterOption<string>>;
 
 /** Long enough that a keystroke does not become a request, short enough to feel answered. */
 const SEARCH_DEBOUNCE_MS = 250;
@@ -148,6 +170,14 @@ export const Route = createFileRoute("/_chat/pull-requests")({
       ? { projectId: raw.projectId as ProjectId }
       : {}),
     ...(typeof raw.host === "string" && raw.host ? { host: raw.host.slice(0, 200) } : {}),
+    ...(raw.reviewStatus === "approved" ||
+    raw.reviewStatus === "changes-requested" ||
+    raw.reviewStatus === "review-required" ||
+    raw.reviewStatus === "none"
+      ? { reviewStatus: raw.reviewStatus }
+      : {}),
+    ...(typeof raw.label === "string" && raw.label ? { label: raw.label.slice(0, 100) } : {}),
+    ...(raw.maxSize === "m" ? { maxSize: "m" as const } : {}),
     ...(typeof raw.selectedProjectId === "string" && raw.selectedProjectId
       ? { selectedProjectId: raw.selectedProjectId as ProjectId }
       : {}),
@@ -164,6 +194,11 @@ function PullRequestsRouteView() {
   const capabilityKnown = primaryEnvironment !== null && primaryEnvironment.serverConfig !== null;
   const pullRequestsSupported =
     primaryEnvironment?.serverConfig?.environment.capabilities.pullRequests === true;
+  const quickFiltersSupported =
+    primaryEnvironment?.serverConfig?.environment.capabilities.pullRequestQuickFilters === true;
+  const reviewStatus = quickFiltersSupported ? search.reviewStatus : undefined;
+  const label = quickFiltersSupported ? search.label : undefined;
+  const maxSize = quickFiltersSupported ? search.maxSize : undefined;
   // The primary environment may still be connecting, or may predate this feature. In either
   // case every query remains idle until the server has explicitly advertised these APIs.
   const pullRequestEnvironmentId = pullRequestsSupported ? environmentId : null;
@@ -235,6 +270,9 @@ function PullRequestsRouteView() {
             ...(next.number ? { number: next.number } : {}),
             ...(next.projectId ? { projectId: next.projectId } : {}),
             ...(next.host ? { host: next.host } : {}),
+            ...(next.reviewStatus ? { reviewStatus: next.reviewStatus } : {}),
+            ...(next.label ? { label: next.label } : {}),
+            ...(next.maxSize ? { maxSize: next.maxSize } : {}),
             ...(next.selectedProjectId ? { selectedProjectId: next.selectedProjectId } : {}),
             ...(next.q ? { q: next.q } : {}),
           };
@@ -269,7 +307,7 @@ function PullRequestsRouteView() {
   const querySettled = typedQuery === sentQuery;
 
   // Page size is view state, not a URL concern: a shared link should open the first page.
-  const scopeKey = `${environmentId ?? ""}:${search.state}:${search.involvement}:${scopedProjectId ?? ""}:${search.host ?? ""}`;
+  const scopeKey = `${environmentId ?? ""}:${search.state}:${search.involvement}:${scopedProjectId ?? ""}:${search.host ?? ""}:${reviewStatus ?? ""}:${label ?? ""}:${maxSize ?? ""}`;
   const filterKey = `${scopeKey}:${sentQuery}`;
   // Where the next slice carries on from, per repository, as the server handed it back. Sending
   // it is what makes a second page cost a second page rather than the whole list again — and a
@@ -303,6 +341,9 @@ function PullRequestsRouteView() {
             limit: pageSize,
             ...(scopedProjectId ? { projectId: scopedProjectId } : {}),
             ...(search.host ? { host: search.host } : {}),
+            ...(reviewStatus ? { reviewStatus } : {}),
+            ...(label ? { label } : {}),
+            ...(maxSize ? { maxSize } : {}),
             ...(sentQuery ? { query: sentQuery } : {}),
             ...(sentCursors ? { cursors: sentCursors } : {}),
           },
@@ -330,6 +371,27 @@ function PullRequestsRouteView() {
             limit: PAGE_SIZE,
             ...(scopedProjectId ? { projectId: scopedProjectId } : {}),
             ...(search.host ? { host: search.host } : {}),
+            ...(reviewStatus ? { reviewStatus } : {}),
+            ...(label ? { label } : {}),
+            ...(maxSize ? { maxSize } : {}),
+          },
+        }),
+  );
+  // Once a label is selected, keep the menu sourced from the same scope without that label.
+  // Otherwise the selected result set would replace the menu and make unrelated labels vanish.
+  const labelOptionsQuery = useEnvironmentQuery(
+    pullRequestEnvironmentId === null || label === undefined
+      ? null
+      : pullRequestEnvironment.list({
+          environmentId: pullRequestEnvironmentId,
+          input: {
+            state: search.state,
+            involvement: search.involvement,
+            limit: PAGE_SIZE,
+            ...(scopedProjectId ? { projectId: scopedProjectId } : {}),
+            ...(search.host ? { host: search.host } : {}),
+            ...(reviewStatus ? { reviewStatus } : {}),
+            ...(maxSize ? { maxSize } : {}),
           },
         }),
   );
@@ -351,6 +413,9 @@ function PullRequestsRouteView() {
             limit: PAGE_SIZE,
             ...(scopedProjectId ? { projectId: scopedProjectId } : {}),
             ...(search.host ? { host: search.host } : {}),
+            ...(reviewStatus ? { reviewStatus } : {}),
+            ...(label ? { label } : {}),
+            ...(maxSize ? { maxSize } : {}),
           },
         }),
   );
@@ -365,6 +430,9 @@ function PullRequestsRouteView() {
             limit: PAGE_SIZE,
             ...(scopedProjectId ? { projectId: scopedProjectId } : {}),
             ...(search.host ? { host: search.host } : {}),
+            ...(reviewStatus ? { reviewStatus } : {}),
+            ...(label ? { label } : {}),
+            ...(maxSize ? { maxSize } : {}),
           },
         }),
   );
@@ -496,9 +564,22 @@ function PullRequestsRouteView() {
       state: search.state,
       projectId: scopedProjectId,
       host: search.host,
+      reviewStatus,
+      label,
+      maxSize,
     });
     return entries.length === 0 ? null : { ...loaded.data, entries };
-  }, [environmentId, loaded, scopeKey, scopedProjectId, search.host, search.state]);
+  }, [
+    environmentId,
+    loaded,
+    scopeKey,
+    scopedProjectId,
+    search.host,
+    label,
+    maxSize,
+    reviewStatus,
+    search.state,
+  ]);
   // With nothing typed and nothing to carry on from, the answer is taken from the read that is
   // keyed to exactly that question. Otherwise a search's answer lingers for a render after the
   // text has gone — the data cannot say which question it belongs to, but the read it came from
@@ -953,6 +1034,9 @@ function PullRequestsRouteView() {
           filtered={
             search.state !== "open" ||
             search.involvement !== "all" ||
+            reviewStatus !== undefined ||
+            maxSize !== undefined ||
+            label !== undefined ||
             scopedProjectId !== undefined ||
             search.host !== undefined
           }
@@ -1037,14 +1121,38 @@ function PullRequestsRouteView() {
       };
     }),
   ];
+  const labelNames = [
+    ...new Set(
+      [
+        ...(labelOptionsQuery.data?.entries ?? []),
+        ...(baselineQuery.data?.entries ?? []),
+        ...(listData?.entries ?? []),
+      ].flatMap((entry) => entry.labels.map((label) => label.name)),
+    ),
+  ].toSorted((left, right) => left.localeCompare(right));
+  if (label && !labelNames.includes(label)) labelNames.unshift(label);
+  const labelOptions: ReadonlyArray<PullRequestFilterOption<string>> = [
+    { value: "", label: "Any label", Icon: LayersIcon },
+    ...labelNames.map((label) => ({ value: label, label, Icon: TagIcon })),
+  ];
   const filtersMenu = (
     <PullRequestFiltersMenu
       state={search.state}
+      quickFiltersSupported={quickFiltersSupported}
       stateOptions={STATE_TABS}
       onState={(state) => updateListScope({ state })}
       involvement={search.involvement}
       involvementOptions={INVOLVEMENT_TABS}
       onInvolvement={(involvement) => updateListScope({ involvement })}
+      reviewStatus={reviewStatus}
+      reviewStatusOptions={REVIEW_OPTIONS}
+      onReviewStatus={(reviewStatus) => updateListScope({ reviewStatus })}
+      maxSize={maxSize}
+      sizeOptions={SIZE_OPTIONS}
+      onMaxSize={(maxSize) => updateListScope({ maxSize })}
+      label={label}
+      labelOptions={labelOptions}
+      onLabel={(label) => updateListScope({ label })}
       host={search.host}
       hostOptions={hostMenuOptions}
       onHost={(host) => updateListScope({ host })}

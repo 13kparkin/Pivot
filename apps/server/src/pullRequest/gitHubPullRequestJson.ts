@@ -12,6 +12,7 @@ import type {
   PullRequestMergeCapabilities,
   PullRequestMergeability,
   PullRequestReviewCommentDraft,
+  PullRequestReviewStatus,
   PullRequestReviewThread,
   PullRequestReviewVerdict,
   PullRequestReviewerCandidate,
@@ -66,6 +67,7 @@ const RawListItemSchema = Schema.Struct({
   createdAt: Schema.String,
   updatedAt: Schema.String,
   mergedAt: Schema.optional(Schema.NullOr(Schema.String)),
+  reviewDecision: Schema.optional(Schema.NullOr(Schema.String)),
   reviewRequests: Schema.optional(Schema.Array(RawReviewRequestSchema)),
   labels: Schema.optional(Schema.Array(RawLabelSchema)),
 });
@@ -88,6 +90,7 @@ const RawSearchItemSchema = Schema.Struct({
   createdAt: Schema.String,
   updatedAt: Schema.String,
   mergedAt: Schema.optional(Schema.NullOr(Schema.String)),
+  reviewDecision: Schema.optional(Schema.NullOr(Schema.String)),
   repository: Schema.optional(Schema.NullOr(Schema.Struct({ nameWithOwner: Schema.String }))),
   reviewRequests: Schema.optional(
     Schema.NullOr(
@@ -384,7 +387,7 @@ export function decodeActorAvatarsJson(
 }
 
 export const PULL_REQUEST_LIST_JSON_FIELDS =
-  "number,title,url,author,headRefName,baseRefName,state,isDraft,mergeable,additions,deletions,createdAt,updatedAt,mergedAt,reviewRequests,labels";
+  "number,title,url,author,headRefName,baseRefName,state,isDraft,mergeable,additions,deletions,createdAt,updatedAt,mergedAt,reviewDecision,reviewRequests,labels";
 
 export const PULL_REQUEST_DETAIL_JSON_FIELDS = `${PULL_REQUEST_LIST_JSON_FIELDS},body,changedFiles,closedAt,statusCheckRollup`;
 export const PULL_REQUEST_ACTIVITY_JSON_FIELDS = "author,comments,reviews,commits";
@@ -432,9 +435,10 @@ export function pullRequestSearchGraphQlQuery(rows: number): string {
         createdAt
         updatedAt
         mergedAt
+        reviewDecision
         repository { nameWithOwner }
         reviewRequests(first: 20) { nodes { requestedReviewer { ... on User { login } } } }
-        labels(first: 20) { nodes { name color } }
+        labels(first: 100) { nodes { name color } }
       }
     }
   }
@@ -631,6 +635,7 @@ export interface GitHubPullRequestListItem {
   readonly createdAt: string;
   readonly updatedAt: string;
   readonly reviewRequestLogins: ReadonlyArray<string>;
+  readonly reviewStatus: PullRequestReviewStatus;
   /** At least one outstanding request targets a team rather than an individual login. */
   readonly hasTeamReviewRequest: boolean;
   readonly labels: ReadonlyArray<PullRequestLabel>;
@@ -882,6 +887,19 @@ function toCommits(
   }));
 }
 
+function toReviewStatus(value: string | null | undefined): PullRequestReviewStatus {
+  switch (value?.trim().toUpperCase()) {
+    case "APPROVED":
+      return "approved";
+    case "CHANGES_REQUESTED":
+      return "changes-requested";
+    case "REVIEW_REQUIRED":
+      return "review-required";
+    default:
+      return "none";
+  }
+}
+
 function toListItem(raw: Schema.Schema.Type<typeof RawListItemSchema>): GitHubPullRequestListItem {
   return {
     authorId: trimmed(raw.author?.id),
@@ -899,6 +917,7 @@ function toListItem(raw: Schema.Schema.Type<typeof RawListItemSchema>): GitHubPu
     createdAt: raw.createdAt,
     updatedAt: raw.updatedAt,
     reviewRequestLogins: toReviewRequestLogins(raw.reviewRequests),
+    reviewStatus: toReviewStatus(raw.reviewDecision),
     hasTeamReviewRequest: hasTeamReviewRequest(raw.reviewRequests),
     labels: toLabels(raw.labels),
   };

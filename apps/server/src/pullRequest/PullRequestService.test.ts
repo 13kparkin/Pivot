@@ -242,6 +242,67 @@ it.effect("asks for a whole page of a host, and for the reader's own size when g
   }),
 );
 
+it.effect("forwards and enforces review, label, and size filters", () =>
+  Effect.gen(function* () {
+    const requested: Array<{
+      readonly reviewStatus: string | undefined;
+      readonly label: string | undefined;
+      readonly maxSize: string | undefined;
+    }> = [];
+    const service = yield* makeService({
+      projects: [
+        project({ id: "p1", title: "t3code", workspaceRoot: "/a", repository: "pingdotgg/t3code" }),
+      ],
+      providers: [
+        fakeProvider("github", {
+          listChangeRequests: (input) => {
+            requested.push({
+              reviewStatus: input.reviewStatus,
+              label: input.label,
+              maxSize: input.maxSize,
+            });
+            return Effect.succeed({
+              items: [
+                {
+                  ...changeRequest(1, "2026-07-03T00:00:00Z"),
+                  reviewStatus: "approved" as const,
+                  labels: [
+                    { name: "Bug", color: null },
+                    { name: "size:S", color: null },
+                  ],
+                },
+                {
+                  ...changeRequest(2, "2026-07-02T00:00:00Z"),
+                  reviewStatus: "changes-requested" as const,
+                  labels: [
+                    { name: "bug", color: null },
+                    { name: "size:L", color: null },
+                  ],
+                },
+              ],
+              truncated: false,
+              continues: true,
+            });
+          },
+        }),
+      ],
+    });
+
+    const result = yield* service.list({
+      state: "open",
+      reviewStatus: "approved",
+      label: "bug",
+      maxSize: "m",
+    });
+
+    assert.deepStrictEqual(requested, [{ reviewStatus: "approved", label: "bug", maxSize: "m" }]);
+    assert.deepStrictEqual(
+      result.entries.map((entry) => ({ number: entry.number, reviewStatus: entry.reviewStatus })),
+      [{ number: 1, reviewStatus: "approved" }],
+    );
+  }),
+);
+
 it.effect("says where each repository carries on, and from nothing it has run out of", () =>
   Effect.gen(function* () {
     const service = yield* makeService({

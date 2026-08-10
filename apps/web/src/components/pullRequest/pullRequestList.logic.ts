@@ -1,7 +1,11 @@
 import * as Schema from "effect/Schema";
 
 import { PullRequestListEntry, PullRequestListResult } from "@t3tools/contracts";
-import type { PullRequestInvolvement, PullRequestListState } from "@t3tools/contracts";
+import type {
+  PullRequestInvolvement,
+  PullRequestListState,
+  PullRequestReviewStatus,
+} from "@t3tools/contracts";
 
 export type PullRequestGroupKey = "reviewRequested" | "authored" | "others";
 
@@ -81,14 +85,23 @@ export function narrowPullRequestsToFilters(
     readonly state: PullRequestListState;
     readonly projectId: string | undefined;
     readonly host: string | undefined;
+    readonly reviewStatus?: PullRequestReviewStatus | undefined;
+    readonly label?: string | undefined;
+    readonly maxSize?: "m" | undefined;
   },
 ): ReadonlyArray<PullRequestListEntry> {
-  return entries.filter(
-    (entry) =>
+  return entries.filter((entry) => {
+    const labels = new Set(entry.labels.map((label) => label.name.trim().toLowerCase()));
+    return (
       (filters.state === "all" || entry.state === filters.state) &&
       (filters.projectId === undefined || entry.projectId === filters.projectId) &&
-      (filters.host === undefined || entry.host === filters.host),
-  );
+      (filters.host === undefined || entry.host === filters.host) &&
+      (filters.reviewStatus === undefined || entry.reviewStatus === filters.reviewStatus) &&
+      (filters.label === undefined || labels.has(filters.label.trim().toLowerCase())) &&
+      (filters.maxSize === undefined ||
+        ["size:xs", "size:s", "size:m"].some((label) => labels.has(label)))
+    );
+  });
 }
 
 /**

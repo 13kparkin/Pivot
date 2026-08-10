@@ -170,13 +170,26 @@ describe("carrying rows already read into filters nothing has answered yet", () 
     entry({ number: 3, state: "closed" }),
     entry({ number: 4, host: "github.acme.dev" }),
     entry({ number: 5, projectId: "project-2" as PullRequestListEntry["projectId"] }),
+    entry({
+      number: 6,
+      reviewStatus: "approved",
+      labels: [
+        { name: "Quick Win", color: null },
+        { name: "size:S", color: null },
+      ],
+    }),
+    entry({
+      number: 7,
+      reviewStatus: "changes-requested",
+      labels: [{ name: "size:L", color: null }],
+    }),
   ];
   const everything = { state: "all", projectId: undefined, host: undefined } as const;
 
   it("never lets a merged pull request sit under Open", () => {
     expect(
       narrowPullRequestsToFilters(rows, { ...everything, state: "open" }).map((row) => row.number),
-    ).toEqual([1, 4, 5]);
+    ).toEqual([1, 4, 5, 6, 7]);
   });
 
   it("keeps only the state that was asked for", () => {
@@ -201,6 +214,28 @@ describe("carrying rows already read into filters nothing has answered yet", () 
         (row) => row.number,
       ),
     ).toEqual([5]);
+  });
+
+  it("narrows to a review outcome", () => {
+    expect(
+      narrowPullRequestsToFilters(rows, { ...everything, reviewStatus: "approved" }).map(
+        (row) => row.number,
+      ),
+    ).toEqual([6]);
+  });
+
+  it("matches labels case-insensitively and exactly", () => {
+    expect(
+      narrowPullRequestsToFilters(rows, { ...everything, label: "quick win" }).map(
+        (row) => row.number,
+      ),
+    ).toEqual([6]);
+  });
+
+  it("treats size at most M as the XS, S, and M label family", () => {
+    expect(
+      narrowPullRequestsToFilters(rows, { ...everything, maxSize: "m" }).map((row) => row.number),
+    ).toEqual([6]);
   });
 
   it("holds on to everything when nothing narrows it", () => {

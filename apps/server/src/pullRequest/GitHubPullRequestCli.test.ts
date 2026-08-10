@@ -149,6 +149,7 @@ function searchItem(number: number, repository: string, updatedAt: string) {
     createdAt: "2026-07-01T00:00:00Z",
     updatedAt,
     repository: { nameWithOwner: repository },
+    reviewDecision: "APPROVED",
     reviewRequests: { nodes: [{ requestedReviewer: { login: "hubot" } }] },
     labels: { nodes: [{ name: "bug", color: "ff0000" }] },
   };
@@ -302,6 +303,71 @@ layer("GitHubPullRequestCli.layer", (it) => {
         'is:pr is:closed is:unmerged review-requested:bilal "pull requests page" ' +
           "updated:<=2026-07-02T00:00:00Z sort:updated-desc repo:acme/web repo:pingdotgg/t3code",
       );
+    }),
+  );
+
+  it.effect("carries quick-win filters into GitHub search qualifiers", () =>
+    Effect.gen(function* () {
+      mockedExecute.mockReturnValue(Effect.succeed(searchPage([])));
+      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+
+      yield* cli.searchPullRequests({
+        cwd: "/w",
+        host: "github.com",
+        repositories: ["acme/web"],
+        state: "open",
+        involvement: "all",
+        viewer: "bilal",
+        limit: 10,
+        reviewStatus: "review-required",
+        label: "good first issue",
+        maxSize: "m",
+      });
+
+      expect(searchQueryOfCall(0)).toBe(
+        'is:pr is:open review:required label:"good first issue" ' +
+          'label:"size:XS","size:S","size:M" sort:updated-desc repo:acme/web',
+      );
+    }),
+  );
+
+  it.effect("leaves no-decision filtering to the shared review-decision predicate", () =>
+    Effect.gen(function* () {
+      mockedExecute.mockReturnValue(Effect.succeed(searchPage([])));
+      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+
+      yield* cli.searchPullRequests({
+        cwd: "/w",
+        host: "github.com",
+        repositories: ["acme/web"],
+        state: "open",
+        involvement: "all",
+        viewer: "bilal",
+        limit: 10,
+        reviewStatus: "none",
+      });
+
+      expect(searchQueryOfCall(0)).toBe("is:pr is:open sort:updated-desc repo:acme/web");
+    }),
+  );
+
+  it.effect("uses GitHub's changes-requested spelling in per-repository lists", () =>
+    Effect.gen(function* () {
+      mockedExecute.mockReturnValue(Effect.succeed(output("[]")));
+      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+
+      yield* cli.listPullRequests({
+        cwd: "/w",
+        repository: "acme/web",
+        host: "github.com",
+        state: "open",
+        involvement: "all",
+        viewer: "bilal",
+        limit: 10,
+        reviewStatus: "changes-requested",
+      });
+
+      expect(searchOfCall(0)).toBe("review:changes_requested sort:updated-desc");
     }),
   );
 
@@ -689,6 +755,46 @@ layer("GitHubPullRequestCli.layer", (it) => {
       assert.strictEqual(batch.items.length, 3);
       // The fallback itself uses no search, then narrows the decoded rows locally. They still
       // arrive in gh's own order, so nothing can carry on from them.
+      expect(searchOfCall(1)).toBeUndefined();
+      assert.isFalse(batch.continues);
+    }),
+  );
+
+  it.effect("keeps quick-win filters on the search-free fallback", () =>
+    Effect.gen(function* () {
+      mockedExecute.mockReturnValueOnce(Effect.succeed(output("[]")));
+      mockedExecute.mockReturnValueOnce(
+        Effect.succeed(
+          output(
+            pullRequests(3, 1, (number) => ({
+              reviewDecision: number === 2 ? "APPROVED" : "CHANGES_REQUESTED",
+              labels:
+                number === 2
+                  ? [
+                      { name: "quick win", color: "c5def5" },
+                      { name: "size:S", color: null },
+                    ]
+                  : [{ name: "size:L", color: null }],
+            })),
+          ),
+        ),
+      );
+      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+
+      const batch = yield* cli.listPullRequests({
+        cwd: "/w",
+        repository: "acme/web",
+        host: "github.com",
+        state: "open",
+        involvement: "all",
+        viewer: "bilal",
+        limit: 10,
+        reviewStatus: "approved",
+        label: "Quick Win",
+        maxSize: "m",
+      });
+
+      expect(batch.items.map((item) => item.number)).toEqual([2]);
       expect(searchOfCall(1)).toBeUndefined();
       assert.isFalse(batch.continues);
     }),
@@ -1472,7 +1578,7 @@ layer("GitHubPullRequestCli.layer", (it) => {
       expect(detail.body).toBe("Core body");
       expect(activity.author?.login).toBe("octocat");
       expect(callAt(0).args.at(-1)).toBe(
-        "number,title,url,author,headRefName,baseRefName,state,isDraft,mergeable,additions,deletions,createdAt,updatedAt,mergedAt,reviewRequests,labels,body,changedFiles,closedAt,statusCheckRollup",
+        "number,title,url,author,headRefName,baseRefName,state,isDraft,mergeable,additions,deletions,createdAt,updatedAt,mergedAt,reviewDecision,reviewRequests,labels,body,changedFiles,closedAt,statusCheckRollup",
       );
       expect(callAt(1).args.at(-1)).toBe("author,comments,reviews,commits");
     }),

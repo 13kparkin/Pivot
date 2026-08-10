@@ -71,6 +71,24 @@ function PullRequestRowImpl({
           </span>
           {showProjectTitle ? <span className="truncate">{entry.repository}</span> : null}
           <PullRequestActorLabel actor={entry.author} className="max-w-40 shrink-0" />
+          {entry.reviewStatus && entry.reviewStatus !== "none" ? (
+            <span
+              className={cn(
+                "shrink-0 rounded-full border px-1.5 text-[10px] font-medium",
+                entry.reviewStatus === "approved"
+                  ? "border-green-500/35 bg-green-500/10 text-green-700 dark:text-green-400"
+                  : entry.reviewStatus === "changes-requested"
+                    ? "border-amber-500/35 bg-amber-500/10 text-amber-700 dark:text-amber-400"
+                    : "border-border/60 text-muted-foreground",
+              )}
+            >
+              {entry.reviewStatus === "approved"
+                ? "approved"
+                : entry.reviewStatus === "changes-requested"
+                  ? "changes requested"
+                  : "review required"}
+            </span>
+          ) : null}
           <span className="truncate" title={`${entry.headBranch} to ${entry.baseBranch}`}>
             {entry.headBranch}
           </span>

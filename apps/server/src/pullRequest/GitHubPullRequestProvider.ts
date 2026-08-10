@@ -128,6 +128,9 @@ export const make = Effect.gen(function* () {
           viewer: input.viewer,
           limit: input.limit,
           query: input.query,
+          reviewStatus: input.reviewStatus,
+          label: input.label,
+          maxSize: input.maxSize,
           cursor: input.cursor,
         })
         .pipe(
@@ -171,6 +174,9 @@ export const make = Effect.gen(function* () {
           viewer: input.viewer,
           limit: input.limit,
           query: input.query,
+          reviewStatus: input.reviewStatus,
+          label: input.label,
+          maxSize: input.maxSize,
           cursor: input.cursor,
         })
         .pipe(

@@ -3,6 +3,7 @@ import type {
   ProjectId,
   PullRequestInvolvement,
   PullRequestListState,
+  PullRequestReviewStatus,
   SourceControlProviderKind,
 } from "@t3tools/contracts";
 import { FolderGit2Icon, LayersIcon, ListFilterIcon, LoaderIcon, SearchIcon } from "lucide-react";
@@ -147,6 +148,16 @@ export function PullRequestFiltersMenu({
   involvement,
   involvementOptions,
   onInvolvement,
+  quickFiltersSupported,
+  reviewStatus,
+  reviewStatusOptions,
+  onReviewStatus,
+  maxSize,
+  sizeOptions,
+  onMaxSize,
+  label,
+  labelOptions,
+  onLabel,
   host,
   hostOptions,
   onHost,
@@ -162,6 +173,16 @@ export function PullRequestFiltersMenu({
   involvement: PullRequestInvolvement;
   involvementOptions: ReadonlyArray<PullRequestFilterOption<PullRequestInvolvement>>;
   onInvolvement: (involvement: PullRequestInvolvement) => void;
+  quickFiltersSupported: boolean;
+  reviewStatus: PullRequestReviewStatus | undefined;
+  reviewStatusOptions: ReadonlyArray<PullRequestFilterOption<string>>;
+  onReviewStatus: (status: PullRequestReviewStatus | undefined) => void;
+  maxSize: "m" | undefined;
+  sizeOptions: ReadonlyArray<PullRequestFilterOption<string>>;
+  onMaxSize: (size: "m" | undefined) => void;
+  label: string | undefined;
+  labelOptions: ReadonlyArray<PullRequestFilterOption<string>>;
+  onLabel: (label: string | undefined) => void;
   host: string | undefined;
   /**
    * Includes the "all hosts" entry, whose value is the empty string. With fewer than two real
@@ -186,7 +207,12 @@ export function PullRequestFiltersMenu({
   onProject: (projectId: ProjectId | undefined) => void;
 }) {
   const filtered =
-    state !== "open" || involvement !== "all" || host !== undefined || projectId !== undefined;
+    state !== "open" ||
+    involvement !== "all" ||
+    (quickFiltersSupported &&
+      (reviewStatus !== undefined || maxSize !== undefined || label !== undefined)) ||
+    host !== undefined ||
+    projectId !== undefined;
   return (
     <Menu>
       <MenuTrigger
@@ -195,7 +221,7 @@ export function PullRequestFiltersMenu({
           "relative inline-flex size-9 shrink-0 items-center justify-center rounded-lg border border-input text-muted-foreground transition-colors hover:bg-accent/50 hover:text-foreground sm:size-8",
           filtered && "text-foreground",
         )}
-        aria-label="Filter pull requests"
+        aria-label={filtered ? "Filter pull requests, filters active" : "Filter pull requests"}
       >
         <ListFilterIcon className="size-4" />
         {filtered ? (
@@ -219,6 +245,33 @@ export function PullRequestFiltersMenu({
           options={involvementOptions}
           onChange={onInvolvement}
         />
+        {quickFiltersSupported ? (
+          <>
+            <MenuSeparator />
+            <PullRequestFilterRadioGroup
+              label="Review"
+              value={reviewStatus ?? ""}
+              options={reviewStatusOptions}
+              onChange={(next) =>
+                onReviewStatus(next === "" ? undefined : (next as PullRequestReviewStatus))
+              }
+            />
+            <MenuSeparator />
+            <PullRequestFilterRadioGroup
+              label="Size"
+              value={maxSize ?? ""}
+              options={sizeOptions}
+              onChange={(next) => onMaxSize(next === "" ? undefined : "m")}
+            />
+            <MenuSeparator />
+            <PullRequestFilterRadioGroup
+              label="Label"
+              value={label ?? ""}
+              options={labelOptions}
+              onChange={(next) => onLabel(next === "" ? undefined : next)}
+            />
+          </>
+        ) : null}
         {hostOptions.length > 2 ? (
           <>
             <MenuSeparator />

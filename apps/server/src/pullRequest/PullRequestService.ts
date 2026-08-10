@@ -561,8 +561,22 @@ export const make = Effect.gen(function* () {
       viewerReviewRequested:
         input.item.author?.login.toLowerCase() !== viewer &&
         input.item.reviewRequestLogins.some((login) => login.toLowerCase() === viewer),
+      reviewStatus: input.item.reviewStatus ?? null,
       labels: input.item.labels,
     };
+  };
+
+  const matchesQuickWinFilters = (
+    item: ProviderChangeRequest,
+    input: PullRequestListInput,
+  ): boolean => {
+    const labels = new Set(item.labels.map((label) => label.name.trim().toLowerCase()));
+    return (
+      (input.reviewStatus === undefined || item.reviewStatus === input.reviewStatus) &&
+      (input.label === undefined || labels.has(input.label.trim().toLowerCase())) &&
+      (input.maxSize === undefined ||
+        ["size:xs", "size:s", "size:m"].some((label) => labels.has(label)))
+    );
   };
 
   const listUncached: PullRequestService["Service"]["list"] = (input) =>
@@ -685,6 +699,9 @@ export const make = Effect.gen(function* () {
               // Each host matches this its own way, and one that cannot match text at all
               // answers unnarrowed rather than failing.
               query: input.query,
+              reviewStatus: input.reviewStatus,
+              label: input.label,
+              maxSize: input.maxSize,
               // Only the two fields a host can act on: which rows have already been sent at the
               // boundary instant is this service's business, not a provider's.
               ...(cursor === undefined
@@ -698,7 +715,7 @@ export const make = Effect.gen(function* () {
                 // The boundary instant was asked for inclusively, so the rows already sent at it
                 // come back with the slice. Dropping them here rather than asking for strictly
                 // older is what keeps their neighbours at the same instant from being skipped.
-                const items =
+                const available =
                   cursor === undefined
                     ? page.items
                     : page.items.filter(
@@ -706,6 +723,7 @@ export const make = Effect.gen(function* () {
                           item.updatedAt !== cursor.updatedBefore ||
                           !cursor.seenAt.includes(item.number),
                       );
+                const items = available.filter((item) => matchesQuickWinFilters(item, input));
                 return {
                   key,
                   entries: items.map((item) => toEntry({ project, item, viewer })),
@@ -713,7 +731,7 @@ export const make = Effect.gen(function* () {
                   truncated: page.truncated,
                   nextCursor:
                     page.continues && page.truncated
-                      ? nextListCursor(cursor, page.items, items, page.cursorAdvance)
+                      ? nextListCursor(cursor, page.items, available, page.cursorAdvance)
                       : null,
                 };
               }),
@@ -766,6 +784,9 @@ export const make = Effect.gen(function* () {
           viewer,
           limit,
           query: input.query,
+          reviewStatus: input.reviewStatus,
+          label: input.label,
+          maxSize: input.maxSize,
           ...(cursor === undefined
             ? {}
             : { cursor: { updatedBefore: cursor.updatedBefore, delivered: cursor.delivered } }),
@@ -801,7 +822,7 @@ export const make = Effect.gen(function* () {
                   return readRepository(project);
                 }
                 const cursorHere = cursorOf(project);
-                const items =
+                const available =
                   cursorHere === undefined
                     ? fetched
                     : fetched.filter(
@@ -809,6 +830,7 @@ export const make = Effect.gen(function* () {
                           item.updatedAt !== cursorHere.updatedBefore ||
                           !cursorHere.seenAt.includes(item.number),
                       );
+                const items = available.filter((item) => matchesQuickWinFilters(item, input));
                 return Effect.succeed({
                   key: listCursorKey(project.host, project.repository),
                   entries: items.map((item) => toEntry({ project, item, viewer })),
@@ -816,7 +838,7 @@ export const make = Effect.gen(function* () {
                   truncated: page.truncated,
                   nextCursor:
                     page.truncated && boundary !== null
-                      ? listCursorAt(cursorHere, boundary, fetched, items.length)
+                      ? listCursorAt(cursorHere, boundary, fetched, available.length)
                       : null,
                 });
               },
@@ -1458,11 +1480,24 @@ export const make = Effect.gen(function* () {
     (key: string) => {
       // The parse undoes this module's own serialization, so the shapes are known exactly;
       // the cast restores the branded field types JSON cannot carry.
-      const [, state, involvement, projectId, host, limit, query, cursorEntries] = JSON.parse(
-        key,
-      ) as [
+      const [
+        ,
+        state,
+        involvement,
+        projectId,
+        host,
+        reviewStatus,
+        label,
+        maxSize,
+        limit,
+        query,
+        cursorEntries,
+      ] = JSON.parse(key) as [
         number,
         string,
+        string | null,
+        string | null,
+        string | null,
         string | null,
         string | null,
         string | null,
@@ -1475,6 +1510,9 @@ export const make = Effect.gen(function* () {
         ...(involvement === null ? {} : { involvement }),
         ...(projectId === null ? {} : { projectId }),
         ...(host === null ? {} : { host }),
+        ...(reviewStatus === null ? {} : { reviewStatus }),
+        ...(label === null ? {} : { label }),
+        ...(maxSize === null ? {} : { maxSize }),
         ...(limit === null ? {} : { limit }),
         ...(query === null ? {} : { query }),
         ...(cursorEntries === null ? {} : { cursors: Object.fromEntries(cursorEntries) }),
@@ -1496,6 +1534,9 @@ export const make = Effect.gen(function* () {
       input.involvement ?? null,
       input.projectId ?? null,
       input.host ?? null,
+      input.reviewStatus ?? null,
+      input.label ?? null,
+      input.maxSize ?? null,
       input.limit ?? null,
       input.query ?? null,
       input.cursors === undefined

@@ -8,6 +8,7 @@ import {
   decodePullRequestDetailJson,
   decodePullRequestFilesJson,
   decodePullRequestListJson,
+  decodePullRequestSearchJson,
   decodeRepositoryAccessJson,
   decodeReviewerCandidatesJson,
   decodeReviewThreadCommentsJson,
@@ -65,6 +66,52 @@ describe("pull request list decoding", () => {
       ),
     ).items;
     expect(entry?.reviewRequestLogins).toEqual(["octocat"]);
+  });
+
+  it("normalizes review decisions and keeps no decision distinct", () => {
+    const batch = expectSuccess(
+      decodePullRequestListJson(
+        listJson([
+          { reviewDecision: "APPROVED" },
+          { reviewDecision: "CHANGES_REQUESTED" },
+          { reviewDecision: "REVIEW_REQUIRED" },
+          { reviewDecision: null },
+        ]),
+      ),
+    );
+    expect(batch.items.map((entry) => entry.reviewStatus)).toEqual([
+      "approved",
+      "changes-requested",
+      "review-required",
+      "none",
+    ]);
+  });
+
+  it("keeps review decisions on rows returned by cross-repository search", () => {
+    const batch = expectSuccess(
+      decodePullRequestSearchJson(
+        JSON.stringify({
+          data: {
+            search: {
+              nodes: [
+                {
+                  number: 1,
+                  title: "Add the pull requests page",
+                  url: "https://github.com/pingdotgg/t3code/pull/1",
+                  headRefName: "feat/page",
+                  baseRefName: "main",
+                  createdAt: "2026-07-01T00:00:00Z",
+                  updatedAt: "2026-07-02T00:00:00Z",
+                  reviewDecision: "APPROVED",
+                  repository: { nameWithOwner: "pingdotgg/t3code" },
+                },
+              ],
+            },
+          },
+        }),
+      ),
+    );
+    expect(batch.items[0]?.reviewStatus).toBe("approved");
   });
 
   it("skips malformed entries but still counts them, so paging does not stop early", () => {

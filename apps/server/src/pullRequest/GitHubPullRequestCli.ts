@@ -10,6 +10,7 @@ import type {
   PullRequestListState,
   PullRequestMergeMethod,
   PullRequestReviewCommentDraft,
+  PullRequestReviewStatus,
   PullRequestReviewVerdict,
   PullRequestReviewerCandidateList,
   PullRequestReviewerKind,
@@ -289,6 +290,9 @@ export class GitHubPullRequestCli extends Context.Service<
       readonly limit: number;
       /** Free text for `--search`, matched as one literal phrase. */
       readonly query?: string | undefined;
+      readonly reviewStatus?: PullRequestReviewStatus | undefined;
+      readonly label?: string | undefined;
+      readonly maxSize?: "m" | undefined;
       /** Where to carry on from, as a `updated:` qualifier on the same search. */
       readonly cursor?: ProviderListCursor | undefined;
     }) => Effect.Effect<GitHubPullRequestListBatch, GitHubPullRequestCliError>;
@@ -308,6 +312,9 @@ export class GitHubPullRequestCli extends Context.Service<
       readonly viewer: string;
       readonly limit: number;
       readonly query?: string | undefined;
+      readonly reviewStatus?: PullRequestReviewStatus | undefined;
+      readonly label?: string | undefined;
+      readonly maxSize?: "m" | undefined;
       readonly cursor?: ProviderListCursor | undefined;
     }) => Effect.Effect<GitHubPullRequestSearchBatch, GitHubPullRequestCliError>;
 
@@ -501,11 +508,38 @@ function searchPhrase(query: string): string {
   return `"${query.replaceAll("\\", "\\\\").replaceAll('"', '\\"')}"`;
 }
 
+function quickWinSearchTerms(input: {
+  readonly reviewStatus?: PullRequestReviewStatus | undefined;
+  readonly label?: string | undefined;
+  readonly maxSize?: "m" | undefined;
+}): ReadonlyArray<string> {
+  const review =
+    input.reviewStatus === undefined
+      ? undefined
+      : {
+          approved: "approved",
+          "changes-requested": "changes_requested",
+          "review-required": "required",
+          // GitHub's `review:none` means no submitted reviews, while this field is the overall
+          // review decision and maps a missing decision to `none`. Leave it to the shared local
+          // predicate so indexed and fallback reads agree.
+          none: undefined,
+        }[input.reviewStatus];
+  return [
+    ...(review === undefined ? [] : [`review:${review}`]),
+    ...(input.label === undefined ? [] : [`label:${searchPhrase(input.label)}`]),
+    ...(input.maxSize === "m" ? ['label:"size:XS","size:S","size:M"'] : []),
+  ];
+}
+
 function involvementArgs(input: {
   readonly state: PullRequestListState;
   readonly involvement: PullRequestInvolvement;
   readonly viewer: string;
   readonly query?: string | undefined;
+  readonly reviewStatus?: PullRequestReviewStatus | undefined;
+  readonly label?: string | undefined;
+  readonly maxSize?: "m" | undefined;
   /** Where to carry on from, which only a search can express. */
   readonly cursor?: ProviderListCursor | undefined;
   /**
@@ -527,6 +561,7 @@ function involvementArgs(input: {
         ...(input.involvement === "reviewing" ? [`review-requested:${input.viewer}`] : []),
         ...(input.state === "closed" ? ["is:unmerged"] : []),
         ...(query.length === 0 ? [] : [searchPhrase(query)]),
+        ...quickWinSearchTerms(input),
         // The instant the last slice ended on, and everything before it. Inclusive, because rows
         // sharing one instant are ordinary and the caller drops the ones it has already sent —
         // asking for strictly older would lose the rest of them instead.
@@ -550,6 +585,9 @@ function matchesUnsortedListing(
     readonly state: PullRequestListState;
     readonly involvement: PullRequestInvolvement;
     readonly viewer: string;
+    readonly reviewStatus?: PullRequestReviewStatus | undefined;
+    readonly label?: string | undefined;
+    readonly maxSize?: "m" | undefined;
   },
 ): boolean {
   const matchesState = input.state === "all" || item.state === input.state;
@@ -560,7 +598,14 @@ function matchesUnsortedListing(
       ? item.author?.login.toLowerCase() === viewer
       : item.hasTeamReviewRequest ||
         item.reviewRequestLogins.some((login) => login.toLowerCase() === viewer));
-  return matchesState && matchesInvolvement;
+  const labels = new Set(item.labels.map((label) => label.name.trim().toLowerCase()));
+  const matchesReview =
+    input.reviewStatus === undefined || item.reviewStatus === input.reviewStatus;
+  const matchesLabel = input.label === undefined || labels.has(input.label.trim().toLowerCase());
+  const matchesSize =
+    input.maxSize === undefined ||
+    ["size:xs", "size:s", "size:m"].some((label) => labels.has(label));
+  return matchesState && matchesInvolvement && matchesReview && matchesLabel && matchesSize;
 }
 
 /** What a repository selector may hold before it goes into a search as itself. */
@@ -586,6 +631,9 @@ function searchQuery(input: {
   readonly involvement: PullRequestInvolvement;
   readonly viewer: string;
   readonly query?: string | undefined;
+  readonly reviewStatus?: PullRequestReviewStatus | undefined;
+  readonly label?: string | undefined;
+  readonly maxSize?: "m" | undefined;
   readonly cursor?: ProviderListCursor | undefined;
 }): string | null {
   if (input.repositories.length === 0) return null;
@@ -601,6 +649,7 @@ function searchQuery(input: {
     ...(input.involvement === "authored" ? [`author:${input.viewer}`] : []),
     ...(input.involvement === "reviewing" ? [`review-requested:${input.viewer}`] : []),
     ...(query.length === 0 ? [] : [searchPhrase(query)]),
+    ...quickWinSearchTerms(input),
     // Inclusive, and de-duplicated by the caller, for the reason the per-repository read gives.
     ...(input.cursor === undefined ? [] : [`updated:<=${input.cursor.updatedBefore}`]),
     // The order the page reads its rows in, and the only order a continuation can carry on from.

@@ -272,6 +272,14 @@ export const PullRequestMergeCapabilities = Schema.Struct({
 });
 export type PullRequestMergeCapabilities = typeof PullRequestMergeCapabilities.Type;
 
+export const PullRequestReviewStatus = Schema.Literals([
+  "approved",
+  "changes-requested",
+  "review-required",
+  "none",
+]);
+export type PullRequestReviewStatus = typeof PullRequestReviewStatus.Type;
+
 export const PullRequestListEntry = Schema.Struct({
   provider: SourceControlProviderKind,
   /**
@@ -302,6 +310,8 @@ export const PullRequestListEntry = Schema.Struct({
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
   viewerReviewRequested: Schema.Boolean,
+  /** Overall review decision when the provider reports one. Absent in older cached snapshots. */
+  reviewStatus: Schema.optional(Schema.NullOr(PullRequestReviewStatus)),
   labels: Schema.Array(PullRequestLabel),
 });
 export type PullRequestListEntry = typeof PullRequestListEntry.Type;
@@ -331,6 +341,12 @@ export const PullRequestListInput = Schema.Struct({
    * apart. Absent means every host the workspace has.
    */
   host: Schema.optional(TrimmedNonEmptyString),
+  /** Overall review decision reported by the host. */
+  reviewStatus: Schema.optional(PullRequestReviewStatus),
+  /** Exact label name, compared case-insensitively. */
+  label: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(100))),
+  /** Quick-win size shortcut, backed by the repository's XS, S, and M labels. */
+  maxSize: Schema.optional(Schema.Literal("m")),
   /** Rows to return per repository, which with a continuation is rows per slice. */
   limit: Schema.optional(Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 500 }))),
   /**

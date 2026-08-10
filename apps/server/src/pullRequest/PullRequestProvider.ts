@@ -14,6 +14,7 @@ import type {
   PullRequestMergeMethod,
   PullRequestMergeability,
   PullRequestReviewCommentDraft,
+  PullRequestReviewStatus,
   PullRequestReviewThread,
   PullRequestReviewVerdict,
   PullRequestReviewerCandidateList,
@@ -63,6 +64,8 @@ export interface ProviderChangeRequest {
   readonly updatedAt: string;
   /** Accounts with a review requested. Team-level requests are excluded by each provider. */
   readonly reviewRequestLogins: ReadonlyArray<string>;
+  /** Overall review decision when the provider exposes one. */
+  readonly reviewStatus?: PullRequestReviewStatus | null;
   readonly labels: ReadonlyArray<PullRequestLabel>;
 }
 
@@ -211,6 +214,9 @@ export interface PullRequestProviderApi {
        * rather than a wrong one.
        */
       readonly query?: string | undefined;
+      readonly reviewStatus?: PullRequestReviewStatus | undefined;
+      readonly label?: string | undefined;
+      readonly maxSize?: "m" | undefined;
       /**
        * Where to carry on from, rather than reading this repository from its newest row. Absent
        * asks for the first slice, which is every listing that has not been continued.
@@ -243,6 +249,9 @@ export interface PullRequestProviderApi {
     readonly viewer: string;
     readonly limit: number;
     readonly query?: string | undefined;
+    readonly reviewStatus?: PullRequestReviewStatus | undefined;
+    readonly label?: string | undefined;
+    readonly maxSize?: "m" | undefined;
     readonly cursor?: ProviderListCursor | undefined;
   }) => Effect.Effect<ProviderBatchedChangeRequestPage, PullRequestProviderError>;
 

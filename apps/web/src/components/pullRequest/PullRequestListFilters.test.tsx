@@ -53,6 +53,15 @@ function menu(overrides: Partial<Parameters<typeof PullRequestFiltersMenu>[0]>) 
     involvement: "all",
     involvementOptions: [{ value: "all", label: "All", Icon: CircleIcon }],
     onInvolvement: () => undefined,
+    reviewStatus: undefined,
+    reviewStatusOptions: [{ value: "", label: "Any review status", Icon: CircleIcon }],
+    onReviewStatus: () => undefined,
+    maxSize: undefined,
+    sizeOptions: [{ value: "", label: "Any size", Icon: CircleIcon }],
+    onMaxSize: () => undefined,
+    label: undefined,
+    labelOptions: [{ value: "", label: "Any label", Icon: CircleIcon }],
+    onLabel: () => undefined,
     host: undefined,
     hostOptions: [],
     onHost: () => undefined,
@@ -62,6 +71,7 @@ function menu(overrides: Partial<Parameters<typeof PullRequestFiltersMenu>[0]>) 
     unavailable: new Map(),
     onProject: () => undefined,
     ...overrides,
+    quickFiltersSupported: overrides.quickFiltersSupported ?? true,
   });
 }
 
@@ -77,6 +87,48 @@ describe("pull request filters menu", () => {
     group?.props.onValueChange("closed");
     expect(onState).toHaveBeenCalledOnce();
     expect(onState).toHaveBeenCalledWith("closed");
+  });
+
+  it("hides quick filters when the server does not advertise support", () => {
+    const view = menu({ quickFiltersSupported: false });
+
+    expect(findLabeledGroup(view, "Review")).toBeUndefined();
+    expect(findLabeledGroup(view, "Size")).toBeUndefined();
+    expect(findLabeledGroup(view, "Label")).toBeUndefined();
+  });
+
+  it("maps the review, size, and label any options back to no filter", () => {
+    const onReviewStatus = vi.fn();
+    const onMaxSize = vi.fn();
+    const onLabel = vi.fn();
+    const view = menu({
+      reviewStatus: "approved",
+      reviewStatusOptions: [
+        { value: "", label: "Any review status", Icon: CircleIcon },
+        { value: "approved", label: "Approved", Icon: CircleIcon },
+      ],
+      maxSize: "m",
+      sizeOptions: [
+        { value: "", label: "Any size", Icon: CircleIcon },
+        { value: "m", label: "Size ≤ M", Icon: CircleIcon },
+      ],
+      label: "bug",
+      labelOptions: [
+        { value: "", label: "Any label", Icon: CircleIcon },
+        { value: "bug", label: "bug", Icon: CircleIcon },
+      ],
+      onReviewStatus,
+      onMaxSize,
+      onLabel,
+    });
+
+    findValueChange(findLabeledGroup(view, "Review"))?.props.onValueChange("");
+    findValueChange(findLabeledGroup(view, "Size"))?.props.onValueChange("");
+    findValueChange(findLabeledGroup(view, "Label"))?.props.onValueChange("");
+
+    expect(onReviewStatus).toHaveBeenCalledWith(undefined);
+    expect(onMaxSize).toHaveBeenCalledWith(undefined);
+    expect(onLabel).toHaveBeenCalledWith(undefined);
   });
 
   it("does not emit a change when the selected project is chosen again", () => {
