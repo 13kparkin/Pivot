@@ -259,6 +259,7 @@ jobs:
             -authenticationKeyID "$APPLE_API_KEY_ID" \
             -authenticationKeyIssuerID "$APPLE_API_ISSUER" \
             DEVELOPMENT_TEAM=ARK85ZXQ4Z \
+            CODE_SIGN_IDENTITY="Apple Distribution" \
             CURRENT_PROJECT_VERSION=25 \
             T3CODE_CLERK_PUBLISHABLE_KEY=pk_live_Y2xlcmsudDMuY29kZXMk \
             T3CODE_CLERK_JWT_TEMPLATE=t3-relay \
