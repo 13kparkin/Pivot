@@ -36,6 +36,7 @@ import { AzureDevOpsIcon, BitbucketIcon, GitHubIcon, GitLabIcon } from "~/compon
 import { RadioGroup } from "~/components/ui/radio-group";
 import { Spinner } from "~/components/ui/spinner";
 import { cn } from "~/lib/utils";
+import { openPullRequestLink } from "~/lib/openPullRequestLink";
 import {
   buildMenuItems,
   formatGitActionElapsed,

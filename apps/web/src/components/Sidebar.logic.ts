@@ -495,8 +495,6 @@ export function resolveThreadRowClassName(input: {
   );
 }
 
-// ── Sidebar thread status model ─────────────────────────────────────
-// Five visual states, three colors: color is reserved for "act now"
 // ── Sidebar v2 status model ─────────────────────────────────────────
 // Six visual states, three colors: color is reserved for "act now"
 // (approval), "in motion" (working), and "broken" (failed). Ready is the
@@ -507,14 +505,7 @@ export function resolveThreadRowClassName(input: {
 // false Done.
 // Unread completion is tracked separately: it describes whether a ready
 // thread needs attention, not what the thread is currently doing.
-export type SidebarThreadStatus =
-  | "approval"
-  | "input"
-  | "working"
-  | "monitoring"
-  | "failed"
-  | "ready";
-export type SidebarV2Status = "approval" | "input" | "working" | "waiting" | "failed" | "ready";
+export type SidebarThreadStatus = "approval" | "input" | "working" | "waiting" | "failed" | "ready";
 
 type SidebarThreadStatusInput = Pick<
   SidebarThreadSummary,
@@ -553,7 +544,7 @@ export type SidebarV2TopStatusKind =
   | "working";
 
 export function resolveSidebarV2TopStatus(input: {
-  readonly status: SidebarV2Status;
+  readonly status: SidebarThreadStatus;
   readonly isUnread: boolean;
   readonly isWoke: boolean;
 }): SidebarV2TopStatusKind | null {
@@ -578,7 +569,7 @@ export function resolveSidebarV2TopStatus(input: {
   return input.isUnread ? "done" : null;
 }
 
-export function shouldShowSidebarV2Duration(status: SidebarV2Status): boolean {
+export function shouldShowSidebarV2Duration(status: SidebarThreadStatus): boolean {
   return status === "working";
 }
 
@@ -615,7 +606,7 @@ export function firstValidTimestamp(
   return null;
 }
 
-// Sidebar sort: static creation order, newest thread on top. Activity NEVER
+// v2 sort: static creation order, newest thread on top. Activity NEVER
 // reorders the list — a row holds its position from open until settled, so
 // the screen only moves at lifecycle transitions. Status (including pending
 // approval) is carried by each card's edge strip, not by position.

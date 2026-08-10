@@ -1,48 +1,45 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import {
+  THREAD_JUMP_HINT_SHOW_DELAY_MS,
   archiveSelectedThreadEntries,
   buildBulkTitleRegenerationContextMenuItem,
   buildMultiSelectThreadContextMenuItems,
   createThreadJumpHintVisibilityController,
   filterSidebarV2VisibleThreads,
-  getSidebarThreadIdsToPrewarm,
-  getVisibleSidebarThreadIds,
-  resolveAdjacentThreadId,
+  formatWorkingDurationLabel,
   getFallbackThreadIdAfterDelete,
-  getVisibleThreadsForProject,
   getProjectSortTimestamp,
   getSidebarForkParentThreadId,
+  getSidebarThreadIdsToPrewarm,
+  getVisibleSidebarThreadIds,
+  getVisibleThreadsForProject,
   hasUnseenCompletion,
   isContextMenuPointerDown,
   isSidebarSubagentThread,
   isTrailingDoubleClick,
   orderItemsByPreferredIds,
+  pinOrderKeyBetween,
+  planPinnedReorder,
+  resolveAdjacentThreadId,
   resolveProjectStatusIndicator,
   resolveSidebarStageBadgeLabel,
-  resolveThreadRowClassName,
   resolveSidebarThreadStatus,
-  resolveSidebarV2Status,
   resolveSidebarV2TopStatus,
+  resolveThreadLastVisitedAt,
+  resolveThreadRowClassName,
   resolveThreadStatusPill,
   resolveWorkingStartedAt,
   searchSidebarThreadsByTitle,
-  formatWorkingDurationLabel,
-  shouldShowSidebarV2Duration,
-  shouldNavigateAfterProjectRemoval,
   shouldClearThreadSelectionOnMouseDown,
+  shouldNavigateAfterProjectRemoval,
+  shouldShowSidebarV2Duration,
   sortLogicalProjectsForSidebar,
-  sortSettledThreadsForSidebar,
-  pinOrderKeyBetween,
-  planPinnedReorder,
   sortPinnedThreadsForSidebar,
-  sortThreadsForSidebar,
-  sortSidebarV2ProjectGroups,
-  resolveThreadLastVisitedAt,
-  sortSettledThreadsForSidebarV2,
-  sortThreadsForSidebarV2,
-  sortScopedProjectsForSidebar,
   sortProjectsForSidebar,
-  THREAD_JUMP_HINT_SHOW_DELAY_MS,
+  sortScopedProjectsForSidebar,
+  sortSettledThreadsForSidebar,
+  sortSidebarV2ProjectGroups,
+  sortThreadsForSidebar,
 } from "./Sidebar.logic";
 import { EnvironmentId, ProjectId, ProviderInstanceId, RunId, ThreadId } from "@t3tools/contracts";
 import {
@@ -721,9 +718,6 @@ describe("isContextMenuPointerDown", () => {
 });
 
 describe("resolveSidebarThreadStatus", () => {
-  const session = {
-    threadId: ThreadId.make("thread-1"),
-describe("resolveSidebarV2Status", () => {
   const runtime = {
     status: "running" as const,
     activeRunId: null,
@@ -735,20 +729,16 @@ describe("resolveSidebarV2Status", () => {
 
   const idle = { hasPendingApprovals: false, hasPendingUserInput: false, runtime: null };
 
-  it("prioritizes approval over a running session", () => {
-    expect(resolveSidebarThreadStatus({ ...idle, hasPendingApprovals: true, session })).toBe(
   it("prioritizes approval over a running runtime", () => {
-    expect(resolveSidebarV2Status({ ...idle, hasPendingApprovals: true, runtime })).toBe(
+    expect(resolveSidebarThreadStatus({ ...idle, hasPendingApprovals: true, runtime })).toBe(
       "approval",
     );
   });
 
-  it("prioritizes awaiting input over a running session, below approval", () => {
-    expect(resolveSidebarThreadStatus({ ...idle, hasPendingUserInput: true, session })).toBe(
+  it("prioritizes awaiting input over a running runtime, below approval", () => {
+    expect(resolveSidebarThreadStatus({ ...idle, hasPendingUserInput: true, runtime })).toBe(
       "input",
     );
-  it("prioritizes awaiting input over a running runtime, below approval", () => {
-    expect(resolveSidebarV2Status({ ...idle, hasPendingUserInput: true, runtime })).toBe("input");
     expect(
       resolveSidebarThreadStatus({
         ...idle,
@@ -759,10 +749,8 @@ describe("resolveSidebarV2Status", () => {
     ).toBe("approval");
   });
 
-  it("reports working for running and starting sessions", () => {
-    expect(resolveSidebarThreadStatus({ ...idle, session })).toBe("working");
   it("reports working for running and starting runtimes", () => {
-    expect(resolveSidebarV2Status({ ...idle, runtime })).toBe("working");
+    expect(resolveSidebarThreadStatus({ ...idle, runtime })).toBe("working");
     expect(
       resolveSidebarThreadStatus({
         ...idle,
@@ -792,10 +780,8 @@ describe("resolveSidebarV2Status", () => {
     ).toBe("waiting");
   });
 
-  it("defaults to ready with no session", () => {
-    expect(resolveSidebarThreadStatus({ ...idle, session: null })).toBe("ready");
   it("defaults to ready with no runtime", () => {
-    expect(resolveSidebarV2Status(idle)).toBe("ready");
+    expect(resolveSidebarThreadStatus(idle)).toBe("ready");
   });
 
   it("keeps a waiting runtime visible ahead of unread and woke presentation", () => {
@@ -850,136 +836,6 @@ describe("sortThreadsForSidebar", () => {
     const sorted = sortThreadsForSidebar([
       sortable({ id: "b", createdAt: "2026-03-09T10:00:00.000Z" }),
       sortable({ id: "a", createdAt: "2026-03-09T10:00:00.000Z" }),
-    ]);
-
-    expect(sorted.map((thread) => thread.id)).toEqual(["a", "b"]);
-  });
-});
-
-describe("pinOrderKeyBetween", () => {
-  it("produces keys that sort between their bounds", () => {
-    const middle = pinOrderKeyBetween(null, null)!;
-    const top = pinOrderKeyBetween(null, middle)!;
-    const bottom = pinOrderKeyBetween(middle, null)!;
-    expect(top < middle).toBe(true);
-    expect(middle < bottom).toBe(true);
-
-    const between = pinOrderKeyBetween(top, middle)!;
-    expect(top < between && between < middle).toBe(true);
-  });
-
-  it("extends into new digits when bounds are adjacent", () => {
-    const key = pinOrderKeyBetween("g", "h")!;
-    expect("g" < key && key < "h").toBe(true);
-  });
-
-  it("stays strictly ordered under repeated top insertion", () => {
-    // Every new pin lands at the head of the arranged run; keys must keep
-    // sorting before the previous head without ever bottoming out.
-    let head: string | null = null;
-    const keys: string[] = [];
-    for (let i = 0; i < 100; i += 1) {
-      const key: string = pinOrderKeyBetween(null, head)!;
-      expect(key).not.toBeNull();
-      if (head !== null) expect(key < head).toBe(true);
-      keys.push(key);
-      head = key;
-    }
-    expect(new Set(keys).size).toBe(100);
-  });
-
-  it("stays strictly ordered under repeated middle insertion", () => {
-    let low = pinOrderKeyBetween(null, null)!;
-    let high = pinOrderKeyBetween(low, null)!;
-    for (let i = 0; i < 100; i += 1) {
-      const key: string = pinOrderKeyBetween(low, high)!;
-      expect(low < key && key < high).toBe(true);
-      if (i % 2 === 0) low = key;
-      else high = key;
-    }
-  });
-
-  it("returns null for corrupt or out-of-order bounds instead of throwing", () => {
-    expect(pinOrderKeyBetween("z", "a")).toBeNull();
-    expect(pinOrderKeyBetween("A!", null)).toBeNull();
-    expect(pinOrderKeyBetween(null, "ma")).toBeNull();
-    expect(pinOrderKeyBetween("m", "m")).toBeNull();
-  });
-});
-
-describe("planPinnedReorder", () => {
-  it("writes only the moved thread when neighbors are keyed", () => {
-    const assignments = planPinnedReorder({
-      orderedIds: ["a", "c", "b"],
-      keysById: new Map([
-        ["a", "f"],
-        ["b", "m"],
-        ["c", "t"],
-      ]),
-      movedId: "c",
-    });
-    expect(assignments).toHaveLength(1);
-    expect(assignments[0]!.id).toBe("c");
-    expect(assignments[0]!.orderKey > "f" && assignments[0]!.orderKey < "m").toBe(true);
-  });
-
-  it("treats list edges as open bounds", () => {
-    const assignments = planPinnedReorder({
-      orderedIds: ["b", "a"],
-      keysById: new Map([
-        ["a", "m"],
-        ["b", null],
-      ]),
-      movedId: "b",
-    });
-    expect(assignments).toHaveLength(1);
-    expect(assignments[0]!.orderKey < "m").toBe(true);
-  });
-
-  it("materializes keys for the whole section when a neighbor is keyless", () => {
-    const assignments = planPinnedReorder({
-      orderedIds: ["b", "a", "c"],
-      keysById: new Map([
-        ["a", null],
-        ["b", "m"],
-        ["c", null],
-      ]),
-      movedId: "b",
-    });
-    expect(assignments.map((entry) => entry.id)).toEqual(["b", "a", "c"]);
-    const keys = assignments.map((entry) => entry.orderKey);
-    expect([...keys].sort()).toEqual(keys);
-    expect(new Set(keys).size).toBe(keys.length);
-  });
-});
-
-describe("sortPinnedThreadsForSidebar", () => {
-  const pinnable = (input: { id: string; createdAt: string; pinOrderKey?: string | null }) => ({
-    id: input.id,
-    createdAt: input.createdAt,
-    pinOrderKey: input.pinOrderKey ?? null,
-  });
-
-  it("sorts keyed threads by key ahead of keyless threads in creation order", () => {
-    const sorted = sortPinnedThreadsForSidebar([
-      pinnable({ id: "keyless-old", createdAt: "2026-03-09T08:00:00.000Z" }),
-      pinnable({ id: "second", createdAt: "2026-03-09T09:00:00.000Z", pinOrderKey: "t" }),
-      pinnable({ id: "keyless-new", createdAt: "2026-03-09T12:00:00.000Z" }),
-      pinnable({ id: "first", createdAt: "2026-03-09T07:00:00.000Z", pinOrderKey: "g" }),
-    ]);
-
-    expect(sorted.map((thread) => thread.id)).toEqual([
-      "first",
-      "second",
-      "keyless-new",
-      "keyless-old",
-    ]);
-  });
-
-  it("breaks equal keys by id so raced writes render identically everywhere", () => {
-    const sorted = sortPinnedThreadsForSidebar([
-      pinnable({ id: "b", createdAt: "2026-03-09T10:00:00.000Z", pinOrderKey: "m" }),
-      pinnable({ id: "a", createdAt: "2026-03-09T11:00:00.000Z", pinOrderKey: "m" }),
     ]);
 
     expect(sorted.map((thread) => thread.id)).toEqual(["a", "b"]);
@@ -1874,5 +1730,135 @@ describe("resolveThreadLastVisitedAt", () => {
 
   it("treats an explicit server-side null as never visited", () => {
     expect(resolveThreadLastVisitedAt(null, "2026-07-30T10:00:00.000Z")).toBeUndefined();
+  });
+});
+
+describe("pinOrderKeyBetween", () => {
+  it("produces keys that sort between their bounds", () => {
+    const middle = pinOrderKeyBetween(null, null)!;
+    const top = pinOrderKeyBetween(null, middle)!;
+    const bottom = pinOrderKeyBetween(middle, null)!;
+    expect(top < middle).toBe(true);
+    expect(middle < bottom).toBe(true);
+
+    const between = pinOrderKeyBetween(top, middle)!;
+    expect(top < between && between < middle).toBe(true);
+  });
+
+  it("extends into new digits when bounds are adjacent", () => {
+    const key = pinOrderKeyBetween("g", "h")!;
+    expect("g" < key && key < "h").toBe(true);
+  });
+
+  it("stays strictly ordered under repeated top insertion", () => {
+    // Every new pin lands at the head of the arranged run; keys must keep
+    // sorting before the previous head without ever bottoming out.
+    let head: string | null = null;
+    const keys: string[] = [];
+    for (let i = 0; i < 100; i += 1) {
+      const key: string = pinOrderKeyBetween(null, head)!;
+      expect(key).not.toBeNull();
+      if (head !== null) expect(key < head).toBe(true);
+      keys.push(key);
+      head = key;
+    }
+    expect(new Set(keys).size).toBe(100);
+  });
+
+  it("stays strictly ordered under repeated middle insertion", () => {
+    let low = pinOrderKeyBetween(null, null)!;
+    let high = pinOrderKeyBetween(low, null)!;
+    for (let i = 0; i < 100; i += 1) {
+      const key: string = pinOrderKeyBetween(low, high)!;
+      expect(low < key && key < high).toBe(true);
+      if (i % 2 === 0) low = key;
+      else high = key;
+    }
+  });
+
+  it("returns null for corrupt or out-of-order bounds instead of throwing", () => {
+    expect(pinOrderKeyBetween("z", "a")).toBeNull();
+    expect(pinOrderKeyBetween("A!", null)).toBeNull();
+    expect(pinOrderKeyBetween(null, "ma")).toBeNull();
+    expect(pinOrderKeyBetween("m", "m")).toBeNull();
+  });
+});
+
+describe("planPinnedReorder", () => {
+  it("writes only the moved thread when neighbors are keyed", () => {
+    const assignments = planPinnedReorder({
+      orderedIds: ["a", "c", "b"],
+      keysById: new Map([
+        ["a", "f"],
+        ["b", "m"],
+        ["c", "t"],
+      ]),
+      movedId: "c",
+    });
+    expect(assignments).toHaveLength(1);
+    expect(assignments[0]!.id).toBe("c");
+    expect(assignments[0]!.orderKey > "f" && assignments[0]!.orderKey < "m").toBe(true);
+  });
+
+  it("treats list edges as open bounds", () => {
+    const assignments = planPinnedReorder({
+      orderedIds: ["b", "a"],
+      keysById: new Map([
+        ["a", "m"],
+        ["b", null],
+      ]),
+      movedId: "b",
+    });
+    expect(assignments).toHaveLength(1);
+    expect(assignments[0]!.orderKey < "m").toBe(true);
+  });
+
+  it("materializes keys for the whole section when a neighbor is keyless", () => {
+    const assignments = planPinnedReorder({
+      orderedIds: ["b", "a", "c"],
+      keysById: new Map([
+        ["a", null],
+        ["b", "m"],
+        ["c", null],
+      ]),
+      movedId: "b",
+    });
+    expect(assignments.map((entry) => entry.id)).toEqual(["b", "a", "c"]);
+    const keys = assignments.map((entry) => entry.orderKey);
+    expect([...keys].sort()).toEqual(keys);
+    expect(new Set(keys).size).toBe(keys.length);
+  });
+});
+
+describe("sortPinnedThreadsForSidebar", () => {
+  const pinnable = (input: { id: string; createdAt: string; pinOrderKey?: string | null }) => ({
+    id: input.id,
+    createdAt: input.createdAt,
+    pinOrderKey: input.pinOrderKey ?? null,
+  });
+
+  it("sorts keyed threads by key ahead of keyless threads in creation order", () => {
+    const sorted = sortPinnedThreadsForSidebar([
+      pinnable({ id: "keyless-old", createdAt: "2026-03-09T08:00:00.000Z" }),
+      pinnable({ id: "second", createdAt: "2026-03-09T09:00:00.000Z", pinOrderKey: "t" }),
+      pinnable({ id: "keyless-new", createdAt: "2026-03-09T12:00:00.000Z" }),
+      pinnable({ id: "first", createdAt: "2026-03-09T07:00:00.000Z", pinOrderKey: "g" }),
+    ]);
+
+    expect(sorted.map((thread) => thread.id)).toEqual([
+      "first",
+      "second",
+      "keyless-new",
+      "keyless-old",
+    ]);
+  });
+
+  it("breaks equal keys by id so raced writes render identically everywhere", () => {
+    const sorted = sortPinnedThreadsForSidebar([
+      pinnable({ id: "b", createdAt: "2026-03-09T10:00:00.000Z", pinOrderKey: "m" }),
+      pinnable({ id: "a", createdAt: "2026-03-09T11:00:00.000Z", pinOrderKey: "m" }),
+    ]);
+
+    expect(sorted.map((thread) => thread.id)).toEqual(["a", "b"]);
   });
 });

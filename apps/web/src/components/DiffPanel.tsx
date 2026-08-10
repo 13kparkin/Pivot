@@ -323,13 +323,7 @@ export default function DiffPanel({
       headRef: selectedGitSource.headRef,
       cacheKey: selectedGitSource.diffHash,
     });
-  }, [
-    activeThread,
-    branchDiffPreview.data,
-    getDiffFileContents,
-    selectedGitSource,
-    selectedTurnId,
-  ]);
+  }, [activeThread, branchDiffPreview.data, getDiffFileContents, selectedGitSource, selectedRunId]);
   const localBranchRefs = useEnvironmentQuery(
     selectedRunId === null &&
       selectedGitScope === "branch" &&
