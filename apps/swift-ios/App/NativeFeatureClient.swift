@@ -193,7 +193,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
 
         await adoptEnvironment(environment, client: activeClient)
         let generation = environmentGeneration
-        let loads = await loadEnvironmentShells(environments)
+        let loads = await loadEnvironmentShells(environments.filter(\.isEnabled))
         guard isCurrentSession(client: activeClient, generation: generation) else {
             throw CancellationError()
         }
@@ -222,7 +222,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             return disconnectedSnapshot(environments: environments)
         }
         let environment = activeClient.environment
-        let loads = await loadEnvironmentShells(environments)
+        let loads = await loadEnvironmentShells(environments.filter(\.isEnabled))
         guard let currentClient = try await runtime.activeClient(),
               currentClient.environment.id == environment.id else {
             throw CancellationError()
@@ -382,11 +382,18 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         }
     }
 
-    func activateEnvironment(id: String) async throws {
-        let activated = try await runtime.activate(id: id)
-        await adoptEnvironment(activated.environment, client: activated)
-        try await refresh(client: activated)
-        startPolling(activated)
+    func setEnvironmentEnabled(id: String, enabled: Bool) async throws {
+        try await runtime.setEnabled(id: id, enabled: enabled)
+        if !enabled {
+            environmentConnectionStates[id] = .disconnected
+            environmentConnectionDetails[id] = nil
+            environmentClients[id] = nil
+            shellsByEnvironmentID[id] = nil
+            serverConfigsByEnvironmentID[id] = nil
+            providerCatalogCache[id] = nil
+            archivedThreadsByEnvironmentID[id] = nil
+            archivedShellThreadsByEnvironmentID[id] = nil
+        }
     }
 
     func removeEnvironment(id: String) async throws {
@@ -2657,7 +2664,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
                     return
                 }
                 let passiveEnvironments = environments.filter {
-                    $0.id != activeEnvironment.id
+                    $0.isEnabled && $0.id != activeEnvironment.id
                 }
                 guard !passiveEnvironments.isEmpty else { continue }
                 let loads = await self.loadEnvironmentShells(passiveEnvironments)
@@ -3711,7 +3718,8 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         connectionState: FeatureConnection.State,
         connectionDetail: String? = nil
     ) -> FeatureSnapshot {
-        let threads = environments.flatMap { environment in
+        let enabledEnvironments = environments.filter(\.isEnabled)
+        let threads = enabledEnvironments.flatMap { environment in
             let live = shellsByEnvironmentID[environment.id]?.threads.map {
                 mapThread($0, environment: environment)
             } ?? []
@@ -3724,7 +3732,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         let threadCountByProjectID = threads.reduce(into: [String: Int]()) {
             $0[$1.projectID, default: 0] += 1
         }
-        let projects = environments.flatMap { environment in
+        let projects = enabledEnvironments.flatMap { environment in
             (shellsByEnvironmentID[environment.id]?.projects ?? []).map { project in
                 let uiID = FeatureScopedID.project(
                     environmentID: environment.id,
@@ -3751,7 +3759,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
                 )
             }
         }
-        let providersByEnvironment = environments.reduce(
+        let providersByEnvironment = enabledEnvironments.reduce(
             into: [String: [FeatureProvider]]()
         ) { catalogues, environment in
             guard let shell = shellsByEnvironmentID[environment.id] else { return }
@@ -3761,7 +3769,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
                 config: serverConfigsByEnvironmentID[environment.id]
             )
         }
-        let preferencesByEnvironment = environments.reduce(
+        let preferencesByEnvironment = enabledEnvironments.reduce(
             into: [String: FeatureEnvironmentPreferences]()
         ) { preferences, environment in
             guard let serverSettings = serverConfigsByEnvironmentID[environment.id]?.settings else {
@@ -3818,8 +3826,14 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             name: environment.label,
             endpoint: environment.httpBaseURL.absoluteString,
             isActive: environment.id == activeID,
-            connectionState: environmentConnectionStates[environment.id],
-            connectionDetail: environmentConnectionDetails[environment.id]
+            isEnabled: environment.isEnabled,
+            source: environment.kind == .managedDPoP ? .t3Connect : .direct,
+            connectionState: environment.isEnabled
+                ? environmentConnectionStates[environment.id]
+                : .disconnected,
+            connectionDetail: environment.isEnabled
+                ? environmentConnectionDetails[environment.id]
+                : nil
         )
     }
 
