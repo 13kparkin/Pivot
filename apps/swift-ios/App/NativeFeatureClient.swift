@@ -38,6 +38,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
 
     private let runtime: EnvironmentRuntime
     let t3ConnectController: T3ConnectController
+    private let t3ConnectDeviceManager: any T3ConnectDeviceManaging
     private let hasMatchingT3ConnectController: Bool
     private let settingsStore: UserDefaults
     private let projectFaviconStore: FeatureProjectFaviconStore
@@ -85,6 +86,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
     ] = [:]
     private var approvalRoutes: [String: PendingRequestRoute] = [:]
     private var inputRoutes: [String: PendingRequestRoute] = [:]
+    private var relayDeviceSessionIDs: Set<String> = []
     private struct TerminalKey: Hashable {
         let threadID: String
         let terminalID: String
@@ -117,6 +119,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
     init(
         runtime: EnvironmentRuntime? = nil,
         t3ConnectController: T3ConnectController? = nil,
+        t3ConnectDeviceManager: (any T3ConnectDeviceManaging)? = nil,
         settingsStore: UserDefaults = .standard,
         projectFaviconStore: FeatureProjectFaviconStore = FeatureProjectFaviconStore(),
         fallbackPollingInitialDelay: Duration = .seconds(3),
@@ -142,6 +145,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             controller = T3ConnectController()
         }
         self.t3ConnectController = controller
+        self.t3ConnectDeviceManager = t3ConnectDeviceManager ?? controller
         hasMatchingT3ConnectController = t3ConnectController != nil || runtime == nil
         self.runtime = runtime ?? EnvironmentRuntime(
             managedAuthorization: T3ConnectRuntimeAuthorization(controller: controller)
@@ -1695,6 +1699,18 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
     }
 
     func loadDeviceSessions() async throws -> [FeatureDeviceSession] {
+        if t3ConnectDeviceManager.hasActiveAccount {
+            let devices = try await t3ConnectDeviceManager.registeredDevices()
+            relayDeviceSessionIDs = Set(devices.map(\.deviceId))
+            return devices.map {
+                FeatureDeviceSession(
+                    relayDevice: $0,
+                    currentDeviceID: t3ConnectDeviceManager.currentRegisteredDeviceID
+                )
+            }
+        }
+
+        relayDeviceSessionIDs.removeAll()
         let client = try requireClient()
         try await requireScope("access:read", client: client)
         return try await client.clientSessions().map { session in
@@ -1715,6 +1731,12 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
     }
 
     func revokeDeviceSession(id: String) async throws {
+        if relayDeviceSessionIDs.contains(id) {
+            try await t3ConnectDeviceManager.unregisterDevice(id: id)
+            relayDeviceSessionIDs.remove(id)
+            return
+        }
+
         let client = try requireClient()
         try await requireScope("access:write", client: client)
         guard try await client.revokeClientSession(id: id) else {
@@ -1723,6 +1745,18 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
     }
 
     func revokeOtherDeviceSessions() async throws {
+        if !relayDeviceSessionIDs.isEmpty {
+            guard let currentID = t3ConnectDeviceManager.currentRegisteredDeviceID else {
+                throw NativeFeatureClientError.currentDeviceUnknown
+            }
+            let otherIDs = relayDeviceSessionIDs.filter { $0 != currentID }
+            for id in otherIDs {
+                try await t3ConnectDeviceManager.unregisterDevice(id: id)
+            }
+            relayDeviceSessionIDs.subtract(otherIDs)
+            return
+        }
+
         let client = try requireClient()
         try await requireScope("access:write", client: client)
         _ = try await client.revokeOtherClientSessions()
@@ -5287,6 +5321,28 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
     private static let dateFormatter = ISO8601DateFormatter()
 }
 
+extension FeatureDeviceSession {
+    init(relayDevice: T3ConnectRelayDevice, currentDeviceID: String?) {
+        let updatedAt = Self.t3ConnectRelayDate(relayDevice.updatedAt)
+        self.init(
+            sessionID: relayDevice.deviceId,
+            label: relayDevice.label,
+            deviceType: relayDevice.platform.lowercased().contains("ipad") ? .tablet : .mobile,
+            operatingSystem: "iOS \(relayDevice.iosMajorVersion)",
+            browser: relayDevice.appVersion.map { "T3 Code \($0)" },
+            issuedAt: updatedAt,
+            expiresAt: .distantFuture,
+            lastConnectedAt: updatedAt,
+            isConnected: false,
+            isCurrent: relayDevice.deviceId == currentDeviceID
+        )
+    }
+
+    private static func t3ConnectRelayDate(_ value: String) -> Date {
+        (try? Date(value, strategy: .iso8601)) ?? .distantPast
+    }
+}
+
 enum NativeDetailRenderMutation: Equatable {
     case full
     case message(OrchestrationMessage)
@@ -5862,6 +5918,7 @@ private enum NativeFeatureClientError: LocalizedError {
     case invalidProjectPath
     case branchRequired
     case deviceSessionNotFound
+    case currentDeviceUnknown
     case missingScope(String)
     case tooManyAttachments
 
@@ -5877,6 +5934,7 @@ private enum NativeFeatureClientError: LocalizedError {
         case .invalidProjectPath: "Enter a workspace path on the connected environment."
         case .branchRequired: "Choose a base branch for the new worktree."
         case .deviceSessionNotFound: "That device session is no longer active."
+        case .currentDeviceUnknown: "This installation has not registered for device access yet."
         case .missingScope: "This connection does not have permission to manage devices."
         case .tooManyAttachments: "You can attach up to 8 images per message."
         }
