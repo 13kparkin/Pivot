@@ -1,3 +1,5 @@
+import { decodeString } from "micromark-util-decode-string";
+
 import { formatWorkspaceRelativePath } from "./filePathDisplay";
 import { resolvePathLinkTarget, splitPathAndPosition } from "./terminal-links";
 
@@ -5,11 +7,13 @@ const WINDOWS_DRIVE_PATH_PATTERN = /^[A-Za-z]:[\\/]/;
 const WINDOWS_UNC_PATH_PATTERN = /^\\\\/;
 const EXTERNAL_SCHEME_PATTERN = /^([A-Za-z][A-Za-z0-9+.-]*):(.*)$/;
 const RELATIVE_PATH_PREFIX_PATTERN = /^(~\/|\.{1,2}\/)/;
-const RELATIVE_FILE_PATH_PATTERN = /^[A-Za-z0-9._ -]+(?:\/[A-Za-z0-9._ -]+)+(?::\d+){0,2}$/;
-const RELATIVE_FILE_NAME_PATTERN = /^[A-Za-z0-9._ -]+\.[A-Za-z0-9_-]+(?::\d+){0,2}$/;
+const RELATIVE_FILE_PATH_PATTERN = /^[A-Za-z0-9._ ()-]+(?:\/[A-Za-z0-9._ ()-]+)+(?::\d+){0,2}$/;
+const RELATIVE_FILE_NAME_PATTERN = /^[A-Za-z0-9._ ()-]+\.[A-Za-z0-9_-]+(?::\d+){0,2}$/;
 const POSITION_SUFFIX_PATTERN = /:\d+(?::\d+)?$/;
 const POSITION_ONLY_PATTERN = /^\d+(?::\d+)?$/;
-const MARKDOWN_LINK_HREF_PATTERN = /\[[^\]]*]\(\s*(<[^>\n]+>|[^)\s]+)(?:\s+["'][^"']*["'])?\s*\)/g;
+const MARKDOWN_ESCAPABLE_CHARACTER_PATTERN = /^[!-/:-@[-`{-~]$/;
+const MAX_MARKDOWN_DESTINATION_DEPTH = 32;
+const MAX_MARKDOWN_TITLE_LENGTH = 1_024;
 // Standard OS and dev-container roots; deliberately excludes app-route-ish
 // prefixes like /app/ or /chat/ so SPA routes never read as files.
 const POSIX_FILE_ROOT_PREFIXES = [
@@ -65,12 +69,150 @@ export function normalizeMarkdownLinkDestination(value: string): string {
   return unwrapMarkdownLinkDestination(value.trim());
 }
 
+interface ParsedMarkdownDestination {
+  readonly href: string;
+  readonly end: number;
+}
+
+function isMarkdownEscape(text: string, index: number): boolean {
+  return text[index] === "\\" && MARKDOWN_ESCAPABLE_CHARACTER_PATTERN.test(text[index + 1] ?? "");
+}
+
+function skipMarkdownWhitespace(text: string, start: number): number | null {
+  let index = start;
+  let lineBreaks = 0;
+  while (index < text.length && /[\t\n\r ]/.test(text[index] ?? "")) {
+    if (text[index] === "\n" || text[index] === "\r") {
+      lineBreaks += 1;
+      if (lineBreaks > 1) return null;
+      if (text[index] === "\r" && text[index + 1] === "\n") index += 1;
+    }
+    index += 1;
+  }
+  return index;
+}
+
+function parseMarkdownLinkTitle(text: string, start: number): number | null {
+  const opener = text[start];
+  if (opener !== '"' && opener !== "'" && opener !== "(") return null;
+  const closer = opener === "(" ? ")" : opener;
+
+  const end = Math.min(text.length, start + 1 + MAX_MARKDOWN_TITLE_LENGTH);
+  for (let index = start + 1; index < end; index += 1) {
+    const character = text[index];
+    if (isMarkdownEscape(text, index)) {
+      index += 1;
+      continue;
+    }
+    if (character === closer) return index + 1;
+    if (character === "\n" || character === "\r") {
+      const next = skipMarkdownWhitespace(text, index);
+      if (next === null) return null;
+    }
+  }
+  return null;
+}
+
+function finishMarkdownDestination(
+  text: string,
+  destination: string,
+  start: number,
+): ParsedMarkdownDestination | null {
+  const suffixStart = skipMarkdownWhitespace(text, start);
+  if (suffixStart === null) return null;
+  if (text[suffixStart] === ")") {
+    return { href: decodeString(destination), end: suffixStart };
+  }
+
+  const titleEnd = parseMarkdownLinkTitle(text, suffixStart);
+  if (titleEnd === null) return null;
+  const wrapperEnd = skipMarkdownWhitespace(text, titleEnd);
+  if (wrapperEnd === null || text[wrapperEnd] !== ")") return null;
+  return { href: decodeString(destination), end: wrapperEnd };
+}
+
+function parseMarkdownDestination(text: string, start: number): ParsedMarkdownDestination | null {
+  const destinationStart = skipMarkdownWhitespace(text, start);
+  if (destinationStart === null) return null;
+
+  if (text[destinationStart] === "<") {
+    for (let index = destinationStart + 1; index < text.length; index += 1) {
+      const character = text[index];
+      if (isMarkdownEscape(text, index)) {
+        index += 1;
+        continue;
+      }
+      if (character === ">") {
+        return finishMarkdownDestination(text, text.slice(destinationStart + 1, index), index + 1);
+      }
+      if (character === "<" || character === "\n" || character === "\r") {
+        return null;
+      }
+    }
+    return null;
+  }
+
+  let depth = 0;
+  for (let index = destinationStart; index < text.length; index += 1) {
+    const character = text[index];
+    if (isMarkdownEscape(text, index)) {
+      index += 1;
+      continue;
+    }
+    if (character === "(" && ++depth > MAX_MARKDOWN_DESTINATION_DEPTH) return null;
+    if (character === ")") {
+      if (depth === 0) {
+        return {
+          href: decodeString(text.slice(destinationStart, index)),
+          end: index,
+        };
+      }
+      depth -= 1;
+      continue;
+    }
+    if (character === "\n" || character === "\r" || character === "\t" || character === " ") {
+      if (depth > 0) return null;
+      return finishMarkdownDestination(text, text.slice(destinationStart, index), index);
+    }
+  }
+  return null;
+}
+
 export function extractMarkdownLinkHrefs(text: string): string[] {
   const hrefs: string[] = [];
-  for (const match of text.matchAll(MARKDOWN_LINK_HREF_PATTERN)) {
-    const href = match[1]?.trim();
-    if (href) hrefs.push(href);
+  const labelOpeners: { readonly image: boolean }[] = [];
+  let imageOpener = false;
+
+  for (let index = 0; index < text.length; index += 1) {
+    const character = text[index];
+    if (isMarkdownEscape(text, index)) {
+      index += 1;
+      continue;
+    }
+    if (character === "!" && text[index + 1] === "[") {
+      imageOpener = true;
+      continue;
+    }
+    if (character === "[") {
+      labelOpeners.push({ image: imageOpener });
+      imageOpener = false;
+      continue;
+    }
+    imageOpener = false;
+
+    if (character !== "]") continue;
+    const opener = labelOpeners.pop();
+    if (!opener || text[index + 1] !== "(") continue;
+
+    const destination = parseMarkdownDestination(text, index + 2);
+    if (!destination) continue;
+    if (!opener.image) {
+      hrefs.push(destination.href);
+      labelOpeners.length = 0;
+    }
+    index = destination.end;
   }
+
   return hrefs;
 }
 

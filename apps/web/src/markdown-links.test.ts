@@ -14,7 +14,7 @@ describe("extractMarkdownLinkHrefs", () => {
   it("extracts angle-bracketed destinations containing spaces", () => {
     const [href] = extractMarkdownLinkHrefs('[file](<src/file name.ts> "source")');
 
-    expect(href).toBe("<src/file name.ts>");
+    expect(href).toBe("src/file name.ts");
     expect(normalizeMarkdownLinkHrefKey(href ?? "")).toBe(
       normalizeMarkdownLinkHrefKey("src/file%20name.ts"),
     );
@@ -27,6 +27,50 @@ describe("extractMarkdownLinkHrefs", () => {
 
   it("continues to extract regular markdown destinations", () => {
     expect(extractMarkdownLinkHrefs("[file](src/file%20name.ts)")).toEqual(["src/file%20name.ts"]);
+  });
+
+  it("extracts and resolves destinations containing balanced parentheses", () => {
+    const hrefs = extractMarkdownLinkHrefs(
+      '[one](src/foo(bar).ts) [two](src/foo(bar(baz)).ts "source")',
+    );
+
+    expect(hrefs).toEqual(["src/foo(bar).ts", "src/foo(bar(baz)).ts"]);
+    expect(resolveMarkdownFileLinkMeta(hrefs[0], "/repo/project")).toMatchObject({
+      filePath: "/repo/project/src/foo(bar).ts",
+    });
+  });
+
+  it("matches renderer decoding and nested labels", () => {
+    const hrefs = extractMarkdownLinkHrefs(
+      String.raw`[escaped](src/foo\(bar\).ts) [nested [label]](src/foo&#40;bar&#41;.ts (source))`,
+    );
+
+    expect(hrefs).toEqual(["src/foo(bar).ts", "src/foo(bar).ts"]);
+  });
+
+  it("handles images inside links and brackets in destinations", () => {
+    expect(extractMarkdownLinkHrefs("[outer ![alt](img.png)](src/foo(bar).ts)")).toEqual([
+      "src/foo(bar).ts",
+    ]);
+    expect(extractMarkdownLinkHrefs("[file](</tmp/foo[bar].ts>)")).toEqual(["/tmp/foo[bar].ts"]);
+  });
+
+  it("ignores destinations with unbalanced parentheses", () => {
+    expect(extractMarkdownLinkHrefs("[file](src/foo(bar).ts")).toEqual([]);
+  });
+
+  it("recovers a valid link after a malformed destination", () => {
+    expect(extractMarkdownLinkHrefs("[broken](oops\n[file](src/file.ts)")).toEqual(["src/file.ts"]);
+    expect(extractMarkdownLinkHrefs("[bad](oops([good](src/file.ts)")).toEqual(["src/file.ts"]);
+    expect(extractMarkdownLinkHrefs(String.raw`[bad](oops\ [good](src/file.ts))`)).toEqual([
+      "src/file.ts",
+    ]);
+  });
+
+  it("keeps malformed input parsing bounded", () => {
+    const malformed = `${"[x](<unterminated\n".repeat(4_000)}[file](src/file.ts)`;
+
+    expect(extractMarkdownLinkHrefs(malformed)).toEqual(["src/file.ts"]);
   });
 });
 
