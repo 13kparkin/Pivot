@@ -943,12 +943,10 @@ describe("EnvironmentSupervisor", () => {
       // and must not trigger an early retry.
       yield* harness.wake("network-path-changed");
       yield* harness.wake("network-path-changed");
-      for (let attempt = 0; attempt < 20; attempt += 1) {
-        yield* Effect.yieldNow;
-      }
+      yield* TestClock.adjust("2999 millis");
       expect(yield* Ref.get(harness.prepareCount)).toBe(1);
       expect((yield* SubscriptionRef.get(supervisor.state)).phase).toBe("backoff");
-    }),
+    }).pipe(Effect.provide(TestClock.layer())),
   );
 
   it.effect("immediately replaces a mobile session after a long background resume", () =>
