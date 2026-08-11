@@ -49,6 +49,7 @@
     "@expo-google-fonts/dm-sans": "^0.4.2",
     "@expo/metro-runtime": "~56.0.15",
     "@expo/ui": "~56.0.18",
+    "@gorhom/bottom-sheet": "5.2.14",
     "@legendapp/list": "catalog:",
     "@noble/curves": "catalog:",
     "@noble/hashes": "catalog:",

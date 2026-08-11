@@ -23,14 +23,16 @@ export function useThreadSettingsSheetPresentation(input: {
   const restoreFocusOnSaveRef = useRef(false);
   const shouldRestoreAfterDismissRef = useRef(false);
 
-  useEffect(
-    () => () => {
+  useEffect(() => {
+    // React Strict Mode and Fast Refresh both run an effect cleanup/setup
+    // cycle without recreating refs. Re-arm the mounted guard on every setup.
+    isMountedRef.current = true;
+    return () => {
       isMountedRef.current = false;
       isActiveRef.current = false;
       openingIdRef.current += 1;
-    },
-    [],
-  );
+    };
+  }, []);
 
   const open = useCallback(() => {
     if (isActiveRef.current) {
@@ -45,10 +47,12 @@ export function useThreadSettingsSheetPresentation(input: {
     const openingId = openingIdRef.current + 1;
     openingIdRef.current = openingId;
 
-    // Keyboard.dismiss() only tracks React Native TextInputs. The composer is
-    // a custom native text view, so explicitly resign its first responder too.
+    // Start observing the keyboard transition before the custom native editor
+    // resigns first responder. Blurring first can finish the dismissal before
+    // KeyboardController subscribes, leaving this promise pending forever.
+    const keyboardDismissal = KeyboardController.dismiss({ animated: false });
     input.editorRef.current?.blur();
-    void KeyboardController.dismiss().then(() => {
+    void keyboardDismissal.then(() => {
       if (!isMountedRef.current || !isActiveRef.current || openingIdRef.current !== openingId) {
         return;
       }

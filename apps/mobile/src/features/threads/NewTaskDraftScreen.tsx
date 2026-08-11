@@ -29,7 +29,7 @@ import { ComposerAttachmentStrip } from "../../components/ComposerAttachmentStri
 import { ControlPill, ControlPillMenu } from "../../components/ControlPill";
 import { ProviderIcon } from "../../components/ProviderIcon";
 import { ComposerSurface } from "./ThreadComposer";
-import { ThreadSettingsSheet, threadSettingsSummaryLabel } from "./ThreadSettingsSheet";
+import { ContainedThreadSettingsSheet, threadSettingsSummaryLabel } from "./ThreadSettingsSheet";
 import { useThreadSettingsSheetPresentation } from "./use-thread-settings-sheet-presentation";
 
 import { makeTurnCommandMetadata } from "../../lib/commandMetadata";
@@ -958,7 +958,7 @@ export function NewTaskDraftScreen(props: {
   );
 
   const settingsSheet = (
-    <ThreadSettingsSheet
+    <ContainedThreadSettingsSheet
       visible={settingsSheetPresentation.isVisible}
       onClose={settingsSheetPresentation.close}
       onDismissed={settingsSheetPresentation.onDismissed}
