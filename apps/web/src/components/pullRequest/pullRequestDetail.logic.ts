@@ -4,9 +4,11 @@ import type {
   PullRequestBaseComparison,
   PullRequestCheck,
   PullRequestComment,
+  PullRequestDetail,
   PullRequestDetailView,
   PullRequestMergeability,
   PullRequestReaction,
+  PullRequestMergeMethod,
   PullRequestReviewThread,
   PullRequestState,
   PullRequestUpdateMethod,
@@ -62,6 +64,68 @@ export function describePullRequestState(state: PullRequestState, isDraft: boole
   if (state === "merged") return "Merged";
   if (state === "closed") return "Closed";
   return isDraft ? "Draft" : "Ready for review";
+}
+
+/** The slice of a detail that decides which actions it offers. */
+export type PullRequestActionableDetail = Pick<
+  PullRequestDetail,
+  "state" | "isDraft" | "mergeability" | "capabilities" | "viewerPermissions" | "mergeCapabilities"
+>;
+
+/**
+ * The host says which strategies it offers at all; the repository narrows that to the ones it
+ * actually allows.
+ */
+export function allowedPullRequestMergeMethods(
+  detail: Pick<PullRequestActionableDetail, "capabilities" | "mergeCapabilities"> | null,
+): ReadonlyArray<PullRequestMergeMethod> {
+  return detail === null
+    ? []
+    : detail.capabilities.mergeMethods.filter((method) => detail.mergeCapabilities[method]);
+}
+
+/** The reader's preference where the repository allows it, and the first allowed method else. */
+export function resolveSelectedMergeMethod(
+  allowedMergeMethods: ReadonlyArray<PullRequestMergeMethod>,
+  preferred: PullRequestMergeMethod,
+): PullRequestMergeMethod {
+  return allowedMergeMethods.includes(preferred) ? preferred : (allowedMergeMethods[0] ?? "merge");
+}
+
+/**
+ * Two questions, both of which have to say yes: whether this host can do it at all, and whether
+ * this account may. A reader with read access on someone else's project sees the pull request and
+ * none of the buttons that would only ever be refused.
+ */
+export function canPerformPullRequestAction(
+  detail: Pick<PullRequestActionableDetail, "capabilities" | "viewerPermissions"> | null,
+  action: PullRequestAction,
+): boolean {
+  return (
+    detail !== null &&
+    detail.capabilities.actions.includes(action) &&
+    detail.viewerPermissions.actions.includes(action)
+  );
+}
+
+export function isPullRequestConflicting(
+  detail: Pick<PullRequestActionableDetail, "state" | "mergeability"> | null,
+): boolean {
+  return detail?.state === "open" && detail.mergeability === "conflicting";
+}
+
+/**
+ * One live action holds the slot. A conflicting change cannot be merged now, so the slot goes to
+ * the thing that would help instead of a Merge button that only ever says no.
+ */
+export function resolvePullRequestPrimaryAction(
+  detail: PullRequestActionableDetail | null,
+): "ready" | "merge" | "resolve" | null {
+  if (detail === null || detail.state !== "open") return null;
+  if (detail.isDraft && canPerformPullRequestAction(detail, "ready")) return "ready";
+  if (!canPerformPullRequestAction(detail, "merge")) return null;
+  if (isPullRequestConflicting(detail)) return "resolve";
+  return allowedPullRequestMergeMethods(detail).length > 0 ? "merge" : null;
 }
 
 /** Chronological ascending, oldest to newest — reversed for the "newest" reading order. */
