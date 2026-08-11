@@ -2355,12 +2355,12 @@ projectionSnapshotLayer("ProjectionSnapshotQuery windowed thread detail", (it) =
           ),
           (
             'user-input-tied-z-request', 'thread-w', NULL, 'approval', 'user-input.requested',
-            'Tied closed question', '{"requestId":"input-tied-closed"}', NULL,
+            'Tied open question', '{"requestId":"input-tied-open"}', NULL,
             '2026-03-01T00:00:05.000Z'
           ),
           (
             'user-input-tied-a-resolution', 'thread-w', NULL, 'info', 'user-input.resolved',
-            'Tied closed question', '{"requestId":"input-tied-closed"}', NULL,
+            'Tied open question', '{"requestId":"input-tied-open"}', NULL,
             '2026-03-01T00:00:05.000Z'
           )
       `;
@@ -2383,11 +2383,11 @@ projectionSnapshotLayer("ProjectionSnapshotQuery windowed thread detail", (it) =
       assert.equal(detailWithPinnedRequests._tag, "Some");
       if (detailWithPinnedRequests._tag === "Some") {
         const ids = detailWithPinnedRequests.value.activities.map((activity) => activity.id);
-        assert.equal(detailWithPinnedRequests.value.activities.length, 502);
+        assert.equal(detailWithPinnedRequests.value.activities.length, 503);
         assert.equal(ids.includes(asEventId("approval-old")), true);
         assert.equal(ids.includes(asEventId("user-input-old")), true);
         assert.equal(ids.includes(asEventId("user-input-closed")), false);
-        assert.equal(ids.includes(asEventId("user-input-tied-z-request")), false);
+        assert.equal(ids.includes(asEventId("user-input-tied-z-request")), true);
       }
 
       const windowWithPinnedRequests = yield* snapshotQuery.getThreadDetailSnapshot(threadW, {
@@ -2396,11 +2396,11 @@ projectionSnapshotLayer("ProjectionSnapshotQuery windowed thread detail", (it) =
       assert.equal(windowWithPinnedRequests._tag, "Some");
       if (windowWithPinnedRequests._tag === "Some") {
         const ids = windowWithPinnedRequests.value.thread.activities.map((activity) => activity.id);
-        assert.equal(windowWithPinnedRequests.value.thread.activities.length, 502);
+        assert.equal(windowWithPinnedRequests.value.thread.activities.length, 503);
         assert.equal(ids.includes(asEventId("approval-old")), true);
         assert.equal(ids.includes(asEventId("user-input-old")), true);
         assert.equal(ids.includes(asEventId("user-input-closed")), false);
-        assert.equal(ids.includes(asEventId("user-input-tied-z-request")), false);
+        assert.equal(ids.includes(asEventId("user-input-tied-z-request")), true);
       }
     }),
   );

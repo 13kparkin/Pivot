@@ -1292,10 +1292,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
             activity.kind,
             ROW_NUMBER() OVER (
               PARTITION BY json_extract(activity.payload_json, '$.requestId')
-              ORDER BY
-                activity.created_at DESC,
-                CASE WHEN activity.kind = 'user-input.requested' THEN 0 ELSE 1 END DESC,
-                activity.activity_id DESC
+              ORDER BY activity.created_at DESC, activity.activity_id DESC
             ) AS request_order
           FROM pending_user_input_thread AS pending
           CROSS JOIN projection_thread_activities AS activity
