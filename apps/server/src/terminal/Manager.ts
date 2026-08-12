@@ -703,6 +703,7 @@ const posixInspectSubprocess = Effect.fn("terminal.posixInspectSubprocess")(func
   ProcessRunner.ProcessRunner
 > {
   const processRunner = yield* ProcessRunner.ProcessRunner;
+  // Absolute paths avoid libuv's per-PATH-entry posix_spawn search on macOS.
   const pgrepCommand = platform === "darwin" ? "/usr/bin/pgrep" : "pgrep";
   const psCommand = platform === "darwin" ? "/bin/ps" : "ps";
   const runPgrep = processRunner
