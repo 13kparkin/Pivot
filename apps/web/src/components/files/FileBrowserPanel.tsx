@@ -78,7 +78,7 @@ function FileSearchField(props: {
   value: string;
 }) {
   return (
-    <InputGroup variant="ghost" className="h-7 min-w-0 flex-1 rounded-md">
+    <InputGroup variant="ghost" className="h-7 min-w-0 flex-1">
       <InputGroupInput
         type="search"
         name={props.name}
