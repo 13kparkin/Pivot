@@ -2125,7 +2125,10 @@ const stopRowToggle = (e: { stopPropagation: () => void }) => e.stopPropagation(
  * no animation.
  */
 export const AGENT_SPAWN_CTA_CLASS_NAME =
-  "flex w-full items-center gap-2 rounded-md border border-border/60 bg-card/50 px-2.5 py-1.5 text-left text-[13px] transition hover:bg-accent/50";
+  "@container/agent-spawn rounded-2xl border border-border/70 bg-secondary p-2 dark:border-transparent dark:bg-input/32";
+
+export const AGENT_SPAWN_CTA_TRIGGER_CLASS_NAME =
+  "group flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden rounded-lg px-1 py-1.5 text-left transition-colors hover:bg-accent/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring";
 
 const AgentSpawnCtaRow = memo(function AgentSpawnCtaRow(props: { workEntry: TimelineWorkEntry }) {
   const { workEntry } = props;
@@ -2192,21 +2195,36 @@ const AgentSpawnCtaRow = memo(function AgentSpawnCtaRow(props: { workEntry: Time
       : "✓ completed";
 
   return (
-    <button type="button" onClick={onOpenAgents} className={AGENT_SPAWN_CTA_CLASS_NAME}>
-      <span aria-hidden className={cn("size-1.5 shrink-0 rounded-full", dotClass)} />
-      <WorkEntryIconSvg name="bot" className="size-3.5 shrink-0 text-muted-foreground" />
-      <span className="min-w-0 truncate">
-        <span className="font-medium">{lead}</span>
-        {workflowName ? <span className="text-muted-foreground"> · {workflowName}</span> : null}
-      </span>
-      <span className="ml-auto flex shrink-0 items-center gap-2 font-mono text-[.7rem] text-muted-foreground">
-        <span>{status}</span>
-        {totalTokens > 0 ? (
-          <span className="tabular-nums">Σ {formatSubagentTokenCount(totalTokens)}</span>
-        ) : null}
-        <span className="text-info-foreground">{live ? "Open Agents ▸" : "View ▸"}</span>
-      </span>
-    </button>
+    <div className={AGENT_SPAWN_CTA_CLASS_NAME}>
+      <div className="flex items-center justify-between gap-2 rounded-xl px-1">
+        <button type="button" onClick={onOpenAgents} className={AGENT_SPAWN_CTA_TRIGGER_CLASS_NAME}>
+          <ChevronRightIcon
+            aria-hidden="true"
+            className="size-3.5 shrink-0 text-muted-foreground"
+          />
+          <span className="flex min-w-0 shrink-0 items-center gap-1.5 whitespace-nowrap font-medium text-foreground text-xs leading-4">
+            <span aria-hidden className={cn("size-1.5 shrink-0 rounded-full", dotClass)} />
+            <WorkEntryIconSvg name="bot" className="size-3.5 shrink-0 text-muted-foreground" />
+            <span className="truncate">{lead}</span>
+          </span>
+          {workflowName ? (
+            <span className="ml-1 hidden min-w-0 flex-1 truncate text-[11px] text-muted-foreground group-hover:text-foreground/80 @[24rem]/agent-spawn:inline">
+              {workflowName}
+            </span>
+          ) : null}
+          <span className="ml-1 hidden min-w-0 flex-1 truncate text-[11px] text-muted-foreground group-hover:text-foreground/80 @[24rem]/agent-spawn:inline">
+            {status}
+            {totalTokens > 0 ? ` · Σ ${formatSubagentTokenCount(totalTokens)}` : ""}
+          </span>
+        </button>
+        <Button type="button" size="xs" variant="outline" onClick={onOpenAgents}>
+          <BotIcon className="size-3" />
+          <span className="hidden @[24rem]/agent-spawn:inline">
+            {live ? "Open agents" : "View agents"}
+          </span>
+        </Button>
+      </div>
+    </div>
   );
 });
 
