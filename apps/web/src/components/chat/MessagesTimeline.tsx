@@ -2203,10 +2203,6 @@ const AgentSpawnCtaRow = memo(function AgentSpawnCtaRow(props: { workEntry: Time
     <div className={AGENT_SPAWN_CTA_CLASS_NAME}>
       <div className="flex items-center justify-between gap-2 rounded-xl px-1">
         <button type="button" onClick={onOpenAgents} className={AGENT_SPAWN_CTA_TRIGGER_CLASS_NAME}>
-          <ChevronRightIcon
-            aria-hidden="true"
-            className="size-3.5 shrink-0 text-muted-foreground"
-          />
           <span className="flex min-w-0 shrink-0 items-center gap-1.5 whitespace-nowrap font-medium text-foreground text-xs leading-4">
             <span aria-hidden className={cn("size-1.5 shrink-0 rounded-full", dotClass)} />
             <WorkEntryIconSvg name="bot" className="size-3.5 shrink-0 text-muted-foreground" />
