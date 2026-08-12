@@ -954,7 +954,7 @@ it.layer(
     }),
   );
 
-  it.effect("uses absolute utility paths for macOS subprocess polling", () =>
+  it.effect("uses platform utility paths for POSIX subprocess polling", () =>
     Effect.gen(function* () {
       const calls: ProcessRunner.ProcessRunInput[] = [];
       const runner = ProcessRunner.ProcessRunner.of({
@@ -997,6 +997,23 @@ it.layer(
         "/bin/ps",
         "/bin/ps",
       ]);
+
+      yield* manager.close({ threadId: "thread-1" });
+      calls.length = 0;
+
+      const { manager: linuxManager } = yield* createManager(5, {
+        subprocessPollIntervalMs: 20,
+      }).pipe(
+        Effect.provideService(ProcessRunner.ProcessRunner, runner),
+        Effect.provide(withHostPlatform("linux")),
+      );
+      yield* linuxManager.open(openInput());
+      yield* waitFor(
+        Effect.sync(() => calls.length >= 4),
+        "1200 millis",
+      );
+
+      expect(calls.slice(0, 4).map(({ command }) => command)).toEqual(["pgrep", "ps", "ps", "ps"]);
     }),
   );
 
