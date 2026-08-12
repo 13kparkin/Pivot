@@ -74,5 +74,20 @@ export function pruneAcknowledgedComposerNativeEvents(
   snapshots: ReadonlyArray<ComposerNativeEventSnapshot>,
   acknowledgedEventCount: number,
 ): ComposerNativeEventSnapshot[] {
-  return snapshots.filter((snapshot) => snapshot.eventCount > acknowledgedEventCount);
+  // The newest acknowledged snapshot must survive pruning: it is what lets a
+  // later, unrelated re-render classify the settled composer state as a native
+  // echo instead of a parent-driven edit that would re-control the caret (and
+  // reset the keyboard's autocorrect context on iOS).
+  let latestAcknowledgedIndex = -1;
+  for (let index = snapshots.length - 1; index >= 0; index -= 1) {
+    const snapshot = snapshots[index];
+    if (snapshot !== undefined && snapshot.eventCount <= acknowledgedEventCount) {
+      latestAcknowledgedIndex = index;
+      break;
+    }
+  }
+  return snapshots.filter(
+    (snapshot, index) =>
+      index === latestAcknowledgedIndex || snapshot.eventCount > acknowledgedEventCount,
+  );
 }

@@ -103,11 +103,12 @@ export function ComposerEditor({
   const nativeRef = useRef<NativeComposerEditorRef>(null);
   const mostRecentEventCountRef = useRef(0);
   const [mostRecentEventCount, setMostRecentEventCount] = useState(0);
-  const [nativeEventSequence, setNativeEventSequence] = useState(0);
-  const previousRenderedEventSequenceRef = useRef(0);
-  const nativeEventSnapshotsRef = useRef<ComposerNativeEventSnapshot[]>([
-    { eventCount: 0, value: props.value, selection: selection ?? null },
-  ]);
+  const [, forceNativeEventRender] = useState(0);
+  // The native editor mounts empty, so the snapshot history starts empty: the
+  // first controlled payload must be a non-echo so a restored draft (or a
+  // recycled native view) is applied rather than skipped.
+  const nativeEventSnapshotsRef = useRef<ComposerNativeEventSnapshot[]>([]);
+  const lastDeliveredValueRef = useRef(props.value);
   const [initialConfirmedTokens] = useState(() => collectComposerInlineTokens(props.value));
   const confirmedTokensRef = useRef(initialConfirmedTokens);
   const textColor = useThemeColor("--color-foreground");
@@ -155,15 +156,16 @@ export function ComposerEditor({
       })),
     );
   }, [props.value, skillLabels]);
-  const includesNativeEvent = nativeEventSequence !== previousRenderedEventSequenceRef.current;
-  const controlledEventCount = includesNativeEvent
-    ? resolveComposerControlledEventCount(
-        props.value,
-        selection ?? null,
-        mostRecentEventCount,
-        nativeEventSnapshotsRef.current,
-      )
-    : mostRecentEventCount;
+  // Every render resolves against the snapshot history, so a render whose
+  // (value, selection) lags the acknowledged native state is stamped behind
+  // the native revision and rejected by the editor instead of re-applying a
+  // stale caret or stale text mid-typing.
+  const controlledEventCount = resolveComposerControlledEventCount(
+    props.value,
+    selection ?? null,
+    mostRecentEventCount,
+    nativeEventSnapshotsRef.current,
+  );
   const acknowledgesLatestNativeEvent = isComposerNativeEcho(
     props.value,
     selection ?? null,
@@ -171,9 +173,7 @@ export function ComposerEditor({
     nativeEventSnapshotsRef.current,
   );
   const isNativeEcho =
-    includesNativeEvent &&
-    controlledEventCount === mostRecentEventCount &&
-    acknowledgesLatestNativeEvent;
+    controlledEventCount === mostRecentEventCount && acknowledgesLatestNativeEvent;
   const controlledDocumentJson = JSON.stringify({
     value: props.value,
     selection: isNativeEcho ? null : (selection ?? null),
@@ -181,9 +181,6 @@ export function ComposerEditor({
     mostRecentEventCount: controlledEventCount,
     isNativeEcho,
   });
-  useEffect(() => {
-    previousRenderedEventSequenceRef.current = nativeEventSequence;
-  }, [nativeEventSequence]);
   useEffect(() => {
     if (!acknowledgesLatestNativeEvent) return;
     nativeEventSnapshotsRef.current = pruneAcknowledgedComposerNativeEvents(
@@ -260,10 +257,11 @@ export function ComposerEditor({
             event.nativeEvent.selection,
           );
           if (acknowledgedEventCount === false) return;
+          lastDeliveredValueRef.current = event.nativeEvent.value;
           onChangeText(event.nativeEvent.value);
           onSelectionChange?.(event.nativeEvent.selection);
           setMostRecentEventCount(acknowledgedEventCount);
-          setNativeEventSequence((sequence) => sequence + 1);
+          forceNativeEventRender((sequence) => sequence + 1);
         }}
         onComposerSelectionChange={(event) => {
           const acknowledgedEventCount = acceptNativeEvent(
@@ -272,9 +270,17 @@ export function ComposerEditor({
             event.nativeEvent.selection,
           );
           if (acknowledgedEventCount === false) return;
+          // A selection event that carries text the change handler has not
+          // delivered yet (the platform emitted it mid-mutation) must also
+          // deliver the value, or the parent's next render would round-trip
+          // stale text stamped with this acknowledged revision.
+          if (event.nativeEvent.value !== lastDeliveredValueRef.current) {
+            lastDeliveredValueRef.current = event.nativeEvent.value;
+            onChangeText(event.nativeEvent.value);
+          }
           onSelectionChange?.(event.nativeEvent.selection);
           setMostRecentEventCount(acknowledgedEventCount);
-          setNativeEventSequence((sequence) => sequence + 1);
+          forceNativeEventRender((sequence) => sequence + 1);
         }}
         onComposerPasteImages={(event) => onPasteImages?.(event.nativeEvent.uris)}
         onComposerFocus={onFocus}

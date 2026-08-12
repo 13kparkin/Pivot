@@ -95,7 +95,7 @@ describe("pruneAcknowledgedComposerNativeEvents", () => {
       selection: { start: eventCount, end: eventCount },
     }));
 
-    expect(pruneAcknowledgedComposerNativeEvents(snapshots, 999)).toEqual([]);
+    expect(pruneAcknowledgedComposerNativeEvents(snapshots, 999)).toEqual([snapshots[999]]);
   });
 
   it("retains native events that arrive after the acknowledged render", () => {
@@ -104,6 +104,27 @@ describe("pruneAcknowledgedComposerNativeEvents", () => {
       { eventCount: 41, value: "ab", selection: { start: 2, end: 2 } },
     ];
 
-    expect(pruneAcknowledgedComposerNativeEvents(snapshots, 40)).toEqual([snapshots[1]]);
+    expect(pruneAcknowledgedComposerNativeEvents(snapshots, 40)).toEqual(snapshots);
+  });
+
+  it("retains the newest acknowledged snapshot so settled re-renders stay echoes", () => {
+    const snapshots = [
+      { eventCount: 40, value: "a", selection: { start: 1, end: 1 } },
+      { eventCount: 41, value: "ab", selection: { start: 2, end: 2 } },
+      { eventCount: 42, value: "abc", selection: { start: 3, end: 3 } },
+    ];
+
+    const pruned = pruneAcknowledgedComposerNativeEvents(snapshots, 42);
+    expect(pruned).toEqual([snapshots[2]]);
+    expect(isComposerNativeEcho("abc", { start: 3, end: 3 }, 42, pruned)).toBe(true);
+  });
+
+  it("keeps the newest of several snapshots sharing the acknowledged revision", () => {
+    const snapshots = [
+      { eventCount: 41, value: "ab", selection: { start: 2, end: 2 } },
+      { eventCount: 41, value: "ab", selection: { start: 1, end: 1 } },
+    ];
+
+    expect(pruneAcknowledgedComposerNativeEvents(snapshots, 41)).toEqual([snapshots[1]]);
   });
 });
