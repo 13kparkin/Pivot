@@ -1,28 +1,45 @@
 import {
   PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
   PROVIDER_SEND_TURN_MAX_IMAGE_BYTES,
-  type UploadChatImageAttachment,
 } from "@t3tools/contracts";
 import { estimateBase64ByteSize } from "./base64";
 import { uuidv4 } from "./uuid";
 
-export interface DraftComposerImageAttachment extends UploadChatImageAttachment {
+/**
+ * Local-only draft shape. It used to extend the contracts upload type, but
+ * `thread.turn.start` now carries id references to already-uploaded blobs, so
+ * `dataUrl` never reaches the wire and lives purely in mobile draft storage.
+ */
+export interface DraftComposerImageAttachment {
   readonly id: string;
   readonly previewUri: string;
+  readonly type: "image";
+  readonly name: string;
+  readonly mimeType: string;
+  readonly sizeBytes: number;
+  readonly dataUrl: string;
 }
 
-/** Wire shape for startTurn: pure uploads without client draft id / previewUri. */
-export function toUploadChatImageAttachments(
-  attachments: ReadonlyArray<DraftComposerImageAttachment>,
-): ReadonlyArray<UploadChatImageAttachment> {
-  return attachments.map((attachment) => ({
-    type: attachment.type,
-    name: attachment.name,
-    mimeType: attachment.mimeType,
-    sizeBytes: attachment.sizeBytes,
-    dataUrl: attachment.dataUrl,
-  }));
+export const IMAGE_ATTACH_UNAVAILABLE_MESSAGE = "Image attach needs an app update.";
+
+/**
+ * Copy for legacy draft/outbox images that predate the contract change and so
+ * cannot be sent. Returns null when there is nothing to warn about.
+ */
+export function droppedAttachmentsWarning(count: number): string | null {
+  if (count <= 0) {
+    return null;
+  }
+  const subject = count === 1 ? "1 image was" : `${count} images were`;
+  return `${subject} not sent. ${IMAGE_ATTACH_UNAVAILABLE_MESSAGE}`;
 }
+
+/**
+ * Mobile has no upload-on-attach implementation yet (web shipped first), and
+ * the old data-url path is gone from the contract. Capture stays disabled
+ * until the mobile port lands; flip this back on with that change.
+ */
+const IMAGE_ATTACH_ENABLED: boolean = false;
 
 const OWNED_PASTED_IMAGE_DIRECTORY = "t3-composer-paste";
 
@@ -46,6 +63,10 @@ export async function pickComposerImages(input: { readonly existingCount: number
   readonly images: ReadonlyArray<DraftComposerImageAttachment>;
   readonly error: string | null;
 }> {
+  if (!IMAGE_ATTACH_ENABLED) {
+    return { images: [], error: IMAGE_ATTACH_UNAVAILABLE_MESSAGE };
+  }
+
   const remainingSlots = PROVIDER_SEND_TURN_MAX_ATTACHMENTS - input.existingCount;
   if (remainingSlots <= 0) {
     return {
@@ -138,6 +159,9 @@ export async function pasteComposerClipboard(input: { readonly existingCount: nu
   const remainingSlots = PROVIDER_SEND_TURN_MAX_ATTACHMENTS - input.existingCount;
 
   if (await clipboard.hasImageAsync()) {
+    if (!IMAGE_ATTACH_ENABLED) {
+      return { images: [], text: null, error: IMAGE_ATTACH_UNAVAILABLE_MESSAGE };
+    }
     if (remainingSlots <= 0) {
       return {
         images: [],
@@ -236,7 +260,14 @@ export async function convertPastedImagesToAttachments(input: {
   readonly existingCount: number;
 }): Promise<ReadonlyArray<DraftComposerImageAttachment>> {
   const { File } = await import("expo-file-system");
-  const remainingSlots = PROVIDER_SEND_TURN_MAX_ATTACHMENTS - input.existingCount;
+  // Zero slots while attach is disabled: the loop below still runs so owned
+  // temporary paste files are deleted, but nothing is decoded or attached.
+  const remainingSlots = IMAGE_ATTACH_ENABLED
+    ? PROVIDER_SEND_TURN_MAX_ATTACHMENTS - input.existingCount
+    : 0;
+  if (!IMAGE_ATTACH_ENABLED && input.uris.length > 0) {
+    console.warn(IMAGE_ATTACH_UNAVAILABLE_MESSAGE, { droppedPastedImages: input.uris.length });
+  }
   const results: DraftComposerImageAttachment[] = [];
 
   for (const [index, uri] of input.uris.entries()) {

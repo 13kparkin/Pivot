@@ -203,6 +203,8 @@ import {
   useComposerDraftStore,
   type DraftId,
 } from "../composerDraftStore";
+import { awaitAttachmentUploads } from "../lib/attachmentUploadQueue";
+import { readyAttachmentRefs, summarizeAttachmentUploads } from "../lib/attachmentUploadState";
 import {
   appendTerminalContextsToPrompt,
   formatTerminalContextLabel,
@@ -305,7 +307,6 @@ import {
   PullRequestDialogState,
   cloneComposerImageForRetry,
   deriveLockedProvider,
-  readFileAsDataUrl,
   reconcileMountedTerminalThreadIds,
   resolveThreadMetadataUpdateForNextTurn,
   resolveSendEnvMode,
@@ -4944,7 +4945,9 @@ function ChatViewContent(props: ChatViewProps) {
       hasSendableContent,
     } = deriveComposerSendState({
       prompt: promptForSend,
-      imageCount: composerImages.length,
+      // Only uploaded attachments count: an image still in flight (or failed)
+      // is not sendable content, and the composer blocks the send anyway.
+      imageCount: summarizeAttachmentUploads(composerImages).ready,
       terminalContexts: composerTerminalContexts,
       elementContextCount:
         composerElementContexts.length +
@@ -5069,15 +5072,6 @@ function ChatViewContent(props: ChatViewProps) {
       effort: ctxSelectedPromptEffort,
       text: messageTextForSend || IMAGE_ONLY_BOOTSTRAP_PROMPT,
     });
-    const turnAttachmentsPromise = Promise.all(
-      composerImagesSnapshot.map(async (image) => ({
-        type: "image" as const,
-        name: image.name,
-        mimeType: image.mimeType,
-        sizeBytes: image.sizeBytes,
-        dataUrl: await readFileAsDataUrl(image.file),
-      })),
-    );
     const optimisticAttachments = composerImagesSnapshot.map((image) => ({
       type: "image" as const,
       id: image.id,
@@ -5189,13 +5183,33 @@ function ChatViewContent(props: ChatViewProps) {
       }
     }
 
-    const turnAttachmentsResult = await settlePromise(() => turnAttachmentsPromise);
-    if (failure === null && turnAttachmentsResult._tag === "Failure") {
-      failure = turnAttachmentsResult;
+    // Attachments ride the turn as id references to bytes that uploaded the
+    // moment they were attached. The composer blocks sending while an upload
+    // is in flight, but the preview "pick and send" gesture attaches and sends
+    // in one step, so wait for anything still running here.
+    const settledUploads = await awaitAttachmentUploads(
+      composerImagesSnapshot.map((image) => image.id),
+    );
+    const sendableImages = composerImagesSnapshot.map((image) => {
+      const settledUpload = settledUploads.get(image.id);
+      return settledUpload ? { ...image, upload: settledUpload } : image;
+    });
+    const turnAttachments = readyAttachmentRefs(sendableImages);
+    const unsentImageNames = sendableImages
+      .filter((image) => image.upload.status !== "ready")
+      .map((image) => image.name);
+    if (unsentImageNames.length > 0) {
+      toastManager.add(
+        stackedThreadToast({
+          type: "warning",
+          title: "Some images were not attached",
+          description: `${unsentImageNames.join(", ")} did not finish uploading, so the message was sent without them.`,
+        }),
+      );
     }
 
     let turnStartSucceeded = false;
-    if (failure === null && turnAttachmentsResult._tag === "Success") {
+    if (failure === null) {
       const bootstrap =
         isLocalDraftThread || baseBranchForWorktree
           ? {
@@ -5235,7 +5249,7 @@ function ChatViewContent(props: ChatViewProps) {
             messageId: messageIdForSend,
             role: "user",
             text: outgoingMessageText,
-            attachments: turnAttachmentsResult.value,
+            attachments: turnAttachments,
           },
           modelSelection: ctxSelectedModelSelection,
           titleSeed: title,

@@ -18,7 +18,16 @@ import {
   FilesystemBrowseResult,
   FilesystemBrowseError,
 } from "./filesystem.ts";
-import { AssetAccessError, AssetCreateUrlInput, AssetCreateUrlResult } from "./assets.ts";
+import {
+  AssetAccessError,
+  AssetCreateUrlInput,
+  AssetCreateUrlResult,
+  AttachmentCreateUploadUrlInput,
+  AttachmentCreateUploadUrlResult,
+  AttachmentDeleteInput,
+  AttachmentUploadRequestError,
+  AttachmentUploadSigningKeyError,
+} from "./assets.ts";
 import {
   GitActionProgressEvent,
   VcsSwitchRefInput,
@@ -204,6 +213,10 @@ export const WS_METHODS = {
   // Filesystem methods
   filesystemBrowse: "filesystem.browse",
   assetsCreateUrl: "assets.createUrl",
+
+  // Attachment upload methods
+  attachmentsCreateUploadUrl: "attachments.createUploadUrl",
+  attachmentsDelete: "attachments.delete",
 
   // VCS methods
   vcsPull: "vcs.pull",
@@ -631,6 +644,21 @@ export const WsAssetsCreateUrlRpc = Rpc.make(WS_METHODS.assetsCreateUrl, {
   error: Schema.Union([AssetAccessError, EnvironmentAuthorizationError]),
 });
 
+export const WsAttachmentsCreateUploadUrlRpc = Rpc.make(WS_METHODS.attachmentsCreateUploadUrl, {
+  payload: AttachmentCreateUploadUrlInput,
+  success: AttachmentCreateUploadUrlResult,
+  error: Schema.Union([
+    AttachmentUploadRequestError,
+    AttachmentUploadSigningKeyError,
+    EnvironmentAuthorizationError,
+  ]),
+});
+
+export const WsAttachmentsDeleteRpc = Rpc.make(WS_METHODS.attachmentsDelete, {
+  payload: AttachmentDeleteInput,
+  error: Schema.Union([AttachmentUploadRequestError, EnvironmentAuthorizationError]),
+});
+
 export const WsSubscribeVcsStatusRpc = Rpc.make(WS_METHODS.subscribeVcsStatus, {
   payload: VcsStatusInput,
   success: VcsStatusStreamEvent,
@@ -994,6 +1022,8 @@ export const WsRpcGroup = RpcGroup.make(
   WsShellOpenInEditorRpc,
   WsFilesystemBrowseRpc,
   WsAssetsCreateUrlRpc,
+  WsAttachmentsCreateUploadUrlRpc,
+  WsAttachmentsDeleteRpc,
   WsSubscribeVcsStatusRpc,
   WsVcsPullRpc,
   WsVcsRefreshStatusRpc,

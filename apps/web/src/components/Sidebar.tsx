@@ -440,10 +440,8 @@ const SidebarDraftRow = memo(function SidebarDraftRow(props: {
 }) {
   const { composer, draftId, onDiscard, onNavigate, session } = props;
   const promptPreview = composer.prompt.trim().split("\n", 1)[0] ?? "";
-  // images mirrors persistedAttachments once rehydration finishes; before
-  // that only the persisted list is populated, hence max not sum.
   const attachmentCount =
-    Math.max(composer.images.length, composer.persistedAttachments.length) +
+    composer.images.length +
     composer.terminalContexts.length +
     composer.elementContexts.length +
     composer.previewAnnotations.length +
