@@ -46,15 +46,18 @@ when the machine boots and keeps running after you log out (lingering is enabled
 **macOS** uses a launch agent at `~/Library/LaunchAgents/com.t3tools.t3code.service.plist`. It
 starts when you log in, not when the Mac boots, and it stops when you log out; macOS has no
 equivalent of Linux lingering for user agents. For a Mac that should stay reachable unattended,
-turn on automatic login (System Settings → Users & Groups) and keep the Mac from sleeping.
+turn on automatic login (System Settings → Users & Groups; unavailable while FileVault is on) and
+keep the Mac from sleeping.
 
 Two more macOS notes:
 
-- Installing over SSH only starts the agent immediately when someone is also logged in at the
-  Mac's screen. Otherwise the install completes and the agent starts at the next login.
-- A background agent cannot answer macOS privacy prompts. If agent work fails to read protected
-  folders such as Desktop, Documents, or Downloads, grant Full Disk Access to the node binary
-  listed in the launch agent's `ProgramArguments`.
+- Installing over SSH needs someone logged in at the Mac's screen to start the agent right away.
+  Without that, the install command reports an error at the final start step, but the agent is
+  fully installed and starts at the next login.
+- macOS may show privacy prompts for protected folders such as Desktop, Documents, or Downloads,
+  attributed to a bare `node` process, or deny access without a prompt. If agent work fails to
+  read those folders, grant Full Disk Access to the node binary listed in the launch agent's
+  `ProgramArguments`.
 
 **Windows** is not supported yet.
 

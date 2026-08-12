@@ -67,8 +67,8 @@ it("keeps launchd pinned to the stable launcher rather than a versioned server",
 it("restarts the launch agent on the systemd cadence", () => {
   const plist = BootService.renderBootServicePlist(macPlan, { homeDir: "/Users/theo" });
 
-  expect(plist).toContain("<key>RunAtLoad</key>");
-  expect(plist).toContain("<key>KeepAlive</key>");
+  expect(plist).toContain("<key>RunAtLoad</key>\n  <true/>");
+  expect(plist).toContain("<key>KeepAlive</key>\n  <true/>");
   expect(plist).toContain("<key>ThrottleInterval</key>\n  <integer>5</integer>");
 });
 
@@ -276,7 +276,7 @@ it.layer(NodeServices.layer)("boot service install", (it) => {
       yield* service.install;
       const plistPath = (yield* service.status).unitPath;
       commands.length = 0;
-      control.failCommand = "launchctl kickstart -k gui/501/com.t3tools.t3code.service";
+      control.failCommand = `launchctl bootstrap gui/501 ${plistPath}`;
 
       const error = yield* service.install.pipe(Effect.flip);
       expect(error._tag).toBe("BootServiceCommandError");
@@ -284,9 +284,7 @@ it.layer(NodeServices.layer)("boot service install", (it) => {
         "launchctl bootout gui/501/com.t3tools.t3code.service",
         "launchctl enable gui/501/com.t3tools.t3code.service",
         `launchctl bootstrap gui/501 ${plistPath}`,
-        "launchctl kickstart -k gui/501/com.t3tools.t3code.service",
         `launchctl bootstrap gui/501 ${plistPath}`,
-        "launchctl kickstart -k gui/501/com.t3tools.t3code.service",
       ]);
     }),
   );
@@ -326,7 +324,6 @@ it.layer(NodeServices.layer)("boot service install", (it) => {
       expect(commands.filter((command) => command.startsWith("launchctl "))).toEqual([
         "launchctl bootout gui/501/com.t3tools.t3code.service",
         `launchctl bootstrap gui/501 ${plistPath}`,
-        "launchctl kickstart -k gui/501/com.t3tools.t3code.service",
       ]);
     }),
   );

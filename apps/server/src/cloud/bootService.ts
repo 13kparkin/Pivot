@@ -103,8 +103,11 @@ export function renderBootServicePlist(
 ): string {
   // KeepAlive + ThrottleInterval mirror Restart=always + RestartSec=5. launchd
   // has no StartLimitBurst analog; a hard crash loop respawns every 5s forever.
-  // ExitTimeOut must exceed the server's graceful shutdown plus the launcher's
-  // 5s child SIGKILL grace, or launchd (default 20s) SIGKILLs mid-shutdown.
+  // ExitTimeOut 90 matches systemd's default TimeoutStopSec. A plain stop
+  // completes within the launcher's 5s child grace, but a stop that queues
+  // behind an in-flight update transition can take much longer; launchd's
+  // default 20s would SIGKILL the launcher (and, with it, the process group)
+  // mid-handoff.
   // ProcessType Interactive opts out of background-job resource throttling.
   // AbandonProcessGroup stays at its default (false): launchd reaps leftover
   // process-group members only when the launcher itself exits — the analog of
@@ -138,7 +141,7 @@ export function renderBootServicePlist(
     `  <key>ThrottleInterval</key>`,
     `  <integer>5</integer>`,
     `  <key>ExitTimeOut</key>`,
-    `  <integer>30</integer>`,
+    `  <integer>90</integer>`,
     `  <key>ProcessType</key>`,
     `  <string>Interactive</string>`,
     `  <key>StandardOutPath</key>`,
@@ -258,10 +261,13 @@ export function launchdManager(input: {
   );
   const domainTarget = `gui/${input.uid}`;
   const serviceTarget = `${domainTarget}/${BOOT_SERVICE_LAUNCHD_LABEL}`;
-  // bootout/enable/bootstrap are optional: they fail on not-loaded /
-  // already-loaded states that are fine to proceed from. The strict
-  // `kickstart -k` runs last, so a genuinely broken gui domain (e.g. an SSH
-  // session with nobody logged in at the screen) still fails the flow loudly.
+  // bootout/enable are optional: they fail on not-loaded states that are fine
+  // to proceed from. The strict `bootstrap` runs last and is also the start:
+  // loading a RunAtLoad/KeepAlive plist starts the job, so a separate
+  // kickstart would kill and restart a server it just booted. A lingering job
+  // that survived bootout, or a gui domain with nobody logged in at the
+  // screen (SSH install), makes bootstrap fail the flow loudly rather than
+  // silently keeping a stale server.
   return {
     kind: "launchd",
     unitPath,
@@ -282,30 +288,18 @@ export function launchdManager(input: {
         args: ["enable", serviceTarget],
         optional: true,
       },
-      {
-        step: "loading the launch agent",
-        command: "launchctl",
-        args: ["bootstrap", domainTarget, unitPath],
-        optional: true,
-      },
       // Start last. No administrative state write occurs after this succeeds.
       {
         step: "starting the service",
         command: "launchctl",
-        args: ["kickstart", "-k", serviceTarget],
+        args: ["bootstrap", domainTarget, unitPath],
       },
     ],
     restart: [
       {
-        step: "reloading the launch agent after a failed update",
-        command: "launchctl",
-        args: ["bootstrap", domainTarget, unitPath],
-        optional: true,
-      },
-      {
         step: "restarting the service after a failed update",
         command: "launchctl",
-        args: ["kickstart", "-k", serviceTarget],
+        args: ["bootstrap", domainTarget, unitPath],
       },
     ],
     // No `launchctl disable` here: a persisted override would sabotage a
