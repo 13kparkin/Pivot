@@ -10,12 +10,12 @@ import {
   getProviderOptionCurrentValue,
   getProviderOptionDescriptors,
 } from "@t3tools/shared/model";
+import { useNavigation, useRoute, type RouteProp } from "@react-navigation/native";
+import {
+  createNativeStackNavigator,
+  type NativeStackNavigationProp,
+} from "@react-navigation/native-stack";
 import ExpoBottomSheet from "@expo/ui/community/bottom-sheet";
-import GorhomBottomSheet, {
-  BottomSheetBackdrop,
-  BottomSheetView,
-  type BottomSheetBackdropProps,
-} from "@gorhom/bottom-sheet";
 import * as Haptics from "expo-haptics";
 import {
   createContext,
@@ -36,7 +36,11 @@ import { ProviderIcon } from "../../components/ProviderIcon";
 import { cn } from "../../lib/cn";
 import type { ModelOption, ProviderGroup } from "../../lib/modelOptions";
 import { applyProviderOptionSelection, providerOptionValueLabels } from "../../lib/providerOptions";
+import { resolveProviderOptionDescriptors } from "../../lib/providerOptions";
 import { useThemeColor } from "../../lib/useThemeColor";
+import { NativeHeaderToolbar, NativeStackScreenOptions } from "../../native/StackHeader";
+import { useNewTaskFlow } from "./new-task-flow-provider";
+import { useNewTaskSettingsTransition } from "./new-task-settings-transition";
 import { RUNTIME_MODE_CHOICES, selectableChoices } from "./thread-settings-menu";
 import { pendingModelAfterPress } from "./thread-settings-sheet-state";
 import type { ThreadSettingsSheetCloseReason } from "./use-thread-settings-sheet-presentation";
@@ -259,49 +263,6 @@ function SwitchRow(props: {
 type ThreadSettingsSubmenuPage =
   | { readonly kind: "descriptor"; readonly id: string }
   | { readonly kind: "runtime" };
-
-function ThreadSettingsSheetHeader(props: {
-  readonly title: string;
-  readonly leadingLabel: string;
-  readonly onLeadingPress: () => void;
-  readonly trailingLabel?: string;
-  readonly onTrailingPress?: () => void;
-}) {
-  const foreground = useThemeColor("--color-foreground");
-
-  return (
-    <View className="h-14 flex-row items-center border-b border-border bg-sheet px-2">
-      <Pressable
-        accessibilityRole="button"
-        onPress={props.onLeadingPress}
-        className="h-11 min-w-24 flex-row items-center gap-1 rounded-full px-3 active:bg-subtle"
-      >
-        {props.leadingLabel === "Back" ? (
-          <SymbolView name="chevron.left" size={13} tintColor={foreground} type="monochrome" />
-        ) : null}
-        <Text className="text-base font-t3-medium text-foreground">{props.leadingLabel}</Text>
-      </Pressable>
-      <Text
-        accessibilityRole="header"
-        className="min-w-0 flex-1 text-center text-base font-t3-bold text-foreground"
-        numberOfLines={1}
-      >
-        {props.title}
-      </Text>
-      {props.trailingLabel && props.onTrailingPress ? (
-        <Pressable
-          accessibilityRole="button"
-          onPress={props.onTrailingPress}
-          className="h-11 min-w-24 items-end justify-center rounded-full px-3 active:bg-subtle"
-        >
-          <Text className="text-base font-t3-bold text-foreground">{props.trailingLabel}</Text>
-        </Pressable>
-      ) : (
-        <View className="min-w-24" />
-      )}
-    </View>
-  );
-}
 
 type ThreadSettingsSessionProps = {
   readonly providerGroups: ReadonlyArray<ProviderGroup>;
@@ -528,15 +489,13 @@ function useThreadSettingsSession() {
 
 /** Model catalog plus pinned option rows, without imposing a presentation owner. */
 function ThreadSettingsMainContent(props: {
-  readonly header?: ReactNode;
   readonly onOpenSubmenu: (submenu: ThreadSettingsSubmenuPage) => void;
 }) {
   const insets = useSafeAreaInsets();
   const session = useThreadSettingsSession();
 
   return (
-    <View className="flex-1 bg-sheet">
-      {props.header}
+    <View collapsable={false} className="flex-1 bg-sheet">
       {session.hasLegacyModels ? (
         <View className="flex-row justify-end px-4 py-2">
           <Pressable
@@ -560,44 +519,13 @@ function ThreadSettingsMainContent(props: {
         contentInsetAdjustmentBehavior="automatic"
         showsVerticalScrollIndicator={false}
       >
-        {session.providerGroups.map((group) => {
-          const driver = group.models[0]?.providerDriver;
-          const isPrimary = driver !== undefined && PRIMARY_PROVIDER_DRIVERS.has(driver);
-          const visibleModels = session.showLegacy
-            ? group.models
-            : group.models.filter((model) => !model.isLegacy || session.isDisplayed(model));
-          if (visibleModels.length === 0) {
-            return null;
-          }
-          const containsSelection = group.models.some(session.isDisplayed);
-          const collapsible = !isPrimary && !containsSelection;
-          const collapsed = collapsible && !session.expandedProviders.has(group.providerKey);
-          return (
-            <View key={group.providerKey}>
-              <ProviderHeader
-                driver={driver}
-                label={group.providerLabel}
-                collapsible={collapsible}
-                collapsed={collapsed}
-                modelCount={visibleModels.length}
-                onToggle={() => session.toggleProvider(group.providerKey)}
-              />
-              {collapsed
-                ? null
-                : visibleModels.map((option) => (
-                    <ModelRow
-                      key={option.key}
-                      option={option}
-                      selected={session.isDisplayed(option)}
-                      onPress={() => session.pressModel(option)}
-                    />
-                  ))}
-            </View>
-          );
-        })}
+        <ThreadSettingsModelGroups />
       </ScrollView>
 
-      <View className="border-t border-border" style={{ paddingBottom: insets.bottom + 12 }}>
+      <View
+        className="z-10 border-t border-border bg-sheet"
+        style={{ paddingBottom: insets.bottom + 12 }}
+      >
         {session.descriptorTemplate.map((entry) => {
           const live = session.displayedDescriptors.find(
             (descriptor) => descriptor.label === entry.label,
@@ -641,9 +569,48 @@ function ThreadSettingsMainContent(props: {
   );
 }
 
-/** Compact choice content; native navigators decide whether it pushes or nests as a sheet. */
+function ThreadSettingsModelGroups() {
+  const session = useThreadSettingsSession();
+
+  return session.providerGroups.map((group) => {
+    const driver = group.models[0]?.providerDriver;
+    const isPrimary = driver !== undefined && PRIMARY_PROVIDER_DRIVERS.has(driver);
+    const visibleModels = session.showLegacy
+      ? group.models
+      : group.models.filter((model) => !model.isLegacy || session.isDisplayed(model));
+    if (visibleModels.length === 0) {
+      return null;
+    }
+    const containsSelection = group.models.some(session.isDisplayed);
+    const collapsible = !isPrimary && !containsSelection;
+    const collapsed = collapsible && !session.expandedProviders.has(group.providerKey);
+    return (
+      <View key={group.providerKey}>
+        <ProviderHeader
+          driver={driver}
+          label={group.providerLabel}
+          collapsible={collapsible}
+          collapsed={collapsed}
+          modelCount={visibleModels.length}
+          onToggle={() => session.toggleProvider(group.providerKey)}
+        />
+        {collapsed
+          ? null
+          : visibleModels.map((option) => (
+              <ModelRow
+                key={option.key}
+                option={option}
+                selected={session.isDisplayed(option)}
+                onPress={() => session.pressModel(option)}
+              />
+            ))}
+      </View>
+    );
+  });
+}
+
+/** Compact choice page pushed by the picker navigator. */
 function ThreadSettingsChoiceContent(props: {
-  readonly header?: ReactNode;
   readonly submenu: ThreadSettingsSubmenuPage;
   readonly onSelected: () => void;
 }) {
@@ -694,8 +661,7 @@ function ThreadSettingsChoiceContent(props: {
   }
 
   return (
-    <View className="flex-1 bg-sheet">
-      {props.header}
+    <View collapsable={false} className="flex-1 bg-sheet">
       <ScrollView
         className="flex-1"
         contentContainerStyle={{ paddingBottom: insets.bottom + 12, paddingTop: 8 }}
@@ -710,9 +676,128 @@ function ThreadSettingsChoiceContent(props: {
   );
 }
 
+type ThreadSettingsPickerStackParams = {
+  ThreadSettingsModels: undefined;
+  ThreadSettingsChoice: ThreadSettingsSubmenuPage & { readonly title: string };
+};
+
+type ThreadSettingsPickerPresentation = {
+  readonly onClose: (reason: ThreadSettingsSheetCloseReason) => void;
+};
+
+const ThreadSettingsPickerStack = createNativeStackNavigator<ThreadSettingsPickerStackParams>();
+const ThreadSettingsPickerPresentationContext =
+  createContext<ThreadSettingsPickerPresentation | null>(null);
+
+function useThreadSettingsPickerPresentation() {
+  const value = use(ThreadSettingsPickerPresentationContext);
+  if (!value) {
+    throw new Error(
+      "useThreadSettingsPickerPresentation must be used inside ThreadSettingsPickerNavigator.",
+    );
+  }
+  return value;
+}
+
+function ThreadSettingsModelsScreen() {
+  const session = useThreadSettingsSession();
+  const presentation = useThreadSettingsPickerPresentation();
+  const navigation = useNavigation<NativeStackNavigationProp<ThreadSettingsPickerStackParams>>();
+
+  return (
+    <View collapsable={false} className="flex-1 bg-sheet">
+      <NativeStackScreenOptions
+        options={{
+          headerBackVisible: false,
+          title: "Thread settings",
+        }}
+      />
+      <NativeHeaderToolbar placement="left">
+        <NativeHeaderToolbar.Button
+          accessibilityLabel="Cancel thread settings"
+          label="Cancel"
+          onPress={() => presentation.onClose("dismiss")}
+        />
+      </NativeHeaderToolbar>
+      <NativeHeaderToolbar placement="right">
+        <NativeHeaderToolbar.Button
+          accessibilityLabel={session.pendingModel ? "Save thread settings" : "Done"}
+          label={session.pendingModel ? "Save" : "Done"}
+          onPress={() => {
+            session.commitPendingModel();
+            presentation.onClose("save");
+          }}
+        />
+      </NativeHeaderToolbar>
+      <ThreadSettingsMainContent
+        onOpenSubmenu={(submenu) => {
+          const title =
+            submenu.kind === "runtime"
+              ? "Runtime"
+              : (session.displayedDescriptors.find(
+                  (descriptor) => descriptor.type === "select" && descriptor.id === submenu.id,
+                )?.label ?? "Option");
+          navigation.navigate("ThreadSettingsChoice", { ...submenu, title });
+        }}
+      />
+    </View>
+  );
+}
+
+function ThreadSettingsChoiceScreen() {
+  const navigation = useNavigation<NativeStackNavigationProp<ThreadSettingsPickerStackParams>>();
+  const route = useRoute<RouteProp<ThreadSettingsPickerStackParams, "ThreadSettingsChoice">>();
+
+  return (
+    <View collapsable={false} className="flex-1 bg-sheet">
+      <NativeStackScreenOptions options={{ title: route.params.title }} />
+      <ThreadSettingsChoiceContent submenu={route.params} onSelected={() => navigation.goBack()} />
+    </View>
+  );
+}
+
+function ThreadSettingsPickerNavigator(props: ThreadSettingsPickerPresentation) {
+  const sheetBackground = String(useThemeColor("--color-sheet"));
+  const foreground = String(useThemeColor("--color-foreground"));
+  const presentation = useMemo(
+    () => ({
+      onClose: props.onClose,
+    }),
+    [props.onClose],
+  );
+
+  return (
+    <ThreadSettingsPickerPresentationContext.Provider value={presentation}>
+      <ThreadSettingsPickerStack.Navigator
+        initialRouteName="ThreadSettingsModels"
+        screenOptions={{
+          animation: "slide_from_right",
+          contentStyle: { backgroundColor: sheetBackground },
+          gestureEnabled: true,
+          headerBackButtonDisplayMode: "minimal",
+          headerBackTitle: "",
+          headerShadowVisible: false,
+          headerStyle: { backgroundColor: sheetBackground },
+          headerTintColor: foreground,
+          headerTitleStyle: { fontSize: 17, fontWeight: "700" },
+        }}
+      >
+        <ThreadSettingsPickerStack.Screen
+          name="ThreadSettingsModels"
+          component={ThreadSettingsModelsScreen}
+        />
+        <ThreadSettingsPickerStack.Screen
+          name="ThreadSettingsChoice"
+          component={ThreadSettingsChoiceScreen}
+        />
+      </ThreadSettingsPickerStack.Navigator>
+    </ThreadSettingsPickerPresentationContext.Provider>
+  );
+}
+
 /**
- * Native modal sheet used by existing threads. Its option picker is an inline
- * child so opening it never replaces the model picker on compact devices.
+ * Native modal sheet used by existing threads. Option pages push inside the
+ * sheet's own navigator instead of presenting another modal layer.
  */
 export function ThreadSettingsSheet(
   props: ThreadSettingsSessionProps & {
@@ -756,274 +841,55 @@ export function ThreadSettingsSheet(
       snapPoints={["86%"]}
     >
       <ThreadSettingsSessionProvider {...props}>
-        <View className="flex-1 bg-sheet">
-          <ThreadSettingsInlineContent visible={props.visible} onClose={props.onClose} />
-        </View>
+        <ThreadSettingsPickerNavigator onClose={props.onClose} />
       </ThreadSettingsSessionProvider>
     </ExpoBottomSheet>
   );
 }
 
-function ContainedSheetBackdrop(props: BottomSheetBackdropProps) {
-  return (
-    <BottomSheetBackdrop
-      {...props}
-      accessible={false}
-      appearsOnIndex={0}
-      disappearsOnIndex={-1}
-      opacity={0.32}
-      pressBehavior="close"
-    />
-  );
-}
-
-function ContainedSubmenuBackdrop(props: BottomSheetBackdropProps) {
-  return <ContainedSheetBackdrop {...props} style={[props.style, { top: "14%" }]} />;
-}
-
-function ThreadSettingsInlineContent(props: {
-  readonly visible: boolean;
-  readonly onClose: (reason: ThreadSettingsSheetCloseReason) => void;
-}) {
-  const session = useThreadSettingsSession();
-  const sheetBackground = useThemeColor("--color-sheet");
-  const handleColor = useThemeColor("--color-icon-subtle");
-  const submenuSheetRef = useRef<GorhomBottomSheet>(null);
-  const [submenu, setSubmenu] = useState<ThreadSettingsSubmenuPage | null>(null);
-  const [isSubmenuVisible, setIsSubmenuVisible] = useState(false);
-
-  useEffect(() => {
-    if (!props.visible) {
-      submenuSheetRef.current?.close();
-    }
-  }, [props.visible]);
-
-  const submenuTitle =
-    submenu?.kind === "runtime"
-      ? "Runtime"
-      : submenu?.kind === "descriptor"
-        ? (session.displayedDescriptors.find(
-            (descriptor) => descriptor.type === "select" && descriptor.id === submenu.id,
-          )?.label ?? "Option")
-        : "Option";
-
-  const closeSubmenu = useCallback(() => submenuSheetRef.current?.close(), []);
-
-  return (
-    <View className="flex-1 bg-sheet">
-      <ThreadSettingsMainContent
-        header={
-          <ThreadSettingsSheetHeader
-            title="Thread settings"
-            leadingLabel="Cancel"
-            onLeadingPress={() => props.onClose("dismiss")}
-            trailingLabel={session.pendingModel ? "Save" : "Done"}
-            onTrailingPress={() => {
-              session.commitPendingModel();
-              props.onClose("save");
-            }}
-          />
-        }
-        onOpenSubmenu={(nextSubmenu) => {
-          setSubmenu(nextSubmenu);
-          setIsSubmenuVisible(true);
-        }}
-      />
-
-      {isSubmenuVisible ? (
-        <GorhomBottomSheet
-          ref={submenuSheetRef}
-          accessible={false}
-          backdropComponent={ContainedSheetBackdrop}
-          backgroundStyle={{
-            backgroundColor: sheetBackground,
-            borderTopLeftRadius: 26,
-            borderTopRightRadius: 26,
-          }}
-          containerStyle={{ zIndex: 2 }}
-          enableDynamicSizing={false}
-          enablePanDownToClose
-          handleIndicatorStyle={{ backgroundColor: handleColor, width: 36 }}
-          index={0}
-          onClose={() => setIsSubmenuVisible(false)}
-          snapPoints={[320]}
-        >
-          <BottomSheetView style={{ flex: 1 }}>
-            {submenu ? (
-              <ThreadSettingsChoiceContent
-                header={
-                  <ThreadSettingsSheetHeader
-                    title={submenuTitle}
-                    leadingLabel="Cancel"
-                    onLeadingPress={closeSubmenu}
-                  />
-                }
-                submenu={submenu}
-                onSelected={closeSubmenu}
-              />
-            ) : null}
-          </BottomSheetView>
-        </GorhomBottomSheet>
-      ) : null}
-    </View>
-  );
-}
-
 /**
- * Inline sheet used inside the New Task form sheet. Gorhom's sheet owns its
- * gesture and spring animation but remains in the parent view hierarchy, so
- * neither this picker nor its child picker can escape the New Task card.
+ * Native stack hosted by the New Task navigator's form-sheet route. Keeping
+ * the sheet presentation in RNS gives UIKit ownership of nested dismissal,
+ * while Reasoning and Runtime remain regular pushes inside this navigator.
  */
-export function ContainedThreadSettingsSheet(
-  props: ThreadSettingsSessionProps & {
-    readonly visible: boolean;
-    readonly onClose: (reason: ThreadSettingsSheetCloseReason) => void;
-    readonly onDismissed: () => void;
-  },
-) {
-  const sheetBackground = useThemeColor("--color-sheet");
-  const handleColor = useThemeColor("--color-icon-subtle");
-  const sheetRef = useRef<GorhomBottomSheet>(null);
-  const submenuSheetRef = useRef<GorhomBottomSheet>(null);
-  const wasPresentedRef = useRef(false);
-  const [submenu, setSubmenu] = useState<ThreadSettingsSubmenuPage | null>(null);
-  const [isSubmenuVisible, setIsSubmenuVisible] = useState(false);
-
+export function NewTaskThreadSettingsRouteScreen() {
+  const flow = useNewTaskFlow();
+  const navigation = useNavigation<NativeStackNavigationProp<Record<string, object | undefined>>>();
+  const transition = useNewTaskSettingsTransition();
+  const optionDescriptors = useMemo(
+    () =>
+      resolveProviderOptionDescriptors({
+        capabilities: flow.selectedModelOption?.capabilities,
+        selections: flow.selectedModel?.options,
+      }),
+    [flow.selectedModel?.options, flow.selectedModelOption?.capabilities],
+  );
   useEffect(() => {
-    if (props.visible) {
-      wasPresentedRef.current = true;
-    } else if (wasPresentedRef.current) {
-      submenuSheetRef.current?.close();
-      sheetRef.current?.close();
-    }
-  }, [props.visible]);
-
-  const handleSheetClosed = useCallback(() => {
-    if (!wasPresentedRef.current) {
-      return;
-    }
-
-    wasPresentedRef.current = false;
-    if (props.visible) {
-      props.onClose("dismiss");
-    }
-    props.onDismissed();
-  }, [props.onClose, props.onDismissed, props.visible]);
-
-  if (!props.visible && !wasPresentedRef.current) {
-    return null;
-  }
-
-  return (
-    <ThreadSettingsSessionProvider {...props}>
-      <GorhomBottomSheet
-        ref={sheetRef}
-        accessible={false}
-        backdropComponent={ContainedSheetBackdrop}
-        backgroundStyle={{
-          backgroundColor: sheetBackground,
-          borderTopLeftRadius: 28,
-          borderTopRightRadius: 28,
-        }}
-        containerStyle={{ zIndex: 100 }}
-        enableDynamicSizing={false}
-        enablePanDownToClose
-        handleIndicatorStyle={{ backgroundColor: handleColor, width: 36 }}
-        index={0}
-        onClose={handleSheetClosed}
-        snapPoints={["86%"]}
-      >
-        <BottomSheetView style={{ flex: 1 }}>
-          <ContainedThreadSettingsMain
-            onClose={props.onClose}
-            onOpenSubmenu={(nextSubmenu) => {
-              setSubmenu(nextSubmenu);
-              setIsSubmenuVisible(true);
-            }}
-          />
-        </BottomSheetView>
-      </GorhomBottomSheet>
-
-      {isSubmenuVisible && submenu ? (
-        <ContainedThreadSettingsSubmenu
-          sheetRef={submenuSheetRef}
-          submenu={submenu}
-          onClose={() => setIsSubmenuVisible(false)}
-        />
-      ) : null}
-    </ThreadSettingsSessionProvider>
-  );
-}
-
-function ContainedThreadSettingsMain(props: {
-  readonly onClose: (reason: ThreadSettingsSheetCloseReason) => void;
-  readonly onOpenSubmenu: (submenu: ThreadSettingsSubmenuPage) => void;
-}) {
-  const session = useThreadSettingsSession();
-
-  return (
-    <ThreadSettingsMainContent
-      header={
-        <ThreadSettingsSheetHeader
-          title="Thread settings"
-          leadingLabel="Cancel"
-          onLeadingPress={() => props.onClose("dismiss")}
-          trailingLabel={session.pendingModel ? "Save" : "Done"}
-          onTrailingPress={() => {
-            session.commitPendingModel();
-            props.onClose("save");
-          }}
-        />
+    const removeTransitionStart = navigation.addListener("transitionStart", (event) => {
+      if (event.data.closing) {
+        transition.notifyDismissalStart();
       }
-      onOpenSubmenu={props.onOpenSubmenu}
-    />
-  );
-}
-
-function ContainedThreadSettingsSubmenu(props: {
-  readonly sheetRef: { readonly current: GorhomBottomSheet | null };
-  readonly submenu: ThreadSettingsSubmenuPage;
-  readonly onClose: () => void;
-}) {
-  const session = useThreadSettingsSession();
-  const sheetBackground = useThemeColor("--color-sheet");
-  const handleColor = useThemeColor("--color-icon-subtle");
-  const descriptorId = props.submenu.kind === "descriptor" ? props.submenu.id : null;
-  const title =
-    props.submenu.kind === "runtime"
-      ? "Runtime"
-      : (session.displayedDescriptors.find(
-          (descriptor) => descriptor.type === "select" && descriptor.id === descriptorId,
-        )?.label ?? "Option");
-  const close = useCallback(() => props.sheetRef.current?.close(), [props.sheetRef]);
+    });
+    const removeGestureCancel = navigation.addListener("gestureCancel", () => {
+      transition.notifyDismissalCancel();
+    });
+    return () => {
+      removeTransitionStart();
+      removeGestureCancel();
+    };
+  }, [navigation, transition]);
 
   return (
-    <GorhomBottomSheet
-      ref={props.sheetRef}
-      accessible={false}
-      backdropComponent={ContainedSubmenuBackdrop}
-      backgroundStyle={{
-        backgroundColor: sheetBackground,
-        borderTopLeftRadius: 26,
-        borderTopRightRadius: 26,
-      }}
-      containerStyle={{ zIndex: 101 }}
-      enableDynamicSizing={false}
-      enablePanDownToClose
-      handleIndicatorStyle={{ backgroundColor: handleColor, width: 36 }}
-      index={0}
-      onClose={props.onClose}
-      snapPoints={[320]}
+    <ThreadSettingsSessionProvider
+      providerGroups={flow.providerGroups}
+      selectedModel={flow.selectedModel}
+      onSelectModel={(option) => flow.setSelectedModelKey(option.key, option.selection.options)}
+      optionDescriptors={optionDescriptors}
+      onUpdateOptionSelections={flow.setSelectedModelOptions}
+      runtimeMode={flow.runtimeMode}
+      onUpdateRuntimeMode={flow.setRuntimeMode}
     >
-      <BottomSheetView style={{ flex: 1 }}>
-        <ThreadSettingsChoiceContent
-          header={
-            <ThreadSettingsSheetHeader title={title} leadingLabel="Cancel" onLeadingPress={close} />
-          }
-          submenu={props.submenu}
-          onSelected={close}
-        />
-      </BottomSheetView>
-    </GorhomBottomSheet>
+      <ThreadSettingsPickerNavigator onClose={() => navigation.goBack()} />
+    </ThreadSettingsSessionProvider>
   );
 }

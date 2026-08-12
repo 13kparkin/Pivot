@@ -39,7 +39,9 @@ import { AddProjectLocalRoute } from "./features/projects/AddProjectLocalRoute";
 import { AddProjectRepositoryRoute } from "./features/projects/AddProjectRepositoryRoute";
 import { AddProjectSourceRoute } from "./features/projects/AddProjectSourceRoute";
 import { NewTaskDraftRouteScreen } from "./features/threads/NewTaskDraftRouteScreen";
+import { NewTaskThreadSettingsRouteScreen } from "./features/threads/ThreadSettingsSheet";
 import { NewTaskFlowProvider } from "./features/threads/new-task-flow-provider";
+import { NewTaskSettingsTransitionProvider } from "./features/threads/new-task-settings-transition";
 import { NewTaskRouteScreen } from "./features/threads/NewTaskRouteScreen";
 import { SettingsAppearanceRouteScreen } from "./features/settings/SettingsAppearanceRouteScreen";
 import { SettingsClientStorageRouteScreen } from "./features/settings/SettingsClientStorageRouteScreen";
@@ -256,6 +258,21 @@ const NewTaskSheetStack = createNativeStackNavigator({
       // The draft composer has no scroll view for glass to sample; a solid
       // header also lays the content out below the bar (no manual inset).
       options: SHEET_SOLID_HEADER_OPTIONS,
+    }),
+    ThreadSettings: createNativeStackScreen({
+      screen: NewTaskThreadSettingsRouteScreen,
+      linking: "draft/settings",
+      options: {
+        gestureEnabled: true,
+        headerShown: false,
+        ...(Platform.OS === "android"
+          ? { presentation: "card" as const }
+          : {
+              presentation: "formSheet" as const,
+              sheetAllowedDetents: [0.86],
+              sheetGrabberVisible: true,
+            }),
+      },
     }),
     AddProject: createNativeStackScreen({
       screen: AddProjectSourceRoute,
@@ -568,7 +585,11 @@ export const RootStack = createNativeStackNavigator({
       // The whole new-task flow (choose project → draft → add project) shares
       // draft state via NewTaskFlowProvider. The expo-router era mounted it in
       // app/new/_layout.tsx; this layout wrapper is the native-stack equivalent.
-      layout: ({ children }) => <NewTaskFlowProvider>{children}</NewTaskFlowProvider>,
+      layout: ({ children }) => (
+        <NewTaskFlowProvider>
+          <NewTaskSettingsTransitionProvider>{children}</NewTaskSettingsTransitionProvider>
+        </NewTaskFlowProvider>
+      ),
       options: {
         gestureEnabled: true,
         headerShown: false,

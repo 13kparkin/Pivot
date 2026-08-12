@@ -1,5 +1,10 @@
 import { NativeStackScreenOptions } from "../../native/StackHeader";
-import { StackActions, useNavigation, usePreventRemove } from "@react-navigation/native";
+import {
+  StackActions,
+  useFocusEffect,
+  useNavigation,
+  usePreventRemove,
+} from "@react-navigation/native";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Alert, InteractionManager, Platform, View, useColorScheme } from "react-native";
 import {
@@ -29,7 +34,7 @@ import { ComposerAttachmentStrip } from "../../components/ComposerAttachmentStri
 import { ControlPill, ControlPillMenu } from "../../components/ControlPill";
 import { ProviderIcon } from "../../components/ProviderIcon";
 import { ComposerSurface } from "./ThreadComposer";
-import { ContainedThreadSettingsSheet, threadSettingsSummaryLabel } from "./ThreadSettingsSheet";
+import { threadSettingsSummaryLabel } from "./ThreadSettingsSheet";
 import { useThreadSettingsSheetPresentation } from "./use-thread-settings-sheet-presentation";
 
 import { makeTurnCommandMetadata } from "../../lib/commandMetadata";
@@ -50,6 +55,7 @@ import { armAgentAwarenessLiveActivityForLocalWork } from "../agent-awareness/re
 import { enqueueThreadOutboxMessage, removeThreadOutboxMessage } from "../../state/thread-outbox";
 import { useRemoteConnectionStatus } from "../../state/use-remote-environment-registry";
 import { branchBadgeLabel, useNewTaskFlow } from "./new-task-flow-provider";
+import { useNewTaskSettingsTransition } from "./new-task-settings-transition";
 import { useCreateProjectThread } from "./use-project-actions";
 import { resolveDraftProjectSelection } from "./new-task-project-selection";
 import { useIncomingShare } from "../sharing/IncomingShareProvider";
@@ -80,6 +86,7 @@ export function NewTaskDraftScreen(props: {
   const createProjectThread = useCreateProjectThread();
   const flow = useNewTaskFlow();
   const navigation = useNavigation();
+  const settingsTransition = useNewTaskSettingsTransition();
   const {
     consumeShare,
     getShare,
@@ -108,6 +115,38 @@ export function NewTaskDraftScreen(props: {
     editorRef: promptInputRef,
     isEditorFocused: isComposerFocused,
   });
+  const settingsRoutePresentedRef = useRef(false);
+  useEffect(() => {
+    if (!settingsSheetPresentation.isVisible || settingsRoutePresentedRef.current) {
+      return;
+    }
+
+    settingsRoutePresentedRef.current = true;
+    navigation.dispatch(StackActions.push("ThreadSettings"));
+  }, [navigation, settingsSheetPresentation.isVisible]);
+  useEffect(
+    () =>
+      settingsTransition.registerHandlers({
+        onDismissalStart: settingsSheetPresentation.beginDismissalFocusRestore,
+        onDismissalCancel: settingsSheetPresentation.cancelDismissalFocusRestore,
+      }),
+    [
+      settingsTransition,
+      settingsSheetPresentation.beginDismissalFocusRestore,
+      settingsSheetPresentation.cancelDismissalFocusRestore,
+    ],
+  );
+  useFocusEffect(
+    useCallback(() => {
+      if (!settingsRoutePresentedRef.current) {
+        return;
+      }
+
+      settingsRoutePresentedRef.current = false;
+      settingsSheetPresentation.close("dismiss");
+      settingsSheetPresentation.onDismissed();
+    }, [settingsSheetPresentation.close, settingsSheetPresentation.onDismissed]),
+  );
   const [importingShareKey, setImportingShareKey] = useState<string | null>(null);
   const [isCancellingShareImport, setIsCancellingShareImport] = useState(false);
   const [cancelledIncomingShareId, setCancelledIncomingShareId] = useState<string | null>(null);
@@ -532,7 +571,7 @@ export function NewTaskDraftScreen(props: {
         if (!settingsSheetPresentation.isActiveRef.current) {
           promptInputRef.current?.focus();
         } else {
-          settingsSheetPresentation.restoreFocusAfterSave();
+          settingsSheetPresentation.requestFocusAfterDismiss();
         }
       });
     });
@@ -546,7 +585,7 @@ export function NewTaskDraftScreen(props: {
   }, [
     selectedProject,
     settingsSheetPresentation.isActiveRef,
-    settingsSheetPresentation.restoreFocusAfterSave,
+    settingsSheetPresentation.requestFocusAfterDismiss,
   ]);
 
   const environmentMenuActions = useMemo(
@@ -957,21 +996,6 @@ export function NewTaskDraftScreen(props: {
     </>
   );
 
-  const settingsSheet = (
-    <ContainedThreadSettingsSheet
-      visible={settingsSheetPresentation.isVisible}
-      onClose={settingsSheetPresentation.close}
-      onDismissed={settingsSheetPresentation.onDismissed}
-      providerGroups={flow.providerGroups}
-      selectedModel={flow.selectedModel}
-      onSelectModel={(option) => flow.setSelectedModelKey(option.key, option.selection.options)}
-      optionDescriptors={providerOptionDescriptors}
-      onUpdateOptionSelections={flow.setSelectedModelOptions}
-      runtimeMode={flow.runtimeMode}
-      onUpdateRuntimeMode={flow.setRuntimeMode}
-    />
-  );
-
   const startButton = (
     <ComposerToolbarButton
       accessibilityLabel={
@@ -1076,7 +1100,6 @@ export function NewTaskDraftScreen(props: {
             ) : null}
           </View>
         </KeyboardStickyView>
-        {settingsSheet}
       </View>
     );
   }
@@ -1110,7 +1133,6 @@ export function NewTaskDraftScreen(props: {
           </ComposerToolbarRow>
         </View>
       </KeyboardAvoidingView>
-      {settingsSheet}
     </View>
   );
 }
