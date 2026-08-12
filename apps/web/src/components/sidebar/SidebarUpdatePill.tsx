@@ -1,5 +1,5 @@
 import { DownloadIcon, RotateCwIcon, TriangleAlertIcon } from "lucide-react";
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { isElectron } from "../../env";
 import { cn } from "../../lib/utils";
 import { ensureLocalApi } from "../../localApi";
@@ -21,7 +21,10 @@ import { Alert, AlertDescription, AlertTitle } from "../ui/alert";
 import { Separator } from "../ui/separator";
 import { SidebarMenuItem } from "../ui/sidebar";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
-import { DesktopUpdateCheckIcon } from "./DesktopUpdateCheckIcon";
+import {
+  DesktopUpdateCheckIcon,
+  shouldContinueDesktopUpdateCheckAnimation,
+} from "./DesktopUpdateCheckIcon";
 
 function keyReleaseNoteItems(items: ReadonlyArray<string>) {
   const occurrences = new Map<string, number>();
@@ -111,7 +114,11 @@ export function SidebarUpdatePill() {
 function SidebarUpdateControl() {
   const state = useDesktopUpdateState();
   const [isActionPending, setIsActionPending] = useState(false);
-  const [checkAnimationKey, setCheckAnimationKey] = useState(0);
+  const [isCheckIconAnimating, setIsCheckIconAnimating] = useState(false);
+
+  useEffect(() => {
+    if (state?.status === "checking") setIsCheckIconAnimating(true);
+  }, [state?.status]);
 
   const action = state ? resolveDesktopUpdateButtonAction(state) : "none";
   const isDownloading = state?.status === "downloading";
@@ -211,7 +218,7 @@ function SidebarUpdateControl() {
       return;
     }
 
-    setCheckAnimationKey((key) => key + 1);
+    setIsCheckIconAnimating(true);
     void bridge
       .checkForUpdate()
       .then((result) => {
@@ -237,6 +244,12 @@ function SidebarUpdateControl() {
       .finally(() => setIsActionPending(false));
   }, [action, disabled, isActionPending, state]);
 
+  const handleCheckAnimationIteration = useCallback(() => {
+    setIsCheckIconAnimating(
+      shouldContinueDesktopUpdateCheckAnimation({ isChecking: state?.status === "checking" }),
+    );
+  }, [state?.status]);
+
   return (
     <SidebarMenuItem className="ml-auto shrink-0">
       <Tooltip>
@@ -261,8 +274,8 @@ function SidebarUpdateControl() {
                 <DownloadIcon className="size-4" />
               ) : (
                 <DesktopUpdateCheckIcon
-                  key={checkAnimationKey}
-                  isAnimating={checkAnimationKey > 0 || state?.status === "checking"}
+                  isAnimating={isCheckIconAnimating}
+                  onAnimationIteration={handleCheckAnimationIteration}
                 />
               )}
             </button>
