@@ -3,6 +3,10 @@ import type { AnimationEventHandler } from "react";
 
 import { cn } from "../../lib/utils";
 
+export function nextDesktopUpdateCheckAnimationKey(key: number) {
+  return key + 1;
+}
+
 export function shouldContinueDesktopUpdateCheckAnimation({
   isChecking,
 }: {

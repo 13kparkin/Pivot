@@ -23,6 +23,7 @@ import { SidebarMenuItem } from "../ui/sidebar";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import {
   DesktopUpdateCheckIcon,
+  nextDesktopUpdateCheckAnimationKey,
   shouldContinueDesktopUpdateCheckAnimation,
 } from "./DesktopUpdateCheckIcon";
 
@@ -114,6 +115,7 @@ export function SidebarUpdatePill() {
 function SidebarUpdateControl() {
   const state = useDesktopUpdateState();
   const [isActionPending, setIsActionPending] = useState(false);
+  const [checkAnimationKey, setCheckAnimationKey] = useState(0);
   const [isCheckIconAnimating, setIsCheckIconAnimating] = useState(false);
 
   useEffect(() => {
@@ -219,6 +221,7 @@ function SidebarUpdateControl() {
     }
 
     setIsCheckIconAnimating(true);
+    setCheckAnimationKey(nextDesktopUpdateCheckAnimationKey);
     void bridge
       .checkForUpdate()
       .then((result) => {
@@ -274,6 +277,7 @@ function SidebarUpdateControl() {
                 <DownloadIcon className="size-4" />
               ) : (
                 <DesktopUpdateCheckIcon
+                  key={checkAnimationKey}
                   isAnimating={isCheckIconAnimating}
                   onAnimationIteration={handleCheckAnimationIteration}
                 />

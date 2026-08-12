@@ -3,6 +3,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   DesktopUpdateCheckIcon,
+  nextDesktopUpdateCheckAnimationKey,
   shouldContinueDesktopUpdateCheckAnimation,
 } from "./DesktopUpdateCheckIcon";
 
@@ -33,5 +34,9 @@ describe("DesktopUpdateCheckIcon", () => {
         isChecking: false,
       }),
     ).toBe(false);
+  });
+
+  it("restarts the animation for each manual check", () => {
+    expect(nextDesktopUpdateCheckAnimationKey(2)).toBe(3);
   });
 });
