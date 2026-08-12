@@ -2124,15 +2124,6 @@ const stopRowToggle = (e: { stopPropagation: () => void }) => e.stopPropagation(
  * only roster. Freezes to past tense when every member settles. Static dot,
  * no animation.
  */
-export const AGENT_SPAWN_CTA_CLASS_NAME =
-  "@container/agent-spawn rounded-2xl border border-border/70 bg-secondary p-2 dark:border-transparent dark:bg-input/32";
-
-export const AGENT_SPAWN_CTA_TRIGGER_CLASS_NAME =
-  "group flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden rounded-lg px-1 py-1.5 text-left transition-colors hover:bg-accent/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring";
-
-export const resolveAgentSpawnActionLabel = (live: boolean) =>
-  live ? "Open agents" : "View agents";
-
 const AgentSpawnCtaRow = memo(function AgentSpawnCtaRow(props: { workEntry: TimelineWorkEntry }) {
   const { workEntry } = props;
   const { agentPanelModel, onOpenAgents } = use(TimelineRowCtx);
@@ -2197,12 +2188,16 @@ const AgentSpawnCtaRow = memo(function AgentSpawnCtaRow(props: { workEntry: Time
       ? `${failed} failed`
       : "✓ completed";
 
-  const actionLabel = resolveAgentSpawnActionLabel(live);
+  const actionLabel = live ? "Open agents" : "View agents";
 
   return (
-    <div className={AGENT_SPAWN_CTA_CLASS_NAME}>
+    <div className="@container/agent-spawn rounded-2xl border border-border/70 bg-secondary p-2 dark:border-transparent dark:bg-input/32">
       <div className="flex items-center justify-between gap-2 rounded-xl px-1">
-        <button type="button" onClick={onOpenAgents} className={AGENT_SPAWN_CTA_TRIGGER_CLASS_NAME}>
+        <button
+          type="button"
+          onClick={onOpenAgents}
+          className="group flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden rounded-lg px-1 py-1.5 text-left transition-colors hover:bg-accent/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        >
           <span className="flex min-w-0 shrink-0 items-center gap-1.5 whitespace-nowrap font-medium text-foreground text-xs leading-4">
             <span aria-hidden className={cn("size-1.5 shrink-0 rounded-full", dotClass)} />
             <WorkEntryIconSvg name="bot" className="size-3.5 shrink-0 text-muted-foreground" />
