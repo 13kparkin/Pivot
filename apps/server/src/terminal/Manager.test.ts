@@ -24,6 +24,7 @@ import * as Ref from "effect/Ref";
 import * as Schedule from "effect/Schedule";
 import * as Scope from "effect/Scope";
 import * as TestClock from "effect/testing/TestClock";
+import * as ChildProcessSpawner from "effect/unstable/process/ChildProcessSpawner";
 import { expect } from "vite-plus/test";
 
 import * as ProcessRunner from "../processRunner.ts";
@@ -950,6 +951,52 @@ it.layer(
         Effect.sync(() => checks > 0),
         "1200 millis",
       );
+    }),
+  );
+
+  it.effect("uses absolute utility paths for macOS subprocess polling", () =>
+    Effect.gen(function* () {
+      const calls: ProcessRunner.ProcessRunInput[] = [];
+      const runner = ProcessRunner.ProcessRunner.of({
+        run: (input) => {
+          calls.push(input);
+          const stdout =
+            input.args[0] === "-P"
+              ? "10001\n"
+              : input.args[0] === "-eo"
+                ? "10001 9000\n"
+                : input.args.includes("comm=")
+                  ? ""
+                  : "/usr/bin/node\n";
+          return Effect.succeed({
+            stdout,
+            stderr: "",
+            code: ChildProcessSpawner.ExitCode(0),
+            timedOut: false,
+            stdoutTruncated: false,
+            stderrTruncated: false,
+            stdoutInvalidUtf8: false,
+            stderrInvalidUtf8: false,
+          });
+        },
+      });
+
+      const { manager } = yield* createManager(5, { subprocessPollIntervalMs: 20 }).pipe(
+        Effect.provideService(ProcessRunner.ProcessRunner, runner),
+        Effect.provide(withHostPlatform("darwin")),
+      );
+      yield* manager.open(openInput());
+      yield* waitFor(
+        Effect.sync(() => calls.length >= 4),
+        "1200 millis",
+      );
+
+      expect(calls.slice(0, 4).map(({ command }) => command)).toEqual([
+        "/usr/bin/pgrep",
+        "/bin/ps",
+        "/bin/ps",
+        "/bin/ps",
+      ]);
     }),
   );
 

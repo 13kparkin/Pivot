@@ -703,9 +703,11 @@ const posixInspectSubprocess = Effect.fn("terminal.posixInspectSubprocess")(func
   ProcessRunner.ProcessRunner
 > {
   const processRunner = yield* ProcessRunner.ProcessRunner;
+  const pgrepCommand = platform === "darwin" ? "/usr/bin/pgrep" : "pgrep";
+  const psCommand = platform === "darwin" ? "/bin/ps" : "ps";
   const runPgrep = processRunner
     .run({
-      command: "pgrep",
+      command: pgrepCommand,
       args: ["-P", String(terminalPid)],
       timeout: "1 second",
       maxOutputBytes: 32_768,
@@ -725,7 +727,7 @@ const posixInspectSubprocess = Effect.fn("terminal.posixInspectSubprocess")(func
 
   const runPs = processRunner
     .run({
-      command: "ps",
+      command: psCommand,
       args: ["-eo", "pid=,ppid="],
       timeout: "1 second",
       maxOutputBytes: 262_144,
@@ -776,7 +778,7 @@ const posixInspectSubprocess = Effect.fn("terminal.posixInspectSubprocess")(func
   }
 
   const runComm = processRunner.run({
-    command: "ps",
+    command: psCommand,
     args: ["-p", String(childPid), "-o", "comm="],
     timeout: "1 second",
     maxOutputBytes: 8_192,
@@ -792,7 +794,7 @@ const posixInspectSubprocess = Effect.fn("terminal.posixInspectSubprocess")(func
 
   if (!rawComm || rawComm.length === 0) {
     const runArgs = processRunner.run({
-      command: "ps",
+      command: psCommand,
       args: ["-p", String(childPid), "-o", "args="],
       timeout: "1 second",
       maxOutputBytes: 16_384,
