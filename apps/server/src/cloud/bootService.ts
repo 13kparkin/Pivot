@@ -106,8 +106,8 @@ export function renderBootServicePlist(
   // ExitTimeOut 90 matches systemd's default TimeoutStopSec. A plain stop
   // completes within the launcher's 5s child grace, but a stop that queues
   // behind an in-flight update transition can take much longer; launchd's
-  // default 20s would SIGKILL the launcher (and, with it, the process group)
-  // mid-handoff.
+  // system-defined default (5s on current macOS) would SIGKILL the launcher
+  // (and, with it, the process group) mid-handoff.
   // ProcessType Interactive opts out of background-job resource throttling.
   // AbandonProcessGroup stays at its default (false): launchd reaps leftover
   // process-group members only when the launcher itself exits — the analog of
@@ -158,9 +158,23 @@ export interface BootServiceStep {
   readonly step: string;
   readonly command: string;
   readonly args: ReadonlyArray<string>;
-  /** Non-zero exit is logged and ignored: idempotent domain operations. */
+  /**
+   * Non-zero exit is logged and ignored. Reserved for steps whose common
+   * failures (not loaded, already enabled) leave a state a later strict step
+   * either tolerates or fails loudly on.
+   */
   readonly optional?: boolean;
+  /** Override the ProcessRunner default (60s) for steps that block longer. */
+  readonly timeout?: Duration.Input;
 }
+
+/**
+ * Stop commands block until the service manager gives up: 90s by default for
+ * systemd's TimeoutStopSec, and ExitTimeOut=90 in the rendered plist. This
+ * must stay above both, or the runner cancels the stop mid-shutdown and the
+ * next step races a still-loaded service.
+ */
+const STOP_STEP_TIMEOUT = Duration.seconds(120);
 
 /**
  * Platform service-manager integration as data: paths, a pure renderer, and
@@ -203,6 +217,7 @@ export function systemdManager(input: {
         step: "stopping the installed service",
         command: "systemctl",
         args: ["--user", "stop", BOOT_SERVICE_UNIT_FILE],
+        timeout: STOP_STEP_TIMEOUT,
       },
     ],
     activate: [
@@ -236,6 +251,7 @@ export function systemdManager(input: {
         step: "stopping the service",
         command: "systemctl",
         args: ["--user", "disable", "--now", BOOT_SERVICE_UNIT_FILE],
+        timeout: STOP_STEP_TIMEOUT,
       },
     ],
     finalize: [
@@ -278,6 +294,7 @@ export function launchdManager(input: {
         command: "launchctl",
         args: ["bootout", serviceTarget],
         optional: true,
+        timeout: STOP_STEP_TIMEOUT,
       },
     ],
     activate: [
@@ -304,12 +321,15 @@ export function launchdManager(input: {
     ],
     // No `launchctl disable` here: a persisted override would sabotage a
     // later reinstall. Removing the plist is what stops the next login load.
+    // A bootout that fails for a reason other than "not loaded" leaves the
+    // job running until logout; the failure is in the boot-service log.
     deactivate: [
       {
         step: "stopping the service",
         command: "launchctl",
         args: ["bootout", serviceTarget],
         optional: true,
+        timeout: STOP_STEP_TIMEOUT,
       },
     ],
     finalize: [],
@@ -492,7 +512,12 @@ export const make = Effect.fn("cloud.boot_service.make")(function* (input: {
     Effect.forEach(
       steps,
       (entry) => {
-        const run = runStep(entry.step, entry.command, entry.args);
+        const run = runStep(
+          entry.step,
+          entry.command,
+          entry.args,
+          entry.timeout === undefined ? undefined : { timeout: entry.timeout },
+        );
         // runStep's tapError already appends the failure to the log, so an
         // ignored optional step still leaves a trace.
         return entry.optional === true ? run.pipe(Effect.ignore) : run.pipe(Effect.asVoid);

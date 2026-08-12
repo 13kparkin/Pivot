@@ -58,6 +58,9 @@ Two more macOS notes:
   attributed to a bare `node` process, or deny access without a prompt. If agent work fails to
   read those folders, grant Full Disk Access to the node binary listed in the launch agent's
   `ProgramArguments`.
+- The agent appears under System Settings → General → Login Items. If it was switched off there,
+  or disabled with `launchctl disable`, macOS will not start it at login until you switch it back
+  on.
 
 **Windows** is not supported yet.
 

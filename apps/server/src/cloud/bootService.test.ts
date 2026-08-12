@@ -7,6 +7,7 @@ import {
   HostProcessUserId,
 } from "@t3tools/shared/hostProcess";
 import * as ConfigProvider from "effect/ConfigProvider";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -70,6 +71,7 @@ it("restarts the launch agent on the systemd cadence", () => {
   expect(plist).toContain("<key>RunAtLoad</key>\n  <true/>");
   expect(plist).toContain("<key>KeepAlive</key>\n  <true/>");
   expect(plist).toContain("<key>ThrottleInterval</key>\n  <integer>5</integer>");
+  expect(plist).toContain("<key>ExitTimeOut</key>\n  <integer>90</integer>");
 });
 
 it("appends both stdio streams to the boot service log", () => {
@@ -113,12 +115,14 @@ const makeHarness = Effect.fn("test.make_boot_service_harness")(function* (
   yield* fs.writeFileString(runtime.sentinelPath, "1.2.3\n");
 
   const commands: string[] = [];
+  const timeouts = new Map<string, unknown>();
   const control: { failCommand: string | undefined } = { failCommand: undefined };
   const runner = ProcessRunner.ProcessRunner.of({
     run: (input) =>
       Effect.sync(() => {
         const command = `${input.command} ${input.args.join(" ")}`;
         commands.push(command);
+        timeouts.set(command, input.timeout);
         return {
           stdout: input.args[1] === "--version" ? "t3 v1.2.3\n" : "",
           stderr: "",
@@ -151,13 +155,13 @@ const makeHarness = Effect.fn("test.make_boot_service_harness")(function* (
       ),
     ),
   );
-  return { service, fs, statePath, commands, control };
+  return { service, fs, statePath, commands, timeouts, control };
 });
 
 it.layer(NodeServices.layer)("boot service install", (it) => {
   it.effect("installs, reports current state, and uninstalls", () =>
     Effect.gen(function* () {
-      const { service, fs, statePath, commands } = yield* makeHarness();
+      const { service, fs, statePath, commands, timeouts } = yield* makeHarness();
       const plan = yield* service.install;
 
       expect(parseServiceState(yield* fs.readFileString(statePath))).toEqual({
@@ -183,6 +187,11 @@ it.layer(NodeServices.layer)("boot service install", (it) => {
       expect(yield* service.uninstall).toBe(true);
       expect((yield* service.status).installed).toBe(false);
       expect(commands.some((command) => command.startsWith("npm "))).toBe(false);
+      // The stop can block up to systemd's 90s TimeoutStopSec; the runner's
+      // 60s default would cancel it mid-shutdown.
+      expect(timeouts.get("systemctl --user disable --now t3code.service")).toEqual(
+        Duration.seconds(120),
+      );
     }),
   );
 
@@ -251,7 +260,7 @@ it.layer(NodeServices.layer)("boot service install", (it) => {
 
   it.effect("installs, reports current state, and uninstalls on macOS", () =>
     Effect.gen(function* () {
-      const { service, fs, statePath, commands } = yield* makeHarness("darwin");
+      const { service, fs, statePath, commands, timeouts } = yield* makeHarness("darwin");
       const plan = yield* service.install;
 
       expect(plan.unitPath.endsWith("Library/LaunchAgents/com.t3tools.t3code.service.plist")).toBe(
@@ -267,6 +276,11 @@ it.layer(NodeServices.layer)("boot service install", (it) => {
       expect((yield* service.status).installed).toBe(false);
       expect(commands.some((command) => command.startsWith("npm "))).toBe(false);
       expect(commands.some((command) => command.startsWith("systemctl "))).toBe(false);
+      // A bootout can block up to the plist's 90s ExitTimeOut; the runner's
+      // 60s default would cancel it and let bootstrap race a loaded job.
+      expect(timeouts.get("launchctl bootout gui/501/com.t3tools.t3code.service")).toEqual(
+        Duration.seconds(120),
+      );
     }),
   );
 
