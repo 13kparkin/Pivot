@@ -2124,6 +2124,9 @@ const stopRowToggle = (e: { stopPropagation: () => void }) => e.stopPropagation(
  * only roster. Freezes to past tense when every member settles. Static dot,
  * no animation.
  */
+export const AGENT_SPAWN_CTA_CLASS_NAME =
+  "flex w-full items-center gap-2 rounded-md border border-border/60 bg-card/50 px-2.5 py-1.5 text-left text-[13px] transition hover:bg-accent/50";
+
 const AgentSpawnCtaRow = memo(function AgentSpawnCtaRow(props: { workEntry: TimelineWorkEntry }) {
   const { workEntry } = props;
   const { agentPanelModel, onOpenAgents } = use(TimelineRowCtx);
@@ -2189,11 +2192,7 @@ const AgentSpawnCtaRow = memo(function AgentSpawnCtaRow(props: { workEntry: Time
       : "✓ completed";
 
   return (
-    <button
-      type="button"
-      onClick={onOpenAgents}
-      className="-mx-1 flex w-full items-center gap-2 rounded-md border border-border/60 bg-card/50 px-2.5 py-1.5 text-left text-[13px] transition hover:bg-accent/50"
-    >
+    <button type="button" onClick={onOpenAgents} className={AGENT_SPAWN_CTA_CLASS_NAME}>
       <span aria-hidden className={cn("size-1.5 shrink-0 rounded-full", dotClass)} />
       <WorkEntryIconSvg name="bot" className="size-3.5 shrink-0 text-muted-foreground" />
       <span className="min-w-0 truncate">
