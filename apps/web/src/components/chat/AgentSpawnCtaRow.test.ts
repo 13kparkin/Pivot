@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { AGENT_SPAWN_CTA_CLASS_NAME, AGENT_SPAWN_CTA_TRIGGER_CLASS_NAME } from "./MessagesTimeline";
+import {
+  AGENT_SPAWN_CTA_CLASS_NAME,
+  AGENT_SPAWN_CTA_TRIGGER_CLASS_NAME,
+  resolveAgentSpawnActionLabel,
+} from "./MessagesTimeline";
 
 describe("AgentSpawnCtaRow", () => {
   it("uses the changed-files card shell", () => {
@@ -14,5 +18,10 @@ describe("AgentSpawnCtaRow", () => {
     expect(AGENT_SPAWN_CTA_TRIGGER_CLASS_NAME).toContain("min-w-0");
     expect(AGENT_SPAWN_CTA_TRIGGER_CLASS_NAME).toContain("flex-1");
     expect(AGENT_SPAWN_CTA_TRIGGER_CLASS_NAME).toContain("rounded-lg");
+  });
+
+  it("names the agents action when its visible label is hidden", () => {
+    expect(resolveAgentSpawnActionLabel(true)).toBe("Open agents");
+    expect(resolveAgentSpawnActionLabel(false)).toBe("View agents");
   });
 });

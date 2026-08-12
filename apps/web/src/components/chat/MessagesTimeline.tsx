@@ -2130,6 +2130,9 @@ export const AGENT_SPAWN_CTA_CLASS_NAME =
 export const AGENT_SPAWN_CTA_TRIGGER_CLASS_NAME =
   "group flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden rounded-lg px-1 py-1.5 text-left transition-colors hover:bg-accent/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring";
 
+export const resolveAgentSpawnActionLabel = (live: boolean) =>
+  live ? "Open agents" : "View agents";
+
 const AgentSpawnCtaRow = memo(function AgentSpawnCtaRow(props: { workEntry: TimelineWorkEntry }) {
   const { workEntry } = props;
   const { agentPanelModel, onOpenAgents } = use(TimelineRowCtx);
@@ -2194,6 +2197,8 @@ const AgentSpawnCtaRow = memo(function AgentSpawnCtaRow(props: { workEntry: Time
       ? `${failed} failed`
       : "✓ completed";
 
+  const actionLabel = resolveAgentSpawnActionLabel(live);
+
   return (
     <div className={AGENT_SPAWN_CTA_CLASS_NAME}>
       <div className="flex items-center justify-between gap-2 rounded-xl px-1">
@@ -2217,11 +2222,15 @@ const AgentSpawnCtaRow = memo(function AgentSpawnCtaRow(props: { workEntry: Time
             {totalTokens > 0 ? ` · Σ ${formatSubagentTokenCount(totalTokens)}` : ""}
           </span>
         </button>
-        <Button type="button" size="xs" variant="outline" onClick={onOpenAgents}>
+        <Button
+          type="button"
+          size="xs"
+          variant="outline"
+          aria-label={actionLabel}
+          onClick={onOpenAgents}
+        >
           <BotIcon className="size-3" />
-          <span className="hidden @[24rem]/agent-spawn:inline">
-            {live ? "Open agents" : "View agents"}
-          </span>
+          <span className="hidden @[24rem]/agent-spawn:inline">{actionLabel}</span>
         </Button>
       </div>
     </div>
