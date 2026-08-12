@@ -12,6 +12,7 @@ import {
   resolveCursorAcpConfigUpdates,
 } from "../Layers/CursorProvider.ts";
 import * as AcpSessionRuntime from "./AcpSessionRuntime.ts";
+import { discoverCursorPluginDirectories } from "./CursorMcpServers.ts";
 
 type CursorAcpRuntimeCursorSettings = Pick<CursorSettings, "apiEndpoint" | "binaryPath">;
 
@@ -46,6 +47,20 @@ export function buildCursorAcpSpawnInput(
   };
 }
 
+export function addCursorPluginDirectories(
+  spawn: AcpSessionRuntime.AcpSpawnInput,
+  pluginDirectories: ReadonlyArray<string>,
+): AcpSessionRuntime.AcpSpawnInput {
+  return {
+    ...spawn,
+    args: [
+      ...spawn.args.slice(0, -1),
+      ...pluginDirectories.flatMap((path) => ["--plugin-dir", path]),
+      ...spawn.args.slice(-1),
+    ],
+  };
+}
+
 export const makeCursorAcpRuntime = (
   input: CursorAcpRuntimeInput,
 ): Effect.Effect<
@@ -54,10 +69,14 @@ export const makeCursorAcpRuntime = (
   Crypto.Crypto | Scope.Scope
 > =>
   Effect.gen(function* () {
+    const pluginDirectories = yield* discoverCursorPluginDirectories(
+      input.environment === undefined ? {} : { environment: input.environment },
+    );
+    const spawn = buildCursorAcpSpawnInput(input.cursorSettings, input.cwd, input.environment);
     const acpContext = yield* Layer.build(
       AcpSessionRuntime.layer({
         ...input,
-        spawn: buildCursorAcpSpawnInput(input.cursorSettings, input.cwd, input.environment),
+        spawn: addCursorPluginDirectories(spawn, pluginDirectories),
         authMethodId: "cursor_login",
         clientCapabilities: CURSOR_PARAMETERIZED_MODEL_PICKER_CAPABILITIES,
       }).pipe(
