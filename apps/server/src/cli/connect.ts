@@ -36,6 +36,7 @@ import * as CliState from "../cloud/CliState.ts";
 import * as CliTokenManager from "../cloud/CliTokenManager.ts";
 import {
   CLOUD_LINKED_USER_ID,
+  isAgentActivityPublishingEnabledValue,
   PUBLISH_AGENT_ACTIVITY_SECRET,
   RELAY_URL_SECRET,
 } from "../cloud/config.ts";
@@ -142,7 +143,7 @@ function stringToBytes(value: string): Uint8Array {
 }
 
 export function isPublishAgentActivityEnabledValue(value: string | null): boolean {
-  return value === "true";
+  return isAgentActivityPublishingEnabledValue(value);
 }
 
 interface CloudCliStatus {
