@@ -1,4 +1,4 @@
-import { DownloadIcon, RefreshCwIcon, RotateCwIcon, TriangleAlertIcon } from "lucide-react";
+import { DownloadIcon, RotateCwIcon, TriangleAlertIcon } from "lucide-react";
 import { useCallback, useState } from "react";
 import { isElectron } from "../../env";
 import { cn } from "../../lib/utils";
@@ -21,6 +21,7 @@ import { Alert, AlertDescription, AlertTitle } from "../ui/alert";
 import { Separator } from "../ui/separator";
 import { SidebarMenuItem } from "../ui/sidebar";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
+import { DesktopUpdateCheckIcon } from "./DesktopUpdateCheckIcon";
 
 function keyReleaseNoteItems(items: ReadonlyArray<string>) {
   const occurrences = new Map<string, number>();
@@ -110,6 +111,7 @@ export function SidebarUpdatePill() {
 function SidebarUpdateControl() {
   const state = useDesktopUpdateState();
   const [isActionPending, setIsActionPending] = useState(false);
+  const [checkAnimationKey, setCheckAnimationKey] = useState(0);
 
   const action = state ? resolveDesktopUpdateButtonAction(state) : "none";
   const isDownloading = state?.status === "downloading";
@@ -209,6 +211,7 @@ function SidebarUpdateControl() {
       return;
     }
 
+    setCheckAnimationKey((key) => key + 1);
     void bridge
       .checkForUpdate()
       .then((result) => {
@@ -257,8 +260,9 @@ function SidebarUpdateControl() {
               ) : isUpdateState ? (
                 <DownloadIcon className="size-4" />
               ) : (
-                <RefreshCwIcon
-                  className={cn("size-4", state?.status === "checking" && "animate-spin")}
+                <DesktopUpdateCheckIcon
+                  key={checkAnimationKey}
+                  isAnimating={checkAnimationKey > 0 || state?.status === "checking"}
                 />
               )}
             </button>

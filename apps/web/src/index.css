@@ -140,6 +140,7 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
 }
 
 @theme inline {
+  --animate-spin-once: spin 1s linear 1;
   --color-zinc-25: oklch(99.2% 0 0);
   --animate-skeleton: skeleton 2s infinite linear;
   /* Duty-cycled indicator animations: long holds with stepped ramps, so the
