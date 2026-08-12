@@ -3,6 +3,7 @@ import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as PlatformError from "effect/PlatformError";
 import * as Schema from "effect/Schema";
 
@@ -20,7 +21,21 @@ const isServerEnvironmentIdPersistenceError = Schema.is(
 );
 
 const makeServerEnvironmentLayer = (baseDir: string) =>
-  ServerEnvironment.layer.pipe(Layer.provide(ServerConfig.layerTest(process.cwd(), baseDir)));
+  ServerEnvironment.layer.pipe(
+    Layer.provide(ServerSecretStore.layer),
+    Layer.provide(ServerConfig.layerTest(process.cwd(), baseDir)),
+  );
+
+const emptySecretStoreLayer = Layer.succeed(
+  ServerSecretStore.ServerSecretStore,
+  ServerSecretStore.ServerSecretStore.of({
+    get: () => Effect.succeed(Option.none()),
+    set: () => Effect.void,
+    create: () => Effect.void,
+    getOrCreateRandom: () => Effect.succeed(new Uint8Array()),
+    remove: () => Effect.void,
+  }),
+);
 
 const makeServerConfig = Effect.fn(function* (baseDir: string) {
   const derivedPaths = yield* ServerConfig.deriveServerPaths(baseDir, undefined);
@@ -87,9 +102,9 @@ it.layer(NodeServices.layer)("ServerEnvironmentLive", (it) => {
         prefix: "t3-server-environment-publish-test-",
       });
       const testLayer = Layer.mergeAll(
-        makeServerEnvironmentLayer(baseDir),
-        ServerSecretStore.layer.pipe(Layer.provide(ServerConfig.layerTest(process.cwd(), baseDir))),
-      );
+        ServerEnvironment.layer.pipe(Layer.provide(ServerSecretStore.layer)),
+        ServerSecretStore.layer,
+      ).pipe(Layer.provide(ServerConfig.layerTest(process.cwd(), baseDir)));
 
       yield* Effect.gen(function* () {
         const secrets = yield* ServerSecretStore.ServerSecretStore;
@@ -105,8 +120,15 @@ it.layer(NodeServices.layer)("ServerEnvironmentLive", (it) => {
         const withoutLink = yield* serverEnvironment.getDescriptor;
         expect(withoutLink.capabilities.agentActivityPublishing).toBe(false);
 
-        yield* secrets.set(RELAY_URL_SECRET, encode("https://relay.example"));
+        // Empty credentials are as unconfigured as missing ones: the
+        // publisher's truthiness gate skips them, so the capability must not
+        // advertise publishing.
+        yield* secrets.set(RELAY_URL_SECRET, encode(""));
         yield* secrets.set(RELAY_ENVIRONMENT_CREDENTIAL_SECRET, encode("credential"));
+        const emptyUrl = yield* serverEnvironment.getDescriptor;
+        expect(emptyUrl.capabilities.agentActivityPublishing).toBe(false);
+
+        yield* secrets.set(RELAY_URL_SECRET, encode("https://relay.example"));
         const linked = yield* serverEnvironment.getDescriptor;
         expect(linked.capabilities.agentActivityPublishing).toBe(true);
 
@@ -150,11 +172,6 @@ it.layer(NodeServices.layer)("ServerEnvironmentLive", (it) => {
             writeAttempts.push(path);
             return Effect.fail(cause);
           },
-          // The secret store the environment layer builds prepares its
-          // directory on construction; only the environment-id operations
-          // above are meant to fail here.
-          makeDirectory: () => Effect.void,
-          chmod: () => Effect.void,
         });
 
         const error = yield* Effect.gen(function* () {
@@ -163,6 +180,7 @@ it.layer(NodeServices.layer)("ServerEnvironmentLive", (it) => {
         }).pipe(
           Effect.provide(
             ServerEnvironment.layer.pipe(
+              Layer.provide(emptySecretStoreLayer),
               Layer.provide(Layer.merge(ServerConfig.layer(serverConfig), failingFileSystemLayer)),
             ),
           ),

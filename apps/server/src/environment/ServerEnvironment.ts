@@ -170,9 +170,7 @@ export const make = Effect.gen(function* () {
 /**
  * ServerEnvironment is acquired from persisted filesystem and host-process
  * state. It intentionally has no fallback Layer.succeed value: callers must
- * provide the external platform services and a ServerConfig.
+ * provide the external platform services, a ServerConfig, and the
+ * ServerSecretStore backing the descriptor's publishing capability.
  */
-export const layer = Layer.effect(ServerEnvironment, make).pipe(
-  Layer.provide(ProcessRunner.layer),
-  Layer.provide(ServerSecretStore.layer),
-);
+export const layer = Layer.effect(ServerEnvironment, make).pipe(Layer.provide(ProcessRunner.layer));

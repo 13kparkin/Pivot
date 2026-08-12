@@ -46,9 +46,13 @@ export const readAgentActivityPublishingActive = (
       readSecretString(RELAY_URL_SECRET),
       readSecretString(RELAY_ENVIRONMENT_CREDENTIAL_SECRET),
     ]);
+    // Empty strings are as unconfigured as missing files: the publisher's
+    // truthiness gate skips them, so the capability must too.
     return (
       isAgentActivityPublishingEnabledValue(enabled) &&
       url !== null &&
-      environmentCredential !== null
+      url !== "" &&
+      environmentCredential !== null &&
+      environmentCredential !== ""
     );
   }).pipe(Effect.orElseSucceed(() => false));

@@ -448,7 +448,7 @@ const runCloudCommand = Effect.fn("cloud.cli.run_cloud_command")(function* <A, E
     ),
     RelayClient.layerCloudflared({ baseDir: config.baseDir }),
     EnvironmentAuth.runtimeLayer,
-    ServerEnvironment.layer,
+    ServerEnvironment.layer.pipe(Layer.provide(ServerSecretStore.layer)),
     bootServiceLayer(config),
     headlessRelayClientTracingLayer,
   ).pipe(
