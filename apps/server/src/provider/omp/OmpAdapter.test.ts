@@ -291,6 +291,59 @@ describe("OmpAdapter", () => {
     }),
   );
 
+  it.effect("surfaces command_output text from local slash prompts as assistant_text", () =>
+    Effect.gen(function* () {
+      const fake = new FakeOmpRpc();
+      fake.agentInvoked = undefined;
+      const adapter = new OmpAdapter(fake, testRandomUUID);
+      const eventsFiber = yield* collectUntilTurnCompleted(adapter.streamEvents).pipe(
+        Effect.forkChild,
+      );
+      yield* adapter.startSession(startInput);
+      yield* adapter.sendTurn({ threadId: THREAD_ID, input: "/jobs" });
+      yield* fake.offer(THREAD_ID, {
+        type: "command_output",
+        text: "No background jobs running.",
+      });
+      yield* fake.offer(THREAD_ID, { type: "prompt_result", id: "req_1", agentInvoked: false });
+      const events = yield* Fiber.join(eventsFiber);
+      NodeAssert.equal(
+        events.some(
+          (event) =>
+            event.type === "content.delta" &&
+            event.payload.streamKind === "assistant_text" &&
+            event.payload.delta === "No background jobs running.",
+        ),
+        true,
+      );
+      NodeAssert.equal(events.filter((event) => event.type === "turn.completed").length, 1);
+    }),
+  );
+
+  it.effect("ignores empty command_output text from local slash prompts", () =>
+    Effect.gen(function* () {
+      const fake = new FakeOmpRpc();
+      fake.agentInvoked = undefined;
+      const adapter = new OmpAdapter(fake, testRandomUUID);
+      const eventsFiber = yield* collectUntilTurnCompleted(adapter.streamEvents).pipe(
+        Effect.forkChild,
+      );
+      yield* adapter.startSession(startInput);
+      yield* adapter.sendTurn({ threadId: THREAD_ID, input: "/jobs" });
+      yield* fake.offer(THREAD_ID, { type: "command_output", text: "" });
+      yield* fake.offer(THREAD_ID, { type: "prompt_result", id: "req_1", agentInvoked: false });
+      const events = yield* Fiber.join(eventsFiber);
+      NodeAssert.equal(
+        events.some(
+          (event) =>
+            event.type === "content.delta" && event.payload.streamKind === "assistant_text",
+        ),
+        false,
+      );
+      NodeAssert.equal(events.filter((event) => event.type === "turn.completed").length, 1);
+    }),
+  );
+
   it.effect("does not emit empty assistant content for tool-only or empty deltas", () =>
     Effect.gen(function* () {
       const fake = new FakeOmpRpc();
