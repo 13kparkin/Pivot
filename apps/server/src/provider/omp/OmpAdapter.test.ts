@@ -1,0 +1,215 @@
+import * as NodeAssert from "node:assert/strict";
+
+import { it } from "@effect/vitest";
+import { type ProviderRuntimeEvent, ProviderDriverKind, ThreadId } from "@t3tools/contracts";
+import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
+import * as Queue from "effect/Queue";
+import * as Stream from "effect/Stream";
+import { describe } from "vite-plus/test";
+
+import { OmpAdapter } from "./OmpAdapter.ts";
+
+class FakeOmpRpc {
+  agentInvoked: boolean | undefined = true;
+  sessionFile = "/tmp/omp-session.jsonl";
+  readonly sent: Array<Record<string, unknown>> = [];
+  readonly frames = new Map<string, Queue.Queue<object>>();
+
+  ensureSession(input: {
+    readonly sessionKey: string;
+    readonly cwd: string;
+    readonly resumeCursor: string | null;
+  }) {
+    return Effect.gen({ self: this }, function* () {
+      if (!this.frames.has(input.sessionKey)) {
+        this.frames.set(input.sessionKey, yield* Queue.unbounded<object>());
+      }
+      return { sessionKey: input.sessionKey, sessionFile: this.sessionFile };
+    });
+  }
+
+  send(_sessionKey: string, command: Record<string, unknown>) {
+    this.sent.push(command);
+    return Effect.succeed({
+      type: "response",
+      success: true,
+      ...(this.agentInvoked === undefined ? {} : { data: { agentInvoked: this.agentInvoked } }),
+    });
+  }
+
+  streamFrames(sessionKey: string) {
+    const queue = this.frames.get(sessionKey);
+    if (!queue) {
+      return Stream.die(`no live omp session for ${sessionKey}`);
+    }
+    return Stream.fromQueue(queue);
+  }
+
+  dispose(_sessionKey: string) {
+    return Effect.void;
+  }
+
+  offer(sessionKey: string, frame: object) {
+    const queue = this.frames.get(sessionKey);
+    if (!queue) {
+      return Effect.die(`no live omp session for ${sessionKey}`);
+    }
+    return Queue.offer(queue, frame);
+  }
+}
+
+const THREAD_ID = ThreadId.make("thread-1");
+const PROVIDER = ProviderDriverKind.make("omp");
+
+const startInput = {
+  threadId: THREAD_ID,
+  provider: PROVIDER,
+  cwd: "/proj",
+  runtimeMode: "full-access" as const,
+};
+
+const collectUntilTurnCompleted = (stream: Stream.Stream<ProviderRuntimeEvent>) =>
+  Stream.runCollect(stream.pipe(Stream.takeUntil((event) => event.type === "turn.completed"))).pipe(
+    Effect.map((chunk) => Array.from(chunk)),
+  );
+
+describe("OmpAdapter", () => {
+  it.effect("completes a T3 turn on terminal agent_end", () =>
+    Effect.gen(function* () {
+      const fake = new FakeOmpRpc();
+      const adapter = new OmpAdapter(fake);
+      const eventsFiber = yield* collectUntilTurnCompleted(adapter.streamEvents).pipe(
+        Effect.forkChild,
+      );
+      yield* adapter.startSession(startInput);
+      yield* adapter.sendTurn({ threadId: THREAD_ID, input: "hi" });
+      yield* fake.offer(THREAD_ID, { type: "agent_end", messages: [], isTerminal: true });
+      const events = yield* Fiber.join(eventsFiber);
+      const completed = events.filter((event) => event.type === "turn.completed");
+      NodeAssert.equal(completed.length, 1);
+      NodeAssert.equal(completed[0]?.payload.state, "completed");
+      NodeAssert.equal(completed[0]?.threadId, THREAD_ID);
+      NodeAssert.equal(completed[0]?.provider, PROVIDER);
+    }),
+  );
+
+  it.effect("treats agent_end with omitted isTerminal as terminal", () =>
+    Effect.gen(function* () {
+      const fake = new FakeOmpRpc();
+      const adapter = new OmpAdapter(fake);
+      const eventsFiber = yield* collectUntilTurnCompleted(adapter.streamEvents).pipe(
+        Effect.forkChild,
+      );
+      yield* adapter.startSession(startInput);
+      yield* adapter.sendTurn({ threadId: THREAD_ID, input: "hi" });
+      yield* fake.offer(THREAD_ID, { type: "agent_end", messages: [] });
+      const events = yield* Fiber.join(eventsFiber);
+      NodeAssert.equal(events.filter((event) => event.type === "turn.completed").length, 1);
+    }),
+  );
+
+  it.effect("does not complete a T3 turn on nonterminal agent_end", () =>
+    Effect.gen(function* () {
+      const fake = new FakeOmpRpc();
+      const adapter = new OmpAdapter(fake);
+      const eventsFiber = yield* collectUntilTurnCompleted(adapter.streamEvents).pipe(
+        Effect.forkChild,
+      );
+      yield* adapter.startSession(startInput);
+      yield* adapter.sendTurn({ threadId: THREAD_ID, input: "hi" });
+      yield* fake.offer(THREAD_ID, { type: "agent_end", messages: [], isTerminal: false });
+      yield* fake.offer(THREAD_ID, {
+        type: "message_update",
+        assistantMessageEvent: { type: "text_delta", delta: "hi" },
+        message: { role: "assistant", content: [] },
+      });
+      yield* fake.offer(THREAD_ID, { type: "agent_end", messages: [], isTerminal: true });
+      const events = yield* Fiber.join(eventsFiber);
+      NodeAssert.equal(events.filter((event) => event.type === "turn.completed").length, 1);
+      NodeAssert.equal(
+        events.some(
+          (event) =>
+            event.type === "content.delta" &&
+            event.payload.streamKind === "assistant_text" &&
+            event.payload.delta === "hi",
+        ),
+        true,
+      );
+    }),
+  );
+
+  it.effect("completes a local-only prompt when agentInvoked is false", () =>
+    Effect.gen(function* () {
+      const fake = new FakeOmpRpc();
+      fake.agentInvoked = false;
+      const adapter = new OmpAdapter(fake);
+      const eventsFiber = yield* collectUntilTurnCompleted(adapter.streamEvents).pipe(
+        Effect.forkChild,
+      );
+      yield* adapter.startSession(startInput);
+      const result = yield* adapter.sendTurn({ threadId: THREAD_ID, input: "/help" });
+      const events = yield* Fiber.join(eventsFiber);
+      NodeAssert.equal(result.threadId, THREAD_ID);
+      NodeAssert.equal(result.resumeCursor, "/tmp/omp-session.jsonl");
+      NodeAssert.equal(events.filter((event) => event.type === "turn.completed").length, 1);
+      NodeAssert.equal(
+        events.some((event) => event.type === "item.started"),
+        false,
+      );
+    }),
+  );
+
+  it.effect("completes a local-only prompt from a later prompt_result frame", () =>
+    Effect.gen(function* () {
+      const fake = new FakeOmpRpc();
+      fake.agentInvoked = undefined;
+      const adapter = new OmpAdapter(fake);
+      const eventsFiber = yield* collectUntilTurnCompleted(adapter.streamEvents).pipe(
+        Effect.forkChild,
+      );
+      yield* adapter.startSession(startInput);
+      yield* adapter.sendTurn({ threadId: THREAD_ID, input: "/help" });
+      yield* fake.offer(THREAD_ID, { type: "prompt_result", id: "req_1", agentInvoked: false });
+      const events = yield* Fiber.join(eventsFiber);
+      NodeAssert.equal(events.filter((event) => event.type === "turn.completed").length, 1);
+    }),
+  );
+
+  it.effect("does not emit empty assistant content for tool-only or empty deltas", () =>
+    Effect.gen(function* () {
+      const fake = new FakeOmpRpc();
+      const adapter = new OmpAdapter(fake);
+      const eventsFiber = yield* collectUntilTurnCompleted(adapter.streamEvents).pipe(
+        Effect.forkChild,
+      );
+      yield* adapter.startSession(startInput);
+      yield* adapter.sendTurn({ threadId: THREAD_ID, input: "run tools" });
+      yield* fake.offer(THREAD_ID, {
+        type: "message_update",
+        assistantMessageEvent: { type: "toolcall_start" },
+        message: { role: "assistant", content: [] },
+      });
+      yield* fake.offer(THREAD_ID, {
+        type: "message_update",
+        assistantMessageEvent: { type: "text_delta", delta: "" },
+        message: { role: "assistant", content: [] },
+      });
+      yield* fake.offer(THREAD_ID, { type: "agent_end", messages: [], isTerminal: true });
+      const events = yield* Fiber.join(eventsFiber);
+      NodeAssert.equal(
+        events.some((event) => event.type === "content.delta"),
+        false,
+      );
+      NodeAssert.equal(
+        events.some(
+          (event) =>
+            (event.type === "item.started" || event.type === "item.completed") &&
+            event.payload.itemType === "assistant_message",
+        ),
+        false,
+      );
+      NodeAssert.equal(events.filter((event) => event.type === "turn.completed").length, 1);
+    }),
+  );
+});
