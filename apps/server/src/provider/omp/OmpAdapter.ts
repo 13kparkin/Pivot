@@ -92,7 +92,7 @@ interface TrackedOmpToolCall {
   readonly intent: string | undefined;
 }
 
-type PendingExtensionUiKind = "confirm" | "select" | "input" | "editor";
+type PendingExtensionUiKind = "confirm" | "select" | "input" | "editor" | "host_uri";
 
 interface PendingExtensionUiRequest {
   readonly kind: PendingExtensionUiKind;
@@ -238,6 +238,7 @@ export class OmpAdapter {
       if (session.interactionMode !== "plan") {
         yield* this.#applyModelSelection(input.threadId, input.modelSelection?.model);
       }
+      yield* this.#applyTurnOptions(input.threadId, input.modelSelection?.options);
       yield* this.#emit({
         type: "turn.started",
         threadId: input.threadId,
@@ -360,7 +361,7 @@ export class OmpAdapter {
     });
   }
 
-  public rollbackThread(threadId: ThreadId, _numTurns: number) {
+  public setThinkingLevel(threadId: ThreadId, level: string) {
     return Effect.gen({ self: this }, function* () {
       if (!this.#sessions.has(threadId)) {
         return yield* new ProviderAdapterSessionNotFoundError({
@@ -368,11 +369,102 @@ export class OmpAdapter {
           threadId,
         });
       }
-      return yield* new ProviderAdapterRequestError({
-        provider: PROVIDER,
-        method: "rollbackThread",
-        detail: "unsupported: omp branch rollback is not wired yet",
+      yield* this.#send(threadId, { type: "set_thinking_level", level });
+    });
+  }
+
+  public setFastMode(threadId: ThreadId, enabled: boolean) {
+    return Effect.gen({ self: this }, function* () {
+      if (!this.#sessions.has(threadId)) {
+        return yield* new ProviderAdapterSessionNotFoundError({
+          provider: PROVIDER,
+          threadId,
+        });
+      }
+      yield* this.#send(threadId, { type: "set_fast_mode", enabled });
+    });
+  }
+
+  public setAutoCompaction(threadId: ThreadId, enabled: boolean) {
+    return Effect.gen({ self: this }, function* () {
+      if (!this.#sessions.has(threadId)) {
+        return yield* new ProviderAdapterSessionNotFoundError({
+          provider: PROVIDER,
+          threadId,
+        });
+      }
+      yield* this.#send(threadId, { type: "set_auto_compaction", enabled });
+    });
+  }
+
+  public setAutoRetry(threadId: ThreadId, enabled: boolean) {
+    return Effect.gen({ self: this }, function* () {
+      if (!this.#sessions.has(threadId)) {
+        return yield* new ProviderAdapterSessionNotFoundError({
+          provider: PROVIDER,
+          threadId,
+        });
+      }
+      yield* this.#send(threadId, { type: "set_auto_retry", enabled });
+    });
+  }
+
+  public compact(threadId: ThreadId, customInstructions?: string) {
+    return Effect.gen({ self: this }, function* () {
+      if (!this.#sessions.has(threadId)) {
+        return yield* new ProviderAdapterSessionNotFoundError({
+          provider: PROVIDER,
+          threadId,
+        });
+      }
+      yield* this.#send(threadId, {
+        type: "compact",
+        ...(customInstructions === undefined ? {} : { customInstructions }),
       });
+    });
+  }
+
+  public rollbackThread(threadId: ThreadId, numTurns: number) {
+    return Effect.gen({ self: this }, function* () {
+      if (!this.#sessions.has(threadId)) {
+        return yield* new ProviderAdapterSessionNotFoundError({
+          provider: PROVIDER,
+          threadId,
+        });
+      }
+      if (numTurns <= 0) {
+        return { threadId, turns: [] as const };
+      }
+      const response = yield* this.#send(threadId, { type: "get_branch_messages" });
+      if (
+        !isRecord(response) ||
+        !isRecord(response.data) ||
+        !Array.isArray(response.data.messages)
+      ) {
+        return yield* new ProviderAdapterRequestError({
+          provider: PROVIDER,
+          method: "rollbackThread",
+          detail: "get_branch_messages returned no messages",
+        });
+      }
+      const messages = response.data.messages;
+      if (messages.length < numTurns) {
+        return yield* new ProviderAdapterRequestError({
+          provider: PROVIDER,
+          method: "rollbackThread",
+          detail: `cannot rollback ${numTurns} turns; only ${messages.length} branch messages available`,
+        });
+      }
+      const target = messages[messages.length - numTurns];
+      if (!isRecord(target) || typeof target.entryId !== "string" || target.entryId.length === 0) {
+        return yield* new ProviderAdapterRequestError({
+          provider: PROVIDER,
+          method: "rollbackThread",
+          detail: "branch message missing entryId",
+        });
+      }
+      yield* this.#send(threadId, { type: "branch", entryId: target.entryId });
+      return { threadId, turns: [] as const };
     });
   }
 
@@ -390,21 +482,35 @@ export class OmpAdapter {
         });
       }
       const pending = session.pendingUiRequests.get(requestId);
-      if (!pending || pending.kind !== "confirm") {
+      if (!pending || (pending.kind !== "confirm" && pending.kind !== "host_uri")) {
         return yield* new ProviderAdapterRequestError({
           provider: PROVIDER,
           method: "respondToRequest",
           detail: `no pending extension_ui confirm for ${requestId}`,
         });
       }
+      const accepted = decision === "accept" || decision === "acceptForSession";
       const response =
-        decision === "cancel"
-          ? { type: "extension_ui_response" as const, id: pending.ompId, cancelled: true as const }
-          : {
-              type: "extension_ui_response" as const,
-              id: pending.ompId,
-              confirmed: decision === "accept" || decision === "acceptForSession",
-            };
+        pending.kind === "host_uri"
+          ? decision === "cancel" || !accepted
+            ? {
+                type: "host_uri_result" as const,
+                id: pending.ompId,
+                isError: true as const,
+                error: "rejected by user",
+              }
+            : { type: "host_uri_result" as const, id: pending.ompId }
+          : decision === "cancel"
+            ? {
+                type: "extension_ui_response" as const,
+                id: pending.ompId,
+                cancelled: true as const,
+              }
+            : {
+                type: "extension_ui_response" as const,
+                id: pending.ompId,
+                confirmed: accepted,
+              };
       yield* this.#runtime.write(threadId, response).pipe(
         Effect.mapError((cause) =>
           cause instanceof OmpSpawnError
@@ -573,6 +679,12 @@ export class OmpAdapter {
     }
     if (frame.type === "extension_ui_request") {
       return this.#onExtensionUiRequest(session, frame);
+    }
+    if (frame.type === "host_uri_request") {
+      return this.#onHostUriRequest(session, frame);
+    }
+    if (frame.type === "host_uri_cancel") {
+      return this.#onHostUriCancel(session, frame);
     }
     if (frame.type === "agent_end" && frame.isTerminal !== false) {
       return this.#emitTurnCompleted(session);
@@ -924,6 +1036,14 @@ export class OmpAdapter {
         typeof contextUsage.contextWindow === "number" && contextUsage.contextWindow > 0
           ? Math.floor(contextUsage.contextWindow)
           : undefined;
+      const statsResponse = yield* this.#send(session.threadId, { type: "get_session_stats" }).pipe(
+        Effect.orElseSucceed(() => undefined),
+      );
+      const stats =
+        statsResponse !== undefined && isRecord(statsResponse) && isRecord(statsResponse.data)
+          ? statsResponse.data
+          : undefined;
+      const tokens = stats !== undefined && isRecord(stats.tokens) ? stats.tokens : undefined;
       yield* this.#emit({
         type: "thread.token-usage.updated",
         threadId: session.threadId,
@@ -932,9 +1052,95 @@ export class OmpAdapter {
           usage: {
             usedTokens,
             ...(maxTokens === undefined ? {} : { maxTokens }),
+            ...(tokens !== undefined && typeof tokens.input === "number"
+              ? { inputTokens: Math.max(0, Math.floor(tokens.input)) }
+              : {}),
+            ...(tokens !== undefined && typeof tokens.output === "number"
+              ? { outputTokens: Math.max(0, Math.floor(tokens.output)) }
+              : {}),
+            ...(tokens !== undefined && typeof tokens.reasoning === "number"
+              ? { reasoningOutputTokens: Math.max(0, Math.floor(tokens.reasoning)) }
+              : {}),
+            ...(stats !== undefined && typeof stats.toolUses === "number"
+              ? { toolUses: Math.max(0, Math.floor(stats.toolUses)) }
+              : {}),
+            ...(stats !== undefined && typeof stats.durationMs === "number"
+              ? { durationMs: Math.max(0, Math.floor(stats.durationMs)) }
+              : {}),
           },
         },
       });
+    });
+  }
+
+  #applyTurnOptions(
+    threadId: ThreadId,
+    options: ReadonlyArray<{ readonly id: string; readonly value: string | boolean }> | undefined,
+  ) {
+    return Effect.gen({ self: this }, function* () {
+      if (options === undefined) {
+        return;
+      }
+      for (const option of options) {
+        if (
+          (option.id === "effort" ||
+            option.id === "thinking" ||
+            option.id === "reasoningEffort" ||
+            option.id === "thinkingLevel") &&
+          typeof option.value === "string"
+        ) {
+          yield* this.#send(threadId, { type: "set_thinking_level", level: option.value });
+        }
+        if (option.id === "fastMode" && typeof option.value === "boolean") {
+          yield* this.#send(threadId, { type: "set_fast_mode", enabled: option.value });
+        }
+      }
+    });
+  }
+
+  #onHostUriRequest(
+    session: LiveAdapterSession,
+    frame: Record<string, unknown>,
+  ): Effect.Effect<void> {
+    if (typeof frame.id !== "string" || frame.id.length === 0) {
+      return Effect.void;
+    }
+    const operation = frame.operation === "write" ? "write" : "read";
+    const url = typeof frame.url === "string" ? frame.url : "";
+    const title = operation === "write" ? "Accept proposed edit" : "Allow host URI read";
+    const detail = url.length > 0 ? `${title}\n${url}` : title;
+    session.pendingUiRequests.set(frame.id, { kind: "host_uri", ompId: frame.id });
+    return this.#emit({
+      type: "request.opened",
+      threadId: session.threadId,
+      turnId: session.turnId,
+      requestId: RuntimeRequestId.make(frame.id),
+      payload: {
+        requestType: operation === "write" ? "file_change_approval" : "file_read_approval",
+        detail,
+      },
+    });
+  }
+
+  #onHostUriCancel(
+    session: LiveAdapterSession,
+    frame: Record<string, unknown>,
+  ): Effect.Effect<void> {
+    const targetId = typeof frame.targetId === "string" ? frame.targetId : undefined;
+    if (targetId === undefined) {
+      return Effect.void;
+    }
+    const pending = session.pendingUiRequests.get(targetId);
+    if (!pending || pending.kind !== "host_uri") {
+      return Effect.void;
+    }
+    session.pendingUiRequests.delete(targetId);
+    return this.#emit({
+      type: "request.resolved",
+      threadId: session.threadId,
+      turnId: session.turnId,
+      requestId: RuntimeRequestId.make(targetId),
+      payload: { requestType: "file_change_approval", decision: "cancel" },
     });
   }
 
@@ -1482,7 +1688,27 @@ function modelsFromAvailableModelsResponse(
       name,
       isCustom: false,
       capabilities: null,
+      optionDescriptors: [
+        {
+          id: "effort",
+          label: "Thinking",
+          type: "select",
+          options: OMP_THINKING_LEVELS.map((level) => ({
+            id: level,
+            label: level,
+            ...(level === "medium" ? { isDefault: true } : {}),
+          })),
+        },
+        {
+          id: "fastMode",
+          label: "Fast mode",
+          type: "boolean",
+          currentValue: false,
+        },
+      ],
     });
   }
   return Effect.succeed(models);
 }
+
+const OMP_THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;

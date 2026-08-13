@@ -264,6 +264,26 @@ export function makeProviderSettingsSchema<const Fields extends Schema.Struct.Fi
   );
 }
 
+const makeOmpRoleSetting = (title: string, description: string) =>
+  TrimmedString.pipe(
+    Schema.withDecodingDefault(Effect.succeed("")),
+    Schema.annotateKey({
+      title,
+      description,
+      providerSettingsForm: { placeholder: "provider/model", clearWhenEmpty: "omit" },
+    }),
+  );
+
+const makeOmpSwitchSetting = (title: string, description: string, defaultValue: boolean) =>
+  Schema.Boolean.pipe(
+    Schema.withDecodingDefault(Effect.succeed(defaultValue)),
+    Schema.annotateKey({
+      title,
+      description,
+      providerSettingsForm: { control: "switch" },
+    }),
+  );
+
 export const OmpSettings = makeProviderSettingsSchema(
   {
     enabled: Schema.Boolean.pipe(
@@ -277,9 +297,73 @@ export const OmpSettings = makeProviderSettingsSchema(
         providerSettingsForm: { placeholder: "omp", clearWhenEmpty: "omit" },
       }),
     ),
+    roleDefault: makeOmpRoleSetting("Default role model", "Model slug for omp modelRoles.default."),
+    roleSmol: makeOmpRoleSetting("Smol role model", "Model slug for omp modelRoles.smol."),
+    roleSlow: makeOmpRoleSetting("Slow role model", "Model slug for omp modelRoles.slow."),
+    rolePlan: makeOmpRoleSetting("Plan role model", "Model slug for omp modelRoles.plan."),
+    roleAdvisor: makeOmpRoleSetting("Advisor role model", "Model slug for omp modelRoles.advisor."),
+    roleTask: makeOmpRoleSetting("Task role model", "Model slug for omp modelRoles.task."),
+    roleVision: makeOmpRoleSetting("Vision role model", "Model slug for omp modelRoles.vision."),
+    roleDesigner: makeOmpRoleSetting(
+      "Designer role model",
+      "Model slug for omp modelRoles.designer.",
+    ),
+    roleCommit: makeOmpRoleSetting("Commit role model", "Model slug for omp modelRoles.commit."),
+    roleTiny: makeOmpRoleSetting("Tiny role model", "Model slug for omp modelRoles.tiny."),
+    autoCompactionEnabled: makeOmpSwitchSetting(
+      "Auto compaction",
+      "Enable omp automatic context compaction.",
+      false,
+    ),
+    autoRetryEnabled: makeOmpSwitchSetting(
+      "Auto retry",
+      "Enable omp automatic retries on API errors.",
+      false,
+    ),
+    advisorEnabled: makeOmpSwitchSetting(
+      "Advisor",
+      "Enable the omp advisor secondary model.",
+      false,
+    ),
+    memoryBackend: TrimmedString.pipe(
+      Schema.withDecodingDefault(Effect.succeed("")),
+      Schema.annotateKey({
+        title: "Memory backend",
+        description: "omp memory.backend value (off, local, mnemopi, hindsight).",
+        providerSettingsForm: { placeholder: "off", clearWhenEmpty: "omit" },
+      }),
+    ),
+    toolGithubEnabled: makeOmpSwitchSetting(
+      "GitHub tool",
+      "Enable the omp github tool (github.enabled).",
+      false,
+    ),
+    toolSecurityScanEnabled: makeOmpSwitchSetting(
+      "Security scan tool",
+      "Enable the omp security_scan tool (security.enabled).",
+      false,
+    ),
   },
   {
-    order: ["binaryPath"],
+    order: [
+      "binaryPath",
+      "roleDefault",
+      "roleSmol",
+      "roleSlow",
+      "rolePlan",
+      "roleAdvisor",
+      "roleTask",
+      "roleVision",
+      "roleDesigner",
+      "roleCommit",
+      "roleTiny",
+      "autoCompactionEnabled",
+      "autoRetryEnabled",
+      "advisorEnabled",
+      "memoryBackend",
+      "toolGithubEnabled",
+      "toolSecurityScanEnabled",
+    ],
   },
 );
 export type OmpSettings = typeof OmpSettings.Type;
@@ -478,6 +562,22 @@ const ModelSelectionPatch = Schema.Struct({
 const OmpSettingsPatch = Schema.Struct({
   enabled: Schema.optionalKey(Schema.Boolean),
   binaryPath: Schema.optionalKey(TrimmedString),
+  roleDefault: Schema.optionalKey(TrimmedString),
+  roleSmol: Schema.optionalKey(TrimmedString),
+  roleSlow: Schema.optionalKey(TrimmedString),
+  rolePlan: Schema.optionalKey(TrimmedString),
+  roleAdvisor: Schema.optionalKey(TrimmedString),
+  roleTask: Schema.optionalKey(TrimmedString),
+  roleVision: Schema.optionalKey(TrimmedString),
+  roleDesigner: Schema.optionalKey(TrimmedString),
+  roleCommit: Schema.optionalKey(TrimmedString),
+  roleTiny: Schema.optionalKey(TrimmedString),
+  autoCompactionEnabled: Schema.optionalKey(Schema.Boolean),
+  autoRetryEnabled: Schema.optionalKey(Schema.Boolean),
+  advisorEnabled: Schema.optionalKey(Schema.Boolean),
+  memoryBackend: Schema.optionalKey(TrimmedString),
+  toolGithubEnabled: Schema.optionalKey(Schema.Boolean),
+  toolSecurityScanEnabled: Schema.optionalKey(Schema.Boolean),
 });
 
 export const ServerSettingsPatch = Schema.Struct({

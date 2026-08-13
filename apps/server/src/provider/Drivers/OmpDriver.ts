@@ -43,6 +43,7 @@ import {
   OMP_MANAGED_UPDATE_LOCK_KEY,
   OMP_NPM_PACKAGE_NAME,
 } from "../omp/OmpManagedBinary.ts";
+import { OmpConfigStore, syncOmpSettingsToConfigStore } from "../omp/OmpConfigStore.ts";
 import { parseOmpModelRoleSlug } from "../omp/ompModelRoles.ts";
 import { OmpRpcRuntime } from "../omp/OmpRpcRuntime.ts";
 import {
@@ -334,7 +335,7 @@ export const OmpDriver: ProviderDriver<OmpSettings, OmpDriverEnv> = {
         accentColor,
         continuationGroupKey: continuationIdentity.continuationKey,
       });
-      const effectiveConfig = { ...config, enabled } satisfies OmpSettings;
+      const effectiveConfig = decodeOmpSettings({ ...config, enabled });
       const crypto = yield* Crypto.Crypto;
       const randomUUID = crypto.randomUUIDv4.pipe(Effect.orDie);
 
@@ -383,13 +384,17 @@ export const OmpDriver: ProviderDriver<OmpSettings, OmpDriverEnv> = {
         pathPrefixDirs: [rtkCurrentDir],
       });
       const fs = yield* FileSystem.FileSystem;
+      const ompHomeEnv = process.env.OMP_HOME?.trim();
+      const ompHome =
+        ompHomeEnv && ompHomeEnv.length > 0 ? ompHomeEnv : pathService.join(Os.homedir(), ".omp");
+      const ompConfigStore = new OmpConfigStore(fs, pathService, ompHome);
+      // Settings updates recreate the instance via ProviderInstanceRegistryMutator,
+      // so create() is the sync point for OmpSettings → omp config.yml.
+      yield* syncOmpSettingsToConfigStore(effectiveConfig, ompConfigStore).pipe(
+        Effect.orElseSucceed(() => undefined),
+      );
       const resolveRoleModel = (role: string) =>
         Effect.gen(function* () {
-          const ompHomeEnv = process.env.OMP_HOME?.trim();
-          const ompHome =
-            ompHomeEnv && ompHomeEnv.length > 0
-              ? ompHomeEnv
-              : pathService.join(Os.homedir(), ".omp");
           const configPath = pathService.join(ompHome, "agent", "config.yml");
           const exists = yield* fs.exists(configPath);
           if (!exists) {

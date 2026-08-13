@@ -57,6 +57,14 @@ class FakeOmpRpc {
         readonly messages: ReadonlyArray<object>;
       }
     | undefined = undefined;
+  branchMessages: ReadonlyArray<{ readonly entryId: string; readonly text?: string }> = [];
+  sessionStats:
+    | {
+        readonly tokens?: { readonly input?: number; readonly output?: number };
+        readonly toolUses?: number;
+        readonly durationMs?: number;
+      }
+    | undefined = undefined;
   readonly sent: Array<Record<string, unknown>> = [];
   readonly frames = new Map<string, Queue.Queue<object>>();
 
@@ -153,6 +161,20 @@ class FakeOmpRpc {
         },
       });
     }
+    if (command.type === "get_branch_messages") {
+      return Effect.succeed({
+        type: "response",
+        success: true,
+        data: { messages: this.branchMessages },
+      });
+    }
+    if (command.type === "get_session_stats") {
+      return Effect.succeed({
+        type: "response",
+        success: true,
+        data: this.sessionStats ?? {},
+      });
+    }
     if (
       command.type === "steer" ||
       command.type === "set_subagent_subscription" ||
@@ -162,8 +184,6 @@ class FakeOmpRpc {
       command.type === "set_auto_retry" ||
       command.type === "compact" ||
       command.type === "branch" ||
-      command.type === "get_branch_messages" ||
-      command.type === "get_session_stats" ||
       command.type === "set_host_uri_schemes"
     ) {
       return Effect.succeed({ type: "response", success: true, data: {} });
@@ -692,17 +712,20 @@ describe("OmpAdapter", () => {
     }),
   );
 
-  it.effect("rollbackThread fails as explicit unsupported", () =>
+  it.effect("rollbackThread branches to the selected entryId", () =>
     Effect.gen(function* () {
-      const adapter = new OmpAdapter(new FakeOmpRpc(), testRandomUUID);
+      const fake = new FakeOmpRpc();
+      fake.branchMessages = [
+        { entryId: "e1", text: "first" },
+        { entryId: "e2", text: "second" },
+      ];
+      const adapter = new OmpAdapter(fake, testRandomUUID);
       yield* adapter.startSession(startInput);
-      const exit = yield* Effect.exit(adapter.rollbackThread(THREAD_ID, 1));
-      NodeAssert.equal(Exit.isFailure(exit), true);
-      if (Exit.isFailure(exit)) {
-        const error = Cause.squash(exit.cause);
-        NodeAssert.ok(isProviderAdapterRequestError(error));
-        NodeAssert.match(error.detail, /unsupported/i);
-      }
+      const sentBefore = fake.sent.length;
+      yield* adapter.rollbackThread(THREAD_ID, 1);
+      const commands = fake.sent.slice(sentBefore).map((command) => command.type);
+      NodeAssert.deepEqual(commands, ["get_branch_messages", "branch"]);
+      NodeAssert.equal(fake.sent.at(-1)?.entryId, "e2");
     }),
   );
 
@@ -1218,6 +1241,75 @@ describe("OmpAdapter", () => {
         ["set_subagent_subscription"],
       );
       NodeAssert.equal(fake.sent.at(-1)?.level, "events");
+    }),
+  );
+
+  it.effect("sendTurn applies thinking and fastMode options before prompt", () =>
+    Effect.gen(function* () {
+      const fake = new FakeOmpRpc();
+      const adapter = new OmpAdapter(fake, testRandomUUID);
+      yield* adapter.startSession(startInput);
+      const sentBefore = fake.sent.length;
+      yield* adapter.sendTurn({
+        threadId: THREAD_ID,
+        input: "hi",
+        modelSelection: {
+          instanceId: ProviderInstanceId.make("omp"),
+          model: "openai/gpt-5",
+          options: [
+            { id: "effort", value: "high" },
+            { id: "fastMode", value: true },
+          ],
+        },
+      });
+      NodeAssert.deepEqual(
+        fake.sent.slice(sentBefore).map((command) => command.type),
+        ["set_model", "set_thinking_level", "set_fast_mode", "prompt"],
+      );
+      NodeAssert.equal(fake.sent.slice(sentBefore)[1]?.level, "high");
+      NodeAssert.equal(fake.sent.slice(sentBefore)[2]?.enabled, true);
+    }),
+  );
+
+  it.effect("compact and auto toggles send omp RPC", () =>
+    Effect.gen(function* () {
+      const fake = new FakeOmpRpc();
+      const adapter = new OmpAdapter(fake, testRandomUUID);
+      yield* adapter.startSession(startInput);
+      const sentBefore = fake.sent.length;
+      yield* adapter.setAutoCompaction(THREAD_ID, true);
+      yield* adapter.setAutoRetry(THREAD_ID, false);
+      yield* adapter.compact(THREAD_ID, "keep tests");
+      NodeAssert.deepEqual(
+        fake.sent.slice(sentBefore).map((command) => command.type),
+        ["set_auto_compaction", "set_auto_retry", "compact"],
+      );
+    }),
+  );
+
+  it.effect("maps host_uri_request write to request.opened and accepts via host_uri_result", () =>
+    Effect.gen(function* () {
+      const fake = new FakeOmpRpc();
+      const adapter = new OmpAdapter(fake, testRandomUUID);
+      const eventsFiber = yield* Stream.runCollect(
+        adapter.streamEvents.pipe(Stream.takeUntil((event) => event.type === "request.opened")),
+      ).pipe(Effect.timeout("2 seconds"), Effect.forkChild);
+      yield* adapter.startSession(startInput);
+      yield* fake.offer(THREAD_ID, {
+        type: "host_uri_request",
+        id: "uri-1",
+        operation: "write",
+        url: "edit://file.ts",
+        content: "new",
+      });
+      const events = yield* Fiber.join(eventsFiber);
+      const opened = events.find((event) => event.type === "request.opened");
+      NodeAssert.ok(opened);
+      NodeAssert.equal(opened?.payload.requestType, "file_change_approval");
+      yield* adapter.respondToRequest(THREAD_ID, ApprovalRequestId.make("uri-1"), "accept");
+      const result = fake.sent.find((command) => command.type === "host_uri_result");
+      NodeAssert.equal(result?.id, "uri-1");
+      NodeAssert.equal(result?.isError, undefined);
     }),
   );
 });
