@@ -21,6 +21,7 @@ import { OmpAdapter } from "./OmpAdapter.ts";
 class FakeOmpRpc {
   agentInvoked: boolean | undefined = true;
   sessionFile = "/tmp/omp-session.jsonl";
+  availableModels: ReadonlyArray<object> = [];
   readonly sent: Array<Record<string, unknown>> = [];
   readonly frames = new Map<string, Queue.Queue<object>>();
 
@@ -39,6 +40,13 @@ class FakeOmpRpc {
 
   send(_sessionKey: string, command: Record<string, unknown>) {
     this.sent.push(command);
+    if (command.type === "get_available_models") {
+      return Effect.succeed({
+        type: "response",
+        success: true,
+        data: { models: this.availableModels },
+      });
+    }
     return Effect.succeed({
       type: "response",
       success: true,
@@ -341,6 +349,27 @@ describe("OmpAdapter", () => {
         NodeAssert.ok(error instanceof ProviderAdapterRequestError);
         NodeAssert.match(error.detail, /unsupported/i);
       }
+    }),
+  );
+
+  it.effect("discoverModels maps get_available_models into ServerProviderModel slugs", () =>
+    Effect.gen(function* () {
+      const fake = new FakeOmpRpc();
+      fake.availableModels = [
+        { provider: "openai", id: "gpt-5", name: "GPT-5" },
+        { provider: "anthropic", id: "claude-sonnet-4", name: "Claude Sonnet 4" },
+      ];
+      const adapter = new OmpAdapter(fake);
+      yield* adapter.startSession(startInput);
+      const models = yield* adapter.discoverModels(THREAD_ID);
+      NodeAssert.equal(fake.sent.at(-1)?.type, "get_available_models");
+      NodeAssert.deepEqual(
+        models.map((model) => ({ slug: model.slug, name: model.name, isCustom: model.isCustom })),
+        [
+          { slug: "openai/gpt-5", name: "GPT-5", isCustom: false },
+          { slug: "anthropic/claude-sonnet-4", name: "Claude Sonnet 4", isCustom: false },
+        ],
+      );
     }),
   );
 });
