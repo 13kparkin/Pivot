@@ -6,14 +6,8 @@ import {
   MAX_RPC_FRAME_BYTES,
   MAX_RPC_REASSEMBLED_BYTES,
   OmpRpcFrameDecoder,
+  RPC_CHUNK_PAYLOAD_BYTES,
 } from "./OmpRpcRuntime.ts";
-
-function chunkPayloadBytes(byteLength: number, chunkCount: number, index: number): Buffer {
-  const size = Math.ceil(byteLength / chunkCount);
-  const start = index * size;
-  const end = Math.min(byteLength, start + size);
-  return Buffer.alloc(end - start, index + 1);
-}
 
 function makeChunkFrame(input: {
   readonly chunkId: string;
@@ -32,6 +26,22 @@ function makeChunkFrame(input: {
   };
 }
 
+function splitIntoChunkFrames(logical: object, chunkId = "rpc-1") {
+  const bytes = Buffer.from(JSON.stringify(logical), "utf8");
+  NodeAssert.ok(bytes.byteLength >= MAX_RPC_FRAME_BYTES);
+  const count = Math.ceil(bytes.byteLength / RPC_CHUNK_PAYLOAD_BYTES);
+  NodeAssert.ok(count >= 2);
+  return Array.from({ length: count }, (_, index) =>
+    makeChunkFrame({
+      chunkId,
+      index,
+      count,
+      byteLength: bytes.byteLength,
+      data: bytes.subarray(index * RPC_CHUNK_PAYLOAD_BYTES, (index + 1) * RPC_CHUNK_PAYLOAD_BYTES),
+    }),
+  );
+}
+
 describe("OmpRpcFrameDecoder", () => {
   it("passes through non-chunk frames", () => {
     const decoder = new OmpRpcFrameDecoder();
@@ -47,36 +57,23 @@ describe("OmpRpcFrameDecoder", () => {
       success: true,
       data: { messages: ["x".repeat(MAX_RPC_FRAME_BYTES)] },
     };
-    const json = JSON.stringify(logical);
-    const bytes = Buffer.from(json, "utf8");
-    NodeAssert.ok(bytes.byteLength > MAX_RPC_FRAME_BYTES);
+    const chunks = splitIntoChunkFrames(logical);
 
-    const chunkSize = Math.ceil(bytes.byteLength / 3);
-    const chunks = [0, 1, 2].map((index) =>
-      makeChunkFrame({
-        chunkId: "rpc-1",
-        index,
-        count: 3,
-        byteLength: bytes.byteLength,
-        data: bytes.subarray(index * chunkSize, (index + 1) * chunkSize),
-      }),
-    );
-
-    NodeAssert.equal(decoder.push(chunks[0]), undefined);
-    NodeAssert.equal(decoder.push(chunks[1]), undefined);
-    NodeAssert.deepEqual(decoder.push(chunks[2]), logical);
+    for (const chunk of chunks.slice(0, -1)) {
+      NodeAssert.equal(decoder.push(chunk), undefined);
+    }
+    NodeAssert.deepEqual(decoder.push(chunks[chunks.length - 1]!), logical);
   });
 
   it("fails when a chunk sequence is interrupted by a non-chunk frame", () => {
     const decoder = new OmpRpcFrameDecoder();
-    const first = makeChunkFrame({
-      chunkId: "rpc-1",
-      index: 0,
-      count: 2,
-      byteLength: MAX_RPC_FRAME_BYTES + 8,
-      data: chunkPayloadBytes(MAX_RPC_FRAME_BYTES + 8, 2, 0),
+    const chunks = splitIntoChunkFrames({
+      type: "response",
+      command: "get_messages",
+      success: true,
+      data: { pad: "y".repeat(MAX_RPC_FRAME_BYTES) },
     });
-    NodeAssert.equal(decoder.push(first), undefined);
+    NodeAssert.equal(decoder.push(chunks[0]!), undefined);
     NodeAssert.throws(() => decoder.push({ type: "ready" }), /interrupted/i);
   });
 
@@ -90,7 +87,7 @@ describe("OmpRpcFrameDecoder", () => {
             index: 0,
             count: 2,
             byteLength: MAX_RPC_REASSEMBLED_BYTES + 1,
-            data: Buffer.from("aa"),
+            data: Buffer.alloc(16, 1),
           }),
         ),
       /invalid rpc chunk metadata|reassembl/i,
@@ -99,18 +96,12 @@ describe("OmpRpcFrameDecoder", () => {
 
   it("fails when chunk indexes are out of order", () => {
     const decoder = new OmpRpcFrameDecoder();
-    NodeAssert.throws(
-      () =>
-        decoder.push(
-          makeChunkFrame({
-            chunkId: "rpc-1",
-            index: 1,
-            count: 2,
-            byteLength: MAX_RPC_FRAME_BYTES + 8,
-            data: chunkPayloadBytes(MAX_RPC_FRAME_BYTES + 8, 2, 1),
-          }),
-        ),
-      /index 0|sequence must start/i,
-    );
+    const chunks = splitIntoChunkFrames({
+      type: "response",
+      command: "get_messages",
+      success: true,
+      data: { pad: "z".repeat(MAX_RPC_FRAME_BYTES) },
+    });
+    NodeAssert.throws(() => decoder.push(chunks[1]!), /index 0|sequence must start/i);
   });
 });
