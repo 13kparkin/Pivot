@@ -12,6 +12,9 @@
  * Subagents (AC7): `set_subagent_subscription` + `subagent_*` → `task.*`.
  * Host UI: `extension_ui_request` confirm/select/input/editor → approval /
  * user-input events; replies via `extension_ui_response`.
+ * Plan mode: on `interactionMode: "plan"` remember the current model via
+ * `get_state`, `set_model` to the resolved plan role, and restore on exit.
+ * While plan is active, turn `modelSelection` is ignored.
  *
  * @module provider/omp/OmpAdapter
  */
@@ -33,6 +36,7 @@ import {
   ProviderDriverKind,
   RuntimeTaskId,
   type RuntimeMode,
+  type ProviderInteractionMode,
   type ThreadId,
   TurnId,
 } from "@t3tools/contracts";
@@ -105,7 +109,15 @@ interface LiveAdapterSession {
   readonly toolCalls: Map<string, TrackedOmpToolCall>;
   readonly pendingUiRequests: Map<string, PendingExtensionUiRequest>;
   turnId: TurnId | undefined;
+  interactionMode: ProviderInteractionMode;
+  prePlanModelSlug: string | undefined;
   onOpenUrl: ((request: OmpOpenUrlRequest) => Effect.Effect<void>) | undefined;
+}
+
+export type OmpResolveRoleModel = (role: string) => Effect.Effect<string | undefined>;
+
+export interface OmpAdapterOptions {
+  readonly resolveRoleModel?: OmpResolveRoleModel;
 }
 
 /**
@@ -124,10 +136,16 @@ export class OmpAdapter {
   readonly #sessions = new Map<ThreadId, LiveAdapterSession>();
   readonly #runtime: OmpRpcClient;
   readonly #randomUUID: Effect.Effect<string>;
+  readonly #resolveRoleModel: OmpResolveRoleModel;
 
-  public constructor(runtime: OmpRpcClient, randomUUID: Effect.Effect<string>) {
+  public constructor(
+    runtime: OmpRpcClient,
+    randomUUID: Effect.Effect<string>,
+    options: OmpAdapterOptions = {},
+  ) {
     this.#runtime = runtime;
     this.#randomUUID = randomUUID;
+    this.#resolveRoleModel = options.resolveRoleModel ?? (() => Effect.succeed(undefined));
   }
 
   public get streamEvents(): Stream.Stream<ProviderRuntimeEvent> {
@@ -174,6 +192,8 @@ export class OmpAdapter {
         toolCalls: new Map(),
         pendingUiRequests: new Map(),
         turnId: undefined,
+        interactionMode: "default",
+        prePlanModelSlug: undefined,
         onOpenUrl: undefined,
       };
       this.#sessions.set(input.threadId, session);
@@ -204,7 +224,10 @@ export class OmpAdapter {
       }
       const turnId = yield* this.#randomUUID.pipe(Effect.map(TurnId.make));
       session.turnId = turnId;
-      yield* this.#applyModelSelection(input.threadId, input.modelSelection?.model);
+      yield* this.#applyInteractionMode(session, input.interactionMode);
+      if (session.interactionMode !== "plan") {
+        yield* this.#applyModelSelection(input.threadId, input.modelSelection?.model);
+      }
       yield* this.#emit({
         type: "turn.started",
         threadId: input.threadId,
@@ -846,6 +869,46 @@ export class OmpAdapter {
           },
         },
       });
+    });
+  }
+
+  #applyInteractionMode(session: LiveAdapterSession, mode: ProviderInteractionMode | undefined) {
+    return Effect.gen({ self: this }, function* () {
+      if (mode === undefined || mode === session.interactionMode) {
+        return;
+      }
+      if (mode === "plan") {
+        session.prePlanModelSlug = yield* this.#readCurrentModelSlug(session.threadId);
+        const planSlug = yield* this.#resolveRoleModel("plan");
+        if (planSlug !== undefined) {
+          yield* this.#applyModelSelection(session.threadId, planSlug);
+        }
+        session.interactionMode = "plan";
+        return;
+      }
+      const restoreSlug = session.prePlanModelSlug;
+      session.prePlanModelSlug = undefined;
+      session.interactionMode = "default";
+      if (restoreSlug !== undefined) {
+        yield* this.#applyModelSelection(session.threadId, restoreSlug);
+      }
+    });
+  }
+
+  #readCurrentModelSlug(threadId: ThreadId) {
+    return Effect.gen({ self: this }, function* () {
+      const response = yield* this.#send(threadId, { type: "get_state" });
+      if (!isRecord(response) || !isRecord(response.data)) {
+        return undefined;
+      }
+      const model = response.data.model;
+      if (!isRecord(model)) {
+        return undefined;
+      }
+      if (typeof model.provider !== "string" || typeof model.id !== "string") {
+        return undefined;
+      }
+      return `${model.provider}/${model.id}`;
     });
   }
 

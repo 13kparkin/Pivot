@@ -27,3 +27,5 @@ Login runs on the machine hosting the T3 server (browser opens there; OAuth call
 When omp asks for a confirmation, a paste code, or a choice (including login paste prompts), Pivot shows the existing approval / user-input panels in the composer. Your answer is sent back to omp over RPC.
 
 Type `/` in the composer to see omp slash commands (from `get_available_commands`), such as `/model`, `/review`, or `/jobs`. Choosing one inserts the command into the prompt. Local commands that omp handles without starting an agent turn (for example `/jobs`) show their result in the chat.
+
+When **Plan mode** is enabled in Settings, omp threads show the plan/default toggle. Turning plan on switches the session model to the `plan` role from omp’s `~/.omp/agent/config.yml` (`modelRoles.plan`). Turning it off restores the previous model. Add a `plan` role there if the toggle should change models (without it, the toggle still tracks mode but leaves the model unchanged).

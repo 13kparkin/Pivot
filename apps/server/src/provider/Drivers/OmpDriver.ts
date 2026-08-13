@@ -10,6 +10,8 @@
  *
  * @module provider/Drivers/OmpDriver
  */
+import * as Os from "node:os";
+
 import {
   OmpSettings,
   ProviderDriverKind,
@@ -41,6 +43,7 @@ import {
   OMP_MANAGED_UPDATE_LOCK_KEY,
   OMP_NPM_PACKAGE_NAME,
 } from "../omp/OmpManagedBinary.ts";
+import { parseOmpModelRoleSlug } from "../omp/ompModelRoles.ts";
 import { OmpRpcRuntime } from "../omp/OmpRpcRuntime.ts";
 import {
   defaultProviderContinuationIdentity,
@@ -57,7 +60,7 @@ const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
 
 const OMP_PRESENTATION = {
   displayName: "omp",
-  showInteractionModeToggle: false,
+  showInteractionModeToggle: true,
   requiresNewThreadForModelChange: false,
 } as const;
 
@@ -379,7 +382,23 @@ export const OmpDriver: ProviderDriver<OmpSettings, OmpDriverEnv> = {
       const runtime = new OmpRpcRuntime(spawner, launchBinary, {
         pathPrefixDirs: [rtkCurrentDir],
       });
-      const adapter = new OmpAdapter(runtime, randomUUID);
+      const fs = yield* FileSystem.FileSystem;
+      const resolveRoleModel = (role: string) =>
+        Effect.gen(function* () {
+          const ompHomeEnv = process.env.OMP_HOME?.trim();
+          const ompHome =
+            ompHomeEnv && ompHomeEnv.length > 0
+              ? ompHomeEnv
+              : pathService.join(Os.homedir(), ".omp");
+          const configPath = pathService.join(ompHome, "agent", "config.yml");
+          const exists = yield* fs.exists(configPath);
+          if (!exists) {
+            return undefined;
+          }
+          const text = yield* fs.readFileString(configPath);
+          return parseOmpModelRoleSlug(text, role);
+        }).pipe(Effect.orElseSucceed(() => undefined));
+      const adapter = new OmpAdapter(runtime, randomUUID, { resolveRoleModel });
       yield* Effect.addFinalizer(() => adapter.stopAll());
 
       // Keep runtime binaryPath aligned after managed install/refresh by
