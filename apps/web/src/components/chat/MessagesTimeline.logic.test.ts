@@ -53,7 +53,7 @@ function subagentTimelineEntry(id: string, runId: string | null): TimelineEntry 
     kind: "event",
     createdAt: "2026-08-13T10:00:00.000Z",
     projectedItem: {
-      item: { id: `item:${id}`, type: "subagent", subagentId: id, runId },
+      item: { id: `item:${id}`, type: "subagent", subagentId: id, runId, status: "running" },
     } as never,
   };
 }
@@ -120,10 +120,19 @@ describe("collapseSubagentTimelineEntries", () => {
     expect(result.ctaByItemId.get("item:member-1")).toEqual({
       workflowId: "workflow-1",
       agentIds: ["member-1", "workflow-1", "member-2"],
+      itemStates: [
+        { id: "member-1", status: "running", totalTokens: 0 },
+        { id: "workflow-1", status: "running", totalTokens: 0 },
+        { id: "member-2", status: "running", totalTokens: 0 },
+      ],
     });
     expect(result.ctaByItemId.get("item:direct-1")).toEqual({
       workflowId: null,
       agentIds: ["direct-1", "direct-2"],
+      itemStates: [
+        { id: "direct-1", status: "running", totalTokens: 0 },
+        { id: "direct-2", status: "running", totalTokens: 0 },
+      ],
     });
   });
 

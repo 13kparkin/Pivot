@@ -1,6 +1,7 @@
 import {
   type EnvironmentId,
   type MessageId,
+  type OrchestrationV2SubagentActivation,
   type OrchestrationV2TurnItem,
   type RunAttemptId,
   type ScopedThreadRef,
@@ -81,11 +82,13 @@ import { MessageCopyButton } from "./MessageCopyButton";
 import {
   computeStableMessagesTimelineRows,
   collapseSubagentTimelineEntries,
+  indexAgentSpawnCtaActivations,
   MAX_VISIBLE_WORK_LOG_ENTRIES,
   deriveMessagesTimelineRows,
   normalizeCompactToolLabel,
   resolveTimelineToolPresentation,
   resolveAssistantMessageCopyState,
+  resolveDirectAgentSpawnStates,
   resolveTimelineIsAtEnd,
   resolveTimelineMinimapHasPersistentGutter,
   resolveTimelineMinimapHeightStyle,
@@ -94,6 +97,7 @@ import {
   resolveTimelineMinimapInteractiveWidth,
   resolveTimelineMinimapTopPercent,
   type StableMessagesTimelineRowsState,
+  type AgentSpawnCtaActivationIndex,
   type AgentSpawnCtaGroup,
   type MessagesTimelineRow,
   TIMELINE_MINIMAP_MIN_ITEMS,
@@ -181,6 +185,7 @@ interface TimelineRowActivityState {
 
 interface TimelineAgentSpawnState {
   readonly agentPanelModel: AgentPanelModel;
+  readonly activationIndex: AgentSpawnCtaActivationIndex;
   readonly ctaByItemId: ReadonlyMap<string, AgentSpawnCtaGroup>;
   readonly onOpenAgents: () => void;
 }
@@ -202,6 +207,7 @@ const TIMELINE_MAINTAIN_SCROLL_AT_END = {
 } as const;
 const EMPTY_TIMELINE_PROVIDERS: ReadonlyArray<ServerProvider> = [];
 const EMPTY_TIMELINE_RUNS: ReadonlyArray<HandoffTimelineRun> = [];
+const EMPTY_SUBAGENT_ACTIVATIONS: ReadonlyArray<OrchestrationV2SubagentActivation> = [];
 const EMPTY_AGENT_PANEL_MODEL = emptyAgentPanelModel();
 const NOOP_OPEN_AGENTS = () => {};
 
@@ -211,6 +217,7 @@ const NOOP_OPEN_AGENTS = () => {};
 
 interface MessagesTimelineProps {
   agentPanelModel?: AgentPanelModel;
+  subagentActivations?: ReadonlyArray<OrchestrationV2SubagentActivation>;
   onOpenAgents?: () => void;
   isWorking: boolean;
   activeTurnInProgress: boolean;
@@ -273,6 +280,7 @@ interface MessagesTimelineProps {
 
 export const MessagesTimeline = memo(function MessagesTimeline({
   agentPanelModel = EMPTY_AGENT_PANEL_MODEL,
+  subagentActivations = EMPTY_SUBAGENT_ACTIVATIONS,
   onOpenAgents = NOOP_OPEN_AGENTS,
   isWorking,
   activeTurnInProgress,
@@ -422,6 +430,10 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   const agentSpawnTimeline = useMemo(
     () => collapseSubagentTimelineEntries({ timelineEntries, agentPanelModel }),
     [agentPanelModel, timelineEntries],
+  );
+  const agentSpawnActivationIndex = useMemo(
+    () => indexAgentSpawnCtaActivations(subagentActivations),
+    [subagentActivations],
   );
   const rawRows = useMemo(
     () =>
@@ -609,10 +621,11 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   const agentSpawnState = useMemo<TimelineAgentSpawnState>(
     () => ({
       agentPanelModel,
+      activationIndex: agentSpawnActivationIndex,
       ctaByItemId: agentSpawnTimeline.ctaByItemId,
       onOpenAgents,
     }),
-    [agentPanelModel, agentSpawnTimeline.ctaByItemId, onOpenAgents],
+    [agentPanelModel, agentSpawnActivationIndex, agentSpawnTimeline.ctaByItemId, onOpenAgents],
   );
   const listHeader = useMemo(
     () =>
@@ -1522,7 +1535,8 @@ const AgentSpawnCtaRow = memo(function AgentSpawnCtaRow(props: {
   readonly createdAt: string;
 }) {
   const shared = use(TimelineRowCtx);
-  const { agentPanelModel, ctaByItemId, onOpenAgents } = use(TimelineAgentSpawnCtx);
+  const { agentPanelModel, activationIndex, ctaByItemId, onOpenAgents } =
+    use(TimelineAgentSpawnCtx);
   const spawn = ctaByItemId.get(props.item.id);
   if (spawn === undefined) {
     return (
@@ -1542,51 +1556,52 @@ const AgentSpawnCtaRow = memo(function AgentSpawnCtaRow(props: {
     spawn.workflowId === null
       ? undefined
       : agentPanelModel.workflows.find((group) => group.workflow.id === spawn.workflowId);
-  const agents =
+  const agentStates =
     workflowGroup === undefined
-      ? agentPanelModel.directAgents.filter((agent) => memberIds.has(agent.id))
+      ? resolveDirectAgentSpawnStates({
+          group: spawn,
+          runId: props.item.runId,
+          activationIndex,
+        })
       : [
           ...workflowGroup.phases.flatMap((phase) => phase.members),
           ...workflowGroup.unphasedMembers,
-        ];
+        ].map((agent) => ({
+          id: agent.id,
+          status: agent.status,
+          totalTokens: agent.usage?.totalTokens ?? 0,
+        }));
   const fallbackMemberCount =
     spawn.workflowId === null
       ? memberIds.size
       : [...memberIds].filter((id) => id !== spawn.workflowId).length;
-  const agentCount = Math.max(agents.length, fallbackMemberCount);
-  const useItemStatus = agents.length === 0;
-  const running = useItemStatus
-    ? props.item.status === "running" || props.item.status === "pending"
-      ? 1
-      : 0
-    : agents.filter((agent) => agent.status === "running" || agent.status === "pending").length;
-  const waiting = useItemStatus
-    ? props.item.status === "waiting"
-      ? 1
-      : 0
-    : agents.filter((agent) => agent.status === "waiting").length;
-  const idle = useItemStatus ? 0 : agents.filter((agent) => agent.status === "idle").length;
-  const failed = useItemStatus
-    ? props.item.status === "failed"
-      ? 1
-      : 0
-    : agents.filter((agent) => agent.status === "failed").length;
-  const stopped = useItemStatus
-    ? props.item.status === "cancelled" || props.item.status === "interrupted"
-      ? 1
-      : 0
-    : agents.filter((agent) => agent.status === "cancelled" || agent.status === "interrupted")
-        .length;
+  const agentCount = Math.max(agentStates.length, fallbackMemberCount);
+  const useItemStatus = agentStates.length === 0;
+  let running = 0;
+  let waiting = 0;
+  let idle = 0;
+  let failed = 0;
+  let stopped = 0;
+  const statuses = useItemStatus ? [props.item.status] : agentStates.map((agent) => agent.status);
+  for (const status of statuses) {
+    if (status === "running" || status === "pending") running += 1;
+    else if (status === "waiting") waiting += 1;
+    else if (status === "idle") idle += 1;
+    else if (status === "failed") failed += 1;
+    else if (status === "cancelled" || status === "interrupted") stopped += 1;
+  }
   const coordinatorStatus = workflowGroup?.workflow.status;
+  if (coordinatorStatus === "failed") failed += 1;
+  if (coordinatorStatus === "cancelled" || coordinatorStatus === "interrupted") stopped += 1;
   const coordinatorSettled =
     coordinatorStatus === "completed" ||
     coordinatorStatus === "failed" ||
     coordinatorStatus === "cancelled" ||
     coordinatorStatus === "interrupted";
   const live = workflowGroup === undefined ? running + waiting > 0 : !coordinatorSettled;
-  const totalTokens = agents.reduce(
-    (sum, agent) => sum + (agent.usage?.totalTokens ?? 0),
-    workflowGroup !== undefined && agents.length === 0
+  const totalTokens = agentStates.reduce(
+    (sum, agent) => sum + agent.totalTokens,
+    workflowGroup !== undefined && agentStates.length === 0
       ? (workflowGroup.workflow.usage?.totalTokens ?? 0)
       : 0,
   );
@@ -1598,7 +1613,7 @@ const AgentSpawnCtaRow = memo(function AgentSpawnCtaRow(props: {
     ? "bg-info"
     : failed > 0
       ? "bg-destructive"
-      : idle > 0
+      : idle > 0 || stopped > 0
         ? "bg-muted-foreground/50"
         : "bg-success";
   const lead =

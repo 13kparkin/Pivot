@@ -358,6 +358,7 @@ const EMPTY_PROVIDERS: ServerProvider[] = [];
 const VISIT_DISPATCH_THROTTLE_MS = 10_000;
 const EMPTY_PROVIDER_SKILLS: ServerProvider["skills"] = [];
 const EMPTY_PROJECTION_RUNS: OrchestrationV2ThreadProjection["runs"] = [];
+const EMPTY_SUBAGENT_ACTIVATIONS: OrchestrationV2ThreadProjection["subagentActivations"] = [];
 const EMPTY_ATTACHMENT_IDS: string[] = [];
 const EMPTY_PENDING_USER_INPUT_ANSWERS: Record<string, PendingUserInputDraftAnswer> = {};
 
@@ -6372,6 +6373,9 @@ function ChatViewContent(props: ChatViewProps) {
               {/* Messages — LegendList handles virtualization and scrolling internally */}
               <MessagesTimeline
                 agentPanelModel={agentPanelModel}
+                subagentActivations={
+                  serverProjection?.subagentActivations ?? EMPTY_SUBAGENT_ACTIVATIONS
+                }
                 onOpenAgents={addAgentsSurface}
                 key={activeThread.id}
                 isWorking={isWorking}

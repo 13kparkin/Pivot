@@ -32,6 +32,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import * as Queue from "effect/Queue";
+import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
@@ -60,6 +61,7 @@ import {
   claudeMcpQueryOverrides,
   claudeQueryMessages,
   claudeRuntimeQueryPolicyForRuntimePolicy,
+  commitClaudeSubagentRegistryEntry,
   loggedClaudeQueryOptions,
   makeClaudeAdapterV2,
   makeClaudeAgentSdkProtocolLogger,
@@ -79,6 +81,32 @@ const CLAUDE_TEST_RUNTIME_POLICY = ProviderAdapterV2RuntimePolicy.make({
   runtimeMode: "full-access",
   interactionMode: "default",
   cwd: "/workspace",
+});
+
+describe("ClaudeAdapterV2 subagent registry", () => {
+  it.effect("rejects an active update that loses the registry race to a terminal update", () =>
+    Effect.gen(function* () {
+      type RegistryEntry = {
+        readonly task: { readonly status: "running" | "waiting" | "completed" };
+      };
+      const observed: RegistryEntry = { task: { status: "running" } };
+      const terminal: RegistryEntry = { task: { status: "completed" } };
+      const stale: RegistryEntry = { task: { status: "waiting" } };
+      const registry = yield* Ref.make(new Map<string, RegistryEntry>([["task-race", terminal]]));
+
+      const committed = yield* commitClaudeSubagentRegistryEntry({
+        registry,
+        taskId: "task-race",
+        observed,
+        candidate: stale,
+        activeStart: true,
+        isReopen: false,
+      });
+
+      assert.isFalse(committed);
+      assert.strictEqual((yield* Ref.get(registry)).get("task-race"), terminal);
+    }),
+  );
 });
 
 function makeClaudeTestAppThread(input: {

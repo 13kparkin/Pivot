@@ -2230,6 +2230,38 @@ interface ActiveClaudeProviderRetry {
   readonly itemOrdinal: number;
 }
 
+interface ClaudeSubagentRegistryEntry {
+  readonly task: Pick<OrchestrationV2Subagent, "status">;
+}
+
+export const commitClaudeSubagentRegistryEntry = Effect.fnUntraced(function* <
+  Entry extends ClaudeSubagentRegistryEntry,
+>(input: {
+  readonly registry: Ref.Ref<Map<string, Entry>>;
+  readonly taskId: string;
+  readonly observed: Entry | undefined;
+  readonly candidate: Entry;
+  readonly activeStart: boolean;
+  readonly isReopen: boolean;
+}) {
+  return yield* Ref.modify(input.registry, (current) => {
+    const registered = current.get(input.taskId);
+    const registeredSettled =
+      registered !== undefined &&
+      (registered.task.status === "completed" ||
+        registered.task.status === "failed" ||
+        registered.task.status === "cancelled");
+    if (
+      registeredSettled &&
+      input.activeStart &&
+      !(input.isReopen && registered === input.observed)
+    ) {
+      return [false, current] as const;
+    }
+    return [true, new Map(current).set(input.taskId, input.candidate)] as const;
+  });
+});
+
 interface ActiveClaudeSubagent {
   task: OrchestrationV2Subagent;
   activation: OrchestrationV2SubagentActivation;
@@ -3022,9 +3054,6 @@ export function makeClaudeAdapterV2(
               driver: CLAUDE_PROVIDER,
               nativeThreadId: `${input.context.input.providerThread.id}:${input.taskId}`,
             });
-          if (existingSubagent === undefined) {
-            input.context.subagentNodesByTaskId.set(input.taskId, nodeId);
-          }
           const turnItemOrdinal =
             existingSubagent?.turnItemOrdinal ??
             (yield* resolveItemOrdinal(input.context, `${nativeItemId}:subagent`));
@@ -3159,10 +3188,6 @@ export function makeClaudeAdapterV2(
             // Consumed once the reopen it was recording has been applied.
             resumePending: isReopen ? false : (existingSubagent?.resumePending ?? false),
           } satisfies ActiveClaudeSubagent;
-          input.context.subagentsByTaskId.set(input.taskId, subagent);
-          if (input.toolUseId !== undefined) {
-            input.context.subagentsByToolUseId.set(input.toolUseId, subagent);
-          }
           // The same terminal protection, applied atomically: a concurrent
           // fiber (live stream vs continuation drain) may have terminalized
           // the registry entry after this update's lookup read it. A resume
@@ -3170,22 +3195,25 @@ export function makeClaudeAdapterV2(
           // is still the terminal generation the lookup resolved; if a
           // concurrent fiber installed a newer terminal entry meanwhile, the
           // re-open must not clobber its result.
-          yield* Ref.update(sessionSubagentsByTaskId, (current) => {
-            const registered = current.get(input.taskId);
-            const registeredSettled =
-              registered !== undefined &&
-              (registered.task.status === "completed" ||
-                registered.task.status === "failed" ||
-                registered.task.status === "cancelled");
-            if (
-              registeredSettled &&
-              activeStart &&
-              !(isReopen && registered === existingSubagent)
-            ) {
-              return current;
-            }
-            return new Map(current).set(input.taskId, subagent);
+          const committed = yield* commitClaudeSubagentRegistryEntry({
+            registry: sessionSubagentsByTaskId,
+            taskId: input.taskId,
+            observed: existingSubagent,
+            candidate: subagent,
+            activeStart,
+            isReopen,
           });
+          if (!committed) {
+            return;
+          }
+
+          if (existingSubagent === undefined) {
+            input.context.subagentNodesByTaskId.set(input.taskId, nodeId);
+          }
+          input.context.subagentsByTaskId.set(input.taskId, subagent);
+          if (input.toolUseId !== undefined) {
+            input.context.subagentsByToolUseId.set(input.toolUseId, subagent);
+          }
 
           if (existingSubagent === undefined) {
             const childThread = makeSubagentChildThread({
