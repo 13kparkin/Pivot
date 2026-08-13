@@ -16,6 +16,7 @@ import {
   type ProviderSessionStartInput,
   type ProviderSendTurnInput,
   type ProviderUserInputAnswers,
+  type ServerProviderModel,
   ProviderDriverKind,
   type RuntimeMode,
   type ThreadId,
@@ -249,6 +250,19 @@ export class OmpAdapter {
     });
   }
 
+  public discoverModels(threadId: ThreadId) {
+    return Effect.gen({ self: this }, function* () {
+      if (!this.#sessions.has(threadId)) {
+        return yield* new ProviderAdapterSessionNotFoundError({
+          provider: PROVIDER,
+          threadId,
+        });
+      }
+      const response = yield* this.runtime.send(threadId, { type: "get_available_models" });
+      return yield* modelsFromAvailableModelsResponse(response);
+    });
+  }
+
   #onFrame(session: LiveAdapterSession, frame: object): Effect.Effect<void> {
     if (!isRecord(frame) || typeof frame.type !== "string") {
       return Effect.void;
@@ -318,4 +332,42 @@ export class OmpAdapter {
 
 function isLocalOnlyPromptResponse(response: object): boolean {
   return isRecord(response) && isRecord(response.data) && response.data.agentInvoked === false;
+}
+
+function modelsFromAvailableModelsResponse(
+  response: object,
+): Effect.Effect<ReadonlyArray<ServerProviderModel>, ProviderAdapterRequestError> {
+  if (!isRecord(response) || !isRecord(response.data) || !Array.isArray(response.data.models)) {
+    return Effect.fail(
+      new ProviderAdapterRequestError({
+        provider: PROVIDER,
+        method: "get_available_models",
+        detail: "response data.models must be an array",
+      }),
+    );
+  }
+  const models: ServerProviderModel[] = [];
+  for (const entry of response.data.models) {
+    if (!isRecord(entry) || typeof entry.provider !== "string" || typeof entry.id !== "string") {
+      return Effect.fail(
+        new ProviderAdapterRequestError({
+          provider: PROVIDER,
+          method: "get_available_models",
+          detail: "each model requires provider and id strings",
+        }),
+      );
+    }
+    const provider = entry.provider.trim();
+    const id = entry.id.trim();
+    const slug = `${provider}/${id}`;
+    const name =
+      typeof entry.name === "string" && entry.name.trim().length > 0 ? entry.name.trim() : slug;
+    models.push({
+      slug,
+      name,
+      isCustom: false,
+      capabilities: null,
+    });
+  }
+  return Effect.succeed(models);
 }
