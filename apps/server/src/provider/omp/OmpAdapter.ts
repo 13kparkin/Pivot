@@ -22,8 +22,10 @@ import {
   type ThreadId,
   TurnId,
 } from "@t3tools/contracts";
+import * as Cause from "effect/Cause";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
 
@@ -111,6 +113,7 @@ export class OmpAdapter {
         Stream.runForEach((frame) => this.#onFrame(session, frame)),
         Effect.forkChild,
       );
+      yield* this.#applyModelSelection(input.threadId, input.modelSelection?.model);
       return snapshot;
     });
   }
@@ -126,6 +129,7 @@ export class OmpAdapter {
       }
       const turnId = TurnId.make(globalThis.crypto.randomUUID());
       session.turnId = turnId;
+      yield* this.#applyModelSelection(input.threadId, input.modelSelection?.model);
       const response = yield* this.runtime.send(input.threadId, {
         type: "prompt",
         ...(input.input === undefined ? {} : { message: input.input }),
@@ -311,6 +315,46 @@ export class OmpAdapter {
     });
   }
 
+  #applyModelSelection(threadId: ThreadId, model: string | undefined) {
+    return Effect.gen({ self: this }, function* () {
+      if (model === undefined) {
+        return;
+      }
+      const parsed = parseOmpModelSlug(model);
+      if (!parsed) {
+        yield* this.#clearLiveSession(threadId);
+        return yield* new ProviderAdapterRequestError({
+          provider: PROVIDER,
+          method: "set_model",
+          detail: `invalid omp model slug: ${model}`,
+        });
+      }
+      const exit = yield* Effect.exit(
+        this.runtime.send(threadId, {
+          type: "set_model",
+          provider: parsed.provider,
+          modelId: parsed.modelId,
+        }),
+      );
+      if (Exit.isFailure(exit)) {
+        yield* this.#clearLiveSession(threadId);
+        const cause = Cause.squash(exit.cause);
+        return yield* new ProviderAdapterRequestError({
+          provider: PROVIDER,
+          method: "set_model",
+          detail: cause instanceof Error ? cause.message : String(cause),
+        });
+      }
+    });
+  }
+
+  #clearLiveSession(threadId: ThreadId) {
+    return Effect.gen({ self: this }, function* () {
+      this.#sessions.delete(threadId);
+      yield* this.runtime.dispose(threadId);
+    });
+  }
+
   #emit(
     event: Omit<ProviderRuntimeEvent, "eventId" | "provider" | "createdAt"> & {
       readonly turnId?: TurnId | undefined;
@@ -328,6 +372,14 @@ export class OmpAdapter {
       } as ProviderRuntimeEvent);
     });
   }
+}
+
+function parseOmpModelSlug(slug: string): { provider: string; modelId: string } | null {
+  const slash = slug.indexOf("/");
+  if (slash <= 0 || slash === slug.length - 1) {
+    return null;
+  }
+  return { provider: slug.slice(0, slash), modelId: slug.slice(slash + 1) };
 }
 
 function isLocalOnlyPromptResponse(response: object): boolean {

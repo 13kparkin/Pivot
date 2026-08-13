@@ -5,6 +5,7 @@ import {
   ApprovalRequestId,
   type ProviderRuntimeEvent,
   ProviderDriverKind,
+  ProviderInstanceId,
   ThreadId,
 } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
@@ -20,6 +21,7 @@ import { OmpAdapter } from "./OmpAdapter.ts";
 
 class FakeOmpRpc {
   agentInvoked: boolean | undefined = true;
+  failSetModel = false;
   sessionFile = "/tmp/omp-session.jsonl";
   availableModels: ReadonlyArray<object> = [];
   readonly sent: Array<Record<string, unknown>> = [];
@@ -40,6 +42,9 @@ class FakeOmpRpc {
 
   send(_sessionKey: string, command: Record<string, unknown>) {
     this.sent.push(command);
+    if (command.type === "set_model" && this.failSetModel) {
+      return Effect.fail(new Error("set_model failed"));
+    }
     if (command.type === "get_available_models") {
       return Effect.succeed({
         type: "response",
@@ -370,6 +375,67 @@ describe("OmpAdapter", () => {
           { slug: "anthropic/claude-sonnet-4", name: "Claude Sonnet 4", isCustom: false },
         ],
       );
+    }),
+  );
+
+  it.effect("sendTurn applies modelSelection via set_model before prompt", () =>
+    Effect.gen(function* () {
+      const fake = new FakeOmpRpc();
+      const adapter = new OmpAdapter(fake);
+      yield* adapter.startSession(startInput);
+      yield* adapter.sendTurn({
+        threadId: THREAD_ID,
+        input: "hi",
+        modelSelection: {
+          instanceId: ProviderInstanceId.make("omp"),
+          model: "openai/gpt-5",
+        },
+      });
+      NodeAssert.deepEqual(
+        fake.sent.map((command) => command.type),
+        ["set_model", "prompt"],
+      );
+      NodeAssert.equal(fake.sent[0]?.provider, "openai");
+      NodeAssert.equal(fake.sent[0]?.modelId, "gpt-5");
+    }),
+  );
+
+  it.effect("startSession applies modelSelection via set_model", () =>
+    Effect.gen(function* () {
+      const fake = new FakeOmpRpc();
+      const adapter = new OmpAdapter(fake);
+      yield* adapter.startSession({
+        ...startInput,
+        modelSelection: {
+          instanceId: ProviderInstanceId.make("omp"),
+          model: "anthropic/claude-sonnet-4",
+        },
+      });
+      NodeAssert.equal(fake.sent.at(-1)?.type, "set_model");
+      NodeAssert.equal(fake.sent.at(-1)?.provider, "anthropic");
+      NodeAssert.equal(fake.sent.at(-1)?.modelId, "claude-sonnet-4");
+    }),
+  );
+
+  it.effect("set_model failure disposes the live session for a clean retry", () =>
+    Effect.gen(function* () {
+      const fake = new FakeOmpRpc();
+      fake.failSetModel = true;
+      const adapter = new OmpAdapter(fake);
+      yield* adapter.startSession(startInput);
+      const exit = yield* Effect.exit(
+        adapter.sendTurn({
+          threadId: THREAD_ID,
+          input: "hi",
+          modelSelection: {
+            instanceId: ProviderInstanceId.make("omp"),
+            model: "openai/missing",
+          },
+        }),
+      );
+      NodeAssert.equal(Exit.isFailure(exit), true);
+      NodeAssert.deepEqual(fake.disposed, [THREAD_ID]);
+      NodeAssert.equal(yield* adapter.hasSession(THREAD_ID), false);
     }),
   );
 });
