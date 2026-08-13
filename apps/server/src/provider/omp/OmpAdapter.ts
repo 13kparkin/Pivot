@@ -8,11 +8,14 @@
  * @module provider/omp/OmpAdapter
  */
 import {
+  type ApprovalRequestId,
   EventId,
+  type ProviderApprovalDecision,
   type ProviderRuntimeEvent,
   type ProviderSession,
   type ProviderSessionStartInput,
   type ProviderSendTurnInput,
+  type ProviderUserInputAnswers,
   ProviderDriverKind,
   type RuntimeMode,
   type ThreadId,
@@ -23,7 +26,11 @@ import * as Effect from "effect/Effect";
 import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
 
-import { ProviderAdapterSessionNotFoundError, ProviderAdapterValidationError } from "../Errors.ts";
+import {
+  ProviderAdapterRequestError,
+  ProviderAdapterSessionNotFoundError,
+  ProviderAdapterValidationError,
+} from "../Errors.ts";
 import type { OmpRpcRuntime } from "./OmpRpcRuntime.ts";
 
 const PROVIDER = ProviderDriverKind.make("omp");
@@ -158,6 +165,86 @@ export class OmpAdapter {
       this.#sessions.clear();
       yield* Effect.forEach(threadIds, (threadId) => this.runtime.dispose(threadId), {
         discard: true,
+      });
+    });
+  }
+
+  public interruptTurn(threadId: ThreadId, _turnId?: TurnId) {
+    return Effect.gen({ self: this }, function* () {
+      if (!this.#sessions.has(threadId)) {
+        return yield* new ProviderAdapterSessionNotFoundError({
+          provider: PROVIDER,
+          threadId,
+        });
+      }
+      yield* this.runtime.send(threadId, { type: "abort" });
+    });
+  }
+
+  public readThread(threadId: ThreadId) {
+    return Effect.gen({ self: this }, function* () {
+      if (!this.#sessions.has(threadId)) {
+        return yield* new ProviderAdapterSessionNotFoundError({
+          provider: PROVIDER,
+          threadId,
+        });
+      }
+      return { threadId, turns: [] as const };
+    });
+  }
+
+  public rollbackThread(threadId: ThreadId, _numTurns: number) {
+    return Effect.gen({ self: this }, function* () {
+      if (!this.#sessions.has(threadId)) {
+        return yield* new ProviderAdapterSessionNotFoundError({
+          provider: PROVIDER,
+          threadId,
+        });
+      }
+      return yield* new ProviderAdapterRequestError({
+        provider: PROVIDER,
+        method: "rollbackThread",
+        detail: "unsupported: omp branch rollback is not wired yet",
+      });
+    });
+  }
+
+  public respondToRequest(
+    threadId: ThreadId,
+    _requestId: ApprovalRequestId,
+    _decision: ProviderApprovalDecision,
+  ) {
+    return Effect.gen({ self: this }, function* () {
+      if (!this.#sessions.has(threadId)) {
+        return yield* new ProviderAdapterSessionNotFoundError({
+          provider: PROVIDER,
+          threadId,
+        });
+      }
+      return yield* new ProviderAdapterRequestError({
+        provider: PROVIDER,
+        method: "respondToRequest",
+        detail: "unsupported: extension_ui_request approval bridge is not wired yet",
+      });
+    });
+  }
+
+  public respondToUserInput(
+    threadId: ThreadId,
+    _requestId: ApprovalRequestId,
+    _answers: ProviderUserInputAnswers,
+  ) {
+    return Effect.gen({ self: this }, function* () {
+      if (!this.#sessions.has(threadId)) {
+        return yield* new ProviderAdapterSessionNotFoundError({
+          provider: PROVIDER,
+          threadId,
+        });
+      }
+      return yield* new ProviderAdapterRequestError({
+        provider: PROVIDER,
+        method: "respondToUserInput",
+        detail: "unsupported: extension_ui_request user-input bridge is not wired yet",
       });
     });
   }

@@ -7,6 +7,7 @@ import {
   ProviderDriverKind,
   ThreadId,
 } from "@t3tools/contracts";
+import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
@@ -283,8 +284,7 @@ describe("OmpAdapter", () => {
       const exit = yield* Effect.exit(adapter.interruptTurn(THREAD_ID));
       NodeAssert.equal(Exit.isFailure(exit), true);
       if (Exit.isFailure(exit)) {
-        const error = exit.cause.failures[0];
-        NodeAssert.ok(error instanceof ProviderAdapterSessionNotFoundError);
+        NodeAssert.ok(Cause.squash(exit.cause) instanceof ProviderAdapterSessionNotFoundError);
       }
     }),
   );
@@ -305,7 +305,7 @@ describe("OmpAdapter", () => {
       const exit = yield* Effect.exit(adapter.rollbackThread(THREAD_ID, 1));
       NodeAssert.equal(Exit.isFailure(exit), true);
       if (Exit.isFailure(exit)) {
-        const error = exit.cause.failures[0];
+        const error = Cause.squash(exit.cause);
         NodeAssert.ok(error instanceof ProviderAdapterRequestError);
         NodeAssert.match(error.detail, /unsupported/i);
       }
@@ -321,7 +321,7 @@ describe("OmpAdapter", () => {
       );
       NodeAssert.equal(Exit.isFailure(exit), true);
       if (Exit.isFailure(exit)) {
-        const error = exit.cause.failures[0];
+        const error = Cause.squash(exit.cause);
         NodeAssert.ok(error instanceof ProviderAdapterRequestError);
         NodeAssert.match(error.detail, /unsupported/i);
       }
@@ -337,7 +337,7 @@ describe("OmpAdapter", () => {
       );
       NodeAssert.equal(Exit.isFailure(exit), true);
       if (Exit.isFailure(exit)) {
-        const error = exit.cause.failures[0];
+        const error = Cause.squash(exit.cause);
         NodeAssert.ok(error instanceof ProviderAdapterRequestError);
         NodeAssert.match(error.detail, /unsupported/i);
       }
