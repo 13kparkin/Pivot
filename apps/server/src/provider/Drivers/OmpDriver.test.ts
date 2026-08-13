@@ -20,6 +20,7 @@ import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 import { describe } from "vite-plus/test";
 
 import * as ServerConfig from "../../config.ts";
+import * as ServerSettings from "../../serverSettings.ts";
 import { OmpDriver } from "./OmpDriver.ts";
 
 function makeTempOmpBinary(): string {
@@ -31,7 +32,11 @@ function makeTempOmpBinary(): string {
 
 const OmpDriverTestLayer = ServerConfig.layerTest(process.cwd(), {
   prefix: "t3code-omp-driver-test-",
-}).pipe(Layer.provideMerge(NodeServices.layer), Layer.provideMerge(FetchHttpClient.layer));
+}).pipe(
+  Layer.provideMerge(ServerSettings.layerTest()),
+  Layer.provideMerge(NodeServices.layer),
+  Layer.provideMerge(FetchHttpClient.layer),
+);
 
 const realOmpBinary = (() => {
   try {

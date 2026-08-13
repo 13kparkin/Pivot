@@ -45,11 +45,11 @@ yay -S t3code-bin
 
 Pivot drives omp; it does not ship the CLI. Install omp on the server host, then authenticate it.
 
-| Provider | CLI                   | Default binary | Notes                                                                                                                       |
-| -------- | --------------------- | -------------- | --------------------------------------------------------------------------------------------------------------------------- |
-| omp      | [omp](https://omp.sh) | `omp`          | Required. Optional: [rtk](https://github.com/rtk-ai/rtk) + `omp plugin install github:authrequest/pi-rtk` for bash rewrite. |
+| Provider | CLI                   | Default binary | Notes                                                                                                         |
+| -------- | --------------------- | -------------- | ------------------------------------------------------------------------------------------------------------- |
+| omp      | [omp](https://omp.sh) | `omp`          | Required. Settings → Install also ships managed [rtk](https://github.com/rtk-ai/rtk) and activates omp hooks. |
 
-Run login and plugin install on the machine running the T3 Code server, not on the device you browse from.
+Run omp login on the machine running the T3 Code server, not on the device you browse from.
 
 ### Binary Discovery
 

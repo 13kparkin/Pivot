@@ -136,6 +136,7 @@ type SpawnedCommand = {
   readonly options: {
     readonly cwd?: string;
     readonly extendEnv?: boolean;
+    readonly env?: Record<string, string>;
     readonly stdin?: { readonly stream: "pipe"; readonly endOnDone: false };
   };
 };
@@ -150,6 +151,7 @@ function asSpawnedCommand(command: ChildProcess.Command): SpawnedCommand {
     throw new Error("expected StandardCommand");
   }
   const stdin = command.options.stdin;
+  const env = command.options.env;
   return {
     command: command.command,
     args: command.args,
@@ -158,6 +160,7 @@ function asSpawnedCommand(command: ChildProcess.Command): SpawnedCommand {
       ...(typeof command.options.extendEnv === "boolean"
         ? { extendEnv: command.options.extendEnv }
         : {}),
+      ...(env && typeof env === "object" ? { env: env as Record<string, string> } : {}),
       ...(typeof stdin === "object" &&
       stdin !== null &&
       "stream" in stdin &&
@@ -272,7 +275,9 @@ describe("OmpRpcRuntime", () => {
   it.effect("spawns the configured binary in rpc mode without disabling extensions", () =>
     Effect.gen(function* () {
       const fake = makeFakeOmpSpawner({ sessionFile: "/tmp/omp-session.jsonl" });
-      const runtime = new OmpRpcRuntime(fake.spawner, "/opt/omp");
+      const runtime = new OmpRpcRuntime(fake.spawner, "/opt/omp", {
+        pathPrefixDirs: ["/managed/rtk/current"],
+      });
       yield* runtime.ensureSession({
         sessionKey: "thread-1",
         cwd: "/proj",
@@ -285,6 +290,8 @@ describe("OmpRpcRuntime", () => {
       NodeAssert.equal(fake.spawns[0]?.options.cwd, "/proj");
       NodeAssert.equal(fake.spawns[0]?.options.extendEnv, true);
       NodeAssert.deepEqual(fake.spawns[0]?.options.stdin, { stream: "pipe", endOnDone: false });
+      const pathEnv = fake.spawns[0]?.options.env?.PATH ?? "";
+      NodeAssert.ok(pathEnv.includes("/managed/rtk/current"));
     }),
   );
 

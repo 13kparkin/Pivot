@@ -7,6 +7,7 @@
  *
  * @module provider/omp/OmpRpcRuntime
  */
+import { mergePathValues } from "@t3tools/shared/shell";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -15,6 +16,7 @@ import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
+import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 
 /** Maximum UTF-8 size of one newline-delimited RPC frame, including the newline. */
 export const MAX_RPC_FRAME_BYTES = 1024 * 1024;
@@ -187,6 +189,11 @@ interface LiveOmpSession {
   readonly pending: Map<string, Deferred.Deferred<object, OmpSpawnError>>;
 }
 
+export interface OmpRpcRuntimeOptions {
+  /** Directories prepended to PATH for the omp child (e.g. managed rtk). */
+  readonly pathPrefixDirs?: ReadonlyArray<string>;
+}
+
 /**
  * Spawns and owns one `omp --mode rpc` child per T3 thread session.
  */
@@ -195,13 +202,16 @@ export class OmpRpcRuntime {
   #nextRequestId = 0;
   readonly #processSpawner: ChildProcessSpawner.ChildProcessSpawner["Service"];
   #binaryPath: string;
+  readonly #pathPrefixDirs: ReadonlyArray<string>;
 
   public constructor(
     processSpawner: ChildProcessSpawner.ChildProcessSpawner["Service"],
     binaryPath: string,
+    options?: OmpRpcRuntimeOptions,
   ) {
     this.#processSpawner = processSpawner;
     this.#binaryPath = binaryPath;
+    this.#pathPrefixDirs = options?.pathPrefixDirs ?? [];
   }
 
   /** Update the spawn binary after a managed install/refresh. */
@@ -218,12 +228,19 @@ export class OmpRpcRuntime {
         return existing.handle;
       }
 
+      const platform = yield* HostProcessPlatform;
+      const preferredPath =
+        this.#pathPrefixDirs.length > 0
+          ? this.#pathPrefixDirs.join(platform === "win32" ? ";" : ":")
+          : undefined;
+      const mergedPath = mergePathValues(preferredPath, process.env.PATH, platform);
       const scope = yield* Scope.make();
       const child = yield* this.#processSpawner
         .spawn(
           ChildProcess.make(this.#binaryPath, ["--mode", "rpc"], {
             cwd: input.cwd,
             extendEnv: true,
+            ...(mergedPath !== undefined ? { env: { PATH: mergedPath } } : {}),
             // Keep stdin open across many RPC writes. Default endOnDone ends the
             // pipe after the first Stream.run, which hangs the next command.
             stdin: { stream: "pipe", endOnDone: false },

@@ -4,15 +4,14 @@ Pivot drives [omp](https://omp.sh) over `omp --mode rpc`. omp is the only built-
 
 ## Install
 
-1. Open **Settings → omp** and click **Install** to download a managed omp binary into the T3 home (`tools/omp/`), or install the `omp` CLI yourself and set **Binary path**.
+1. Open **Settings → omp** and click **Install**. Pivot downloads a managed omp binary into the T3 home (`tools/omp/`), then downloads managed [rtk](https://github.com/rtk-ai/rtk) into `tools/rtk/` and runs `rtk init -g --agent omp` so bash rewrite hooks are active for omp.
 2. Authenticate omp for the models you use (Settings → omp accounts, or `omp login` on the server host).
-3. Optional token savings: install [rtk](https://github.com/rtk-ai/rtk) on that same PATH, then install the omp plugin for the omp user the server uses:
 
-```bash
-omp plugin install github:authrequest/pi-rtk
-```
+When Pivot detects that managed omp **or** managed rtk is behind the latest GitHub release, Settings shows the same Update action. Updating refreshes both binaries and re-runs the omp hook init.
 
-With `rtk` present, agent bash calls can be rewritten via `rtk rewrite`. If `rtk` is missing, commands still run as written.
+You can still point **Binary path** at your own `omp`. In that case Pivot does not manage rtk for you.
+
+Unsupported hosts (for example linux musl on arm64 for rtk) fail Install with a clear error.
 
 ## Settings
 

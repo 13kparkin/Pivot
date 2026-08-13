@@ -32,6 +32,7 @@ import {
   OMP_MANAGED_UPDATE_LOCK_KEY,
   OmpManagedBinaryError,
 } from "./omp/OmpManagedBinary.ts";
+import { makeRtkManagedBinary, RtkManagedBinaryError } from "./omp/RtkManagedBinary.ts";
 import { makeProviderMaintenanceCommandCoordinator } from "./providerMaintenanceCommandCoordinator.ts";
 import { enrichProviderSnapshotWithVersionAdvisory } from "./providerMaintenance.ts";
 import type { ProviderMaintenanceCapabilities } from "./providerMaintenance.ts";
@@ -259,8 +260,37 @@ export const make = Effect.fn("ProviderMaintenanceRunner.make")(function* () {
             }),
         ),
       );
+      const rtk = yield* provideOmpManagedBinaryServices(
+        makeRtkManagedBinary({
+          baseDir: serverConfig.baseDir,
+        }),
+      );
+      const rtkInstalled = yield* rtk.install.pipe(
+        Effect.mapError(
+          (cause) =>
+            new ProviderMaintenanceCommandError({
+              message:
+                cause instanceof RtkManagedBinaryError
+                  ? cause.message
+                  : "Managed rtk install failed.",
+              cause,
+            }),
+        ),
+      );
+      yield* rtk.activateOmpHook.pipe(
+        Effect.mapError(
+          (cause) =>
+            new ProviderMaintenanceCommandError({
+              message:
+                cause instanceof RtkManagedBinaryError
+                  ? cause.message
+                  : "Managed rtk omp hook activation failed.",
+              cause,
+            }),
+        ),
+      );
       return {
-        stdout: `Installed omp ${installed.version ?? "unknown"} at ${installed.executablePath}`,
+        stdout: `Installed omp ${installed.version ?? "unknown"} at ${installed.executablePath}; rtk ${rtkInstalled.version ?? "unknown"} at ${rtkInstalled.executablePath}; ran rtk init -g --agent omp`,
         stderr: "",
         exitCode: 0,
         timedOut: false,

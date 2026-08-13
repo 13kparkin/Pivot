@@ -17,7 +17,7 @@ Credit for the architecture, clients, and product taste goes to the T3 Code main
 ## Installation
 
 > [!WARNING]
-> You need [omp](https://omp.sh) available to the server (Settings → omp → Install, or your own `omp` on PATH), then authenticate for the models you use. See [omp setup](./docs/user/providers-omp.md).
+> You need [omp](https://omp.sh) available to the server. Settings → omp → Install downloads managed omp + [rtk](https://github.com/rtk-ai/rtk) and activates omp rewrite hooks. Then authenticate for the models you use. See [omp setup](./docs/user/providers-omp.md).
 
 ### Try it out (install-free)
 

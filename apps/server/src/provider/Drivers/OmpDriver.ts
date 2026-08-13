@@ -30,8 +30,10 @@ import { HttpClient } from "effect/unstable/http";
 import { ChildProcessSpawner } from "effect/unstable/process";
 
 import * as ServerConfig from "../../config.ts";
+import { ServerSettingsService } from "../../serverSettings.ts";
 import { makeOmpTextGeneration } from "../../textGeneration/OmpTextGeneration.ts";
 import { OmpAdapter } from "../omp/OmpAdapter.ts";
+import { enrichOmpManagedBundleVersionAdvisory } from "../omp/OmpManagedBundleAdvisory.ts";
 import {
   makeOmpManagedBinary,
   OMP_MANAGED_UPDATE_EXECUTABLE,
@@ -64,7 +66,8 @@ export type OmpDriverEnv =
   | FileSystem.FileSystem
   | HttpClient.HttpClient
   | Path.Path
-  | ServerConfig.ServerConfig;
+  | ServerConfig.ServerConfig
+  | ServerSettingsService;
 
 const withInstanceIdentity =
   (input: {
@@ -108,15 +111,50 @@ function makeOmpSnapshot(input: {
   readonly adapter: OmpAdapter;
   readonly runtime: OmpRpcRuntime;
   readonly randomUUID: Effect.Effect<string>;
+  readonly baseDir: string;
   readonly resolveBinary: Effect.Effect<{
     readonly installed: boolean;
     readonly binaryPath: string | null;
     readonly version: string | null;
     readonly source: "override" | "managed" | "path" | "missing" | "unsupported";
   }>;
-}): Effect.Effect<ServerProviderShape, never, Scope.Scope> {
+}): Effect.Effect<
+  ServerProviderShape,
+  never,
+  | Scope.Scope
+  | ChildProcessSpawner.ChildProcessSpawner
+  | Crypto.Crypto
+  | FileSystem.FileSystem
+  | HttpClient.HttpClient
+  | Path.Path
+  | ServerSettingsService
+> {
   return Effect.gen(function* () {
     const maintenanceCapabilities = makeOmpMaintenanceCapabilities();
+    const serverSettings = yield* ServerSettingsService;
+    const httpClient = yield* HttpClient.HttpClient;
+    const crypto = yield* Crypto.Crypto;
+    const fileSystem = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+    const provideBundleServices = <A, E>(
+      effect: Effect.Effect<
+        A,
+        E,
+        | ChildProcessSpawner.ChildProcessSpawner
+        | Crypto.Crypto
+        | FileSystem.FileSystem
+        | HttpClient.HttpClient
+        | Path.Path
+      >,
+    ) =>
+      effect.pipe(
+        Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+        Effect.provideService(Crypto.Crypto, crypto),
+        Effect.provideService(FileSystem.FileSystem, fileSystem),
+        Effect.provideService(HttpClient.HttpClient, httpClient),
+        Effect.provideService(Path.Path, path),
+      );
 
     const buildSnapshot = (
       models: ReadonlyArray<ServerProviderModel>,
@@ -160,9 +198,22 @@ function makeOmpSnapshot(input: {
 
     const publish = (snapshot: ServerProvider) =>
       Effect.gen(function* () {
-        yield* Ref.set(latest, snapshot);
-        yield* PubSub.publish(changes, snapshot);
-        return snapshot;
+        const enableProviderUpdateChecks = yield* serverSettings.getSettings.pipe(
+          Effect.map((settings) => settings.enableProviderUpdateChecks),
+          Effect.orElseSucceed(() => true),
+        );
+        const resolved = yield* input.resolveBinary;
+        const enriched = yield* provideBundleServices(
+          enrichOmpManagedBundleVersionAdvisory(snapshot, maintenanceCapabilities, {
+            baseDir: input.baseDir,
+            enableProviderUpdateChecks,
+            checkManagedRtk:
+              resolved.source === "managed" || resolved.source === "missing" || !resolved.installed,
+          }),
+        );
+        yield* Ref.set(latest, enriched);
+        yield* PubSub.publish(changes, enriched);
+        return enriched;
       });
 
     const refresh = Effect.gen(function* () {
@@ -307,8 +358,12 @@ export const OmpDriver: ProviderDriver<OmpSettings, OmpDriverEnv> = {
       const launchBinary =
         initialResolved.binaryPath ??
         (hasPathSeparator(binaryPathSetting) ? binaryPathSetting : binaryPathSetting || "omp");
+      const pathService = yield* Path.Path;
+      const rtkCurrentDir = pathService.join(serverConfig.baseDir, "tools", "rtk", "current");
 
-      const runtime = new OmpRpcRuntime(spawner, launchBinary);
+      const runtime = new OmpRpcRuntime(spawner, launchBinary, {
+        pathPrefixDirs: [rtkCurrentDir],
+      });
       const adapter = new OmpAdapter(runtime, randomUUID);
       yield* Effect.addFinalizer(() => adapter.stopAll());
 
@@ -322,6 +377,7 @@ export const OmpDriver: ProviderDriver<OmpSettings, OmpDriverEnv> = {
         adapter,
         runtime,
         randomUUID,
+        baseDir: serverConfig.baseDir,
         resolveBinary,
       });
       // Text generation re-resolves the managed binary per call so Install works
