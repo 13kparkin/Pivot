@@ -2,7 +2,8 @@
  * OmpDriver — ProviderDriver for `omp --mode rpc`.
  *
  * create() owns one OmpRpcRuntime + OmpAdapter per instance and tears them
- * down when the registry scope closes.
+ * down when the registry scope closes. Model discovery (AC3) probes
+ * `get_available_models` through a short-lived adapter session on refresh.
  *
  * @module provider/Drivers/OmpDriver
  */
@@ -11,6 +12,8 @@ import {
   ProviderDriverKind,
   TextGenerationError,
   type ServerProvider,
+  type ServerProviderModel,
+  ThreadId,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -74,39 +77,61 @@ function makeUnsupportedTextGeneration(): TextGeneration.TextGeneration["Service
   });
 }
 
-function makeStaticSnapshot(input: {
+function makeOmpSnapshot(input: {
   readonly stampIdentity: (draft: ServerProviderDraft) => ServerProvider;
   readonly enabled: boolean;
+  readonly adapter: OmpAdapter;
 }): Effect.Effect<ServerProviderShape> {
-  return Effect.gen(function* () {
-    const checkedAt = yield* nowIso;
-    const draft = buildServerProvider({
-      presentation: OMP_PRESENTATION,
-      enabled: input.enabled,
-      checkedAt,
-      models: [],
-      probe: {
-        installed: input.enabled,
-        version: null,
-        status: input.enabled ? "ready" : "warning",
-        auth: { status: "unknown" },
-        message: input.enabled
-          ? "omp models load from get_available_models at session time."
-          : "omp is disabled in T3 Code settings.",
-      },
-    });
-    const snapshot = input.stampIdentity(draft);
-    const maintenanceCapabilities = makeManualOnlyProviderMaintenanceCapabilities({
-      provider: DRIVER_KIND,
-      packageName: null,
-    });
-    return {
-      maintenanceCapabilities,
-      getSnapshot: Effect.succeed(snapshot),
-      refresh: Effect.succeed(snapshot),
-      streamChanges: Stream.empty,
-    } satisfies ServerProviderShape;
+  const maintenanceCapabilities = makeManualOnlyProviderMaintenanceCapabilities({
+    provider: DRIVER_KIND,
+    packageName: null,
   });
+
+  const buildSnapshot = (models: ReadonlyArray<ServerProviderModel>) =>
+    Effect.gen(function* () {
+      const checkedAt = yield* nowIso;
+      return input.stampIdentity(
+        buildServerProvider({
+          presentation: OMP_PRESENTATION,
+          enabled: input.enabled,
+          checkedAt,
+          models,
+          probe: {
+            installed: input.enabled,
+            version: null,
+            status: input.enabled ? "ready" : "warning",
+            auth: { status: "unknown" },
+            message: input.enabled
+              ? "omp models loaded from get_available_models."
+              : "omp is disabled in T3 Code settings.",
+          },
+        }),
+      );
+    });
+
+  const refresh = Effect.gen(function* () {
+    if (!input.enabled) {
+      return yield* buildSnapshot([]);
+    }
+    const threadId = ThreadId.make(`omp-model-probe-${globalThis.crypto.randomUUID()}`);
+    yield* input.adapter.startSession({
+      threadId,
+      provider: DRIVER_KIND,
+      cwd: process.cwd(),
+      runtimeMode: "full-access",
+    });
+    const models = yield* input.adapter
+      .discoverModels(threadId)
+      .pipe(Effect.ensuring(input.adapter.stopSession(threadId)));
+    return yield* buildSnapshot(models);
+  });
+
+  return Effect.succeed({
+    maintenanceCapabilities,
+    getSnapshot: refresh,
+    refresh,
+    streamChanges: Stream.empty,
+  } satisfies ServerProviderShape);
 }
 
 export const OmpDriver: ProviderDriver<OmpSettings, OmpDriverEnv> = {
@@ -135,9 +160,10 @@ export const OmpDriver: ProviderDriver<OmpSettings, OmpDriverEnv> = {
       const adapter = new OmpAdapter(runtime);
       yield* Effect.addFinalizer(() => adapter.stopAll());
 
-      const snapshot = yield* makeStaticSnapshot({
+      const snapshot = yield* makeOmpSnapshot({
         stampIdentity,
         enabled: effectiveConfig.enabled,
+        adapter,
       });
 
       return {
