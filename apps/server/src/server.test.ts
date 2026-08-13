@@ -113,6 +113,7 @@ import * as ProjectionSnapshotQuery from "./orchestration/Services/ProjectionSna
 import { SqlitePersistenceMemory } from "./persistence/Layers/Sqlite.ts";
 import { PersistenceSqlError } from "./persistence/Errors.ts";
 import * as ProviderRegistry from "./provider/Services/ProviderRegistry.ts";
+import * as ProviderService from "./provider/Services/ProviderService.ts";
 import { makeManualOnlyProviderMaintenanceCapabilities } from "./provider/providerMaintenance.ts";
 import * as ServerLifecycleEvents from "./serverLifecycleEvents.ts";
 import * as ServerRuntimeStartup from "./serverRuntimeStartup.ts";
@@ -626,20 +627,53 @@ const buildAppUnderTest = (options?: {
         }),
       ),
       Layer.provide(
-        Layer.mock(ProviderRegistry.ProviderRegistry)({
-          getProviders: Effect.succeed([]),
-          refresh: () => Effect.succeed([]),
-          refreshInstance: () => Effect.succeed([]),
-          getProviderMaintenanceCapabilitiesForInstance: (_instanceId, provider) =>
-            Effect.succeed(
-              makeManualOnlyProviderMaintenanceCapabilities({ provider, packageName: null }),
-            ),
-          setProviderMaintenanceActionState: () => Effect.succeed([]),
-          listOmpLoginProviders: () => Effect.succeed([]),
-          ompLogin: ({ providerId }) => Effect.succeed({ providerId }),
-          streamChanges: Stream.empty,
-          ...options?.layers?.providerRegistry,
-        }),
+        Layer.mergeAll(
+          Layer.mock(ProviderRegistry.ProviderRegistry)({
+            getProviders: Effect.succeed([]),
+            refresh: () => Effect.succeed([]),
+            refreshInstance: () => Effect.succeed([]),
+            getProviderMaintenanceCapabilitiesForInstance: (_instanceId, provider) =>
+              Effect.succeed(
+                makeManualOnlyProviderMaintenanceCapabilities({ provider, packageName: null }),
+              ),
+            setProviderMaintenanceActionState: () => Effect.succeed([]),
+            listOmpLoginProviders: () => Effect.succeed([]),
+            ompLogin: ({ providerId }) => Effect.succeed({ providerId }),
+            streamChanges: Stream.empty,
+            ...options?.layers?.providerRegistry,
+          }),
+          Layer.mock(ProviderService.ProviderService)({
+            startSession: () => Effect.die("ProviderService.startSession unsupported in test"),
+            sendTurn: () => Effect.die("ProviderService.sendTurn unsupported in test"),
+            interruptTurn: () => Effect.die("ProviderService.interruptTurn unsupported in test"),
+            respondToRequest: () =>
+              Effect.die("ProviderService.respondToRequest unsupported in test"),
+            respondToUserInput: () =>
+              Effect.die("ProviderService.respondToUserInput unsupported in test"),
+            stopSession: () => Effect.die("ProviderService.stopSession unsupported in test"),
+            listSessions: () => Effect.succeed([]),
+            getCapabilities: () => Effect.succeed({ sessionModelSwitch: "in-session" }),
+            getInstanceInfo: (instanceId) =>
+              Effect.succeed({
+                instanceId,
+                driverKind: ProviderDriverKind.make(String(instanceId)),
+                displayName: undefined,
+                enabled: true,
+                continuationIdentity: {
+                  driverKind: ProviderDriverKind.make(String(instanceId)),
+                  continuationKey: `${String(instanceId)}:instance:${instanceId}`,
+                },
+              }),
+            rollbackConversation: () =>
+              Effect.die("ProviderService.rollbackConversation unsupported in test"),
+            ompGetSubagentMessages: () =>
+              Effect.die("ProviderService.ompGetSubagentMessages unsupported in test"),
+            ompSteer: () => Effect.die("ProviderService.ompSteer unsupported in test"),
+            ompSetSubagentSubscription: () =>
+              Effect.die("ProviderService.ompSetSubagentSubscription unsupported in test"),
+            streamEvents: Stream.empty,
+          }),
+        ),
       ),
       Layer.provide(
         Layer.mock(ServerSettings.ServerSettingsService)({

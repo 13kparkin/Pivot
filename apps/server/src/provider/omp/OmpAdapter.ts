@@ -41,6 +41,7 @@ import {
   TurnId,
 } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
+import * as Clock from "effect/Clock";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -60,6 +61,7 @@ import { OmpSpawnError, type OmpRpcRuntime } from "./OmpRpcRuntime.ts";
 const PROVIDER = ProviderDriverKind.make("omp");
 const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
 const isProviderAdapterProcessError = Schema.is(ProviderAdapterProcessError);
+const isOmpSpawnError = Schema.is(OmpSpawnError);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -525,12 +527,12 @@ export class OmpAdapter {
               };
       yield* this.#runtime.write(threadId, response).pipe(
         Effect.mapError((cause) =>
-          cause instanceof OmpSpawnError
+          isOmpSpawnError(cause)
             ? mapOmpSpawnError(threadId, cause)
             : new ProviderAdapterRequestError({
                 provider: PROVIDER,
                 method: "respondToRequest",
-                detail: cause instanceof Error ? cause.message : String(cause),
+                detail: String(cause),
                 cause,
               }),
         ),
@@ -589,12 +591,12 @@ export class OmpAdapter {
         })
         .pipe(
           Effect.mapError((cause) =>
-            cause instanceof OmpSpawnError
+            isOmpSpawnError(cause)
               ? mapOmpSpawnError(threadId, cause)
               : new ProviderAdapterRequestError({
                   provider: PROVIDER,
                   method: "respondToUserInput",
-                  detail: cause instanceof Error ? cause.message : String(cause),
+                  detail: String(cause),
                   cause,
                 }),
           ),
@@ -1044,14 +1046,16 @@ export class OmpAdapter {
   }
 
   #maybeEmitLiveTokenUsage(session: LiveAdapterSession): Effect.Effect<void> {
-    if (session.turnId === undefined) {
-      return Effect.void;
-    }
-    const now = Date.now();
-    if (now - session.lastTokenUsageEmitAtMs < TOKEN_USAGE_EMIT_MIN_INTERVAL_MS) {
-      return Effect.void;
-    }
-    return this.#emitTokenUsageFromState(session).pipe(Effect.ignore);
+    return Effect.gen({ self: this }, function* () {
+      if (session.turnId === undefined) {
+        return;
+      }
+      const now = yield* Clock.currentTimeMillis;
+      if (now - session.lastTokenUsageEmitAtMs < TOKEN_USAGE_EMIT_MIN_INTERVAL_MS) {
+        return;
+      }
+      yield* this.#emitTokenUsageFromState(session).pipe(Effect.ignore);
+    });
   }
 
   #emitTokenUsageFromState(
@@ -1095,7 +1099,7 @@ export class OmpAdapter {
           ? statsResponse.data
           : undefined;
       const tokens = stats !== undefined && isRecord(stats.tokens) ? stats.tokens : undefined;
-      session.lastTokenUsageEmitAtMs = Date.now();
+      session.lastTokenUsageEmitAtMs = yield* Clock.currentTimeMillis;
       yield* this.#emit({
         type: "thread.token-usage.updated",
         threadId: session.threadId,
@@ -1743,24 +1747,6 @@ function modelsFromAvailableModelsResponse(
       name,
       isCustom: false,
       capabilities: null,
-      optionDescriptors: [
-        {
-          id: "effort",
-          label: "Thinking",
-          type: "select",
-          options: OMP_THINKING_LEVELS.map((level) => ({
-            id: level,
-            label: level,
-            ...(level === "medium" ? { isDefault: true } : {}),
-          })),
-        },
-        {
-          id: "fastMode",
-          label: "Fast mode",
-          type: "boolean",
-          currentValue: false,
-        },
-      ],
     });
   }
   return Effect.succeed(models);

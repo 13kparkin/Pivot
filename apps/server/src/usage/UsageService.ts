@@ -10,6 +10,7 @@
  */
 import * as NodeOS from "node:os";
 
+import * as NodeChildProcessSpawner from "@effect/platform-node/NodeChildProcessSpawner";
 import {
   USAGE_CONTRACT_VERSION,
   type UsageProviderKind,
@@ -28,6 +29,7 @@ import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import { HttpClient, HttpClientResponse } from "effect/unstable/http";
+import { ChildProcessSpawner } from "effect/unstable/process";
 
 import { ServerConfig } from "../config.ts";
 import { ServerSettingsService } from "../serverSettings.ts";
@@ -119,6 +121,7 @@ export const make = Effect.gen(function* () {
   const config = yield* ServerConfig;
   const httpClient = yield* HttpClient.HttpClient;
   const settingsService = yield* ServerSettingsService;
+  const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
 
   const fileCache: ScanCache = new Map();
   let cacheDirty = false;
@@ -391,7 +394,9 @@ export const make = Effect.gen(function* () {
       Effect.catchCause(() => Effect.succeed(null)),
     );
     const binaryPath = settings?.providers.omp.binaryPath?.trim() || "omp";
-    const planProviders = yield* Effect.promise(() => fetchOmpPlanUsage({ binaryPath, ompHome }));
+    const planProviders = yield* fetchOmpPlanUsage({ binaryPath, ompHome }).pipe(
+      Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+    );
 
     const readAt = yield* DateTime.now;
     const finishedAtMs = yield* Clock.currentTimeMillis;
@@ -421,4 +426,6 @@ export const make = Effect.gen(function* () {
   return { readSummary } as const;
 });
 
-export const layer = Layer.effect(UsageService, make);
+export const layer = Layer.effect(UsageService, make).pipe(
+  Layer.provide(NodeChildProcessSpawner.layer),
+);

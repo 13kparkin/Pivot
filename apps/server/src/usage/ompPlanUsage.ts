@@ -7,24 +7,12 @@
  *
  * @module ompPlanUsage
  */
-import * as NodeChildProcess from "node:child_process";
 import * as NodeOS from "node:os";
-import * as NodePath from "node:path";
-import * as NodeUtil from "node:util";
 
 import type { UsagePlanLimit, UsagePlanProvider } from "@t3tools/contracts";
-
-const execFile = NodeUtil.promisify(NodeChildProcess.execFile);
-
-export interface OmpUsageJsonReport {
-  readonly provider?: unknown;
-  readonly limits?: unknown;
-  readonly metadata?: unknown;
-}
-
-export interface OmpUsageJsonDocument {
-  readonly reports?: unknown;
-}
+import * as Effect from "effect/Effect";
+import * as Stream from "effect/Stream";
+import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   return typeof value === "object" && value !== null ? (value as Record<string, unknown>) : null;
@@ -39,82 +27,71 @@ function asString(value: unknown): string | undefined {
 }
 
 /** Maps one omp usage report into the wire shape. */
-export function mapOmpUsageReport(raw: unknown): UsagePlanProvider | null {
-  const report = asRecord(raw);
-  if (report === null) return null;
-  const provider = asString(report["provider"]);
+export function mapOmpUsageReport(report: unknown): UsagePlanProvider | null {
+  const row = asRecord(report);
+  if (row === null) return null;
+  const provider = asString(row.provider);
   if (provider === undefined) return null;
 
-  const metadata = asRecord(report["metadata"]);
-  const planType = metadata === null ? undefined : asString(metadata["planType"]);
-
-  const limitsRaw = report["limits"];
-  if (!Array.isArray(limitsRaw)) {
-    return { provider, ...(planType !== undefined ? { planType } : {}), limits: [] };
-  }
-
+  const limitsRaw = Array.isArray(row.limits) ? row.limits : [];
   const limits: UsagePlanLimit[] = [];
   for (const entry of limitsRaw) {
     const limit = asRecord(entry);
     if (limit === null) continue;
-    const id = asString(limit["id"]);
-    const label = asString(limit["label"]);
-    if (id === undefined || label === undefined) continue;
+    const id = asString(limit.id);
+    const label = asString(limit.label);
+    const status = asString(limit.status);
+    if (id === undefined || label === undefined || status === undefined) continue;
 
-    const window = asRecord(limit["window"]);
-    const windowLabel = window === null ? label : (asString(window["label"]) ?? label);
-    const resetsAtMs = window === null ? undefined : asFiniteNumber(window["resetsAt"]);
-
-    const amount = asRecord(limit["amount"]);
-    if (amount === null) continue;
-    const used = asFiniteNumber(amount["used"]);
+    const window = asRecord(limit.window);
+    const windowLabel = asString(window?.label) ?? label;
+    const amount = asRecord(limit.amount);
+    const used = asFiniteNumber(amount?.used);
     if (used === undefined) continue;
-    const unit = asString(amount["unit"]) ?? "percent";
-    const status = asString(limit["status"]) ?? "ok";
 
+    const resetsAtMs = asFiniteNumber(window?.resetsAt);
     limits.push({
       id,
       label,
       windowLabel,
-      ...(resetsAtMs !== undefined ? { resetsAtMs } : {}),
       used,
-      ...(asFiniteNumber(amount["limit"]) !== undefined
-        ? { limit: asFiniteNumber(amount["limit"]) }
-        : {}),
-      ...(asFiniteNumber(amount["remaining"]) !== undefined
-        ? { remaining: asFiniteNumber(amount["remaining"]) }
-        : {}),
-      ...(asFiniteNumber(amount["usedFraction"]) !== undefined
-        ? { usedFraction: asFiniteNumber(amount["usedFraction"]) }
-        : {}),
-      ...(asFiniteNumber(amount["remainingFraction"]) !== undefined
-        ? { remainingFraction: asFiniteNumber(amount["remainingFraction"]) }
-        : {}),
-      unit,
+      unit: asString(amount?.unit) ?? "percent",
       status,
+      ...(asFiniteNumber(amount?.limit) !== undefined
+        ? { limit: asFiniteNumber(amount?.limit) }
+        : {}),
+      ...(asFiniteNumber(amount?.remaining) !== undefined
+        ? { remaining: asFiniteNumber(amount?.remaining) }
+        : {}),
+      ...(asFiniteNumber(amount?.usedFraction) !== undefined
+        ? { usedFraction: asFiniteNumber(amount?.usedFraction) }
+        : {}),
+      ...(asFiniteNumber(amount?.remainingFraction) !== undefined
+        ? { remainingFraction: asFiniteNumber(amount?.remainingFraction) }
+        : {}),
+      ...(resetsAtMs !== undefined ? { resetsAtMs } : {}),
     });
   }
 
+  const metadata = asRecord(row.metadata);
+  const planType = metadata !== null ? asString(metadata.planType) : undefined;
   return {
     provider,
-    ...(planType !== undefined ? { planType } : {}),
     limits,
+    ...(planType !== undefined ? { planType } : {}),
   };
 }
 
 /** Parses the stdout of `omp usage --json`. */
 export function parseOmpUsageJson(stdout: string): readonly UsagePlanProvider[] {
-  let parsed: unknown;
+  let document: unknown;
   try {
-    parsed = JSON.parse(stdout);
+    document = JSON.parse(stdout) as unknown;
   } catch {
     return [];
   }
-  const document = asRecord(parsed);
-  if (document === null) return [];
-  const reports = document["reports"];
-  if (!Array.isArray(reports)) return [];
-
+  const root = asRecord(document);
+  const reports = root !== null && Array.isArray(root.reports) ? root.reports : [];
   const out: UsagePlanProvider[] = [];
   for (const report of reports) {
     const mapped = mapOmpUsageReport(report);
@@ -126,31 +103,57 @@ export function parseOmpUsageJson(stdout: string): readonly UsagePlanProvider[] 
 export interface FetchOmpPlanUsageOptions {
   readonly binaryPath: string;
   readonly ompHome?: string;
-  readonly timeoutMs?: number;
 }
 
 /**
  * Runs `omp usage --json` and returns plan providers. Failures yield an empty
  * list so transcript history still loads.
  */
-export async function fetchOmpPlanUsage(
+export function fetchOmpPlanUsage(
   options: FetchOmpPlanUsageOptions,
-): Promise<readonly UsagePlanProvider[]> {
+): Effect.Effect<readonly UsagePlanProvider[], never, ChildProcessSpawner.ChildProcessSpawner> {
   const binaryPath = options.binaryPath.trim() || "omp";
   const ompHome =
-    options.ompHome?.trim() ||
-    process.env.OMP_HOME?.trim() ||
-    NodePath.join(NodeOS.homedir(), ".omp");
-  const timeoutMs = options.timeoutMs ?? 20_000;
+    options.ompHome?.trim() || process.env.OMP_HOME?.trim() || `${NodeOS.homedir()}/.omp`;
 
-  try {
-    const { stdout } = await execFile(binaryPath, ["usage", "--json"], {
-      env: { ...process.env, OMP_HOME: ompHome },
-      timeout: timeoutMs,
-      maxBuffer: 8 * 1024 * 1024,
-    });
-    return parseOmpUsageJson(stdout);
-  } catch {
-    return [];
-  }
+  return Effect.gen(function* () {
+    const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+    const child = yield* spawner
+      .spawn(
+        ChildProcess.make(binaryPath, ["usage", "--json"], {
+          shell: false,
+          env: { ...process.env, OMP_HOME: ompHome },
+          stdout: "pipe",
+          stderr: "ignore",
+        }),
+      )
+      .pipe(Effect.orElseSucceed(() => null));
+    if (!child) {
+      return [];
+    }
+    const [output, exitCode] = yield* Effect.all(
+      [
+        child.stdout.pipe(
+          Stream.decodeText(),
+          Stream.runFold(
+            () => "",
+            (acc, chunk) => acc + chunk,
+          ),
+          Effect.orElseSucceed(() => ""),
+        ),
+        child.exitCode.pipe(
+          Effect.map(Number),
+          Effect.orElseSucceed(() => 1),
+        ),
+      ],
+      { concurrency: "unbounded" },
+    );
+    if (exitCode !== 0 || output.trim().length === 0) {
+      return [];
+    }
+    return parseOmpUsageJson(output);
+  }).pipe(
+    Effect.scoped,
+    Effect.orElseSucceed(() => [] as const),
+  );
 }

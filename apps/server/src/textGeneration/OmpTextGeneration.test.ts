@@ -2,7 +2,7 @@ import * as NodeAssert from "node:assert/strict";
 
 import { it } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { ProviderInstanceId } from "@t3tools/contracts";
+import { OmpSettings, ProviderInstanceId } from "@t3tools/contracts";
 import { createModelSelection } from "@t3tools/shared/model";
 import * as Effect from "effect/Effect";
 import * as Queue from "effect/Queue";
@@ -14,6 +14,7 @@ import { describe } from "vite-plus/test";
 
 import { makeOmpTextGeneration } from "./OmpTextGeneration.ts";
 
+const decodeOmpSettings = Schema.decodeSync(OmpSettings);
 const UnknownJson = Schema.fromJsonString(Schema.Unknown);
 const decodeUnknownJson = Schema.decodeSync(UnknownJson);
 const encodeUnknownJson = Schema.encodeSync(UnknownJson);
@@ -136,10 +137,12 @@ describe("OmpTextGeneration", () => {
   it.effect("generateThreadTitle collects text_delta JSON and sanitizes the title", () =>
     Effect.gen(function* () {
       const fake = makeFakeOmpSpawner("/tmp/omp-textgen.jsonl");
-      const textGeneration = yield* makeOmpTextGeneration({
-        enabled: true,
-        binaryPath: "/opt/omp",
-      }).pipe(
+      const textGeneration = yield* makeOmpTextGeneration(
+        decodeOmpSettings({
+          enabled: true,
+          binaryPath: "/opt/omp",
+        }),
+      ).pipe(
         Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, fake.spawner),
         Effect.provide(NodeServices.layer),
       );

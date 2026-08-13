@@ -6,7 +6,7 @@ import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 
 import { it } from "@effect/vitest";
-import { ProviderDriverKind, ProviderInstanceId, ThreadId } from "@t3tools/contracts";
+import { OmpSettings, ProviderDriverKind, ProviderInstanceId, ThreadId } from "@t3tools/contracts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
@@ -22,6 +22,8 @@ import { describe } from "vite-plus/test";
 import * as ServerConfig from "../../config.ts";
 import * as ServerSettings from "../../serverSettings.ts";
 import { OmpDriver } from "./OmpDriver.ts";
+
+const decodeOmpSettings = Schema.decodeSync(OmpSettings);
 
 function makeTempOmpBinary(): string {
   const dir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-omp-driver-"));
@@ -206,7 +208,7 @@ describe("OmpDriver", () => {
         accentColor: undefined,
         environment: [],
         enabled: true,
-        config: { enabled: true, binaryPath },
+        config: decodeOmpSettings({ enabled: true, binaryPath }),
       }).pipe(
         Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, fake.spawner),
         Effect.provide(OmpDriverTestLayer),
@@ -243,7 +245,7 @@ describe("OmpDriver", () => {
         accentColor: undefined,
         environment: [],
         enabled: true,
-        config: { enabled: true, binaryPath },
+        config: decodeOmpSettings({ enabled: true, binaryPath }),
       }).pipe(
         Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, fake.spawner),
         Effect.provide(OmpDriverTestLayer),
@@ -275,7 +277,7 @@ describe("OmpDriver", () => {
         accentColor: undefined,
         environment: [],
         enabled: true,
-        config: { enabled: true, binaryPath },
+        config: decodeOmpSettings({ enabled: true, binaryPath }),
       }).pipe(
         Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, fake.spawner),
         Effect.provide(OmpDriverTestLayer),
@@ -309,7 +311,7 @@ describe("OmpDriver", () => {
           accentColor: undefined,
           environment: [],
           enabled: true,
-          config: { enabled: true, binaryPath: realOmpBinary! },
+          config: decodeOmpSettings({ enabled: true, binaryPath: realOmpBinary! }),
         }).pipe(Effect.provide(OmpDriverTestLayer));
 
         const updated = yield* instance.snapshot.streamChanges.pipe(

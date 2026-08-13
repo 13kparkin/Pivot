@@ -172,6 +172,7 @@ it.layer(NodeServices.layer)("server settings", (it) => {
       });
 
       assert.deepEqual(next.providers.omp, {
+        ...DEFAULT_SERVER_SETTINGS.providers.omp,
         enabled: true,
         binaryPath: "/opt/homebrew/bin/omp",
       });
@@ -479,6 +480,7 @@ it.layer(NodeServices.layer)("server settings", (it) => {
       });
 
       assert.deepEqual(next.providers.omp, {
+        ...DEFAULT_SERVER_SETTINGS.providers.omp,
         enabled: true,
         binaryPath: "/opt/homebrew/bin/omp",
       });
