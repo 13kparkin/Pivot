@@ -212,7 +212,8 @@ export class OmpAdapter {
         pendingUiRequests: new Map(),
         turnId: undefined,
         stopRequested: false,
-        lastTokenUsageEmitAtMs: 0,
+        // Negative so the first mid-turn emit is not throttled when Clock is 0 (TestClock).
+        lastTokenUsageEmitAtMs: -TOKEN_USAGE_EMIT_MIN_INTERVAL_MS,
         interactionMode: "default",
         prePlanModelSlug: undefined,
         onOpenUrl: undefined,

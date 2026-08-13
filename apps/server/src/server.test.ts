@@ -28,6 +28,7 @@ import {
   ProviderDriverKind,
   ProviderInstanceId,
   ResolvedKeybindingRule,
+  ServerOmpHubError,
   ThreadId,
   WS_METHODS,
   WsRpcGroup,
@@ -113,6 +114,7 @@ import * as ProjectionSnapshotQuery from "./orchestration/Services/ProjectionSna
 import { SqlitePersistenceMemory } from "./persistence/Layers/Sqlite.ts";
 import { PersistenceSqlError } from "./persistence/Errors.ts";
 import * as ProviderRegistry from "./provider/Services/ProviderRegistry.ts";
+import { ProviderValidationError } from "./provider/Errors.ts";
 import * as ProviderService from "./provider/Services/ProviderService.ts";
 import { makeManualOnlyProviderMaintenanceCapabilities } from "./provider/providerMaintenance.ts";
 import * as ServerLifecycleEvents from "./serverLifecycleEvents.ts";
@@ -386,6 +388,7 @@ const buildAppUnderTest = (options?: {
   layers?: {
     keybindings?: Partial<Keybindings.Keybindings["Service"]>;
     providerRegistry?: Partial<ProviderRegistry.ProviderRegistry["Service"]>;
+    providerService?: Partial<ProviderService.ProviderService["Service"]>;
     serverSettings?: Partial<ServerSettings.ServerSettingsService["Service"]>;
     externalLauncher?: Partial<ExternalLauncher.ExternalLauncher["Service"]>;
     vcsDriver?: Partial<VcsDriver.VcsDriver["Service"]>;
@@ -672,6 +675,7 @@ const buildAppUnderTest = (options?: {
             ompSetSubagentSubscription: () =>
               Effect.die("ProviderService.ompSetSubagentSubscription unsupported in test"),
             streamEvents: Stream.empty,
+            ...options?.layers?.providerService,
           }),
         ),
       ),
@@ -4471,6 +4475,78 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
 
       assert.deepEqual(response.issues, []);
       assert.deepEqual(response.keybindings, [resolved]);
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("routes websocket omp hub RPCs and maps failures to ServerOmpHubError", () =>
+    Effect.gen(function* () {
+      const threadId = ThreadId.make("thread-omp-hub-ws");
+      const hubCalls: string[] = [];
+
+      yield* buildAppUnderTest({
+        layers: {
+          providerService: {
+            ompGetSubagentMessages: (input) =>
+              Effect.sync(() => {
+                hubCalls.push(`get:${input.threadId}:${input.subagentId}`);
+                return {
+                  sessionFile: "/tmp/sub.jsonl",
+                  fromByte: 0,
+                  nextByte: 8,
+                  reset: false,
+                  messages: [{ role: "assistant", content: "nested" }],
+                };
+              }),
+            ompSteer: (input) =>
+              Effect.sync(() => {
+                hubCalls.push(`steer:${input.threadId}:${input.message}`);
+              }),
+            ompSetSubagentSubscription: () =>
+              Effect.fail(
+                new ProviderValidationError({
+                  operation: "ProviderService.ompSetSubagentSubscription",
+                  issue: "requires an omp session",
+                }),
+              ),
+          },
+        },
+      });
+
+      const wsUrl = yield* getWsServerUrl("/ws");
+      const page = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[WS_METHODS.serverOmpGetSubagentMessages]({
+            threadId,
+            subagentId: "agent-1",
+          }),
+        ),
+      );
+      yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[WS_METHODS.serverOmpSteer]({
+            threadId,
+            message: "focus on tests",
+          }),
+        ),
+      );
+      const failure = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[WS_METHODS.serverOmpSetSubagentSubscription]({
+            threadId,
+            level: "events",
+          }).pipe(Effect.result),
+        ),
+      );
+
+      assert.equal(page.nextByte, 8);
+      assert.equal(page.messages.length, 1);
+      assert.deepEqual(hubCalls, [`get:${threadId}:agent-1`, `steer:${threadId}:focus on tests`]);
+      assert.equal(failure._tag, "Failure");
+      if (failure._tag !== "Failure") {
+        return;
+      }
+      assert.instanceOf(failure.failure, ServerOmpHubError);
+      assert.include(failure.failure.reason, "requires an omp session");
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
