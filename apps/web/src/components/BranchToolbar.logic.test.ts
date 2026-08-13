@@ -102,7 +102,7 @@ describe("resolvePreviousWorktreeLabel", () => {
   it("includes the branch when known", () => {
     expect(
       resolvePreviousWorktreeLabel({ branch: "pivot-cli/fix-thing", worktreePath: "/wt" }),
-    ).toBe("Previous worktree (t3/fix-thing)");
+    ).toBe("Previous worktree (pivot-cli/fix-thing)");
     expect(resolvePreviousWorktreeLabel({ branch: null, worktreePath: "/wt" })).toBe(
       "Previous worktree",
     );

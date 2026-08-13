@@ -88,13 +88,13 @@ vi.mock("../../state/session", () => ({
 import { EnvironmentProviderSettings } from "./ProviderSettingsPanel";
 
 const environmentId = EnvironmentId.make("remote-device");
-const codexId = ProviderInstanceId.make("codex");
-const customId = ProviderInstanceId.make("codex_work");
+const ompId = ProviderInstanceId.make("omp");
+const customId = ProviderInstanceId.make("omp_work");
 
 function provider(): ServerProvider {
   return {
-    instanceId: codexId,
-    driver: ProviderDriverKind.make("codex"),
+    instanceId: ompId,
+    driver: ProviderDriverKind.make("omp"),
     enabled: true,
     installed: true,
     version: "1.0.0",
@@ -108,7 +108,7 @@ function provider(): ServerProvider {
       status: "behind_latest",
       currentVersion: "1.0.0",
       latestVersion: "1.1.0",
-      updateCommand: "pnpm add -g @openai/codex@latest",
+      updateCommand: "omp update",
       canUpdate: true,
       checkedAt: "2026-07-24T12:00:00.000Z",
       message: "Update available.",
@@ -166,7 +166,7 @@ describe("EnvironmentProviderSettings routing", () => {
     const providerCard = visitElements(
       panel,
       (element) =>
-        element.props.instanceId === codexId && typeof element.props.onRunUpdate === "function",
+        element.props.instanceId === ompId && typeof element.props.onRunUpdate === "function",
     );
     expect(providerCard).not.toBeNull();
     (providerCard?.props.onRunUpdate as (() => void) | undefined)?.();
@@ -174,7 +174,7 @@ describe("EnvironmentProviderSettings routing", () => {
 
     expect(commands.updateProvider).toHaveBeenCalledWith({
       environmentId,
-      input: { provider: ProviderDriverKind.make("codex"), instanceId: codexId },
+      input: { provider: ProviderDriverKind.make("omp"), instanceId: ompId },
     });
   });
 
@@ -184,7 +184,7 @@ describe("EnvironmentProviderSettings routing", () => {
 
     const inertWrapper = visitElements(panel, (element) => element.props.inert === true);
     expect(inertWrapper).not.toBeNull();
-    const providerCard = visitElements(panel, (element) => element.props.instanceId === codexId);
+    const providerCard = visitElements(panel, (element) => element.props.instanceId === ompId);
     expect(providerCard).not.toBeNull();
 
     const notice = visitElements(panel, (element) => element.props.title === "Limited permissions");
@@ -211,12 +211,12 @@ describe("EnvironmentProviderSettings routing", () => {
     settingsState.value = {
       ...DEFAULT_UNIFIED_SETTINGS,
       providerInstances: {
-        [codexId]: {
-          driver: ProviderDriverKind.make("codex"),
+        [ompId]: {
+          driver: ProviderDriverKind.make("omp"),
           enabled: false,
         },
         [customId]: {
-          driver: ProviderDriverKind.make("codex"),
+          driver: ProviderDriverKind.make("omp"),
           enabled: true,
         },
       },
@@ -232,12 +232,12 @@ describe("EnvironmentProviderSettings routing", () => {
 
     expect(settingsState.updateSettings).toHaveBeenLastCalledWith({
       providerInstances: {
-        [codexId]: settingsState.value.providerInstances?.[codexId],
+        [ompId]: settingsState.value.providerInstances?.[ompId],
       },
     });
 
     settingsState.updateSettings.mockClear();
-    const defaultCard = visitElements(panel, (element) => element.props.instanceId === codexId);
+    const defaultCard = visitElements(panel, (element) => element.props.instanceId === ompId);
     const resetAction = defaultCard?.props.headerAction;
     const resetButton = visitElements(
       resetAction,
