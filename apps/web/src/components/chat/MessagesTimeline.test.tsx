@@ -1402,8 +1402,71 @@ describe("MessagesTimeline", () => {
     );
 
     expect(markup).toContain("Ran 1 subagent");
-    expect(markup).toContain("1 failed");
+    expect(markup).toContain(">failed</span>");
+    expect(markup).not.toContain("1 failed");
     expect(markup).not.toContain("✓ completed");
+  });
+
+  it("does not count a failed workflow coordinator as an extra subagent", () => {
+    const coordinator = runtimeAgent("workflow-review", {
+      kind: "workflow",
+      status: "failed",
+      workflowName: "Review",
+      phases: [{ index: 0, title: "Inspect" }],
+    });
+    const members = ["first", "second"].map((suffix) =>
+      runtimeAgent(`workflow-review:${suffix}`, {
+        kind: "workflow_agent",
+        status: "failed",
+        parentAgentId: coordinator.id,
+        phaseIndex: 0,
+        completedAt: MESSAGE_CREATED_AT,
+      }),
+    );
+    const agentPanelModel = {
+      workflows: [
+        {
+          workflow: coordinator,
+          phases: [
+            {
+              index: 0,
+              title: "Inspect",
+              members,
+              state: "done",
+              activeCount: 0,
+              settledCount: 2,
+            },
+          ],
+          unphasedMembers: [],
+        },
+      ],
+      directAgents: [],
+      runningCount: 0,
+      waitingCount: 0,
+      idleCount: 0,
+      settledCount: 3,
+      totalTokens: 0,
+      hasAgents: true,
+      liveCount: 0,
+    } satisfies AgentPanelModel;
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        {...buildProps()}
+        agentPanelModel={agentPanelModel}
+        timelineEntries={[
+          subagentTimelineEntry({
+            itemId: "workflow-review-item",
+            subagentId: coordinator.id,
+            runId: "run-workflow-review",
+            status: "failed",
+          }),
+        ]}
+      />,
+    );
+
+    expect(markup).toContain("Ran 2 subagents");
+    expect(markup).toContain("2 failed");
+    expect(markup).not.toContain("3 failed");
   });
 
   it("keeps an older CTA on its activation after the agent identity is reused", () => {

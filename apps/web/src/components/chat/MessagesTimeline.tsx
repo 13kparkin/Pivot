@@ -1591,13 +1591,11 @@ const AgentSpawnCtaRow = memo(function AgentSpawnCtaRow(props: {
     else if (status === "cancelled" || status === "interrupted") stopped += 1;
   }
   const coordinatorStatus = workflowGroup?.workflow.status;
-  if (coordinatorStatus === "failed") failed += 1;
-  if (coordinatorStatus === "cancelled" || coordinatorStatus === "interrupted") stopped += 1;
+  const coordinatorFailed = coordinatorStatus === "failed";
+  const coordinatorStopped =
+    coordinatorStatus === "cancelled" || coordinatorStatus === "interrupted";
   const coordinatorSettled =
-    coordinatorStatus === "completed" ||
-    coordinatorStatus === "failed" ||
-    coordinatorStatus === "cancelled" ||
-    coordinatorStatus === "interrupted";
+    coordinatorStatus === "completed" || coordinatorFailed || coordinatorStopped;
   const live = workflowGroup === undefined ? running + waiting > 0 : !coordinatorSettled;
   const totalTokens = agentStates.reduce(
     (sum, agent) => sum + agent.totalTokens,
@@ -1611,9 +1609,9 @@ const AgentSpawnCtaRow = memo(function AgentSpawnCtaRow(props: {
   const working = running + waiting;
   const dotClass = live
     ? "bg-info"
-    : failed > 0
+    : failed > 0 || coordinatorFailed
       ? "bg-destructive"
-      : idle > 0 || stopped > 0
+      : idle > 0 || stopped > 0 || coordinatorStopped
         ? "bg-muted-foreground/50"
         : "bg-success";
   const lead =
@@ -1632,11 +1630,15 @@ const AgentSpawnCtaRow = memo(function AgentSpawnCtaRow(props: {
         : "working"
     : failed > 0
       ? `${failed} failed`
-      : idle > 0
-        ? `${idle} idle`
-        : stopped > 0
-          ? `${stopped} stopped`
-          : "✓ completed";
+      : coordinatorFailed
+        ? "failed"
+        : idle > 0
+          ? `${idle} idle`
+          : stopped > 0
+            ? `${stopped} stopped`
+            : coordinatorStopped
+              ? "stopped"
+              : "✓ completed";
 
   return (
     <button
