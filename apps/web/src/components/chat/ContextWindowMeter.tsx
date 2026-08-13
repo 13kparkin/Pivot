@@ -32,6 +32,10 @@ export function ContextWindowMeter(props: {
   const dashOffset = circumference * (1 - normalizedPercentage / 100);
   const totalProcessedTokens = usage.totalProcessedTokens ?? null;
   const showTotalProcessed = totalProcessedTokens !== null && totalProcessedTokens > 0;
+  const tokensPerSecond = usage.tokensPerSecond ?? null;
+  const toolUses = usage.toolUses ?? null;
+  const durationMs = usage.durationMs ?? null;
+  const queuedMessageCount = usage.queuedMessageCount ?? null;
   const isOverloaded = normalizedPercentage > 90;
   const usageColor = isOverloaded
     ? "var(--color-error)"
@@ -136,37 +140,35 @@ export function ContextWindowMeter(props: {
               </span>
             </div>
           ) : null}
-          {usage.tokensPerSecond !== null && usage.tokensPerSecond > 0 ? (
+          {tokensPerSecond !== null && tokensPerSecond > 0 ? (
             <div className="flex items-center justify-between gap-3 text-[11px] leading-4">
               <span className="text-secondary-label">Throughput</span>
               <span className="font-medium tabular-nums text-secondary-label">
-                {usage.tokensPerSecond < 10
-                  ? `${usage.tokensPerSecond.toFixed(1)} tok/s`
-                  : `${Math.round(usage.tokensPerSecond)} tok/s`}
+                {tokensPerSecond < 10
+                  ? `${tokensPerSecond.toFixed(1)} tok/s`
+                  : `${Math.round(tokensPerSecond)} tok/s`}
               </span>
             </div>
           ) : null}
-          {usage.toolUses !== null && usage.toolUses > 0 ? (
+          {toolUses !== null && toolUses > 0 ? (
             <div className="flex items-center justify-between gap-3 text-[11px] leading-4">
               <span className="text-secondary-label">Tool uses</span>
-              <span className="font-medium tabular-nums text-secondary-label">
-                {usage.toolUses}
-              </span>
+              <span className="font-medium tabular-nums text-secondary-label">{toolUses}</span>
             </div>
           ) : null}
-          {usage.durationMs !== null && usage.durationMs > 0 ? (
+          {durationMs !== null && durationMs > 0 ? (
             <div className="flex items-center justify-between gap-3 text-[11px] leading-4">
               <span className="text-secondary-label">Session duration</span>
               <span className="font-medium tabular-nums text-secondary-label">
-                {formatSessionDuration(usage.durationMs)}
+                {formatSessionDuration(durationMs)}
               </span>
             </div>
           ) : null}
-          {usage.queuedMessageCount !== null && usage.queuedMessageCount > 0 ? (
+          {queuedMessageCount !== null && queuedMessageCount > 0 ? (
             <div className="flex items-center justify-between gap-3 text-[11px] leading-4">
               <span className="text-secondary-label">Queued messages</span>
               <span className="font-medium tabular-nums text-secondary-label">
-                {usage.queuedMessageCount}
+                {queuedMessageCount}
               </span>
             </div>
           ) : null}

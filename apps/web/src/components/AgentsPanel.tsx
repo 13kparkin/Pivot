@@ -571,7 +571,7 @@ function PhaseSection({
               key={member.id}
               agent={member}
               selected={selectedAgentId === member.id}
-              onSelect={onSelectAgent}
+              {...(onSelectAgent ? { onSelect: onSelectAgent } : {})}
             />
           ))
         : null}
@@ -652,8 +652,8 @@ function ExpandedWorkflowSection({
           key={phase.index}
           phase={phase}
           defaultOpen={!workflowIsLive(group)}
-          selectedAgentId={selectedAgentId}
-          onSelectAgent={onSelectAgent}
+          {...(selectedAgentId !== undefined ? { selectedAgentId } : {})}
+          {...(onSelectAgent ? { onSelectAgent } : {})}
         />
       ))}
       {group.unphasedMembers.map((member) => (
@@ -661,14 +661,14 @@ function ExpandedWorkflowSection({
           key={member.id}
           agent={member}
           selected={selectedAgentId === member.id}
-          onSelect={onSelectAgent}
+          {...(onSelectAgent ? { onSelect: onSelectAgent } : {})}
         />
       ))}
       {group.phases.length === 0 && group.unphasedMembers.length === 0 ? (
         <AgentRow
           agent={group.workflow}
           selected={selectedAgentId === group.workflow.id}
-          onSelect={onSelectAgent}
+          {...(onSelectAgent ? { onSelect: onSelectAgent } : {})}
         />
       ) : null}
     </section>
@@ -742,8 +742,8 @@ function WorkflowSection({
       group={group}
       environmentId={environmentId}
       threadId={threadId}
-      selectedAgentId={selectedAgentId}
-      onSelectAgent={onSelectAgent}
+      {...(selectedAgentId !== undefined ? { selectedAgentId } : {})}
+      {...(onSelectAgent ? { onSelectAgent } : {})}
       onCollapse={() => setOpen(false)}
     />
   ) : (
