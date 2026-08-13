@@ -1,5 +1,10 @@
 import { NativeHeaderToolbar, NativeStackScreenOptions } from "../../native/StackHeader";
-import { useIsFocused, useNavigation, type StaticScreenProps } from "@react-navigation/native";
+import {
+  StackActions,
+  useIsFocused,
+  useNavigation,
+  type StaticScreenProps,
+} from "@react-navigation/native";
 import { SymbolView } from "../../components/AppSymbol";
 import type { EnvironmentProject } from "@t3tools/client-runtime/state/shell";
 import { useEffect, useRef, useState } from "react";
@@ -80,7 +85,7 @@ function deriveProjectEmptyState(catalogState: WorkspaceState): {
 
 export function NewTaskRouteScreen({ route }: StaticScreenProps<NewTaskRouteParams | undefined>) {
   const projects = useProjects();
-  const { projectScopes } = useNewTaskFlow();
+  const { projectScopes, setProject } = useNewTaskFlow();
   const { state: catalogState } = useWorkspaceState();
   const navigation = useNavigation();
   const isFocused = useIsFocused();
@@ -126,15 +131,22 @@ export function NewTaskRouteScreen({ route }: StaticScreenProps<NewTaskRoutePara
         return;
       }
     }
-    navigation.navigate("NewTaskSheet", {
-      screen: "NewTaskDraft",
-      params: {
+    const state = navigation.getState();
+    const previousRoute = state?.routes[state.index - 1];
+    if (previousRoute?.name === "NewTaskDraft") {
+      setProject(project);
+      navigation.goBack();
+      return;
+    }
+
+    navigation.dispatch(
+      StackActions.push("NewTaskDraft", {
         environmentId: project.environmentId,
         projectId: project.id,
         title: project.title,
         incomingShareId: incomingShare?.id,
-      },
-    });
+      }),
+    );
   }
 
   function toggleGroup(groupKey: string): void {
@@ -169,15 +181,14 @@ export function NewTaskRouteScreen({ route }: StaticScreenProps<NewTaskRoutePara
       return;
     }
     resumedDestinationKeyRef.current = destinationKey;
-    navigation.navigate("NewTaskSheet", {
-      screen: "NewTaskDraft",
-      params: {
+    navigation.dispatch(
+      StackActions.push("NewTaskDraft", {
         environmentId: reservedDestinationProject.environmentId,
         projectId: reservedDestinationProject.id,
         title: reservedDestinationProject.title,
         incomingShareId: incomingShare.id,
-      },
-    });
+      }),
+    );
   }, [incomingShare, isFocused, navigation, reservedDestinationProject]);
 
   return (
@@ -196,7 +207,7 @@ export function NewTaskRouteScreen({ route }: StaticScreenProps<NewTaskRoutePara
                     {
                       accessibilityLabel: "Add project",
                       icon: "plus",
-                      onPress: () => navigation.navigate("NewTaskSheet", { screen: "AddProject" }),
+                      onPress: () => navigation.dispatch(StackActions.push("AddProject")),
                     },
                   ]
                 : []
@@ -223,7 +234,7 @@ export function NewTaskRouteScreen({ route }: StaticScreenProps<NewTaskRoutePara
             {catalogState.hasReadyEnvironment ? (
               <NativeHeaderToolbar.Button
                 icon="plus"
-                onPress={() => navigation.navigate("NewTaskSheet", { screen: "AddProject" })}
+                onPress={() => navigation.dispatch(StackActions.push("AddProject"))}
                 separateBackground
               />
             ) : null}
@@ -263,7 +274,7 @@ export function NewTaskRouteScreen({ route }: StaticScreenProps<NewTaskRoutePara
             ) : (
               <Pressable
                 className="mt-1 rounded-full bg-primary px-4 py-2.5 active:opacity-70"
-                onPress={() => navigation.navigate("NewTaskSheet", { screen: "AddProject" })}
+                onPress={() => navigation.dispatch(StackActions.push("AddProject"))}
               >
                 <Text className="text-sm font-t3-bold text-primary-foreground">
                   Add new project

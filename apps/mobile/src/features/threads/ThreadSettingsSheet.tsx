@@ -15,7 +15,6 @@ import {
   createNativeStackNavigator,
   type NativeStackNavigationProp,
 } from "@react-navigation/native-stack";
-import ExpoBottomSheet from "@expo/ui/community/bottom-sheet";
 import * as Haptics from "expo-haptics";
 import {
   createContext,
@@ -23,7 +22,6 @@ import {
   useCallback,
   useEffect,
   useMemo,
-  useRef,
   useState,
   type ReactNode,
 } from "react";
@@ -38,7 +36,11 @@ import type { ModelOption, ProviderGroup } from "../../lib/modelOptions";
 import { applyProviderOptionSelection, providerOptionValueLabels } from "../../lib/providerOptions";
 import { resolveProviderOptionDescriptors } from "../../lib/providerOptions";
 import { useThemeColor } from "../../lib/useThemeColor";
-import { NativeHeaderToolbar, NativeStackScreenOptions } from "../../native/StackHeader";
+import { NativeHeaderToolbar } from "../../native/StackHeader";
+import {
+  NATIVE_SHEET_SURFACE_COLOR,
+  NATIVE_SHEET_SURFACE_CONTENT_STYLE,
+} from "../../native/sheet-surface";
 import { useNewTaskFlow } from "./new-task-flow-provider";
 import { useNewTaskSettingsTransition } from "./new-task-settings-transition";
 import { RUNTIME_MODE_CHOICES, selectableChoices } from "./thread-settings-menu";
@@ -51,7 +53,6 @@ import type { ThreadSettingsSheetCloseReason } from "./use-thread-settings-sheet
  * bury the list.
  */
 const PRIMARY_PROVIDER_DRIVERS: ReadonlySet<string> = new Set(["claudeAgent", "codex"]);
-
 /**
  * Compact "Fable 5 · Max · Auto" style summary for the composer trigger pill,
  * covering model, provider options, runtime mode, and plan mode in one label.
@@ -273,6 +274,49 @@ type ThreadSettingsSessionProps = {
   readonly runtimeMode: RuntimeMode;
   readonly onUpdateRuntimeMode: (mode: RuntimeMode) => void;
 };
+
+export type ExistingThreadSettingsRouteSession = ThreadSettingsSessionProps & {
+  readonly ownerId: string;
+  readonly onDismissalStart: () => void;
+  readonly onDismissalCancel: () => void;
+};
+
+type ExistingThreadSettingsRouteContextValue = {
+  readonly session: ExistingThreadSettingsRouteSession | null;
+  readonly present: (session: ExistingThreadSettingsRouteSession) => void;
+  readonly clear: (ownerId: string) => void;
+};
+
+const ExistingThreadSettingsRouteContext =
+  createContext<ExistingThreadSettingsRouteContextValue | null>(null);
+
+/** Bridges the active thread's settings state into the root native sheet route. */
+export function ExistingThreadSettingsRouteProvider(props: { readonly children: ReactNode }) {
+  const [session, setSession] = useState<ExistingThreadSettingsRouteSession | null>(null);
+  const present = useCallback((nextSession: ExistingThreadSettingsRouteSession) => {
+    setSession(nextSession);
+  }, []);
+  const clear = useCallback((ownerId: string) => {
+    setSession((current) => (current?.ownerId === ownerId ? null : current));
+  }, []);
+  const value = useMemo(() => ({ session, present, clear }), [clear, present, session]);
+
+  return (
+    <ExistingThreadSettingsRouteContext.Provider value={value}>
+      {props.children}
+    </ExistingThreadSettingsRouteContext.Provider>
+  );
+}
+
+export function useExistingThreadSettingsRoutePresentation() {
+  const value = use(ExistingThreadSettingsRouteContext);
+  if (!value) {
+    throw new Error(
+      "useExistingThreadSettingsRoutePresentation must be used inside ExistingThreadSettingsRouteProvider.",
+    );
+  }
+  return value;
+}
 
 type DescriptorTemplateEntry = {
   readonly label: string;
@@ -706,12 +750,6 @@ function ThreadSettingsModelsScreen() {
 
   return (
     <View collapsable={false} className="flex-1 bg-sheet">
-      <NativeStackScreenOptions
-        options={{
-          headerBackVisible: false,
-          title: "Thread settings",
-        }}
-      />
       <NativeHeaderToolbar placement="left">
         <NativeHeaderToolbar.Button
           accessibilityLabel="Cancel thread settings"
@@ -750,7 +788,6 @@ function ThreadSettingsChoiceScreen() {
 
   return (
     <View collapsable={false} className="flex-1 bg-sheet">
-      <NativeStackScreenOptions options={{ title: route.params.title }} />
       <ThreadSettingsChoiceContent submenu={route.params} onSelected={() => navigation.goBack()} />
     </View>
   );
@@ -759,6 +796,7 @@ function ThreadSettingsChoiceScreen() {
 function ThreadSettingsPickerNavigator(props: ThreadSettingsPickerPresentation) {
   const sheetBackground = String(useThemeColor("--color-sheet"));
   const foreground = String(useThemeColor("--color-foreground"));
+  const nativeSheetBackground = NATIVE_SHEET_SURFACE_COLOR ?? sheetBackground;
   const presentation = useMemo(
     () => ({
       onClose: props.onClose,
@@ -772,12 +810,14 @@ function ThreadSettingsPickerNavigator(props: ThreadSettingsPickerPresentation) 
         initialRouteName="ThreadSettingsModels"
         screenOptions={{
           animation: "slide_from_right",
-          contentStyle: { backgroundColor: sheetBackground },
+          contentStyle: NATIVE_SHEET_SURFACE_CONTENT_STYLE ?? {
+            backgroundColor: nativeSheetBackground,
+          },
           gestureEnabled: true,
           headerBackButtonDisplayMode: "minimal",
           headerBackTitle: "",
           headerShadowVisible: false,
-          headerStyle: { backgroundColor: sheetBackground },
+          headerStyle: { backgroundColor: nativeSheetBackground as unknown as string },
           headerTintColor: foreground,
           headerTitleStyle: { fontSize: 17, fontWeight: "700" },
         }}
@@ -785,65 +825,66 @@ function ThreadSettingsPickerNavigator(props: ThreadSettingsPickerPresentation) 
         <ThreadSettingsPickerStack.Screen
           name="ThreadSettingsModels"
           component={ThreadSettingsModelsScreen}
+          options={{ headerBackVisible: false, title: "Thread settings" }}
         />
         <ThreadSettingsPickerStack.Screen
           name="ThreadSettingsChoice"
           component={ThreadSettingsChoiceScreen}
+          options={({ route }) => ({ title: route.params.title })}
         />
       </ThreadSettingsPickerStack.Navigator>
     </ThreadSettingsPickerPresentationContext.Provider>
   );
 }
 
-/**
- * Native modal sheet used by existing threads. Option pages push inside the
- * sheet's own navigator instead of presenting another modal layer.
- */
-export function ThreadSettingsSheet(
-  props: ThreadSettingsSessionProps & {
-    readonly visible: boolean;
-    readonly onClose: (reason: ThreadSettingsSheetCloseReason) => void;
-    readonly onDismissed: () => void;
-  },
-) {
-  const sheetBackground = useThemeColor("--color-sheet");
-  const wasPresentedRef = useRef(false);
+/** Existing-thread model picker hosted by the root RNS form-sheet route. */
+export function ExistingThreadSettingsRouteScreen() {
+  const navigation = useNavigation<NativeStackNavigationProp<Record<string, object | undefined>>>();
+  const presentation = useExistingThreadSettingsRoutePresentation();
+  const session = presentation.session;
 
   useEffect(() => {
-    if (props.visible) {
-      wasPresentedRef.current = true;
-    }
-  }, [props.visible]);
-
-  const handleSheetClosed = useCallback(() => {
-    if (!wasPresentedRef.current) {
+    if (session) {
       return;
     }
 
-    wasPresentedRef.current = false;
-    if (props.visible) {
-      props.onClose("dismiss");
-    }
-    props.onDismissed();
-  }, [props.onClose, props.onDismissed, props.visible]);
+    navigation.goBack();
+  }, [navigation, session]);
 
-  if (!props.visible && !wasPresentedRef.current) {
-    return null;
+  useEffect(() => {
+    if (!session) {
+      return;
+    }
+
+    const removeTransitionStart = navigation.addListener("transitionStart", (event) => {
+      if (event.data.closing) {
+        session.onDismissalStart();
+      }
+    });
+    const removeGestureCancel = navigation.addListener("gestureCancel", () => {
+      session.onDismissalCancel();
+    });
+    return () => {
+      removeTransitionStart();
+      removeGestureCancel();
+    };
+  }, [navigation, session]);
+
+  if (!session) {
+    return <View className="flex-1 bg-sheet" />;
   }
 
+  const {
+    ownerId: _ownerId,
+    onDismissalStart: _onDismissalStart,
+    onDismissalCancel: _onDismissalCancel,
+    ...settings
+  } = session;
+
   return (
-    <ExpoBottomSheet
-      backgroundStyle={{ backgroundColor: sheetBackground }}
-      enableDynamicSizing={false}
-      enablePanDownToClose
-      index={props.visible ? 0 : -1}
-      onClose={handleSheetClosed}
-      snapPoints={["86%"]}
-    >
-      <ThreadSettingsSessionProvider {...props}>
-        <ThreadSettingsPickerNavigator onClose={props.onClose} />
-      </ThreadSettingsSessionProvider>
-    </ExpoBottomSheet>
+    <ThreadSettingsSessionProvider {...settings}>
+      <ThreadSettingsPickerNavigator onClose={() => navigation.goBack()} />
+    </ThreadSettingsSessionProvider>
   );
 }
 

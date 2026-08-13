@@ -15,6 +15,12 @@ type PresentationPhase = "closed" | "opening" | "visible" | "closing";
 export function useThreadSettingsSheetPresentation(input: {
   readonly editorRef: RefObject<ComposerEditorHandle | null>;
   readonly isEditorFocused: boolean;
+  /**
+   * Native-stack sheets can hide the keyboard without resigning the editor.
+   * Keeping that first responder lets UIKit restore the same keyboard during
+   * an interactive dismissal instead of polling until the modal is gone.
+   */
+  readonly keepEditorFocused?: boolean;
 }) {
   const [phase, setPhase] = useState<PresentationPhase>("closed");
   const isActiveRef = useRef(false);
@@ -56,8 +62,13 @@ export function useThreadSettingsSheetPresentation(input: {
     // Start the keyboard transition before the custom native editor resigns
     // first responder, then present the sheet on the next frame. The sheet and
     // keyboard animate together instead of serializing two native transitions.
-    void KeyboardController.dismiss({ animated: true });
-    input.editorRef.current?.blur();
+    void KeyboardController.dismiss({
+      animated: true,
+      keepFocus: input.keepEditorFocused && restoreFocusAfterDismissRef.current,
+    });
+    if (!input.keepEditorFocused) {
+      input.editorRef.current?.blur();
+    }
 
     requestAnimationFrame(() => {
       if (!isMountedRef.current || !isActiveRef.current || openingIdRef.current !== openingId) {
@@ -65,7 +76,7 @@ export function useThreadSettingsSheetPresentation(input: {
       }
       setPhase("visible");
     });
-  }, [input.editorRef, input.isEditorFocused]);
+  }, [input.editorRef, input.isEditorFocused, input.keepEditorFocused]);
 
   const close = useCallback((_reason: ThreadSettingsSheetCloseReason) => {
     if (!isActiveRef.current) {
@@ -77,6 +88,11 @@ export function useThreadSettingsSheetPresentation(input: {
   }, []);
 
   const restoreEditorFocus = useCallback(() => {
+    if (input.keepEditorFocused) {
+      KeyboardController.setFocusTo("current");
+      return;
+    }
+
     const focusRestoreId = focusRestoreIdRef.current + 1;
     focusRestoreIdRef.current = focusRestoreId;
     let attemptsRemaining = 20;
@@ -99,7 +115,7 @@ export function useThreadSettingsSheetPresentation(input: {
       setTimeout(restoreFocus, 50);
     };
     requestAnimationFrame(restoreFocus);
-  }, [input.editorRef]);
+  }, [input.editorRef, input.keepEditorFocused]);
 
   const beginDismissalFocusRestore = useCallback(() => {
     if (restoreFocusAfterDismissRef.current) {
@@ -109,9 +125,14 @@ export function useThreadSettingsSheetPresentation(input: {
 
   const cancelDismissalFocusRestore = useCallback(() => {
     focusRestoreIdRef.current += 1;
-    input.editorRef.current?.blur();
-    void KeyboardController.dismiss({ animated: true });
-  }, [input.editorRef]);
+    if (!input.keepEditorFocused) {
+      input.editorRef.current?.blur();
+    }
+    void KeyboardController.dismiss({
+      animated: true,
+      keepFocus: input.keepEditorFocused && restoreFocusAfterDismissRef.current,
+    });
+  }, [input.editorRef, input.keepEditorFocused]);
 
   const onDismissed = useCallback(() => {
     const shouldRestoreFocus = restoreFocusAfterDismissRef.current;

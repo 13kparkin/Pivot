@@ -412,6 +412,47 @@ export function restoreComposerDraftSnapshotState(
   return next;
 }
 
+export function copyComposerDraftContentState(
+  current: Record<string, ComposerDraft>,
+  sourceDraftKey: string,
+  targetDraftKey: string,
+): Record<string, ComposerDraft> {
+  if (sourceDraftKey === targetDraftKey) {
+    return current;
+  }
+  const source = normalizeDraft(current[sourceDraftKey]);
+  const target = normalizeDraft(current[targetDraftKey]);
+  const sourceHasContent =
+    source.text.length > 0 ||
+    source.attachments.length > 0 ||
+    (source.importedShareIds?.length ?? 0) > 0;
+  const targetHasContent =
+    target.text.length > 0 ||
+    target.attachments.length > 0 ||
+    (target.importedShareIds?.length ?? 0) > 0;
+  if (!sourceHasContent || targetHasContent) {
+    return current;
+  }
+  return {
+    ...current,
+    [targetDraftKey]: {
+      ...target,
+      text: source.text,
+      attachments: source.attachments,
+      ...(source.importedShareIds ? { importedShareIds: source.importedShareIds } : {}),
+    },
+  };
+}
+
+export function copyComposerDraftContentIfEmpty(
+  sourceDraftKey: string,
+  targetDraftKey: string,
+): void {
+  updateComposerDrafts((current) =>
+    copyComposerDraftContentState(current, sourceDraftKey, targetDraftKey),
+  );
+}
+
 function mergeComposerDraftText(existing: string, incoming: string): string {
   if (incoming.length === 0) {
     return existing;

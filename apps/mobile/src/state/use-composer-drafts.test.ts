@@ -5,6 +5,7 @@ import { appAtomRegistry } from "./atom-registry";
 import {
   clearComposerDraftContentState,
   composerDraftsAtom,
+  copyComposerDraftContentState,
   decodePersistedComposerDrafts,
   type ComposerDraft,
   getComposerDraftSnapshot,
@@ -163,6 +164,53 @@ describe("mobile composer drafts", () => {
     appAtomRegistry.set(composerDraftsAtom, { [draftKey]: selectedDraft });
 
     expect(getComposerDraftSnapshot(draftKey)).toEqual(selectedDraft);
+  });
+
+  it("carries unfinished content to a newly selected project without overwriting its settings", () => {
+    const sourceKey = "new-task:environment-1:project-1";
+    const targetKey = "new-task:environment-1:project-2";
+    const source: ComposerDraft = {
+      text: "Keep this task",
+      attachments: [],
+      importedShareIds: ["share-1"],
+      workspaceSelection: {
+        mode: "worktree",
+        branch: "feature/source",
+        worktreePath: null,
+      },
+    };
+    const target: ComposerDraft = {
+      text: "",
+      attachments: [],
+      runtimeMode: "approval-required",
+    };
+
+    expect(
+      copyComposerDraftContentState(
+        { [sourceKey]: source, [targetKey]: target },
+        sourceKey,
+        targetKey,
+      ),
+    ).toEqual({
+      [sourceKey]: source,
+      [targetKey]: {
+        ...target,
+        text: source.text,
+        attachments: source.attachments,
+        importedShareIds: source.importedShareIds,
+      },
+    });
+  });
+
+  it("does not overwrite unfinished content already stored for the selected project", () => {
+    const sourceKey = "new-task:environment-1:project-1";
+    const targetKey = "new-task:environment-1:project-2";
+    const drafts: Record<string, ComposerDraft> = {
+      [sourceKey]: { text: "Source task", attachments: [] },
+      [targetKey]: { text: "Target task", attachments: [] },
+    };
+
+    expect(copyComposerDraftContentState(drafts, sourceKey, targetKey)).toBe(drafts);
   });
 
   it("merges shared content into a project draft without duplicating retries", () => {
