@@ -137,6 +137,12 @@ export class OmpAdapter {
       const turnId = TurnId.make(globalThis.crypto.randomUUID());
       session.turnId = turnId;
       yield* this.#applyModelSelection(input.threadId, input.modelSelection?.model);
+      yield* this.#emit({
+        type: "turn.started",
+        threadId: input.threadId,
+        turnId,
+        payload: input.modelSelection?.model ? { model: input.modelSelection.model } : {},
+      });
       const response = yield* this.runtime.send(input.threadId, {
         type: "prompt",
         ...(input.input === undefined ? {} : { message: input.input }),

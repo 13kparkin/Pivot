@@ -119,6 +119,28 @@ describe("OmpAdapter", () => {
     }),
   );
 
+  it.effect("sendTurn emits turn.started before prompt for checkpoint baseline", () =>
+    Effect.gen(function* () {
+      const fake = new FakeOmpRpc();
+      const adapter = new OmpAdapter(fake);
+      const eventsFiber = yield* Stream.runCollect(
+        adapter.streamEvents.pipe(Stream.takeUntil((event) => event.type === "turn.started")),
+      ).pipe(
+        Effect.map((chunk) => Array.from(chunk)),
+        Effect.forkChild,
+      );
+      yield* adapter.startSession(startInput);
+      const result = yield* adapter.sendTurn({ threadId: THREAD_ID, input: "hi" });
+      const events = yield* Fiber.join(eventsFiber);
+      const started = events.find((event) => event.type === "turn.started");
+      NodeAssert.ok(started);
+      NodeAssert.equal(started?.threadId, THREAD_ID);
+      NodeAssert.equal(started?.turnId, result.turnId);
+      NodeAssert.equal(started?.provider, PROVIDER);
+      NodeAssert.equal(fake.sent.findIndex((command) => command.type === "prompt") >= 0, true);
+    }),
+  );
+
   it.effect("treats agent_end with omitted isTerminal as terminal", () =>
     Effect.gen(function* () {
       const fake = new FakeOmpRpc();
