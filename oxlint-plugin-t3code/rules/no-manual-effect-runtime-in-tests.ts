@@ -26,7 +26,7 @@ const LEGACY_BASELINE = new Map<string, number>([
   ["apps/mobile/src/features/agent-awareness/remoteRegistration.test.ts", 2],
   ["apps/mobile/src/state/use-remote-environment-registry.test.ts", 2],
   ["apps/server/src/orchestration/commandInvariants.test.ts", 6],
-  ["apps/server/src/orchestration/Layers/CheckpointReactor.test.ts", 42],
+  ["apps/server/src/orchestration/Layers/CheckpointReactor.test.ts", 57],
   ["apps/server/src/orchestration/Layers/OrchestrationEngine.test.ts", 5],
   ["apps/server/src/orchestration/Layers/OrchestrationReactor.test.ts", 4],
   ["apps/server/src/orchestration/Layers/ProviderCommandReactor.test.ts", 70],

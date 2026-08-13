@@ -18,7 +18,6 @@ import {
   type UsageSummaryInput,
   UsageReadError,
 } from "@t3tools/contracts";
-import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
@@ -178,9 +177,7 @@ export const make = Effect.gen(function* () {
   });
 
   /** No host transcript dirs while Claude/Codex drivers are removed (omp-only). */
-  const resolveTranscriptDirs = Effect.fn("UsageService.resolveTranscriptDirs")(function* () {
-    return [] as const;
-  });
+  const resolveTranscriptDirs = () => Effect.succeed([] as const);
 
   /**
    * Loads the persisted scan cache exactly once per process.

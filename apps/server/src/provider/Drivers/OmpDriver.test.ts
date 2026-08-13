@@ -1,7 +1,7 @@
 import * as NodeAssert from "node:assert/strict";
 import * as NodeChildProcess from "node:child_process";
-import * as NodeFs from "node:fs";
-import * as NodeOs from "node:os";
+import * as NodeFS from "node:fs";
+import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 
 import { it } from "@effect/vitest";
@@ -22,9 +22,9 @@ import * as ServerConfig from "../../config.ts";
 import { OmpDriver } from "./OmpDriver.ts";
 
 function makeTempOmpBinary(): string {
-  const dir = NodeFs.mkdtempSync(NodePath.join(NodeOs.tmpdir(), "t3-omp-driver-"));
+  const dir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-omp-driver-"));
   const binaryPath = NodePath.join(dir, "omp");
-  NodeFs.writeFileSync(binaryPath, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+  NodeFS.writeFileSync(binaryPath, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
   return binaryPath;
 }
 

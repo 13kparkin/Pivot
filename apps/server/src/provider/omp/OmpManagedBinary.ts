@@ -6,6 +6,8 @@
  *
  * @module provider/omp/OmpManagedBinary
  */
+import * as NodeFS from "node:fs";
+
 import * as Clock from "effect/Clock";
 import * as Crypto from "effect/Crypto";
 import * as Data from "effect/Data";
@@ -88,29 +90,23 @@ function executableFileName(platform: NodeJS.Platform): string {
   return platform === "win32" ? "omp.exe" : "omp";
 }
 
-export function isLinuxMuslHost(): boolean {
-  if (process.platform !== "linux") {
+export function isLinuxMuslHost(platform: NodeJS.Platform): boolean {
+  if (platform !== "linux") {
     return false;
   }
-  try {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const fs = require("node:fs") as typeof import("node:fs");
-    return (
-      fs.existsSync("/lib/ld-musl-x86_64.so.1") ||
-      fs.existsSync("/lib/ld-musl-aarch64.so.1") ||
-      fs.existsSync("/lib/libc.musl-x86_64.so.1") ||
-      fs.existsSync("/lib/libc.musl-aarch64.so.1")
-    );
-  } catch {
-    return false;
-  }
+  return (
+    NodeFS.existsSync("/lib/ld-musl-x86_64.so.1") ||
+    NodeFS.existsSync("/lib/ld-musl-aarch64.so.1") ||
+    NodeFS.existsSync("/lib/libc.musl-x86_64.so.1") ||
+    NodeFS.existsSync("/lib/libc.musl-aarch64.so.1")
+  );
 }
 
 /** Map host platform/arch to an oh-my-pi release asset basename. */
 export function resolveOmpReleaseAssetName(
   platform: NodeJS.Platform,
   arch: string,
-  musl: boolean = isLinuxMuslHost(),
+  musl: boolean,
 ): string | null {
   if (platform === "darwin" && arch === "arm64") return "omp-darwin-arm64";
   if (platform === "darwin" && (arch === "x64" || arch === "x86_64")) return "omp-darwin-x64";
@@ -126,11 +122,7 @@ export function resolveOmpReleaseAssetName(
   return null;
 }
 
-export function platformKey(
-  platform: NodeJS.Platform,
-  arch: string,
-  musl: boolean = isLinuxMuslHost(),
-): string {
+export function platformKey(platform: NodeJS.Platform, arch: string, musl: boolean): string {
   if (platform === "linux" && musl) {
     return `${platform}-musl-${arch}`;
   }
@@ -198,7 +190,7 @@ export const makeOmpManagedBinary = Effect.fn("ompManagedBinary.make")(function*
   const installSemaphore = yield* Semaphore.make(1);
   const platform = yield* HostProcessPlatform;
   const arch = yield* HostProcessArchitecture;
-  const musl = isLinuxMuslHost();
+  const musl = isLinuxMuslHost(platform);
   const assetName = resolveOmpReleaseAssetName(platform, arch, musl);
   const exeName = executableFileName(platform);
   const currentPath = path.join(options.baseDir, "tools", "omp", "current", exeName);
