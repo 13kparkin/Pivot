@@ -593,34 +593,134 @@ describe("OmpAdapter", () => {
     }),
   );
 
-  it.effect("respondToRequest fails as explicit unsupported until extension_ui_request", () =>
+  it.effect("maps extension_ui_request confirm to request.opened and replies with confirmed", () =>
     Effect.gen(function* () {
-      const adapter = new OmpAdapter(new FakeOmpRpc(), testRandomUUID);
+      const fake = new FakeOmpRpc();
+      const adapter = new OmpAdapter(fake, testRandomUUID);
+      const eventsFiber = yield* Stream.runCollect(
+        adapter.streamEvents.pipe(Stream.takeUntil((event) => event.type === "request.opened")),
+      ).pipe(Effect.timeout("2 seconds"), Effect.forkChild);
       yield* adapter.startSession(startInput);
-      const exit = yield* Effect.exit(
-        adapter.respondToRequest(THREAD_ID, ApprovalRequestId.make("req-1"), "accept"),
-      );
-      NodeAssert.equal(Exit.isFailure(exit), true);
-      if (Exit.isFailure(exit)) {
-        const error = Cause.squash(exit.cause);
-        NodeAssert.ok(isProviderAdapterRequestError(error));
-        NodeAssert.match(error.detail, /unsupported/i);
-      }
+      yield* fake.offer(THREAD_ID, {
+        type: "extension_ui_request",
+        id: "ui-confirm-1",
+        method: "confirm",
+        title: "Allow bash?",
+        message: "Run git status",
+      });
+      const events = yield* Fiber.join(eventsFiber);
+      const opened = events.find((event) => event.type === "request.opened");
+      NodeAssert.ok(opened);
+      NodeAssert.equal(opened.requestId, "ui-confirm-1");
+      NodeAssert.equal(opened.payload.requestType, "command_execution_approval");
+      NodeAssert.match(String(opened.payload.detail ?? ""), /Allow bash/);
+
+      yield* adapter.respondToRequest(THREAD_ID, ApprovalRequestId.make("ui-confirm-1"), "accept");
+      const response = fake.sent.find((command) => command.type === "extension_ui_response");
+      NodeAssert.deepEqual(response, {
+        type: "extension_ui_response",
+        id: "ui-confirm-1",
+        confirmed: true,
+      });
+      yield* adapter.stopSession(THREAD_ID);
     }),
   );
 
-  it.effect("respondToUserInput fails as explicit unsupported until extension_ui_request", () =>
+  it.effect("maps extension_ui_request input to user-input.requested and replies with value", () =>
+    Effect.gen(function* () {
+      const fake = new FakeOmpRpc();
+      const adapter = new OmpAdapter(fake, testRandomUUID);
+      const eventsFiber = yield* Stream.runCollect(
+        adapter.streamEvents.pipe(
+          Stream.takeUntil((event) => event.type === "user-input.requested"),
+        ),
+      ).pipe(Effect.timeout("2 seconds"), Effect.forkChild);
+      yield* adapter.startSession(startInput);
+      yield* fake.offer(THREAD_ID, {
+        type: "extension_ui_request",
+        id: "ui-input-1",
+        method: "input",
+        title: "Paste login code",
+        placeholder: "one-time code",
+      });
+      const events = yield* Fiber.join(eventsFiber);
+      const requested = events.find((event) => event.type === "user-input.requested");
+      NodeAssert.ok(requested);
+      NodeAssert.equal(requested.requestId, "ui-input-1");
+      NodeAssert.equal(requested.payload.questions[0]?.header, "Paste login code");
+      NodeAssert.equal(requested.payload.questions[0]?.options.length, 0);
+
+      // Must not auto-cancel paste/input prompts.
+      NodeAssert.equal(
+        fake.sent.some(
+          (command) => command.type === "extension_ui_response" && command.cancelled === true,
+        ),
+        false,
+      );
+
+      yield* adapter.respondToUserInput(THREAD_ID, ApprovalRequestId.make("ui-input-1"), {
+        input: "abc-123",
+      });
+      const response = fake.sent.find((command) => command.type === "extension_ui_response");
+      NodeAssert.deepEqual(response, {
+        type: "extension_ui_response",
+        id: "ui-input-1",
+        value: "abc-123",
+      });
+      yield* adapter.stopSession(THREAD_ID);
+    }),
+  );
+
+  it.effect("maps extension_ui_request select options into user-input questions", () =>
+    Effect.gen(function* () {
+      const fake = new FakeOmpRpc();
+      const adapter = new OmpAdapter(fake, testRandomUUID);
+      const eventsFiber = yield* Stream.runCollect(
+        adapter.streamEvents.pipe(
+          Stream.takeUntil((event) => event.type === "user-input.requested"),
+        ),
+      ).pipe(Effect.timeout("2 seconds"), Effect.forkChild);
+      yield* adapter.startSession(startInput);
+      yield* fake.offer(THREAD_ID, {
+        type: "extension_ui_request",
+        id: "ui-select-1",
+        method: "select",
+        title: "Pick provider",
+        options: ["openai", "anthropic"],
+      });
+      const events = yield* Fiber.join(eventsFiber);
+      const requested = events.find((event) => event.type === "user-input.requested");
+      NodeAssert.ok(requested);
+      NodeAssert.deepEqual(
+        requested.payload.questions[0]?.options.map((option) => option.label),
+        ["openai", "anthropic"],
+      );
+
+      yield* adapter.respondToUserInput(THREAD_ID, ApprovalRequestId.make("ui-select-1"), {
+        choice: "anthropic",
+      });
+      const response = fake.sent.find((command) => command.type === "extension_ui_response");
+      NodeAssert.deepEqual(response, {
+        type: "extension_ui_response",
+        id: "ui-select-1",
+        value: "anthropic",
+      });
+      yield* adapter.stopSession(THREAD_ID);
+    }),
+  );
+
+  it.effect("respondToRequest without a pending confirm fails clearly", () =>
     Effect.gen(function* () {
       const adapter = new OmpAdapter(new FakeOmpRpc(), testRandomUUID);
       yield* adapter.startSession(startInput);
       const exit = yield* Effect.exit(
-        adapter.respondToUserInput(THREAD_ID, ApprovalRequestId.make("req-1"), {}),
+        adapter.respondToRequest(THREAD_ID, ApprovalRequestId.make("missing"), "accept"),
       );
       NodeAssert.equal(Exit.isFailure(exit), true);
       if (Exit.isFailure(exit)) {
         const error = Cause.squash(exit.cause);
         NodeAssert.ok(isProviderAdapterRequestError(error));
-        NodeAssert.match(error.detail, /unsupported/i);
+        NodeAssert.match(error.detail, /no pending/i);
       }
     }),
   );

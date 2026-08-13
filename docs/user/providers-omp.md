@@ -23,3 +23,5 @@ Unsupported hosts (for example linux musl on arm64 for rtk) fail Install with a 
 Model lists come from omp (`get_available_models`), not from a hardcoded catalog in Pivot.
 
 Login runs on the machine hosting the T3 server (browser opens there; OAuth callbacks stay there). You can also sign in from a terminal on that host with `omp login`.
+
+When omp asks for a confirmation, a paste code, or a choice (including login paste prompts), Pivot shows the existing approval / user-input panels in the composer. Your answer is sent back to omp over RPC.
