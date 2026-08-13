@@ -628,6 +628,56 @@ export class ServerOmpLoginError extends Schema.TaggedErrorClass<ServerOmpLoginE
   }
 }
 
+export const ServerOmpGetSubagentMessagesInput = Schema.Struct({
+  threadId: ThreadId,
+  subagentId: TrimmedNonEmptyString,
+  fromByte: Schema.optionalKey(Schema.Number),
+});
+export type ServerOmpGetSubagentMessagesInput = typeof ServerOmpGetSubagentMessagesInput.Type;
+
+export const ServerOmpGetSubagentMessagesResult = Schema.Struct({
+  sessionFile: Schema.String,
+  fromByte: Schema.Number,
+  nextByte: Schema.Number,
+  reset: Schema.Boolean,
+  messages: Schema.Array(Schema.Unknown),
+});
+export type ServerOmpGetSubagentMessagesResult = typeof ServerOmpGetSubagentMessagesResult.Type;
+
+export const ServerOmpSteerInput = Schema.Struct({
+  threadId: ThreadId,
+  message: TrimmedNonEmptyString,
+});
+export type ServerOmpSteerInput = typeof ServerOmpSteerInput.Type;
+
+export const ServerOmpSteerResult = Schema.Struct({});
+export type ServerOmpSteerResult = typeof ServerOmpSteerResult.Type;
+
+export const ServerOmpSetSubagentSubscriptionInput = Schema.Struct({
+  threadId: ThreadId,
+  level: Schema.Literals(["off", "progress", "events"]),
+});
+export type ServerOmpSetSubagentSubscriptionInput =
+  typeof ServerOmpSetSubagentSubscriptionInput.Type;
+
+export const ServerOmpSetSubagentSubscriptionResult = Schema.Struct({
+  level: Schema.Literals(["off", "progress", "events"]),
+});
+export type ServerOmpSetSubagentSubscriptionResult =
+  typeof ServerOmpSetSubagentSubscriptionResult.Type;
+
+export class ServerOmpHubError extends Schema.TaggedErrorClass<ServerOmpHubError>()(
+  "ServerOmpHubError",
+  {
+    reason: TrimmedNonEmptyString,
+    cause: Schema.optional(Schema.Defect()),
+  },
+) {
+  override get message(): string {
+    return `omp hub failed: ${this.reason}`;
+  }
+}
+
 export const ServerProviderUpdateInput = Schema.Struct({
   provider: ProviderDriverKind,
   instanceId: Schema.optionalKey(ProviderInstanceId),

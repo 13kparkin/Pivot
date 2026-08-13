@@ -120,6 +120,16 @@ export interface OmpAdapterOptions {
   readonly resolveRoleModel?: OmpResolveRoleModel;
 }
 
+export type OmpSubagentSubscriptionLevel = "off" | "progress" | "events";
+
+export interface OmpSubagentTranscriptPage {
+  readonly sessionFile: string;
+  readonly fromByte: number;
+  readonly nextByte: number;
+  readonly reset: boolean;
+  readonly messages: ReadonlyArray<unknown>;
+}
+
 /**
  * Structural RPC client used by the adapter. Tests pass a fake; production
  * passes `OmpRpcRuntime`.
@@ -279,6 +289,62 @@ export class OmpAdapter {
         });
       }
       yield* this.#send(threadId, { type: "abort" });
+    });
+  }
+
+  public fetchSubagentTranscript(threadId: ThreadId, subagentId: string, fromByte?: number) {
+    return Effect.gen({ self: this }, function* () {
+      if (!this.#sessions.has(threadId)) {
+        return yield* new ProviderAdapterSessionNotFoundError({
+          provider: PROVIDER,
+          threadId,
+        });
+      }
+      const response = yield* this.#send(threadId, {
+        type: "get_subagent_messages",
+        subagentId,
+        ...(fromByte === undefined ? {} : { fromByte }),
+      });
+      if (!isRecord(response) || !isRecord(response.data)) {
+        return yield* new ProviderAdapterRequestError({
+          provider: PROVIDER,
+          method: "get_subagent_messages",
+          detail: "response data missing",
+        });
+      }
+      const data = response.data;
+      const messages = Array.isArray(data.messages) ? data.messages : [];
+      return {
+        sessionFile: typeof data.sessionFile === "string" ? data.sessionFile : "",
+        fromByte: typeof data.fromByte === "number" ? data.fromByte : 0,
+        nextByte: typeof data.nextByte === "number" ? data.nextByte : 0,
+        reset: data.reset === true,
+        messages,
+      } satisfies OmpSubagentTranscriptPage;
+    });
+  }
+
+  public steerSession(threadId: ThreadId, message: string) {
+    return Effect.gen({ self: this }, function* () {
+      if (!this.#sessions.has(threadId)) {
+        return yield* new ProviderAdapterSessionNotFoundError({
+          provider: PROVIDER,
+          threadId,
+        });
+      }
+      yield* this.#send(threadId, { type: "steer", message });
+    });
+  }
+
+  public setSubagentSubscription(threadId: ThreadId, level: OmpSubagentSubscriptionLevel) {
+    return Effect.gen({ self: this }, function* () {
+      if (!this.#sessions.has(threadId)) {
+        return yield* new ProviderAdapterSessionNotFoundError({
+          provider: PROVIDER,
+          threadId,
+        });
+      }
+      yield* this.#send(threadId, { type: "set_subagent_subscription", level });
     });
   }
 

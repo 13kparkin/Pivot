@@ -29,3 +29,5 @@ When omp asks for a confirmation, a paste code, or a choice (including login pas
 Type `/` in the composer to see omp slash commands (from `get_available_commands`), such as `/model`, `/review`, or `/jobs`. Choosing one inserts the command into the prompt. Local commands that omp handles without starting an agent turn (for example `/jobs`) show their result in the chat.
 
 When **Plan mode** is enabled in Settings, omp threads show the plan/default toggle. Turning plan on switches the session model to the `plan` role from omp’s `~/.omp/agent/config.yml` (`modelRoles.plan`). Turning it off restores the previous model. Add a `plan` role there if the toggle should change models (without it, the toggle still tracks mode but leaves the model unchanged).
+
+When omp spawns subagents, open the **Agents** panel and click an agent to view its nested transcript (read-only). From that pane you can **Steer** the parent session or **Stop** (abort) the active turn. This does not create a separate Pivot thread.

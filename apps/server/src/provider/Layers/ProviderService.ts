@@ -48,6 +48,7 @@ import {
   withMetrics,
 } from "../../observability/Metrics.ts";
 import { type ProviderAdapterError, ProviderValidationError } from "../Errors.ts";
+import { OmpAdapter } from "../omp/OmpAdapter.ts";
 import type { ProviderAdapterShape } from "../Services/ProviderAdapter.ts";
 import * as ProviderAdapterRegistry from "../Services/ProviderAdapterRegistry.ts";
 import * as ProviderService from "../Services/ProviderService.ts";
@@ -1065,6 +1066,55 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     );
   });
 
+  const requireOmpAdapter = (
+    adapter: ProviderAdapterShape<ProviderAdapterError>,
+    operation: string,
+  ) =>
+    adapter instanceof OmpAdapter
+      ? Effect.succeed(adapter)
+      : toValidationError(
+          operation,
+          `Operation requires an omp session (got '${adapter.provider}').`,
+        );
+
+  const ompGetSubagentMessages: ProviderServiceMethod<"ompGetSubagentMessages"> = Effect.fn(
+    "ompGetSubagentMessages",
+  )(function* (input) {
+    const routed = yield* resolveRoutableSession({
+      threadId: input.threadId,
+      operation: "ProviderService.ompGetSubagentMessages",
+      allowRecovery: true,
+    });
+    const omp = yield* requireOmpAdapter(routed.adapter, "ProviderService.ompGetSubagentMessages");
+    return yield* omp.fetchSubagentTranscript(routed.threadId, input.subagentId, input.fromByte);
+  });
+
+  const ompSteer: ProviderServiceMethod<"ompSteer"> = Effect.fn("ompSteer")(function* (input) {
+    const routed = yield* resolveRoutableSession({
+      threadId: input.threadId,
+      operation: "ProviderService.ompSteer",
+      allowRecovery: true,
+    });
+    const omp = yield* requireOmpAdapter(routed.adapter, "ProviderService.ompSteer");
+    yield* omp.steerSession(routed.threadId, input.message);
+  });
+
+  const ompSetSubagentSubscription: ProviderServiceMethod<"ompSetSubagentSubscription"> = Effect.fn(
+    "ompSetSubagentSubscription",
+  )(function* (input) {
+    const routed = yield* resolveRoutableSession({
+      threadId: input.threadId,
+      operation: "ProviderService.ompSetSubagentSubscription",
+      allowRecovery: true,
+    });
+    const omp = yield* requireOmpAdapter(
+      routed.adapter,
+      "ProviderService.ompSetSubagentSubscription",
+    );
+    yield* omp.setSubagentSubscription(routed.threadId, input.level);
+    return { level: input.level };
+  });
+
   const runStopAll = Effect.fn("runStopAll")(function* () {
     const threadIds = yield* directory.listThreadIds();
     const currentAdapters = yield* getAdapterEntries;
@@ -1136,6 +1186,9 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     getCapabilities,
     getInstanceInfo,
     rollbackConversation,
+    ompGetSubagentMessages,
+    ompSteer,
+    ompSetSubagentSubscription,
     // Each access creates a fresh PubSub subscription so that multiple
     // consumers (ProviderRuntimeIngestion, CheckpointReactor, etc.) each
     // independently receive all runtime events.

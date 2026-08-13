@@ -340,6 +340,9 @@ describe("ProviderCommandReactor", () => {
         });
       },
       rollbackConversation: () => unsupported(),
+      ompGetSubagentMessages: () => unsupported(),
+      ompSteer: () => unsupported(),
+      ompSetSubagentSubscription: () => unsupported(),
       get streamEvents() {
         return Stream.fromPubSub(runtimeEventPubSub);
       },

@@ -106,6 +106,40 @@ export interface ProviderServiceShape {
   }) => Effect.Effect<void, ProviderServiceError>;
 
   /**
+   * omp Agent Hub: fetch a nested subagent transcript page.
+   */
+  readonly ompGetSubagentMessages: (input: {
+    readonly threadId: ThreadId;
+    readonly subagentId: string;
+    readonly fromByte?: number;
+  }) => Effect.Effect<
+    {
+      readonly sessionFile: string;
+      readonly fromByte: number;
+      readonly nextByte: number;
+      readonly reset: boolean;
+      readonly messages: ReadonlyArray<unknown>;
+    },
+    ProviderServiceError
+  >;
+
+  /**
+   * omp Agent Hub: steer the active session.
+   */
+  readonly ompSteer: (input: {
+    readonly threadId: ThreadId;
+    readonly message: string;
+  }) => Effect.Effect<void, ProviderServiceError>;
+
+  /**
+   * omp Agent Hub: change subagent event subscription level.
+   */
+  readonly ompSetSubagentSubscription: (input: {
+    readonly threadId: ThreadId;
+    readonly level: "off" | "progress" | "events";
+  }) => Effect.Effect<{ readonly level: "off" | "progress" | "events" }, ProviderServiceError>;
+
+  /**
    * Canonical provider runtime event stream.
    *
    * Fan-out is owned by ProviderService (not by a standalone event-bus service).

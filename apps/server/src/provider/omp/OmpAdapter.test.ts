@@ -48,6 +48,15 @@ class FakeOmpRpc {
         readonly contextWindow?: number;
       }
     | undefined = undefined;
+  subagentMessages:
+    | {
+        readonly sessionFile: string;
+        readonly fromByte: number;
+        readonly nextByte: number;
+        readonly reset: boolean;
+        readonly messages: ReadonlyArray<object>;
+      }
+    | undefined = undefined;
   readonly sent: Array<Record<string, unknown>> = [];
   readonly frames = new Map<string, Queue.Queue<object>>();
 
@@ -130,6 +139,34 @@ class FakeOmpRpc {
           ...(this.contextUsage === undefined ? {} : { contextUsage: this.contextUsage }),
         },
       });
+    }
+    if (command.type === "get_subagent_messages") {
+      return Effect.succeed({
+        type: "response",
+        success: true,
+        data: this.subagentMessages ?? {
+          sessionFile: "/tmp/sub.jsonl",
+          fromByte: 0,
+          nextByte: 0,
+          reset: false,
+          messages: [],
+        },
+      });
+    }
+    if (
+      command.type === "steer" ||
+      command.type === "set_subagent_subscription" ||
+      command.type === "set_thinking_level" ||
+      command.type === "set_fast_mode" ||
+      command.type === "set_auto_compaction" ||
+      command.type === "set_auto_retry" ||
+      command.type === "compact" ||
+      command.type === "branch" ||
+      command.type === "get_branch_messages" ||
+      command.type === "get_session_stats" ||
+      command.type === "set_host_uri_schemes"
+    ) {
+      return Effect.succeed({ type: "response", success: true, data: {} });
     }
     return Effect.succeed({
       type: "response",
@@ -1125,6 +1162,62 @@ describe("OmpAdapter", () => {
       const completed = events.find((event) => event.type === "task.completed");
       NodeAssert.equal(completed?.payload.taskId, RuntimeTaskId.make("agent-2"));
       NodeAssert.equal(completed?.payload.status, "stopped");
+    }),
+  );
+
+  it.effect("fetchSubagentTranscript sends get_subagent_messages", () =>
+    Effect.gen(function* () {
+      const fake = new FakeOmpRpc();
+      fake.subagentMessages = {
+        sessionFile: "/tmp/sub.jsonl",
+        fromByte: 0,
+        nextByte: 42,
+        reset: false,
+        messages: [{ role: "assistant", content: "nested" }],
+      };
+      const adapter = new OmpAdapter(fake, testRandomUUID);
+      yield* adapter.startSession(startInput);
+      const sentBefore = fake.sent.length;
+      const page = yield* adapter.fetchSubagentTranscript(THREAD_ID, "agent-1", 10);
+      NodeAssert.deepEqual(
+        fake.sent.slice(sentBefore).map((command) => command.type),
+        ["get_subagent_messages"],
+      );
+      NodeAssert.equal(fake.sent.at(-1)?.subagentId, "agent-1");
+      NodeAssert.equal(fake.sent.at(-1)?.fromByte, 10);
+      NodeAssert.equal(page.sessionFile, "/tmp/sub.jsonl");
+      NodeAssert.equal(page.nextByte, 42);
+      NodeAssert.equal(page.messages.length, 1);
+    }),
+  );
+
+  it.effect("steerSession sends steer", () =>
+    Effect.gen(function* () {
+      const fake = new FakeOmpRpc();
+      const adapter = new OmpAdapter(fake, testRandomUUID);
+      yield* adapter.startSession(startInput);
+      const sentBefore = fake.sent.length;
+      yield* adapter.steerSession(THREAD_ID, "focus on tests");
+      NodeAssert.deepEqual(
+        fake.sent.slice(sentBefore).map((command) => command.type),
+        ["steer"],
+      );
+      NodeAssert.equal(fake.sent.at(-1)?.message, "focus on tests");
+    }),
+  );
+
+  it.effect("setSubagentSubscription sends set_subagent_subscription", () =>
+    Effect.gen(function* () {
+      const fake = new FakeOmpRpc();
+      const adapter = new OmpAdapter(fake, testRandomUUID);
+      yield* adapter.startSession(startInput);
+      const sentBefore = fake.sent.length;
+      yield* adapter.setSubagentSubscription(THREAD_ID, "events");
+      NodeAssert.deepEqual(
+        fake.sent.slice(sentBefore).map((command) => command.type),
+        ["set_subagent_subscription"],
+      );
+      NodeAssert.equal(fake.sent.at(-1)?.level, "events");
     }),
   );
 });

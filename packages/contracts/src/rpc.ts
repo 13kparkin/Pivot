@@ -156,6 +156,13 @@ import {
   ServerOmpLoginError,
   ServerOmpLoginInput,
   ServerOmpLoginResult,
+  ServerOmpGetSubagentMessagesInput,
+  ServerOmpGetSubagentMessagesResult,
+  ServerOmpSteerInput,
+  ServerOmpSteerResult,
+  ServerOmpSetSubagentSubscriptionInput,
+  ServerOmpSetSubagentSubscriptionResult,
+  ServerOmpHubError,
   ServerProviderUpdateError,
   ServerProviderUpdateInput,
   ServerLifecycleStreamEvent,
@@ -259,6 +266,9 @@ export const WS_METHODS = {
   serverRefreshProviders: "server.refreshProviders",
   serverOmpListLoginProviders: "server.ompListLoginProviders",
   serverOmpLogin: "server.ompLogin",
+  serverOmpGetSubagentMessages: "server.ompGetSubagentMessages",
+  serverOmpSteer: "server.ompSteer",
+  serverOmpSetSubagentSubscription: "server.ompSetSubagentSubscription",
   serverUpdateProvider: "server.updateProvider",
   serverUpdateServer: "server.updateServer",
   serverUpdateServerWithProgress: "server.updateServerWithProgress",
@@ -367,6 +377,24 @@ export const WsServerOmpLoginRpc = Rpc.make(WS_METHODS.serverOmpLogin, {
   success: ServerOmpLoginResult,
   error: Schema.Union([ServerOmpLoginError, EnvironmentAuthorizationError]),
 });
+export const WsServerOmpGetSubagentMessagesRpc = Rpc.make(WS_METHODS.serverOmpGetSubagentMessages, {
+  payload: ServerOmpGetSubagentMessagesInput,
+  success: ServerOmpGetSubagentMessagesResult,
+  error: Schema.Union([ServerOmpHubError, EnvironmentAuthorizationError]),
+});
+export const WsServerOmpSteerRpc = Rpc.make(WS_METHODS.serverOmpSteer, {
+  payload: ServerOmpSteerInput,
+  success: ServerOmpSteerResult,
+  error: Schema.Union([ServerOmpHubError, EnvironmentAuthorizationError]),
+});
+export const WsServerOmpSetSubagentSubscriptionRpc = Rpc.make(
+  WS_METHODS.serverOmpSetSubagentSubscription,
+  {
+    payload: ServerOmpSetSubagentSubscriptionInput,
+    success: ServerOmpSetSubagentSubscriptionResult,
+    error: Schema.Union([ServerOmpHubError, EnvironmentAuthorizationError]),
+  },
+);
 
 export const WsServerUpdateProviderRpc = Rpc.make(WS_METHODS.serverUpdateProvider, {
   payload: ServerProviderUpdateInput,
@@ -995,6 +1023,9 @@ export const WsRpcGroup = RpcGroup.make(
   WsServerRefreshProvidersRpc,
   WsServerOmpListLoginProvidersRpc,
   WsServerOmpLoginRpc,
+  WsServerOmpGetSubagentMessagesRpc,
+  WsServerOmpSteerRpc,
+  WsServerOmpSetSubagentSubscriptionRpc,
   WsServerUpdateProviderRpc,
   WsServerUpdateServerRpc,
   WsServerUpdateServerWithProgressRpc,

@@ -749,6 +749,32 @@ export function createServerEnvironmentAtoms<R, E>(
           `${environmentId}:${input.instanceId ?? "omp"}:login:${input.providerId}`,
       },
     }),
+    ompGetSubagentMessages: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:omp-get-subagent-messages",
+      tag: WS_METHODS.serverOmpGetSubagentMessages,
+      concurrency: {
+        mode: "singleFlight",
+        key: ({ environmentId, input }) =>
+          `${environmentId}:${input.threadId}:${input.subagentId}:messages`,
+      },
+    }),
+    ompSteer: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:omp-steer",
+      tag: WS_METHODS.serverOmpSteer,
+      concurrency: {
+        mode: "singleFlight",
+        key: ({ environmentId, input }) => `${environmentId}:${input.threadId}:steer`,
+      },
+    }),
+    ompSetSubagentSubscription: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:omp-set-subagent-subscription",
+      tag: WS_METHODS.serverOmpSetSubagentSubscription,
+      concurrency: {
+        mode: "singleFlight",
+        key: ({ environmentId, input }) =>
+          `${environmentId}:${input.threadId}:subagent-sub:${input.level}`,
+      },
+    }),
     updateProvider: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:server:update-provider",
       tag: WS_METHODS.serverUpdateProvider,
