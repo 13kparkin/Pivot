@@ -2,6 +2,7 @@ import * as NodeAssert from "node:assert/strict";
 
 import { it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Queue from "effect/Queue";
 import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
@@ -212,6 +213,15 @@ function makeFakeOmpSpawner(input: { readonly sessionFile: string }) {
                     success: true,
                     data: { sessionFile },
                   });
+                } else if (rpcCommand.type === "prompt") {
+                  yield* offer({ type: "agent_start" });
+                  yield* offer({
+                    id: rpcCommand.id,
+                    type: "response",
+                    command: "prompt",
+                    success: true,
+                    data: { agentInvoked: true },
+                  });
                 }
               }
               newlineIndex = stdinBuf.indexOf("\n");
@@ -328,6 +338,38 @@ describe("OmpRpcRuntime", () => {
         resumeCursor: null,
       });
       NodeAssert.equal(fake.spawns.length, 2);
+    }),
+  );
+
+  it.effect("send correlates a prompt response and streamFrames yields agent events", () =>
+    Effect.gen(function* () {
+      const fake = makeFakeOmpSpawner({ sessionFile: "/tmp/omp-session.jsonl" });
+      const runtime = new OmpRpcRuntime(fake.spawner, "/opt/omp");
+      yield* runtime.ensureSession({
+        sessionKey: "thread-1",
+        cwd: "/proj",
+        resumeCursor: null,
+      });
+      const eventsFiber = yield* runtime
+        .streamFrames("thread-1")
+        .pipe(Stream.take(1), Stream.runCollect, Effect.fork);
+      const response = yield* runtime.send("thread-1", { type: "prompt", message: "hi" });
+      const events = yield* Fiber.join(eventsFiber);
+      NodeAssert.equal(
+        typeof response === "object" &&
+          response !== null &&
+          "success" in response &&
+          response.success,
+        true,
+      );
+      NodeAssert.equal(fake.spawns[0]?.commands.at(-1)?.type, "prompt");
+      NodeAssert.equal(fake.spawns[0]?.commands.at(-1)?.message, "hi");
+      NodeAssert.equal(
+        events[0] && typeof events[0] === "object" && "type" in events[0]
+          ? events[0].type
+          : undefined,
+        "agent_start",
+      );
     }),
   );
 });
