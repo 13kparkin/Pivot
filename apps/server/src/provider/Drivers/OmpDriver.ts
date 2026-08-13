@@ -10,7 +10,7 @@
  *
  * @module provider/Drivers/OmpDriver
  */
-import * as Os from "node:os";
+import * as NodeOS from "node:os";
 
 import {
   OmpSettings,
@@ -386,7 +386,9 @@ export const OmpDriver: ProviderDriver<OmpSettings, OmpDriverEnv> = {
       const fs = yield* FileSystem.FileSystem;
       const ompHomeEnv = process.env.OMP_HOME?.trim();
       const ompHome =
-        ompHomeEnv && ompHomeEnv.length > 0 ? ompHomeEnv : pathService.join(Os.homedir(), ".omp");
+        ompHomeEnv && ompHomeEnv.length > 0
+          ? ompHomeEnv
+          : pathService.join(NodeOS.homedir(), ".omp");
       const ompConfigStore = new OmpConfigStore(fs, pathService, ompHome);
       // Settings updates recreate the instance via ProviderInstanceRegistryMutator,
       // so create() is the sync point for OmpSettings → omp config.yml.
