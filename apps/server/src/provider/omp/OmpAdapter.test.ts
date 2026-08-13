@@ -46,8 +46,11 @@ class FakeOmpRpc {
     | {
         readonly tokens: number;
         readonly contextWindow?: number;
+        readonly percent?: number;
       }
     | undefined = undefined;
+  tokensPerSecond: number | undefined = undefined;
+  queuedMessageCount: number | undefined = undefined;
   subagentMessages:
     | {
         readonly sessionFile: string;
@@ -145,6 +148,10 @@ class FakeOmpRpc {
           sessionFile: this.sessionFile,
           ...(this.stateModel === undefined ? {} : { model: this.stateModel }),
           ...(this.contextUsage === undefined ? {} : { contextUsage: this.contextUsage }),
+          ...(this.tokensPerSecond === undefined ? {} : { tokensPerSecond: this.tokensPerSecond }),
+          ...(this.queuedMessageCount === undefined
+            ? {}
+            : { queuedMessageCount: this.queuedMessageCount }),
         },
       });
     }
@@ -613,7 +620,9 @@ describe("OmpAdapter", () => {
   it.effect("emits thread token usage from get_state contextUsage on turn complete", () =>
     Effect.gen(function* () {
       const fake = new FakeOmpRpc();
-      fake.contextUsage = { tokens: 1100, contextWindow: 200_000 };
+      fake.contextUsage = { tokens: 1100, contextWindow: 200_000, percent: 0.55 };
+      fake.tokensPerSecond = 42;
+      fake.queuedMessageCount = 2;
       const adapter = new OmpAdapter(fake, testRandomUUID);
       const eventsFiber = yield* collectUntilTurnCompleted(adapter.streamEvents).pipe(
         Effect.forkChild,
@@ -627,12 +636,56 @@ describe("OmpAdapter", () => {
           (event) =>
             event.type === "thread.token-usage.updated" &&
             event.payload.usage.usedTokens === 1100 &&
-            event.payload.usage.maxTokens === 200_000,
+            event.payload.usage.maxTokens === 200_000 &&
+            event.payload.usage.contextUsedPercent === 55 &&
+            event.payload.usage.tokensPerSecond === 42 &&
+            event.payload.usage.queuedMessageCount === 2,
         ),
         true,
       );
       NodeAssert.equal(
         fake.sent.some((command) => command.type === "get_state"),
+        true,
+      );
+    }),
+  );
+
+  it.effect("emits live thread token usage during message_update", () =>
+    Effect.gen(function* () {
+      const fake = new FakeOmpRpc();
+      fake.contextUsage = { tokens: 500, contextWindow: 100_000, percent: 0.05 };
+      fake.tokensPerSecond = 12.5;
+      fake.queuedMessageCount = 1;
+      const adapter = new OmpAdapter(fake, testRandomUUID);
+      const eventsFiber = yield* Stream.runCollect(
+        adapter.streamEvents.pipe(
+          Stream.takeUntil(
+            (event) =>
+              event.type === "thread.token-usage.updated" &&
+              event.payload.usage.tokensPerSecond === 12.5,
+          ),
+        ),
+      ).pipe(
+        Effect.map((chunk) => Array.from(chunk)),
+        Effect.timeout("2 seconds"),
+        Effect.forkChild,
+      );
+      yield* adapter.startSession(startInput);
+      yield* adapter.sendTurn({ threadId: THREAD_ID, input: "hi" });
+      yield* fake.offer(THREAD_ID, {
+        type: "message_update",
+        assistantMessageEvent: { type: "text_delta", delta: "hello" },
+      });
+      const events = yield* Fiber.join(eventsFiber);
+      NodeAssert.equal(
+        events.some(
+          (event) =>
+            event.type === "thread.token-usage.updated" &&
+            event.payload.usage.usedTokens === 500 &&
+            event.payload.usage.contextUsedPercent === 5 &&
+            event.payload.usage.tokensPerSecond === 12.5 &&
+            event.payload.usage.queuedMessageCount === 1,
+        ),
         true,
       );
     }),
@@ -689,6 +742,62 @@ describe("OmpAdapter", () => {
       yield* adapter.startSession(startInput);
       yield* adapter.interruptTurn(THREAD_ID);
       NodeAssert.equal(fake.sent.at(-1)?.type, "abort");
+    }),
+  );
+
+  it.effect("emits turn.aborted after interrupt when agent_end confirms the stop", () =>
+    Effect.gen(function* () {
+      const fake = new FakeOmpRpc();
+      const adapter = new OmpAdapter(fake, testRandomUUID);
+      const eventsFiber = yield* Stream.runCollect(
+        adapter.streamEvents.pipe(
+          Stream.takeUntil(
+            (event) => event.type === "turn.aborted" || event.type === "turn.completed",
+          ),
+        ),
+      ).pipe(
+        Effect.map((chunk) => Array.from(chunk)),
+        Effect.forkChild,
+      );
+      yield* adapter.startSession(startInput);
+      yield* adapter.sendTurn({ threadId: THREAD_ID, input: "hi" });
+      yield* adapter.interruptTurn(THREAD_ID);
+      yield* fake.offer(THREAD_ID, { type: "agent_end", messages: [], isTerminal: true });
+      const events = yield* Fiber.join(eventsFiber);
+      NodeAssert.equal(
+        events.some(
+          (event) => event.type === "turn.aborted" && event.payload.reason === "user_abort",
+        ),
+        true,
+      );
+      NodeAssert.equal(
+        events.some((event) => event.type === "turn.completed"),
+        false,
+      );
+    }),
+  );
+
+  it.effect("emits turn.completed when agent_end arrives without interrupt", () =>
+    Effect.gen(function* () {
+      const fake = new FakeOmpRpc();
+      const adapter = new OmpAdapter(fake, testRandomUUID);
+      const eventsFiber = yield* collectUntilTurnCompleted(adapter.streamEvents).pipe(
+        Effect.forkChild,
+      );
+      yield* adapter.startSession(startInput);
+      yield* adapter.sendTurn({ threadId: THREAD_ID, input: "hi" });
+      yield* fake.offer(THREAD_ID, { type: "agent_end", messages: [], isTerminal: true });
+      const events = yield* Fiber.join(eventsFiber);
+      NodeAssert.equal(
+        events.some(
+          (event) => event.type === "turn.completed" && event.payload.state === "completed",
+        ),
+        true,
+      );
+      NodeAssert.equal(
+        events.some((event) => event.type === "turn.aborted"),
+        false,
+      );
     }),
   );
 

@@ -63,8 +63,13 @@ export function deriveLatestContextWindowSnapshot(
     }
 
     const maxTokens = asFiniteNumber(payload?.maxTokens);
+    const contextUsedPercent = asFiniteNumber(payload?.contextUsedPercent);
     const usedPercentage =
-      maxTokens !== null && maxTokens > 0 ? Math.min(100, (usedTokens / maxTokens) * 100) : null;
+      contextUsedPercent !== null
+        ? Math.min(100, Math.max(0, contextUsedPercent))
+        : maxTokens !== null && maxTokens > 0
+          ? Math.min(100, (usedTokens / maxTokens) * 100)
+          : null;
     const remainingTokens =
       maxTokens !== null ? Math.max(0, Math.round(maxTokens - usedTokens)) : null;
     const remainingPercentage = usedPercentage !== null ? Math.max(0, 100 - usedPercentage) : null;
@@ -87,6 +92,9 @@ export function deriveLatestContextWindowSnapshot(
       lastReasoningOutputTokens: asFiniteNumber(payload?.lastReasoningOutputTokens),
       toolUses: asFiniteNumber(payload?.toolUses),
       durationMs: asFiniteNumber(payload?.durationMs),
+      tokensPerSecond: asFiniteNumber(payload?.tokensPerSecond),
+      queuedMessageCount: asFiniteNumber(payload?.queuedMessageCount),
+      contextUsedPercent,
       compactsAutomatically: asBoolean(payload?.compactsAutomatically) ?? false,
       updatedAt: activity.createdAt,
     };

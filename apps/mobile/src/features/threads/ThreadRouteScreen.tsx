@@ -214,6 +214,7 @@ function ThreadRouteContent(
   const gitActions = useSelectedThreadGitActions();
   const requests = useSelectedThreadRequests();
   const interruptThreadTurn = useAtomCommand(threadEnvironment.interruptTurn, "thread interrupt");
+  const [isStoppingTurn, setIsStoppingTurn] = useState(false);
   const navigation = useNavigation();
   const params = props.route.params;
   const environmentIdRaw = firstRouteParam(params.environmentId);
@@ -478,14 +479,26 @@ function ThreadRouteContent(
   const handleOpenConnectionEditor = useCallback(() => {
     void navigation.navigate("Connections");
   }, [navigation]);
+  const activeThreadBusy =
+    selectedThread?.session?.status === "running" || selectedThread?.session?.status === "starting";
+  useEffect(() => {
+    if (!activeThreadBusy) {
+      setIsStoppingTurn(false);
+    }
+  }, [activeThreadBusy]);
+  useEffect(() => {
+    setIsStoppingTurn(false);
+  }, [selectedThread?.id]);
   const handleStopThread = useCallback(() => {
     if (
       !selectedThread ||
+      isStoppingTurn ||
       (selectedThread.session?.status !== "running" &&
         selectedThread.session?.status !== "starting")
     ) {
       return;
     }
+    setIsStoppingTurn(true);
     return interruptThreadTurn({
       environmentId: selectedThread.environmentId,
       input: {
@@ -494,8 +507,12 @@ function ThreadRouteContent(
           ? { turnId: selectedThread.session.activeTurnId }
           : {}),
       },
+    }).then((result) => {
+      if (result._tag === "Failure") {
+        setIsStoppingTurn(false);
+      }
     });
-  }, [interruptThreadTurn, selectedThread]);
+  }, [interruptThreadTurn, isStoppingTurn, selectedThread]);
 
   const handleOpenTerminal = useCallback(
     (nextTerminalId?: string | null) => {
@@ -799,6 +816,7 @@ function ThreadRouteContent(
           onRemoveDraftImage={composer.onRemoveDraftImage}
           serverConfig={serverConfig}
           onStopThread={handleStopThread}
+          isStoppingTurn={isStoppingTurn}
           onSendMessage={composer.onSendMessage}
           onReconnectEnvironment={handleReconnectEnvironment}
           onUpdateThreadModelSelection={composer.onUpdateModelSelection}

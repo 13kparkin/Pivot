@@ -19,9 +19,11 @@ import type { UsageProviderKind } from "@t3tools/contracts";
 
 import {
   initialCodexScanState,
+  initialOmpScanState,
   mightCarryUsage,
   parseClaudeLine,
   parseCodexLine,
+  parseOmpLine,
   type UsageRecord,
 } from "./usageTranscripts.ts";
 
@@ -108,6 +110,7 @@ export async function readTranscriptRecords(
 ): Promise<readonly UsageRecord[] | null> {
   const records: UsageRecord[] = [];
   const codexState = initialCodexScanState();
+  const ompState = initialOmpScanState();
 
   try {
     const lines = NodeReadline.createInterface({
@@ -125,6 +128,16 @@ export async function readTranscriptRecords(
           continue;
         }
         const record = parseCodexLine(line, codexState);
+        if (record !== null) records.push(record);
+        continue;
+      }
+
+      if (provider === "omp") {
+        // Session headers omit "usage"; still need them for sessionId.
+        const maybeSession =
+          line.includes('"type":"session"') || line.includes('"type": "session"');
+        if (!mightCarryUsage(line, provider) && !maybeSession) continue;
+        const record = parseOmpLine(line, ompState);
         if (record !== null) records.push(record);
         continue;
       }

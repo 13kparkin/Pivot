@@ -81,4 +81,28 @@ describe("contextWindow", () => {
     expect(snapshot?.usedTokens).toBe(81_659);
     expect(snapshot?.totalProcessedTokens).toBe(748_126);
   });
+
+  it("prefers omp contextUsedPercent and maps live session stats", () => {
+    const snapshot = deriveLatestContextWindowSnapshot([
+      makeActivity("activity-1", "context-window.updated", {
+        usedTokens: 1_000,
+        maxTokens: 200_000,
+        contextUsedPercent: 55,
+        tokensPerSecond: 42,
+        toolUses: 3,
+        durationMs: 65_000,
+        queuedMessageCount: 2,
+      }),
+    ]);
+
+    expect(snapshot).toMatchObject({
+      usedPercentage: 55,
+      remainingPercentage: 45,
+      tokensPerSecond: 42,
+      toolUses: 3,
+      durationMs: 65_000,
+      queuedMessageCount: 2,
+      contextUsedPercent: 55,
+    });
+  });
 });

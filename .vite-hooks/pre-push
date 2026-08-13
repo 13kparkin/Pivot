@@ -1,0 +1,4 @@
+#!/usr/bin/env sh
+# Local gate before push (format, lint, typecheck). Bypass: VP_GIT_HOOKS=0 git push
+vp check
+vpr typecheck

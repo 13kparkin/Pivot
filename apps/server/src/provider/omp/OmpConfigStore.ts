@@ -217,18 +217,22 @@ export const syncOmpSettingsToConfigStore = (
 };
 
 export class OmpConfigStore {
-  public constructor(
-    private readonly fileSystem: FileSystem.FileSystem,
-    private readonly path: Path.Path,
-    private readonly ompHome: string,
-  ) {}
+  readonly #fileSystem: FileSystem.FileSystem;
+  readonly #path: Path.Path;
+  readonly #ompHome: string;
+
+  public constructor(fileSystem: FileSystem.FileSystem, path: Path.Path, ompHome: string) {
+    this.#fileSystem = fileSystem;
+    this.#path = path;
+    this.#ompHome = ompHome;
+  }
 
   private configPath(): string {
-    return this.path.join(this.ompHome, "agent", "config.yml");
+    return this.#path.join(this.#ompHome, "agent", "config.yml");
   }
 
   public read(): Effect.Effect<OmpConfigStoreSnapshot> {
-    const fs = this.fileSystem;
+    const fs = this.#fileSystem;
     const configPath = this.configPath();
     return Effect.gen(function* () {
       const exists = yield* fs.exists(configPath);
@@ -247,8 +251,8 @@ export class OmpConfigStore {
   }
 
   public write(patch: OmpConfigStorePatch): Effect.Effect<void> {
-    const fs = this.fileSystem;
-    const pathService = this.path;
+    const fs = this.#fileSystem;
+    const pathService = this.#path;
     const configPath = this.configPath();
     const yamlPatch = patchToYamlDoc(patch);
 

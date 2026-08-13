@@ -44,20 +44,20 @@ function renderPendingActions(isRunning: boolean) {
   );
 }
 
-function renderStandaloneStop() {
+function renderStandaloneStop(hasSendableContent = false) {
   return renderToStaticMarkup(
     createElement(ComposerPrimaryActions, {
       compact: true,
       pendingAction: null,
       isRunning: true,
       showPlanFollowUpPrompt: false,
-      promptHasText: false,
+      promptHasText: hasSendableContent,
       isSendBusy: false,
       sendDisabledReason: null,
       isConnecting: false,
       isEnvironmentUnavailable: false,
       isPreparingWorktree: false,
-      hasSendableContent: false,
+      hasSendableContent,
       onPreviousPendingQuestion: () => {},
       onInterrupt: () => {},
       onImplementPlanInNewThread: () => {},
@@ -194,6 +194,17 @@ describe("ComposerPrimaryActions", () => {
     expect(renderPendingActions(true)).toContain("size-8 sm:size-7");
     expect(renderStandaloneStop()).toContain("size-8 sm:h-8 sm:w-8");
     expect(renderStandaloneStop()).not.toContain("sm:size-7");
+  });
+
+  it("offers Queue next to Stop while a turn is running and the composer has text", () => {
+    const markup = renderStandaloneStop(true);
+    expect(markup).toContain('aria-label="Stop generation"');
+    expect(markup).toContain('aria-label="Queue follow-up message"');
+    expect(markup).toContain("Queue");
+  });
+
+  it("hides Queue while running when the composer is empty", () => {
+    expect(renderStandaloneStop(false)).not.toContain('aria-label="Queue follow-up message"');
   });
 
   it("renders stage artwork inside the send button when artwork identification is active", () => {

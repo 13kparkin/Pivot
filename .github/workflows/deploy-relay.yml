@@ -1,9 +1,14 @@
 name: Deploy T3 Connect relay
 
+# Disabled for this fork: Connect/relay is not shipped. Client releases leave
+# T3 Connect public configuration unset. Re-enable only after owning Cloudflare
+# + Clerk + PlanetScale and restoring release.yml Connect bake-in.
+
 on:
-  push:
-    branches:
-      - main
+  workflow_dispatch:
+  # push:
+  #   branches:
+  #     - main
 
 permissions:
   contents: read
@@ -17,6 +22,7 @@ concurrency:
 jobs:
   deploy_relay:
     name: Deploy production relay
+    if: false
     runs-on: blacksmith-8vcpu-ubuntu-2404
     timeout-minutes: 15
     environment:

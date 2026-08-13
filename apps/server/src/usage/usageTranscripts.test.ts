@@ -2,8 +2,10 @@ import { describe, expect, it } from "@effect/vitest";
 
 import {
   initialCodexScanState,
+  initialOmpScanState,
   parseClaudeLine,
   parseCodexLine,
+  parseOmpLine,
   totalTokens,
 } from "./usageTranscripts.ts";
 
@@ -233,6 +235,115 @@ describe("parseCodexLine", () => {
       );
       expect(record).not.toBeNull();
     });
+  });
+});
+
+describe("parseOmpLine", () => {
+  const sessionLine = JSON.stringify({
+    type: "session",
+    version: 3,
+    id: "019ffa18-2d5b-7000-a973-a5119d5eeea4",
+    timestamp: "2026-08-13T07:48:36.315Z",
+  });
+
+  function assistantLine(overrides?: {
+    entryId?: string;
+    model?: string;
+    input?: number;
+    output?: number;
+    cacheRead?: number;
+    cacheWrite?: number;
+    reasoningTokens?: number;
+    costTotal?: number;
+  }): string {
+    return JSON.stringify({
+      type: "message",
+      id: overrides?.entryId ?? "cae3b2ab",
+      timestamp: "2026-08-13T07:48:45.522Z",
+      message: {
+        role: "assistant",
+        model: overrides?.model ?? "gpt-5.6-sol",
+        timestamp: "2026-08-13T07:48:45.522Z",
+        usage: {
+          input: overrides?.input ?? 2746,
+          output: overrides?.output ?? 153,
+          cacheRead: overrides?.cacheRead ?? 0,
+          cacheWrite: overrides?.cacheWrite ?? 0,
+          totalTokens: 2899,
+          reasoningTokens: overrides?.reasoningTokens ?? 90,
+          cost: {
+            input: 0.01373,
+            output: 0.00459,
+            cacheRead: 0,
+            cacheWrite: 0,
+            total: overrides?.costTotal ?? 0.01832,
+          },
+        },
+      },
+    });
+  }
+
+  it("extracts token totals, cost, and session id", () => {
+    const state = initialOmpScanState();
+    expect(parseOmpLine(sessionLine, state)).toBeNull();
+    const record = parseOmpLine(assistantLine(), state);
+
+    expect(record).not.toBeNull();
+    expect(record?.provider).toBe("omp");
+    expect(record?.model).toBe("gpt-5.6-sol");
+    expect(record?.sessionId).toBe("019ffa18-2d5b-7000-a973-a5119d5eeea4");
+    expect(record?.dedupeKey).toBe("019ffa18-2d5b-7000-a973-a5119d5eeea4:cae3b2ab");
+    expect(record?.reportedCostUsd).toBeCloseTo(0.01832);
+    expect(record?.totals).toEqual({
+      uncachedInputTokens: 2746,
+      cachedInputTokens: 0,
+      cacheCreationTokens: 0,
+      outputTokens: 153,
+      reasoningTokens: 90,
+    });
+  });
+
+  it("accepts epoch-millisecond message timestamps from omp", () => {
+    const state = initialOmpScanState();
+    parseOmpLine(sessionLine, state);
+    const line = JSON.stringify({
+      type: "message",
+      id: "num-ts",
+      timestamp: "2026-08-13T07:48:45.522Z",
+      message: {
+        role: "assistant",
+        model: "gpt-5.6-sol",
+        timestamp: 1786635561614,
+        usage: {
+          input: 10,
+          output: 5,
+          cacheRead: 0,
+          cacheWrite: 0,
+          reasoningTokens: 0,
+          cost: { total: 0.001 },
+        },
+      },
+    });
+    const record = parseOmpLine(line, state);
+    expect(record?.timestampMs).toBe(1786635561614);
+  });
+
+  it("skips non-assistant and zero-token messages", () => {
+    const state = initialOmpScanState();
+    expect(
+      parseOmpLine(
+        JSON.stringify({
+          type: "message",
+          id: "u1",
+          timestamp: "2026-08-13T07:48:45.522Z",
+          message: { role: "user", content: "hi" },
+        }),
+        state,
+      ),
+    ).toBeNull();
+    expect(
+      parseOmpLine(assistantLine({ input: 0, output: 0, reasoningTokens: 0 }), state),
+    ).toBeNull();
   });
 });
 

@@ -1,9 +1,11 @@
 import { useNavigation } from "@react-navigation/native";
+import type { UsagePlanLimit, UsagePlanProvider } from "@t3tools/contracts";
 import type { DailyTotals, MergedUsage } from "@t3tools/shared/usageMerge";
 import {
   enumerateDays,
   enumerateHourStarts,
   formatCount,
+  formatDateTimeShort,
   formatDayShort,
   formatHourShort,
   formatPercent,
@@ -23,6 +25,57 @@ import { SettingsSection } from "../settings/components/SettingsSection";
 import { UsageDailyChart } from "./UsageDailyChart";
 import type { UsageChartMetric } from "./usageChartData";
 import { PROVIDER_LABEL, useProviderColors } from "./usageProviders";
+
+function planProviderLabel(provider: string): string {
+  switch (provider) {
+    case "openai-codex":
+      return "Codex";
+    case "opencode-go":
+      return "OpenCode Go";
+    case "cursor":
+      return "Cursor";
+    case "anthropic":
+      return "Anthropic";
+    default:
+      return provider;
+  }
+}
+
+function formatPlanAmount(limit: UsagePlanLimit): string {
+  if (limit.unit === "percent") {
+    const used =
+      limit.usedFraction !== undefined ? formatPercent(limit.usedFraction) : `${limit.used}%`;
+    if (limit.remainingFraction !== undefined) {
+      return `${used} used · ${formatPercent(limit.remainingFraction)} left`;
+    }
+    if (limit.remaining !== undefined) {
+      return `${used} used · ${limit.remaining}% left`;
+    }
+    return `${used} used`;
+  }
+  if (limit.unit === "usd") {
+    const used = `$${limit.used.toFixed(2)}`;
+    if (limit.remaining !== undefined && limit.limit !== undefined) {
+      return `${used} / $${limit.limit.toFixed(2)} · $${limit.remaining.toFixed(2)} left`;
+    }
+    if (limit.limit !== undefined) {
+      return `${used} / $${limit.limit.toFixed(2)}`;
+    }
+    return used;
+  }
+  if (limit.remaining !== undefined && limit.limit !== undefined) {
+    return `${limit.used} / ${limit.limit} ${limit.unit} · ${limit.remaining} left`;
+  }
+  return `${limit.used} ${limit.unit}`;
+}
+
+function usedBarFraction(limit: UsagePlanLimit): number {
+  if (limit.usedFraction !== undefined) return Math.min(1, Math.max(0, limit.usedFraction));
+  if (limit.limit !== undefined && limit.limit > 0) {
+    return Math.min(1, Math.max(0, limit.used / limit.limit));
+  }
+  return 0;
+}
 
 const WINDOW_OPTIONS = [
   { days: 1, label: "Past 24h" },
@@ -127,6 +180,7 @@ export function UsageRouteScreen() {
           </Text>
         ) : (
           <>
+            <PlanLimitsSection planProviders={merged.planProviders} />
             <ChartCard
               merged={merged}
               days={chartDays}
@@ -145,6 +199,63 @@ export function UsageRouteScreen() {
         )}
       </ScrollView>
     </View>
+  );
+}
+
+function PlanLimitsSection(props: { readonly planProviders: readonly UsagePlanProvider[] }) {
+  if (props.planProviders.length === 0) return null;
+
+  return (
+    <SettingsSection title="Plan limits">
+      <View className="gap-3">
+        <Text className="text-sm text-foreground-muted">
+          Live from omp (subscription capacity, separate from token history below).
+        </Text>
+        {props.planProviders.map((provider) => (
+          <View
+            key={provider.provider}
+            className="gap-3 rounded-[20px] border-continuous bg-card p-4"
+          >
+            <View className="flex-row items-baseline justify-between gap-2">
+              <Text className="text-base font-t3-medium text-foreground">
+                {planProviderLabel(provider.provider)}
+              </Text>
+              {provider.planType ? (
+                <Text className="text-xs text-foreground-muted">{provider.planType}</Text>
+              ) : null}
+            </View>
+            {provider.limits.length === 0 ? (
+              <Text className="text-sm text-foreground-muted">No limits reported.</Text>
+            ) : (
+              provider.limits.map((limit) => {
+                const fraction = usedBarFraction(limit);
+                return (
+                  <View key={limit.id} className="gap-1.5">
+                    <View className="flex-row items-baseline justify-between gap-3">
+                      <Text className="text-sm text-foreground">{limit.label}</Text>
+                      <Text className="text-sm tabular-nums text-foreground-muted">
+                        {formatPlanAmount(limit)}
+                      </Text>
+                    </View>
+                    <View className="h-1.5 overflow-hidden rounded-full bg-subtle">
+                      <View
+                        className="h-full rounded-full bg-foreground/80"
+                        style={{ width: `${fraction * 100}%` }}
+                      />
+                    </View>
+                    {limit.resetsAtMs !== undefined ? (
+                      <Text className="text-xs text-foreground-tertiary">
+                        Resets {formatDateTimeShort(new Date(limit.resetsAtMs).toISOString())}
+                      </Text>
+                    ) : null}
+                  </View>
+                );
+              })
+            )}
+          </View>
+        ))}
+      </View>
+    </SettingsSection>
   );
 }
 

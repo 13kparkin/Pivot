@@ -204,6 +204,9 @@ import {
   useComposerDraftStore,
   type DraftId,
 } from "../composerDraftStore";
+import { useFollowUpQueueStore } from "../followUpQueueStore";
+import { shouldDrainFollowUpQueue, type FollowUpQueueItem } from "../lib/followUpQueue";
+import { FollowUpQueueList } from "./chat/FollowUpQueueList";
 import {
   appendTerminalContextsToPrompt,
   formatTerminalContextLabel,
@@ -351,6 +354,7 @@ const EMPTY_ACTIVITIES: OrchestrationThreadActivity[] = [];
 const EMPTY_PROVIDERS: ServerProvider[] = [];
 const EMPTY_PROVIDER_SKILLS: ServerProvider["skills"] = [];
 const EMPTY_PENDING_USER_INPUT_ANSWERS: Record<string, PendingUserInputDraftAnswer> = {};
+const EMPTY_FOLLOW_UP_QUEUE: ReadonlyArray<FollowUpQueueItem> = [];
 function useDraftHeroLayoutTransition(isDraftHeroState: boolean) {
   const transitionGroupRef = useRef<HTMLDivElement | null>(null);
   const composerAnchorRef = useRef<HTMLDivElement | null>(null);
@@ -2188,6 +2192,18 @@ function ChatViewContent(props: ChatViewProps) {
   );
   const selectedProvider: ProviderDriverKind = lockedProvider ?? unlockedSelectedProvider;
   const phase = derivePhase(activeThread?.session ?? null);
+  const previousPhaseRef = useRef(phase);
+  const followUpDrainInFlightRef = useRef(false);
+  const followUpQueue = useFollowUpQueueStore(
+    useShallow((store) =>
+      activeThreadKey
+        ? (store.queuesByThreadKey[activeThreadKey] ?? EMPTY_FOLLOW_UP_QUEUE)
+        : EMPTY_FOLLOW_UP_QUEUE,
+    ),
+  );
+  const enqueueFollowUpMessage = useFollowUpQueueStore((store) => store.enqueue);
+  const removeFollowUpMessage = useFollowUpQueueStore((store) => store.remove);
+  const dequeueFollowUpMessage = useFollowUpQueueStore((store) => store.dequeue);
   const threadActivities = activeThread?.activities ?? EMPTY_ACTIVITIES;
   const workLogEntries = useMemo(() => deriveWorkLogEntries(threadActivities), [threadActivities]);
   const turnPlans = useMemo(() => deriveTurnPlans(threadActivities), [threadActivities]);
@@ -4360,6 +4376,7 @@ function ChatViewContent(props: ChatViewProps) {
   const activeBackgroundLiveness =
     !isWorking && activeThread ? (activeThreadShell?.backgroundLiveness ?? null) : null;
   const [isStoppingBackgroundWork, setIsStoppingBackgroundWork] = useState(false);
+  const [isStoppingTurn, setIsStoppingTurn] = useState(false);
   useEffect(() => {
     // "Stopping..." holds until the liveness clears; the interrupt command
     // returning only means the request was accepted.
@@ -4368,9 +4385,16 @@ function ChatViewContent(props: ChatViewProps) {
     }
   }, [activeBackgroundLiveness]);
   useEffect(() => {
+    // Hold turn "Stopping…" until the active turn/session liveness clears.
+    if (!isWorking) {
+      setIsStoppingTurn(false);
+    }
+  }, [isWorking]);
+  useEffect(() => {
     // Per-thread state: switching threads while A's stop is pending must not
     // disable B's Stop button (review finding).
     setIsStoppingBackgroundWork(false);
+    setIsStoppingTurn(false);
   }, [activeThreadId]);
   const handleStopBackgroundWork = useCallback(async () => {
     if (!activeThread) return;
@@ -5012,6 +5036,33 @@ function ChatViewContent(props: ChatViewProps) {
       }
       return;
     }
+    if (phase === "running") {
+      if (isStoppingTurn || !activeThreadKey) {
+        return;
+      }
+      if (
+        composerImages.length > 0 ||
+        sendableComposerTerminalContexts.length > 0 ||
+        composerElementContexts.length > 0 ||
+        composerPreviewAnnotations.length > 0 ||
+        composerReviewComments.length > 0
+      ) {
+        toastManager.add(
+          stackedThreadToast({
+            type: "warning",
+            title: "Queue text only",
+            description:
+              "Remove attachments and contexts to queue a follow-up while a turn is running.",
+          }),
+        );
+        return;
+      }
+      enqueueFollowUpMessage(activeThreadKey, trimmed);
+      promptRef.current = "";
+      clearComposerDraftContent(composerDraftTarget);
+      composerRef.current?.resetCursorState();
+      return;
+    }
     if (!activeProject) {
       toastManager.add(
         stackedThreadToast({
@@ -5319,18 +5370,231 @@ function ChatViewContent(props: ChatViewProps) {
     }
   };
 
+  const sendQueuedFollowUp = useCallback(
+    async (text: string) => {
+      if (
+        !activeThread ||
+        !isServerThread ||
+        !activeThreadKey ||
+        isSendBusy ||
+        isConnecting ||
+        sendInFlightRef.current ||
+        phase === "running"
+      ) {
+        return false;
+      }
+      const trimmed = text.trim();
+      if (!trimmed) {
+        return false;
+      }
+      const sendCtx = composerRef.current?.getSendContext();
+      if (!sendCtx?.providerAvailable) {
+        return false;
+      }
+      const {
+        selectedProvider: ctxSelectedProvider,
+        selectedModel: ctxSelectedModel,
+        selectedProviderModels: ctxSelectedProviderModels,
+        selectedPromptEffort: ctxSelectedPromptEffort,
+        selectedModelSelection: ctxSelectedModelSelection,
+      } = sendCtx;
+
+      const threadIdForSend = activeThread.id;
+      const messageIdForSend = newMessageId();
+      const messageCreatedAt = new Date().toISOString();
+      const outgoingMessageText = formatOutgoingPrompt({
+        provider: ctxSelectedProvider,
+        model: ctxSelectedModel,
+        models: ctxSelectedProviderModels,
+        effort: ctxSelectedPromptEffort,
+        text: trimmed,
+      });
+
+      sendInFlightRef.current = true;
+      beginLocalDispatch({ preparingWorktree: false });
+      setThreadError(threadIdForSend, null);
+      isAtEndRef.current = true;
+      timelineScrollModeRef.current = "anchoring-new-turn";
+      liveFollowUserScrollGenerationRef.current = anchorUserScrollGenerationRef.current;
+      setTimelineLiveFollowEnabled(true);
+      pendingTimelineAnchorRef.current = messageIdForSend;
+      activeTimelineAnchorIndexRef.current = null;
+      showScrollDebouncer.current.cancel();
+      setShowScrollToBottom(false);
+      setTimelineAnchor({
+        threadKey: scopedThreadKey(scopeThreadRef(activeThread.environmentId, threadIdForSend)),
+        messageId: messageIdForSend,
+      });
+      setOptimisticUserMessages((existing) => [
+        ...existing,
+        {
+          id: messageIdForSend,
+          role: "user",
+          text: outgoingMessageText,
+          turnId: null,
+          createdAt: messageCreatedAt,
+          updatedAt: messageCreatedAt,
+          streaming: false,
+        },
+      ]);
+
+      const settingsResult = await persistThreadSettingsForNextTurn({
+        threadId: threadIdForSend,
+        createdAt: messageCreatedAt,
+        modelSelection: ctxSelectedModelSelection,
+        ...(localCheckoutBranchMismatch
+          ? { branch: localCheckoutBranchMismatch.currentBranch }
+          : {}),
+        runtimeMode,
+        interactionMode,
+      });
+      let failure: AtomCommandResult<unknown, unknown> | null =
+        settingsResult._tag === "Failure" ? settingsResult : null;
+      if (failure === null) {
+        const startResult = await startThreadTurn({
+          environmentId,
+          input: {
+            threadId: threadIdForSend,
+            message: {
+              messageId: messageIdForSend,
+              role: "user",
+              text: outgoingMessageText,
+              attachments: [],
+            },
+            modelSelection: ctxSelectedModelSelection,
+            titleSeed: activeThread.title,
+            runtimeMode,
+            interactionMode,
+            createdAt: messageCreatedAt,
+          },
+        });
+        failure = startResult._tag === "Failure" ? startResult : null;
+      }
+
+      if (failure === null) {
+        acknowledgeActiveThreadWoke();
+        sendInFlightRef.current = false;
+        return true;
+      }
+
+      setOptimisticUserMessages((existing) =>
+        existing.filter((message) => message.id !== messageIdForSend),
+      );
+      if (!isAtomCommandInterrupted(failure)) {
+        const error = squashAtomCommandFailure(failure);
+        setThreadError(
+          threadIdForSend,
+          error instanceof Error ? error.message : "Failed to send queued follow-up.",
+        );
+      }
+      sendInFlightRef.current = false;
+      resetLocalDispatch();
+      return false;
+    },
+    [
+      acknowledgeActiveThreadWoke,
+      activeThread,
+      activeThreadKey,
+      beginLocalDispatch,
+      environmentId,
+      interactionMode,
+      isConnecting,
+      isSendBusy,
+      isServerThread,
+      localCheckoutBranchMismatch,
+      persistThreadSettingsForNextTurn,
+      phase,
+      resetLocalDispatch,
+      runtimeMode,
+      setThreadError,
+      startThreadTurn,
+    ],
+  );
+
+  useEffect(() => {
+    const previousPhase = previousPhaseRef.current;
+    previousPhaseRef.current = phase;
+    if (!activeThreadKey || followUpDrainInFlightRef.current) {
+      return;
+    }
+    if (
+      !shouldDrainFollowUpQueue({
+        previousPhase,
+        phase,
+        latestTurnState: activeThread?.latestTurn?.state,
+      })
+    ) {
+      return;
+    }
+    const next = followUpQueue[0];
+    if (!next) {
+      return;
+    }
+    followUpDrainInFlightRef.current = true;
+    void sendQueuedFollowUp(next.text).then((sent) => {
+      if (sent) {
+        dequeueFollowUpMessage(activeThreadKey);
+      }
+      followUpDrainInFlightRef.current = false;
+    });
+  }, [
+    activeThread?.latestTurn?.state,
+    activeThreadKey,
+    dequeueFollowUpMessage,
+    followUpQueue,
+    phase,
+    sendQueuedFollowUp,
+  ]);
+
+  const onRemoveFollowUp = useCallback(
+    (id: string) => {
+      if (!activeThreadKey) return;
+      removeFollowUpMessage(activeThreadKey, id);
+    },
+    [activeThreadKey, removeFollowUpMessage],
+  );
+
+  const onEditFollowUp = useCallback(
+    (id: string) => {
+      if (!activeThreadKey) return;
+      const item = followUpQueue.find((entry) => entry.id === id);
+      if (!item) return;
+      removeFollowUpMessage(activeThreadKey, id);
+      promptRef.current = item.text;
+      setComposerDraftPrompt(composerDraftTarget, item.text);
+      composerRef.current?.resetCursorState({
+        cursor: collapseExpandedComposerCursor(item.text, item.text.length),
+        prompt: item.text,
+        detectTrigger: true,
+      });
+      scheduleComposerFocus();
+    },
+    [
+      activeThreadKey,
+      composerDraftTarget,
+      followUpQueue,
+      removeFollowUpMessage,
+      scheduleComposerFocus,
+      setComposerDraftPrompt,
+    ],
+  );
+
   const onInterrupt = async () => {
     if (!activeThread) return;
+    setIsStoppingTurn(true);
     const result = await interruptThreadTurn({
       environmentId,
       input: buildThreadTurnInterruptInput(activeThread),
     });
-    if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
-      const error = squashAtomCommandFailure(result);
-      setThreadError(
-        activeThread.id,
-        error instanceof Error ? error.message : "Failed to interrupt the current turn.",
-      );
+    if (result._tag === "Failure") {
+      setIsStoppingTurn(false);
+      if (!isAtomCommandInterrupted(result)) {
+        const error = squashAtomCommandFailure(result);
+        setThreadError(
+          activeThread.id,
+          error instanceof Error ? error.message : "Failed to interrupt the current turn.",
+        );
+      }
     }
   };
 
@@ -6332,6 +6596,11 @@ function ChatViewContent(props: ChatViewProps) {
                     >
                       <div className="chat-composer-glass-host relative z-10 w-full rounded-[22px]">
                         <div ref={attachDraftHeroComposerAnchorRef} className="relative z-10">
+                          <FollowUpQueueList
+                            items={followUpQueue}
+                            onRemove={onRemoveFollowUp}
+                            onEdit={onEditFollowUp}
+                          />
                           <ChatComposer
                             composerRef={composerRef}
                             composerDraftTarget={composerDraftTarget}
@@ -6347,6 +6616,7 @@ function ChatViewContent(props: ChatViewProps) {
                             forceExpandedOnMobile={forceExpandedMobileComposer && isDraftHeroState}
                             projectSelectionRequired={isLocalDraftThread && activeProject === null}
                             phase={phase}
+                            isStoppingTurn={isStoppingTurn}
                             isConnecting={isConnecting}
                             isSendBusy={isSendBusy}
                             sendDisabledReason={threadDetailLoading ? "Messages loading" : null}

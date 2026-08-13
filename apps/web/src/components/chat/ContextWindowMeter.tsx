@@ -12,6 +12,14 @@ function formatPercentage(value: number | null): string | null {
   return `${Math.round(value)}%`;
 }
 
+function formatSessionDuration(durationMs: number): string {
+  const totalSeconds = Math.max(0, Math.floor(durationMs / 1000));
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  if (minutes === 0) return `${seconds}s`;
+  return `${minutes}m ${seconds}s`;
+}
+
 export function ContextWindowMeter(props: {
   usage: ContextWindowSnapshot;
   providerDisplayName?: string | null;
@@ -125,6 +133,40 @@ export function ContextWindowMeter(props: {
               <span className="text-secondary-label">Total processed</span>
               <span className="font-medium tabular-nums text-secondary-label">
                 {formatContextWindowTokens(totalProcessedTokens)}
+              </span>
+            </div>
+          ) : null}
+          {usage.tokensPerSecond !== null && usage.tokensPerSecond > 0 ? (
+            <div className="flex items-center justify-between gap-3 text-[11px] leading-4">
+              <span className="text-secondary-label">Throughput</span>
+              <span className="font-medium tabular-nums text-secondary-label">
+                {usage.tokensPerSecond < 10
+                  ? `${usage.tokensPerSecond.toFixed(1)} tok/s`
+                  : `${Math.round(usage.tokensPerSecond)} tok/s`}
+              </span>
+            </div>
+          ) : null}
+          {usage.toolUses !== null && usage.toolUses > 0 ? (
+            <div className="flex items-center justify-between gap-3 text-[11px] leading-4">
+              <span className="text-secondary-label">Tool uses</span>
+              <span className="font-medium tabular-nums text-secondary-label">
+                {usage.toolUses}
+              </span>
+            </div>
+          ) : null}
+          {usage.durationMs !== null && usage.durationMs > 0 ? (
+            <div className="flex items-center justify-between gap-3 text-[11px] leading-4">
+              <span className="text-secondary-label">Session duration</span>
+              <span className="font-medium tabular-nums text-secondary-label">
+                {formatSessionDuration(usage.durationMs)}
+              </span>
+            </div>
+          ) : null}
+          {usage.queuedMessageCount !== null && usage.queuedMessageCount > 0 ? (
+            <div className="flex items-center justify-between gap-3 text-[11px] leading-4">
+              <span className="text-secondary-label">Queued messages</span>
+              <span className="font-medium tabular-nums text-secondary-label">
+                {usage.queuedMessageCount}
               </span>
             </div>
           ) : null}

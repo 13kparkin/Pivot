@@ -35,4 +35,6 @@ When **Plan mode** is enabled in Settings, omp threads show the plan/default tog
 
 When omp spawns subagents, open the **Agents** panel and click an agent to view its nested transcript (read-only). From that pane you can **Steer** the parent session or **Stop** (abort) the active turn. This does not create a separate Pivot thread.
 
-Thread rollback uses omp session branching (`get_branch_messages` + `branch`). Context usage in the existing meter comes from omp `get_state` / `get_session_stats`.
+While a turn is running, **Send** becomes **Queue**: your follow-up is held until the turn finishes successfully, then sent automatically. **Stop** aborts the active turn and waits until omp confirms the stop (Stopping… → Stopped). Stopping does not auto-send queued follow-ups; they stay until you send again or a later turn completes normally.
+
+Thread rollback uses omp session branching (`get_branch_messages` + `branch`). The context meter updates live from omp `get_state` / `get_session_stats` (including throughput and session duration when omp reports them). The **Usage** page shows live plan limits from `omp usage` (used/remaining per upstream provider such as Codex) and aggregates on-disk omp session history (`~/.omp/agent/sessions`) for token cost.

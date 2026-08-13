@@ -59,6 +59,7 @@ import { OmpSpawnError, type OmpRpcRuntime } from "./OmpRpcRuntime.ts";
 
 const PROVIDER = ProviderDriverKind.make("omp");
 const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
+const isProviderAdapterProcessError = Schema.is(ProviderAdapterProcessError);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -109,10 +110,16 @@ interface LiveAdapterSession {
   readonly toolCalls: Map<string, TrackedOmpToolCall>;
   readonly pendingUiRequests: Map<string, PendingExtensionUiRequest>;
   turnId: TurnId | undefined;
+  /** Set by interruptTurn; cleared when the terminal agent_end confirms stop. */
+  stopRequested: boolean;
+  /** Wall-clock ms of the last mid-turn token-usage emit (throttle). */
+  lastTokenUsageEmitAtMs: number;
   interactionMode: ProviderInteractionMode;
   prePlanModelSlug: string | undefined;
   onOpenUrl: ((request: OmpOpenUrlRequest) => Effect.Effect<void>) | undefined;
 }
+
+const TOKEN_USAGE_EMIT_MIN_INTERVAL_MS = 1_000;
 
 export type OmpResolveRoleModel = (role: string) => Effect.Effect<string | undefined>;
 
@@ -202,6 +209,8 @@ export class OmpAdapter {
         toolCalls: new Map(),
         pendingUiRequests: new Map(),
         turnId: undefined,
+        stopRequested: false,
+        lastTokenUsageEmitAtMs: 0,
         interactionMode: "default",
         prePlanModelSlug: undefined,
         onOpenUrl: undefined,
@@ -234,6 +243,7 @@ export class OmpAdapter {
       }
       const turnId = yield* this.#randomUUID.pipe(Effect.map(TurnId.make));
       session.turnId = turnId;
+      session.stopRequested = false;
       yield* this.#applyInteractionMode(session, input.interactionMode);
       if (session.interactionMode !== "plan") {
         yield* this.#applyModelSelection(input.threadId, input.modelSelection?.model);
@@ -283,12 +293,14 @@ export class OmpAdapter {
 
   public interruptTurn(threadId: ThreadId, _turnId?: TurnId) {
     return Effect.gen({ self: this }, function* () {
-      if (!this.#sessions.has(threadId)) {
+      const session = this.#sessions.get(threadId);
+      if (!session) {
         return yield* new ProviderAdapterSessionNotFoundError({
           provider: PROVIDER,
           threadId,
         });
       }
+      session.stopRequested = true;
       yield* this.#send(threadId, { type: "abort" });
     });
   }
@@ -654,7 +666,7 @@ export class OmpAdapter {
       return yield* this.#send(threadId, { type: "login", providerId }).pipe(
         Effect.timeout("10 minutes"),
         Effect.mapError((cause) =>
-          Schema.is(ProviderAdapterProcessError)(cause)
+          isProviderAdapterProcessError(cause)
             ? cause
             : new ProviderAdapterRequestError({
                 provider: PROVIDER,
@@ -696,7 +708,11 @@ export class OmpAdapter {
       return this.#onCommandOutput(session, frame);
     }
     if (frame.type === "message_update") {
-      return this.#onMessageUpdate(session, frame);
+      return this.#onMessageUpdate(session, frame).pipe(
+        Effect.tap(() =>
+          this.#maybeEmitLiveTokenUsage(session).pipe(Effect.forkDetach, Effect.asVoid),
+        ),
+      );
     }
     if (frame.type === "tool_execution_start") {
       return this.#onToolExecutionStart(session, frame);
@@ -1007,6 +1023,17 @@ export class OmpAdapter {
   #emitTurnCompleted(session: LiveAdapterSession): Effect.Effect<void> {
     return Effect.gen({ self: this }, function* () {
       yield* this.#emitTokenUsageFromState(session).pipe(Effect.ignore);
+      const aborted = session.stopRequested;
+      session.stopRequested = false;
+      if (aborted) {
+        yield* this.#emit({
+          type: "turn.aborted",
+          threadId: session.threadId,
+          turnId: session.turnId,
+          payload: { reason: "user_abort" },
+        });
+        return;
+      }
       yield* this.#emit({
         type: "turn.completed",
         threadId: session.threadId,
@@ -1014,6 +1041,17 @@ export class OmpAdapter {
         payload: { state: "completed" },
       });
     });
+  }
+
+  #maybeEmitLiveTokenUsage(session: LiveAdapterSession): Effect.Effect<void> {
+    if (session.turnId === undefined) {
+      return Effect.void;
+    }
+    const now = Date.now();
+    if (now - session.lastTokenUsageEmitAtMs < TOKEN_USAGE_EMIT_MIN_INTERVAL_MS) {
+      return Effect.void;
+    }
+    return this.#emitTokenUsageFromState(session).pipe(Effect.ignore);
   }
 
   #emitTokenUsageFromState(
@@ -1024,7 +1062,8 @@ export class OmpAdapter {
       if (!isRecord(response) || !isRecord(response.data)) {
         return;
       }
-      const contextUsage = response.data.contextUsage;
+      const state = response.data;
+      const contextUsage = state.contextUsage;
       if (!isRecord(contextUsage) || typeof contextUsage.tokens !== "number") {
         return;
       }
@@ -1036,6 +1075,18 @@ export class OmpAdapter {
         typeof contextUsage.contextWindow === "number" && contextUsage.contextWindow > 0
           ? Math.floor(contextUsage.contextWindow)
           : undefined;
+      const contextUsedPercent =
+        typeof contextUsage.percent === "number" && Number.isFinite(contextUsage.percent)
+          ? Math.min(100, Math.max(0, Math.round(contextUsage.percent * 1000) / 10))
+          : undefined;
+      const tokensPerSecond =
+        typeof state.tokensPerSecond === "number" && Number.isFinite(state.tokensPerSecond)
+          ? state.tokensPerSecond
+          : undefined;
+      const queuedMessageCount =
+        typeof state.queuedMessageCount === "number" && state.queuedMessageCount >= 0
+          ? Math.floor(state.queuedMessageCount)
+          : undefined;
       const statsResponse = yield* this.#send(session.threadId, { type: "get_session_stats" }).pipe(
         Effect.orElseSucceed(() => undefined),
       );
@@ -1044,6 +1095,7 @@ export class OmpAdapter {
           ? statsResponse.data
           : undefined;
       const tokens = stats !== undefined && isRecord(stats.tokens) ? stats.tokens : undefined;
+      session.lastTokenUsageEmitAtMs = Date.now();
       yield* this.#emit({
         type: "thread.token-usage.updated",
         threadId: session.threadId,
@@ -1052,6 +1104,9 @@ export class OmpAdapter {
           usage: {
             usedTokens,
             ...(maxTokens === undefined ? {} : { maxTokens }),
+            ...(contextUsedPercent === undefined ? {} : { contextUsedPercent }),
+            ...(tokensPerSecond === undefined ? {} : { tokensPerSecond }),
+            ...(queuedMessageCount === undefined ? {} : { queuedMessageCount }),
             ...(tokens !== undefined && typeof tokens.input === "number"
               ? { inputTokens: Math.max(0, Math.floor(tokens.input)) }
               : {}),
