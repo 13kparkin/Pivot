@@ -36,6 +36,12 @@ class FakeOmpRpc {
   sessionFile = "/tmp/omp-session.jsonl";
   availableModels: ReadonlyArray<object> = [];
   availableCommands: ReadonlyArray<object> = [];
+  stateModel:
+    | {
+        readonly provider: string;
+        readonly id: string;
+      }
+    | undefined = undefined;
   contextUsage:
     | {
         readonly tokens: number;
@@ -60,8 +66,16 @@ class FakeOmpRpc {
 
   send(sessionKey: string, command: Record<string, unknown>) {
     this.sent.push(command);
-    if (command.type === "set_model" && this.failSetModel) {
-      return Effect.fail(new OmpSpawnError({ operation: "set_model", detail: "set_model failed" }));
+    if (command.type === "set_model") {
+      if (this.failSetModel) {
+        return Effect.fail(
+          new OmpSpawnError({ operation: "set_model", detail: "set_model failed" }),
+        );
+      }
+      if (typeof command.provider === "string" && typeof command.modelId === "string") {
+        this.stateModel = { provider: command.provider, id: command.modelId };
+      }
+      return Effect.succeed({ type: "response", success: true, data: this.stateModel ?? {} });
     }
     if (command.type === "get_available_models") {
       return Effect.succeed({
@@ -112,6 +126,7 @@ class FakeOmpRpc {
         success: true,
         data: {
           sessionFile: this.sessionFile,
+          ...(this.stateModel === undefined ? {} : { model: this.stateModel }),
           ...(this.contextUsage === undefined ? {} : { contextUsage: this.contextUsage }),
         },
       });
@@ -891,6 +906,78 @@ describe("OmpAdapter", () => {
       );
       NodeAssert.equal(turnCommands[0]?.provider, "openai");
       NodeAssert.equal(turnCommands[0]?.modelId, "gpt-5");
+    }),
+  );
+
+  it.effect("sendTurn plan mode switches to the plan-role model then restores on default", () =>
+    Effect.gen(function* () {
+      const fake = new FakeOmpRpc();
+      fake.stateModel = { provider: "openai", id: "gpt-5" };
+      const adapter = new OmpAdapter(fake, testRandomUUID, {
+        resolveRoleModel: (role) =>
+          Effect.succeed(role === "plan" ? "anthropic/claude-plan" : undefined),
+      });
+      yield* adapter.startSession(startInput);
+
+      const enterPlanFrom = fake.sent.length;
+      yield* adapter.sendTurn({
+        threadId: THREAD_ID,
+        input: "design it",
+        interactionMode: "plan",
+      });
+      const enterPlanCommands = fake.sent.slice(enterPlanFrom);
+      NodeAssert.deepEqual(
+        enterPlanCommands.map((command) => command.type),
+        ["get_state", "set_model", "prompt"],
+      );
+      NodeAssert.equal(enterPlanCommands[1]?.provider, "anthropic");
+      NodeAssert.equal(enterPlanCommands[1]?.modelId, "claude-plan");
+
+      const exitPlanFrom = fake.sent.length;
+      yield* adapter.sendTurn({
+        threadId: THREAD_ID,
+        input: "build it",
+        interactionMode: "default",
+      });
+      const exitPlanCommands = fake.sent.slice(exitPlanFrom);
+      NodeAssert.deepEqual(
+        exitPlanCommands.map((command) => command.type),
+        ["set_model", "prompt"],
+      );
+      NodeAssert.equal(exitPlanCommands[0]?.provider, "openai");
+      NodeAssert.equal(exitPlanCommands[0]?.modelId, "gpt-5");
+    }),
+  );
+
+  it.effect("sendTurn plan mode skips modelSelection while plan role is active", () =>
+    Effect.gen(function* () {
+      const fake = new FakeOmpRpc();
+      fake.stateModel = { provider: "openai", id: "gpt-5" };
+      const adapter = new OmpAdapter(fake, testRandomUUID, {
+        resolveRoleModel: (role) =>
+          Effect.succeed(role === "plan" ? "anthropic/claude-plan" : undefined),
+      });
+      yield* adapter.startSession(startInput);
+      yield* adapter.sendTurn({
+        threadId: THREAD_ID,
+        input: "design it",
+        interactionMode: "plan",
+      });
+      const stayingInPlanFrom = fake.sent.length;
+      yield* adapter.sendTurn({
+        threadId: THREAD_ID,
+        input: "more plan",
+        interactionMode: "plan",
+        modelSelection: {
+          instanceId: ProviderInstanceId.make("omp"),
+          model: "openai/gpt-4o",
+        },
+      });
+      const stayingInPlanCommands = fake.sent.slice(stayingInPlanFrom);
+      NodeAssert.deepEqual(
+        stayingInPlanCommands.map((command) => command.type),
+        ["prompt"],
+      );
     }),
   );
 

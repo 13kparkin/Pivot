@@ -259,6 +259,7 @@ describe("OmpDriver", () => {
         snapshot.slashCommands.map((command) => command.name),
         ["model", "review"],
       );
+      NodeAssert.equal(snapshot.showInteractionModeToggle, true);
       NodeAssert.equal(snapshot.installed, true);
       NodeAssert.equal(snapshot.version, "17.3.0");
     }).pipe(Effect.scoped),
