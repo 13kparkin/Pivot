@@ -79,6 +79,16 @@ function makeFakeOmpSpawner(sessionFile: string) {
                     success: true,
                     data: { sessionFile },
                   });
+                } else if (rpcCommand.type === "get_available_models") {
+                  yield* offer({
+                    id: rpcCommand.id,
+                    type: "response",
+                    command: "get_available_models",
+                    success: true,
+                    data: {
+                      models: [{ provider: "openai", id: "gpt-5", name: "GPT-5" }],
+                    },
+                  });
                 } else {
                   yield* offer({
                     id: rpcCommand.id,
@@ -130,6 +140,27 @@ describe("OmpDriver", () => {
       NodeAssert.equal(fake.spawns[0]?.command, "/opt/omp");
       NodeAssert.ok(fake.spawns[0]?.args.includes("--mode"));
       NodeAssert.equal(session.resumeCursor, "/tmp/omp-session.jsonl");
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("refresh populates models from get_available_models", () =>
+    Effect.gen(function* () {
+      const fake = makeFakeOmpSpawner("/tmp/omp-models.jsonl");
+      const instance = yield* OmpDriver.create({
+        instanceId: ProviderInstanceId.make("omp"),
+        displayName: "omp",
+        accentColor: undefined,
+        environment: {},
+        enabled: true,
+        config: { enabled: true, binaryPath: "/opt/omp" },
+      }).pipe(Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, fake.spawner));
+
+      const snapshot = yield* instance.snapshot.refresh;
+      NodeAssert.deepEqual(
+        snapshot.models.map((model) => model.slug),
+        ["openai/gpt-5"],
+      );
+      NodeAssert.equal(snapshot.models[0]?.name, "GPT-5");
     }).pipe(Effect.scoped),
   );
 });
