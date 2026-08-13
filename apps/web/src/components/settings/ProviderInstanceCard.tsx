@@ -15,6 +15,7 @@ import * as Result from "effect/Result";
 import { useState, type ReactNode } from "react";
 import {
   isProviderDriverKind,
+  type EnvironmentId,
   type ProviderInstanceConfig,
   type ProviderInstanceEnvironmentVariable,
   type ProviderInstanceId,
@@ -40,6 +41,7 @@ import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import type { DriverOption } from "./providerDriverMeta";
 import { ProviderSettingsForm } from "./ProviderSettingsForm";
 import { ProviderModelsSection } from "./ProviderModelsSection";
+import { OmpLoginSection } from "./OmpLoginSection";
 import { ProviderInstanceIcon } from "../chat/ProviderInstanceIcon";
 import { ProviderAccentColorPicker } from "./ProviderAccentColorPicker";
 import { RedactedSensitiveText } from "./RedactedSensitiveText";
@@ -319,6 +321,7 @@ function ProviderEnvironmentSection(props: {
 }
 
 interface ProviderInstanceCardProps {
+  readonly environmentId: EnvironmentId;
   readonly instanceId: ProviderInstanceId;
   readonly instance: ProviderInstanceConfig;
   readonly driverOption: DriverOption | undefined;
@@ -376,6 +379,7 @@ interface ProviderInstanceCardProps {
  *     flows through the envelope.
  */
 export function ProviderInstanceCard({
+  environmentId,
   instanceId,
   instance,
   driverOption,
@@ -658,7 +662,13 @@ export function ProviderInstanceCard({
                           onClick={onRunUpdate}
                         >
                           {isUpdating ? <LoaderIcon className="animate-spin" /> : <DownloadIcon />}
-                          {isUpdating ? "Updating" : "Update now"}
+                          {isUpdating
+                            ? liveProvider?.installed
+                              ? "Updating"
+                              : "Installing"
+                            : liveProvider?.installed
+                              ? "Update now"
+                              : "Install"}
                         </Button>
                       ) : null}
                       {onRunUpdate && updateCommand ? (
@@ -772,6 +782,10 @@ export function ProviderInstanceCard({
                 variant="card"
                 onChange={updateConfig}
               />
+            ) : null}
+
+            {String(instance.driver) === "omp" ? (
+              <OmpLoginSection environmentId={environmentId} instanceId={instanceId} />
             ) : null}
 
             {driverOption !== undefined ? (

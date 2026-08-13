@@ -39,7 +39,7 @@ import type { ThreadSettingsSheetCloseReason } from "./use-thread-settings-sheet
  * catalogs and friends) folds behind its header so a 300-model catalog can't
  * bury the list.
  */
-const PRIMARY_PROVIDER_DRIVERS: ReadonlySet<string> = new Set(["claudeAgent", "codex"]);
+const PRIMARY_PROVIDER_DRIVERS: ReadonlySet<string> = new Set(["omp"]);
 
 /**
  * Compact "Fable 5 · Max · Auto" style summary for the composer trigger pill,

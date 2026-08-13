@@ -190,12 +190,12 @@ describe("formatDiagnosticsDescription", () => {
 
 describe("buildProviderInstanceUpdatePatch", () => {
   it("promotes an edited default provider into providerInstances and resets the legacy provider", () => {
-    const instanceId = ProviderInstanceId.make("codex");
+    const instanceId = ProviderInstanceId.make("omp");
     const nextInstance = {
-      driver: ProviderDriverKind.make("codex"),
+      driver: ProviderDriverKind.make("omp"),
       enabled: true,
       config: {
-        binaryPath: "/opt/t3/codex",
+        binaryPath: "/opt/t3/omp",
       },
     } satisfies ProviderInstanceConfig;
 
@@ -204,29 +204,29 @@ describe("buildProviderInstanceUpdatePatch", () => {
         ...DEFAULT_SERVER_SETTINGS,
         providers: {
           ...DEFAULT_SERVER_SETTINGS.providers,
-          codex: {
-            ...DEFAULT_SERVER_SETTINGS.providers.codex,
-            binaryPath: "/legacy/codex",
+          omp: {
+            ...DEFAULT_SERVER_SETTINGS.providers.omp,
+            binaryPath: "/legacy/omp",
           },
         },
       },
       instanceId,
       instance: nextInstance,
-      driver: ProviderDriverKind.make("codex"),
+      driver: ProviderDriverKind.make("omp"),
       isDefault: true,
     });
 
     expect(patch.providerInstances?.[instanceId]).toEqual(nextInstance);
-    expect(patch.providers?.codex).toEqual(DEFAULT_SERVER_SETTINGS.providers.codex);
+    expect(patch.providers?.omp).toEqual(DEFAULT_SERVER_SETTINGS.providers.omp);
   });
 
   it("updates custom instances without touching legacy provider settings", () => {
-    const instanceId = ProviderInstanceId.make("codex_personal");
+    const instanceId = ProviderInstanceId.make("omp_personal");
     const nextInstance = {
-      driver: ProviderDriverKind.make("codex"),
+      driver: ProviderDriverKind.make("omp"),
       enabled: true,
       config: {
-        homePath: "/Users/example/.codex-personal",
+        binaryPath: "/Users/example/.local/bin/omp",
       },
     } satisfies ProviderInstanceConfig;
 
@@ -234,7 +234,7 @@ describe("buildProviderInstanceUpdatePatch", () => {
       settings: DEFAULT_SERVER_SETTINGS,
       instanceId,
       instance: nextInstance,
-      driver: ProviderDriverKind.make("codex"),
+      driver: ProviderDriverKind.make("omp"),
       isDefault: false,
     });
 

@@ -95,9 +95,9 @@ it.layer(NodeServices.layer)("server settings", (it) => {
   it.effect("decodes nested settings patches", () =>
     Effect.gen(function* () {
       assert.deepEqual(
-        yield* decodeSettingsPatch({ providers: { codex: { binaryPath: "/tmp/codex" } } }),
+        yield* decodeSettingsPatch({ providers: { omp: { binaryPath: "/tmp/omp" } } }),
         {
-          providers: { codex: { binaryPath: "/tmp/codex" } },
+          providers: { omp: { binaryPath: "/tmp/omp" } },
         },
       );
 
@@ -142,20 +142,15 @@ it.layer(NodeServices.layer)("server settings", (it) => {
 
       yield* serverSettings.updateSettings({
         providers: {
-          codex: {
-            binaryPath: "/usr/local/bin/codex",
-            homePath: "/Users/julius/.codex",
-          },
-          claudeAgent: {
-            binaryPath: "/usr/local/bin/claude",
-            customModels: ["claude-custom"],
+          omp: {
+            binaryPath: "/usr/local/bin/omp",
           },
         },
         textGenerationModelSelection: {
-          instanceId: ProviderInstanceId.make("codex"),
+          instanceId: ProviderInstanceId.make("omp"),
           model: DEFAULT_SERVER_SETTINGS.textGenerationModelSelection.model,
           options: createModelSelection(
-            ProviderInstanceId.make("codex"),
+            ProviderInstanceId.make("omp"),
             DEFAULT_SERVER_SETTINGS.textGenerationModelSelection.model,
             [
               { id: "reasoningEffort", value: "high" },
@@ -167,8 +162,8 @@ it.layer(NodeServices.layer)("server settings", (it) => {
 
       const next = yield* serverSettings.updateSettings({
         providers: {
-          codex: {
-            binaryPath: "/opt/homebrew/bin/codex",
+          omp: {
+            binaryPath: "/opt/homebrew/bin/omp",
           },
         },
         textGenerationModelSelection: {
@@ -176,25 +171,14 @@ it.layer(NodeServices.layer)("server settings", (it) => {
         },
       });
 
-      assert.deepEqual(next.providers.codex, {
+      assert.deepEqual(next.providers.omp, {
         enabled: true,
-        binaryPath: "/opt/homebrew/bin/codex",
-        homePath: "/Users/julius/.codex",
-        shadowHomePath: "",
-        launchArgs: "",
-        customModels: [],
-      });
-      assert.deepEqual(next.providers.claudeAgent, {
-        enabled: true,
-        binaryPath: "/usr/local/bin/claude",
-        homePath: "",
-        customModels: ["claude-custom"],
-        launchArgs: "",
+        binaryPath: "/opt/homebrew/bin/omp",
       });
       assert.deepEqual(
         next.textGenerationModelSelection,
         createModelSelection(
-          ProviderInstanceId.make("codex"),
+          ProviderInstanceId.make("omp"),
           DEFAULT_SERVER_SETTINGS.textGenerationModelSelection.model,
           [
             { id: "reasoningEffort", value: "high" },
@@ -213,16 +197,16 @@ it.layer(NodeServices.layer)("server settings", (it) => {
 
         yield* serverSettings.updateSettings({
           providers: {
-            codex: {
-              binaryPath: "/usr/local/bin/codex-next",
+            omp: {
+              binaryPath: "/usr/local/bin/omp-next",
             },
           },
         });
 
         const firstChange = yield* changes.pipe(Stream.runHead, Effect.timeout("1 second"));
         assert.equal(
-          Option.getOrUndefined(firstChange)?.providers.codex.binaryPath,
-          "/usr/local/bin/codex-next",
+          Option.getOrUndefined(firstChange)?.providers.omp.binaryPath,
+          "/usr/local/bin/omp-next",
         );
       }),
     ).pipe(Effect.provide(makeServerSettingsLayer())),
@@ -232,26 +216,21 @@ it.layer(NodeServices.layer)("server settings", (it) => {
     Effect.gen(function* () {
       const serverSettings = yield* ServerSettingsModule.ServerSettingsService;
 
-      // Start with Claude text generation selection
       yield* serverSettings.updateSettings({
         textGenerationModelSelection: {
-          instanceId: ProviderInstanceId.make("claudeAgent"),
-          model: "claude-sonnet-4-6",
-          options: createModelSelection(
-            ProviderInstanceId.make("claudeAgent"),
-            "claude-sonnet-4-6",
-            [{ id: "effort", value: "high" }],
-          ).options!,
+          instanceId: ProviderInstanceId.make("omp"),
+          model: "openai/gpt-5",
+          options: createModelSelection(ProviderInstanceId.make("omp"), "openai/gpt-5", [
+            { id: "effort", value: "high" },
+          ]).options!,
         },
       });
 
-      // Switch to Codex — the stale Claude "effort" in options must not
-      // cause the update to lose the selected model.
       const next = yield* serverSettings.updateSettings({
         textGenerationModelSelection: {
-          instanceId: ProviderInstanceId.make("codex"),
-          model: "gpt-5.4",
-          options: createModelSelection(ProviderInstanceId.make("codex"), "gpt-5.4", [
+          instanceId: ProviderInstanceId.make("omp"),
+          model: "openai/gpt-5.4",
+          options: createModelSelection(ProviderInstanceId.make("omp"), "openai/gpt-5.4", [
             { id: "reasoningEffort", value: "high" },
           ]).options!,
         },
@@ -259,7 +238,7 @@ it.layer(NodeServices.layer)("server settings", (it) => {
 
       assert.deepEqual(
         next.textGenerationModelSelection,
-        createModelSelection(ProviderInstanceId.make("codex"), "gpt-5.4", [
+        createModelSelection(ProviderInstanceId.make("omp"), "openai/gpt-5.4", [
           { id: "reasoningEffort", value: "high" },
         ]),
       );
@@ -272,20 +251,20 @@ it.layer(NodeServices.layer)("server settings", (it) => {
 
       const next = yield* serverSettings.updateSettings({
         providerInstances: {
-          [ProviderInstanceId.make("claude_openrouter")]: {
-            driver: ProviderDriverKind.make("claudeAgent"),
+          [ProviderInstanceId.make("omp_work")]: {
+            driver: ProviderDriverKind.make("omp"),
             enabled: true,
-            config: { customModels: ["openai/gpt-5.5"] },
+            config: { binaryPath: "/opt/omp" },
           },
         },
         textGenerationModelSelection: {
-          instanceId: ProviderInstanceId.make("claude_openrouter"),
+          instanceId: ProviderInstanceId.make("omp_work"),
           model: "openai/gpt-5.5",
         },
       });
 
       assert.deepEqual(next.textGenerationModelSelection, {
-        instanceId: ProviderInstanceId.make("claude_openrouter"),
+        instanceId: ProviderInstanceId.make("omp_work"),
         model: "openai/gpt-5.5",
       });
     }).pipe(Effect.provide(makeServerSettingsLayer())),
@@ -296,19 +275,19 @@ it.layer(NodeServices.layer)("server settings", (it) => {
     () =>
       Effect.gen(function* () {
         const serverSettings = yield* ServerSettingsModule.ServerSettingsService;
-        const instanceId = ProviderInstanceId.make("claude_openrouter");
+        const instanceId = ProviderInstanceId.make("omp_work");
 
         const next = yield* serverSettings.updateSettings({
           providers: {
-            claudeAgent: {
+            omp: {
               enabled: false,
             },
           },
           providerInstances: {
             [instanceId]: {
-              driver: ProviderDriverKind.make("claudeAgent"),
+              driver: ProviderDriverKind.make("omp"),
               enabled: true,
-              config: { customModels: ["openai/gpt-5.5"] },
+              config: { binaryPath: "/opt/omp" },
             },
           },
           textGenerationModelSelection: {
@@ -423,10 +402,10 @@ it.layer(NodeServices.layer)("server settings", (it) => {
 
       yield* serverSettings.updateSettings({
         textGenerationModelSelection: {
-          instanceId: ProviderInstanceId.make("codex"),
+          instanceId: ProviderInstanceId.make("omp"),
           model: DEFAULT_SERVER_SETTINGS.textGenerationModelSelection.model,
           options: createModelSelection(
-            ProviderInstanceId.make("codex"),
+            ProviderInstanceId.make("omp"),
             DEFAULT_SERVER_SETTINGS.textGenerationModelSelection.model,
             [
               { id: "reasoningEffort", value: "high" },
@@ -493,42 +472,15 @@ it.layer(NodeServices.layer)("server settings", (it) => {
 
       const next = yield* serverSettings.updateSettings({
         providers: {
-          codex: {
-            binaryPath: "  /opt/homebrew/bin/codex  ",
-            homePath: "   ",
-          },
-          claudeAgent: {
-            binaryPath: "  /opt/homebrew/bin/claude  ",
-          },
-          opencode: {
-            binaryPath: "  /opt/homebrew/bin/opencode  ",
-            serverUrl: "  http://127.0.0.1:4096  ",
-            serverPassword: "  secret-password  ",
+          omp: {
+            binaryPath: "  /opt/homebrew/bin/omp  ",
           },
         },
       });
 
-      assert.deepEqual(next.providers.codex, {
+      assert.deepEqual(next.providers.omp, {
         enabled: true,
-        binaryPath: "/opt/homebrew/bin/codex",
-        homePath: "",
-        shadowHomePath: "",
-        launchArgs: "",
-        customModels: [],
-      });
-      assert.deepEqual(next.providers.claudeAgent, {
-        enabled: true,
-        binaryPath: "/opt/homebrew/bin/claude",
-        homePath: "",
-        customModels: [],
-        launchArgs: "",
-      });
-      assert.deepEqual(next.providers.opencode, {
-        enabled: true,
-        binaryPath: "/opt/homebrew/bin/opencode",
-        serverUrl: "http://127.0.0.1:4096",
-        serverPassword: "secret-password",
-        customModels: [],
+        binaryPath: "/opt/homebrew/bin/omp",
       });
     }).pipe(Effect.provide(makeServerSettingsLayer())),
   );
@@ -559,17 +511,13 @@ it.layer(NodeServices.layer)("server settings", (it) => {
 
       const next = yield* serverSettings.updateSettings({
         providers: {
-          codex: {
+          omp: {
             binaryPath: "   ",
-          },
-          claudeAgent: {
-            binaryPath: "",
           },
         },
       });
 
-      assert.equal(next.providers.codex.binaryPath, "codex");
-      assert.equal(next.providers.claudeAgent.binaryPath, "claude");
+      assert.equal(next.providers.omp.binaryPath, "omp");
     }).pipe(Effect.provide(makeServerSettingsLayer())),
   );
 
@@ -585,18 +533,14 @@ it.layer(NodeServices.layer)("server settings", (it) => {
           otlpMetricsUrl: "http://localhost:4318/v1/metrics",
         },
         providers: {
-          codex: {
-            binaryPath: "/opt/homebrew/bin/codex",
-          },
-          opencode: {
-            serverUrl: "http://127.0.0.1:4096",
-            serverPassword: "secret-password",
+          omp: {
+            binaryPath: "/opt/homebrew/bin/omp",
           },
         },
         automaticGitFetchInterval: Duration.seconds(10),
       });
 
-      assert.equal(next.providers.codex.binaryPath, "/opt/homebrew/bin/codex");
+      assert.equal(next.providers.omp.binaryPath, "/opt/homebrew/bin/omp");
 
       const raw = yield* fileSystem.readFileString(serverConfig.settingsPath);
       // @effect-diagnostics-next-line preferSchemaOverJson:off
@@ -607,12 +551,8 @@ it.layer(NodeServices.layer)("server settings", (it) => {
           otlpMetricsUrl: "http://localhost:4318/v1/metrics",
         },
         providers: {
-          codex: {
-            binaryPath: "/opt/homebrew/bin/codex",
-          },
-          opencode: {
-            serverUrl: "http://127.0.0.1:4096",
-            serverPassword: "secret-password",
+          omp: {
+            binaryPath: "/opt/homebrew/bin/omp",
           },
         },
         backgroundActivity: {

@@ -35,7 +35,7 @@ const makeHarness = Effect.fn("test.make_self_update_harness")(function* (
           order.push("install");
           const prefix = input.args[input.args.indexOf("--prefix") + 1];
           if (prefix === undefined) return yield* Effect.die("missing npm prefix");
-          const entry = path.join(prefix, "node_modules", "t3", "dist", "bin.mjs");
+          const entry = path.join(prefix, "node_modules", "pivot-cli", "dist", "bin.mjs");
           yield* fs.makeDirectory(path.dirname(entry), { recursive: true }).pipe(Effect.orDie);
           yield* fs.writeFileString(entry, "export {};\n").pipe(Effect.orDie);
           return {

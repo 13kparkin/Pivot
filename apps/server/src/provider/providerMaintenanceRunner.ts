@@ -21,11 +21,18 @@ import * as Schema from "effect/Schema";
 import { HttpClient } from "effect/unstable/http";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
-import { ProviderRegistry } from "./Services/ProviderRegistry.ts";
+import * as ServerConfig from "../config.ts";
+import { collectUint8StreamText } from "../stream/collectUint8StreamText.ts";
+import {
+  makeOmpManagedBinary,
+  OMP_MANAGED_UPDATE_EXECUTABLE,
+  OMP_MANAGED_UPDATE_LOCK_KEY,
+  OmpManagedBinaryError,
+} from "./omp/OmpManagedBinary.ts";
 import { makeProviderMaintenanceCommandCoordinator } from "./providerMaintenanceCommandCoordinator.ts";
 import { enrichProviderSnapshotWithVersionAdvisory } from "./providerMaintenance.ts";
 import type { ProviderMaintenanceCapabilities } from "./providerMaintenance.ts";
-import { collectUint8StreamText } from "../stream/collectUint8StreamText.ts";
+import { ProviderRegistry } from "./Services/ProviderRegistry.ts";
 const isServerProviderUpdateError = Schema.is(ServerProviderUpdateError);
 
 const UPDATE_TIMEOUT_MS = 5 * 60_000;
@@ -201,12 +208,41 @@ export const make = Effect.fn("ProviderMaintenanceRunner.make")(function* () {
   const providerRegistry = yield* ProviderRegistry;
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const httpClient = yield* HttpClient.HttpClient;
+  const serverConfig = yield* ServerConfig.ServerConfig;
   const runMaintenanceCommand = (command: string, args: ReadonlyArray<string>) =>
     runProviderMaintenanceCommandWithSpawner({
       spawner,
       command,
       args,
     });
+  const runOmpManagedInstall = Effect.fn("ProviderMaintenanceRunner.runOmpManagedInstall")(
+    function* () {
+      const managed = yield* makeOmpManagedBinary({
+        baseDir: serverConfig.baseDir,
+        pathEnv: process.env.PATH,
+      });
+      const installed = yield* managed.install.pipe(
+        Effect.mapError(
+          (cause) =>
+            new ProviderMaintenanceCommandError({
+              message:
+                cause instanceof OmpManagedBinaryError
+                  ? cause.message
+                  : "Managed omp install failed.",
+              cause,
+            }),
+        ),
+      );
+      return {
+        stdout: `Installed omp ${installed.version ?? "unknown"} at ${installed.executablePath}`,
+        stderr: "",
+        exitCode: 0,
+        timedOut: false,
+        stdoutTruncated: false,
+        stderrTruncated: false,
+      } satisfies ProviderMaintenanceCommandResult;
+    },
+  );
   const commandCoordinator = yield* makeProviderMaintenanceCommandCoordinator({
     makeAlreadyRunningError: () =>
       new ServerProviderUpdateError({
@@ -339,7 +375,11 @@ export const make = Effect.fn("ProviderMaintenanceRunner.make")(function* () {
               }),
             );
 
-            const result = yield* runMaintenanceCommand(update.executable, update.args);
+            const result =
+              update.lockKey === OMP_MANAGED_UPDATE_LOCK_KEY ||
+              update.executable === OMP_MANAGED_UPDATE_EXECUTABLE
+                ? yield* runOmpManagedInstall()
+                : yield* runMaintenanceCommand(update.executable, update.args);
             const finishedAt = yield* nowIso;
             if (result.timedOut || result.exitCode !== 0) {
               return yield* finish(

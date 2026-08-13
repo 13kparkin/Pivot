@@ -11,44 +11,39 @@ import {
 
 describe("ProviderSettingsForm helpers", () => {
   it("derives visible provider config fields from the client definition schema", () => {
-    const codex = DRIVER_OPTION_BY_VALUE[ProviderDriverKind.make("codex")];
+    const omp = DRIVER_OPTION_BY_VALUE[ProviderDriverKind.make("omp")];
 
-    expect(codex).toBeDefined();
-    expect(deriveProviderSettingsFields(codex!).map((field) => field.key)).toEqual([
-      "binaryPath",
-      "homePath",
-      "shadowHomePath",
-      "launchArgs",
-    ]);
+    expect(omp).toBeDefined();
+    expect(deriveProviderSettingsFields(omp!).map((field) => field.key)).toEqual(["binaryPath"]);
   });
 
   it("sources labels and descriptions from schema annotations", () => {
-    const opencode = DRIVER_OPTION_BY_VALUE[ProviderDriverKind.make("opencode")];
-    expect(opencode).toBeDefined();
+    const omp = DRIVER_OPTION_BY_VALUE[ProviderDriverKind.make("omp")];
+    expect(omp).toBeDefined();
 
-    const serverPassword = deriveProviderSettingsFields(opencode!).find(
-      (field) => field.key === "serverPassword",
+    const binaryPath = deriveProviderSettingsFields(omp!).find(
+      (field) => field.key === "binaryPath",
     );
 
-    expect(serverPassword).toMatchObject({
-      label: "Server password",
-      description: "Stored in plain text on disk.",
-      control: "password",
+    expect(binaryPath).toMatchObject({
+      label: "Binary path",
+      description: "Path to the omp binary used by this instance.",
+      control: "text",
     });
   });
 
   it("preserves unknown config keys while omitting empty configurable fields", () => {
-    const opencode = DRIVER_OPTION_BY_VALUE[ProviderDriverKind.make("opencode")];
-    expect(opencode).toBeDefined();
+    const omp = DRIVER_OPTION_BY_VALUE[ProviderDriverKind.make("omp")];
+    expect(omp).toBeDefined();
 
-    const serverUrl = deriveProviderSettingsFields(opencode!).find(
-      (field) => field.key === "serverUrl",
+    const binaryPath = deriveProviderSettingsFields(omp!).find(
+      (field) => field.key === "binaryPath",
     );
-    expect(serverUrl).toBeDefined();
+    expect(binaryPath).toBeDefined();
 
     const next = nextProviderConfigWithFieldValue(
-      { forkOwned: 1, serverUrl: "http://127.0.0.1:4096" },
-      serverUrl!,
+      { forkOwned: 1, binaryPath: "/usr/local/bin/omp" },
+      binaryPath!,
       "",
     );
 

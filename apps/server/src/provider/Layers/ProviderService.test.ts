@@ -478,7 +478,7 @@ it.effect(
       );
       const serverSettingsLayer = ServerSettings.ServerSettingsService.layerTest({
         providers: {
-          codex: {
+          omp: {
             enabled: false,
           },
         },

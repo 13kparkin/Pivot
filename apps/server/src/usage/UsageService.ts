@@ -1,13 +1,10 @@
 /**
- * UsageService - scans provider transcripts and returns priced usage buckets.
+ * UsageService - priced usage buckets for the usage page.
  *
- * The scan reads the provider CLIs' own session files rather than T3 Code's
- * orchestration projections, so usage covers turns driven outside T3 Code too.
- * This is the approach `ccusage` takes.
- *
- * Transcripts are append-only, so parsed records are memoised per file by
- * `(size, mtime)`. A cold 30-day scan of ~1.4 GB lands around 2-3 seconds; warm
- * scans only reparse files that changed.
+ * Pivot is omp-native: live thread chrome uses `thread.token-usage.updated`
+ * from omp `get_state.contextUsage`. Full Cursor-like transcript/stats fidelity
+ * is deferred to omp-usage-fidelity; this service no longer scans removed
+ * Claude/Codex home transcripts.
  *
  * @module UsageService
  */
@@ -34,9 +31,6 @@ import * as Schema from "effect/Schema";
 import { HttpClient, HttpClientResponse } from "effect/unstable/http";
 
 import { ServerConfig } from "../config.ts";
-import * as ServerSettings from "../serverSettings.ts";
-import { resolveClaudeHomePath } from "../provider/Drivers/ClaudeHome.ts";
-import { resolveCodexHomeLayout } from "../provider/Drivers/CodexHomeLayout.ts";
 import { UsageAggregator } from "./usageAggregation.ts";
 import { parseRateTable, type RateTable } from "./usagePricing.ts";
 import {
@@ -121,7 +115,6 @@ export const make = Effect.gen(function* () {
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const config = yield* ServerConfig;
-  const settingsService = yield* ServerSettings.ServerSettingsService;
   const httpClient = yield* HttpClient.HttpClient;
 
   const fileCache: ScanCache = new Map();
@@ -184,45 +177,9 @@ export const make = Effect.gen(function* () {
     );
   });
 
-  /**
-   * Claude's config dir is the home itself when overridden, but a default
-   * install nests transcripts under `~/.claude/projects`. Probe both.
-   */
-  const resolveClaudeTranscriptDir = (homePath: string) =>
-    Effect.gen(function* () {
-      const nested = path.join(homePath, ".claude", "projects");
-      const nestedExists = yield* fileSystem
-        .exists(nested)
-        .pipe(Effect.catchCause(() => Effect.succeed(false)));
-      return nestedExists ? nested : path.join(homePath, "projects");
-    });
-
-  /** Resolves the transcript directory for each provider. */
+  /** No host transcript dirs while Claude/Codex drivers are removed (omp-only). */
   const resolveTranscriptDirs = Effect.fn("UsageService.resolveTranscriptDirs")(function* () {
-    // A settings failure must surface as an error: swallowing it here would
-    // present "zero usage from every provider" as a valid answer.
-    const settings = yield* settingsService.getSettings.pipe(
-      Effect.catchCause(
-        (cause) =>
-          new UsageReadError({
-            reason: "scanFailed",
-            // Bounded description; the squashed failure travels as the cause.
-            // Squashed, not the Cause tree: a full tree in a Defect field is
-            // the unbounded wire payload the bounded detail exists to avoid.
-            detail: "Server settings could not be read.",
-            cause: Cause.squash(cause),
-          }),
-      ),
-    );
-
-    const claudeHome = yield* resolveClaudeHomePath(settings.providers.claudeAgent);
-    const claudeDir = yield* resolveClaudeTranscriptDir(claudeHome);
-    const codexLayout = yield* resolveCodexHomeLayout(settings.providers.codex);
-
-    return [
-      { provider: "claude" as const, dir: claudeDir },
-      { provider: "codex" as const, dir: path.join(codexLayout.sharedHomePath, "sessions") },
-    ];
+    return [] as const;
   });
 
   /**

@@ -635,6 +635,8 @@ const buildAppUnderTest = (options?: {
               makeManualOnlyProviderMaintenanceCapabilities({ provider, packageName: null }),
             ),
           setProviderMaintenanceActionState: () => Effect.succeed([]),
+          listOmpLoginProviders: () => Effect.succeed([]),
+          ompLogin: ({ providerId }) => Effect.succeed({ providerId }),
           streamChanges: Stream.empty,
           ...options?.layers?.providerRegistry,
         }),
@@ -652,6 +654,7 @@ const buildAppUnderTest = (options?: {
       Layer.provide(
         Layer.mock(ExternalLauncher.ExternalLauncher)({
           resolveAvailableEditors: () => Effect.succeed([]),
+          launchBrowser: () => Effect.void,
           ...options?.layers?.externalLauncher,
         }),
       ),

@@ -1,19 +1,23 @@
 {
-  "name": "t3",
+  "name": "pivot-cli",
   "version": "0.0.33",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/pingdotgg/t3code",
+    "url": "https://github.com/13kparkin/Pivot",
     "directory": "apps/server"
   },
   "bin": {
-    "t3": "./dist/bin.mjs"
+    "pivot": "./dist/bin.mjs"
   },
   "files": [
     "dist"
   ],
   "type": "module",
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
   "scripts": {
     "dev": "node --watch src/bin.ts",
     "build:bundle": "vp pack && vp pack src/service-launcher.ts --out-dir dist --no-clean",

@@ -74,6 +74,29 @@ export interface ProviderRegistryShape {
    * change. The array contains the full current state.
    */
   readonly streamChanges: Stream.Stream<ReadonlyArray<ServerProvider>>;
+
+  /**
+   * List omp OAuth/API login providers for one omp instance.
+   */
+  readonly listOmpLoginProviders: (instanceId: ProviderInstanceId) => Effect.Effect<
+    ReadonlyArray<{
+      readonly id: string;
+      readonly name: string;
+      readonly available: boolean;
+      readonly authenticated: boolean;
+    }>,
+    Error
+  >;
+
+  /**
+   * Start omp login for one provider id. `onOpenUrl` receives the auth URL
+   * (prefer launchUrl when present) so the host can open a browser.
+   */
+  readonly ompLogin: (input: {
+    readonly instanceId: ProviderInstanceId;
+    readonly providerId: string;
+    readonly onOpenUrl: (url: string) => Effect.Effect<void>;
+  }) => Effect.Effect<{ readonly providerId: string }, Error>;
 }
 
 export class ProviderRegistry extends Context.Service<ProviderRegistry, ProviderRegistryShape>()(

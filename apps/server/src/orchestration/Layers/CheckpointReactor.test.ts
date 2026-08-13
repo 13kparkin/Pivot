@@ -55,10 +55,13 @@ import {
   ProviderService,
   type ProviderServiceShape,
 } from "../../provider/Services/ProviderService.ts";
+import { OmpAdapter } from "../../provider/omp/OmpAdapter.ts";
 import { checkpointRefForThreadTurn } from "../../checkpointing/Utils.ts";
 import { ServerConfig } from "../../config.ts";
 import * as WorkspaceEntries from "../../workspace/WorkspaceEntries.ts";
 import * as WorkspacePaths from "../../workspace/WorkspacePaths.ts";
+import * as Fiber from "effect/Fiber";
+import * as Queue from "effect/Queue";
 
 const asProjectId = (value: string): ProjectId => ProjectId.make(value);
 const asTurnId = (value: string): TurnId => TurnId.make(value);
@@ -239,6 +242,21 @@ async function waitForGitRefExists(cwd: string, ref: string, timeoutMs = 15_000)
     }
     if ((await Effect.runPromise(Clock.currentTimeMillis)) >= deadline) {
       throw new Error(`Timed out waiting for git ref '${ref}'.`);
+    }
+    await Effect.runPromise(Effect.sleep("10 millis"));
+    return poll();
+  };
+  return poll();
+}
+
+async function waitForCondition(predicate: () => boolean, description: string, timeoutMs = 15_000) {
+  const deadline = (await Effect.runPromise(Clock.currentTimeMillis)) + timeoutMs;
+  const poll = async (): Promise<void> => {
+    if (predicate()) {
+      return;
+    }
+    if ((await Effect.runPromise(Clock.currentTimeMillis)) >= deadline) {
+      throw new Error(`Timed out waiting for ${description}.`);
     }
     await Effect.runPromise(Effect.sleep("10 millis"));
     return poll();
@@ -1257,4 +1275,133 @@ describe("CheckpointReactor", () => {
     );
     expect(harness.provider.rollbackConversation).not.toHaveBeenCalled();
   });
+
+  it("omp adapter turn completion yields a ready checkpoint with a file diff (AC4)", async () => {
+    const omp = ProviderDriverKind.make("omp");
+    const harness = await createHarness({
+      seedFilesystemCheckpoints: false,
+      providerName: omp,
+    });
+    const threadId = ThreadId.make("thread-1");
+    const createdAt = "2026-01-01T00:00:00.000Z";
+    const testRandomUUID = Effect.succeed("00000000-0000-4000-8000-000000000099");
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.make("cmd-session-set-omp-ac4"),
+        threadId,
+        session: {
+          threadId,
+          status: "ready",
+          providerName: "omp",
+          runtimeMode: "full-access",
+          activeTurnId: null,
+          lastError: null,
+          updatedAt: createdAt,
+        },
+        createdAt,
+      }),
+    );
+
+    const fake = new FakeOmpRpcForCheckpoint();
+    const adapter = new OmpAdapter(fake, testRandomUUID);
+    let bridgedTurnCompleted = false;
+    const adapterScope = await Effect.runPromise(Scope.make("sequential"));
+    const bridgeFiber = Effect.runFork(
+      Stream.runForEach(adapter.streamEvents, (event) =>
+        Effect.sync(() => {
+          if (event.type === "turn.completed") {
+            bridgedTurnCompleted = true;
+          }
+          harness.provider.emit(event as unknown as LegacyProviderRuntimeEvent);
+        }),
+      ),
+    );
+
+    await Effect.runPromise(
+      adapter
+        .startSession({
+          threadId,
+          provider: omp,
+          cwd: harness.cwd,
+          runtimeMode: "full-access",
+        })
+        .pipe(Scope.provide(adapterScope)),
+    );
+    await Effect.runPromise(
+      adapter.sendTurn({ threadId, input: "edit readme" }).pipe(Scope.provide(adapterScope)),
+    );
+    await waitForGitRefExists(harness.cwd, checkpointRefForThreadTurn(threadId, 0));
+
+    NodeFS.writeFileSync(NodePath.join(harness.cwd, "README.md"), "v2\n", "utf8");
+    await Effect.runPromise(
+      fake.offer(threadId, { type: "agent_end", messages: [], isTerminal: true }),
+    );
+    await waitForCondition(() => bridgedTurnCompleted, "omp turn.completed bridge");
+    await waitForEvent(harness.engine, (event) => event.type === "thread.turn-diff-completed");
+    await waitForThread(
+      harness.readModel,
+      (entry) => entry.checkpoints.length === 1 && entry.checkpoints[0]?.checkpointTurnCount === 1,
+    );
+    expect(
+      gitShowFileAtRef(harness.cwd, checkpointRefForThreadTurn(threadId, 0), "README.md"),
+    ).toBe("v1\n");
+    expect(
+      gitShowFileAtRef(harness.cwd, checkpointRefForThreadTurn(threadId, 1), "README.md"),
+    ).toBe("v2\n");
+
+    await Effect.runPromise(Fiber.interrupt(bridgeFiber));
+    await Effect.runPromise(Scope.close(adapterScope, Exit.void));
+  });
 });
+
+class FakeOmpRpcForCheckpoint {
+  sessionFile = "/tmp/omp-session.jsonl";
+  readonly frames = new Map<string, Queue.Queue<object>>();
+
+  ensureSession(input: {
+    readonly sessionKey: string;
+    readonly cwd: string;
+    readonly resumeCursor: string | null;
+  }) {
+    return Effect.gen({ self: this }, function* () {
+      if (!this.frames.has(input.sessionKey)) {
+        this.frames.set(input.sessionKey, yield* Queue.unbounded<object>());
+      }
+      return { sessionKey: input.sessionKey, sessionFile: this.sessionFile };
+    });
+  }
+
+  send(_sessionKey: string, _command: Record<string, unknown>) {
+    return Effect.succeed({
+      type: "response",
+      success: true,
+      data: { agentInvoked: true },
+    });
+  }
+
+  write(_sessionKey: string, _command: Record<string, unknown>) {
+    return Effect.void;
+  }
+
+  streamFrames(sessionKey: string) {
+    const queue = this.frames.get(sessionKey);
+    if (!queue) {
+      return Stream.die(`no live omp session for ${sessionKey}`);
+    }
+    return Stream.fromQueue(queue);
+  }
+
+  dispose(_sessionKey: string) {
+    return Effect.void;
+  }
+
+  offer(sessionKey: string, frame: object) {
+    const queue = this.frames.get(sessionKey);
+    if (!queue) {
+      return Effect.die(`no live omp session for ${sessionKey}`);
+    }
+    return Queue.offer(queue, frame);
+  }
+}

@@ -1,0 +1,349 @@
+/**
+ * OmpDriver — ProviderDriver for `omp --mode rpc`.
+ *
+ * create() owns one OmpRpcRuntime + OmpAdapter per instance and tears them
+ * down when the registry scope closes. Model discovery (AC3) probes
+ * `get_available_models` through a short-lived adapter session on refresh.
+ * Binary resolution prefers a Pivot-managed GitHub install under
+ * `{baseDir}/tools/omp/current`, then PATH / settings override.
+ *
+ * @module provider/Drivers/OmpDriver
+ */
+import {
+  OmpSettings,
+  ProviderDriverKind,
+  type ServerProvider,
+  type ServerProviderModel,
+  ThreadId,
+} from "@t3tools/contracts";
+import * as Crypto from "effect/Crypto";
+import * as DateTime from "effect/DateTime";
+import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
+import * as Path from "effect/Path";
+import * as PubSub from "effect/PubSub";
+import * as Ref from "effect/Ref";
+import * as Schema from "effect/Schema";
+import * as Scope from "effect/Scope";
+import * as Stream from "effect/Stream";
+import { HttpClient } from "effect/unstable/http";
+import { ChildProcessSpawner } from "effect/unstable/process";
+
+import * as ServerConfig from "../../config.ts";
+import { makeOmpTextGeneration } from "../../textGeneration/OmpTextGeneration.ts";
+import { OmpAdapter } from "../omp/OmpAdapter.ts";
+import {
+  makeOmpManagedBinary,
+  OMP_MANAGED_UPDATE_EXECUTABLE,
+  OMP_MANAGED_UPDATE_LOCK_KEY,
+  OMP_NPM_PACKAGE_NAME,
+} from "../omp/OmpManagedBinary.ts";
+import { OmpRpcRuntime } from "../omp/OmpRpcRuntime.ts";
+import {
+  defaultProviderContinuationIdentity,
+  type ProviderDriver,
+  type ProviderInstance,
+} from "../ProviderDriver.ts";
+import { buildServerProvider, type ServerProviderDraft } from "../providerSnapshot.ts";
+import { hasPathSeparator, makeProviderMaintenanceCapabilities } from "../providerMaintenance.ts";
+import type { ServerProviderShape } from "../Services/ServerProvider.ts";
+
+const decodeOmpSettings = Schema.decodeSync(OmpSettings);
+const DRIVER_KIND = ProviderDriverKind.make("omp");
+const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
+
+const OMP_PRESENTATION = {
+  displayName: "omp",
+  showInteractionModeToggle: false,
+  requiresNewThreadForModelChange: false,
+} as const;
+
+export type OmpDriverEnv =
+  | ChildProcessSpawner.ChildProcessSpawner
+  | Crypto.Crypto
+  | FileSystem.FileSystem
+  | HttpClient.HttpClient
+  | Path.Path
+  | ServerConfig.ServerConfig;
+
+const withInstanceIdentity =
+  (input: {
+    readonly instanceId: ProviderInstance["instanceId"];
+    readonly displayName: string | undefined;
+    readonly accentColor: string | undefined;
+    readonly continuationGroupKey: string;
+  }) =>
+  (snapshot: ServerProviderDraft): ServerProvider => ({
+    ...snapshot,
+    instanceId: input.instanceId,
+    driver: DRIVER_KIND,
+    ...(input.displayName ? { displayName: input.displayName } : {}),
+    ...(input.accentColor ? { accentColor: input.accentColor } : {}),
+    continuation: { groupKey: input.continuationGroupKey },
+  });
+
+function makeOmpMaintenanceCapabilities() {
+  const capabilities = makeProviderMaintenanceCapabilities({
+    provider: DRIVER_KIND,
+    packageName: OMP_NPM_PACKAGE_NAME,
+    updateExecutable: OMP_MANAGED_UPDATE_EXECUTABLE,
+    updateArgs: ["install"],
+    updateLockKey: OMP_MANAGED_UPDATE_LOCK_KEY,
+  });
+  if (!capabilities.update) {
+    return capabilities;
+  }
+  return {
+    ...capabilities,
+    update: {
+      ...capabilities.update,
+      command: "Pivot managed install (GitHub oh-my-pi)",
+    },
+  };
+}
+
+function makeOmpSnapshot(input: {
+  readonly stampIdentity: (draft: ServerProviderDraft) => ServerProvider;
+  readonly enabled: boolean;
+  readonly adapter: OmpAdapter;
+  readonly runtime: OmpRpcRuntime;
+  readonly randomUUID: Effect.Effect<string>;
+  readonly resolveBinary: Effect.Effect<{
+    readonly installed: boolean;
+    readonly binaryPath: string | null;
+    readonly version: string | null;
+    readonly source: "override" | "managed" | "path" | "missing" | "unsupported";
+  }>;
+}): Effect.Effect<ServerProviderShape, never, Scope.Scope> {
+  return Effect.gen(function* () {
+    const maintenanceCapabilities = makeOmpMaintenanceCapabilities();
+
+    const buildSnapshot = (
+      models: ReadonlyArray<ServerProviderModel>,
+      probe: {
+        readonly installed: boolean;
+        readonly version: string | null;
+        readonly status: "ready" | "warning" | "error";
+        readonly message: string;
+      },
+    ) =>
+      Effect.gen(function* () {
+        const checkedAt = yield* nowIso;
+        return input.stampIdentity(
+          buildServerProvider({
+            presentation: OMP_PRESENTATION,
+            enabled: input.enabled,
+            checkedAt,
+            models,
+            probe: {
+              installed: probe.installed,
+              version: probe.version,
+              status: probe.status,
+              auth: { status: "unknown" },
+              message: probe.message,
+            },
+          }),
+        );
+      });
+
+    const initial = yield* buildSnapshot([], {
+      installed: false,
+      version: null,
+      status: "warning",
+      message: input.enabled
+        ? "Loading omp binary and models."
+        : "omp is disabled in T3 Code settings.",
+    });
+    const latest = yield* Ref.make(initial);
+    const changes = yield* PubSub.unbounded<ServerProvider>();
+    yield* Effect.addFinalizer(() => PubSub.shutdown(changes));
+
+    const publish = (snapshot: ServerProvider) =>
+      Effect.gen(function* () {
+        yield* Ref.set(latest, snapshot);
+        yield* PubSub.publish(changes, snapshot);
+        return snapshot;
+      });
+
+    const refresh = Effect.gen(function* () {
+      if (!input.enabled) {
+        return yield* publish(
+          yield* buildSnapshot([], {
+            installed: false,
+            version: null,
+            status: "warning",
+            message: "omp is disabled in T3 Code settings.",
+          }),
+        );
+      }
+
+      const resolved = yield* input.resolveBinary;
+      if (!resolved.installed || !resolved.binaryPath) {
+        const message =
+          resolved.source === "unsupported"
+            ? "Pivot cannot install a managed omp binary on this platform. Install omp manually and set Binary path."
+            : "omp is not installed. Use Install in Settings to download a managed binary, or set Binary path.";
+        return yield* publish(
+          yield* buildSnapshot([], {
+            installed: false,
+            version: null,
+            status: "warning",
+            message,
+          }),
+        );
+      }
+      input.runtime.setBinaryPath(resolved.binaryPath);
+
+      const probeId = yield* input.randomUUID;
+      const threadId = ThreadId.make(`omp-model-probe-${probeId}`);
+      yield* input.adapter.startSession({
+        threadId,
+        provider: DRIVER_KIND,
+        cwd: process.cwd(),
+        runtimeMode: "full-access",
+      });
+      const models = yield* input.adapter
+        .discoverModels(threadId)
+        .pipe(Effect.ensuring(input.adapter.stopSession(threadId)));
+      return yield* publish(
+        yield* buildSnapshot(models, {
+          installed: true,
+          version: resolved.version,
+          status: "ready",
+          message: `omp models loaded from get_available_models (${resolved.source}).`,
+        }),
+      );
+    }).pipe(
+      Effect.scoped,
+      Effect.catchCause(() =>
+        input.resolveBinary.pipe(
+          Effect.flatMap((resolved) =>
+            buildSnapshot([], {
+              installed: resolved.installed,
+              version: resolved.version,
+              status: "error",
+              message: resolved.installed
+                ? "Failed to load omp models from get_available_models."
+                : "omp is not installed or failed to start.",
+            }),
+          ),
+          Effect.flatMap(publish),
+        ),
+      ),
+    );
+
+    yield* refresh.pipe(Effect.forkScoped);
+
+    return {
+      maintenanceCapabilities,
+      getSnapshot: Ref.get(latest),
+      refresh,
+      streamChanges: Stream.fromPubSub(changes),
+    } satisfies ServerProviderShape;
+  });
+}
+
+export const OmpDriver: ProviderDriver<OmpSettings, OmpDriverEnv> = {
+  driverKind: DRIVER_KIND,
+  metadata: {
+    displayName: "omp",
+    supportsMultipleInstances: true,
+  },
+  configSchema: OmpSettings,
+  defaultConfig: (): OmpSettings => decodeOmpSettings({}),
+  create: ({ instanceId, displayName, accentColor, enabled, config }) =>
+    Effect.gen(function* () {
+      const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+      const serverConfig = yield* ServerConfig.ServerConfig;
+      const continuationIdentity = defaultProviderContinuationIdentity({
+        driverKind: DRIVER_KIND,
+        instanceId,
+      });
+      const stampIdentity = withInstanceIdentity({
+        instanceId,
+        displayName,
+        accentColor,
+        continuationGroupKey: continuationIdentity.continuationKey,
+      });
+      const effectiveConfig = { ...config, enabled } satisfies OmpSettings;
+      const crypto = yield* Crypto.Crypto;
+      const randomUUID = crypto.randomUUIDv4.pipe(Effect.orDie);
+
+      const binaryPathSetting = effectiveConfig.binaryPath.trim();
+      const managed = yield* makeOmpManagedBinary({
+        baseDir: serverConfig.baseDir,
+        binaryPathOverride: hasPathSeparator(binaryPathSetting) ? binaryPathSetting : undefined,
+        pathEnv: process.env.PATH,
+      });
+
+      const resolveBinary = managed.resolve.pipe(
+        Effect.map((status) => {
+          if (status.status === "available") {
+            return {
+              installed: true,
+              binaryPath: status.executablePath,
+              version: status.version,
+              source: status.source,
+            };
+          }
+          if (status.status === "unsupported") {
+            return {
+              installed: false,
+              binaryPath: null,
+              version: null,
+              source: "unsupported" as const,
+            };
+          }
+          return {
+            installed: false,
+            binaryPath: null,
+            version: null,
+            source: "missing" as const,
+          };
+        }),
+      );
+
+      const initialResolved = yield* resolveBinary;
+      const launchBinary =
+        initialResolved.binaryPath ??
+        (hasPathSeparator(binaryPathSetting) ? binaryPathSetting : binaryPathSetting || "omp");
+
+      const runtime = new OmpRpcRuntime(spawner, launchBinary);
+      const adapter = new OmpAdapter(runtime, randomUUID);
+      yield* Effect.addFinalizer(() => adapter.stopAll());
+
+      // Keep runtime binaryPath aligned after managed install/refresh by
+      // recreating is heavy; refresh uses the adapter already constructed with
+      // the best-known path at create. Install path restarts the instance via
+      // registry refresh after updateProvider.
+      const snapshot = yield* makeOmpSnapshot({
+        stampIdentity,
+        enabled: effectiveConfig.enabled,
+        adapter,
+        runtime,
+        randomUUID,
+        resolveBinary,
+      });
+      // Text generation re-resolves the managed binary per call so Install works
+      // without rematerializing the whole provider instance.
+      const textGeneration = yield* makeOmpTextGeneration({
+        ...effectiveConfig,
+        binaryPath: launchBinary,
+        resolveBinaryPath: resolveBinary.pipe(
+          Effect.map((resolved) => resolved.binaryPath ?? launchBinary),
+        ),
+      });
+
+      return {
+        instanceId,
+        driverKind: DRIVER_KIND,
+        continuationIdentity,
+        displayName,
+        accentColor,
+        enabled,
+        snapshot,
+        adapter,
+        textGeneration,
+      } satisfies ProviderInstance;
+    }),
+};

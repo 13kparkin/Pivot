@@ -76,11 +76,11 @@ const MODE_ARGS = {
     "run",
     "--filter=@t3tools/contracts",
     "--filter=@t3tools/web",
-    "--filter=t3",
+    "--filter=pivot-cli",
     "--parallel",
     "dev",
   ],
-  "dev:server": ["run", "--filter=t3", "dev"],
+  "dev:server": ["run", "--filter=pivot-cli", "dev"],
   "dev:web": ["run", "--filter=@t3tools/web", "dev"],
   "dev:desktop": ["run", "--filter=@t3tools/desktop", "--filter=@t3tools/web", "dev"],
 } as const satisfies Record<string, ReadonlyArray<string>>;
