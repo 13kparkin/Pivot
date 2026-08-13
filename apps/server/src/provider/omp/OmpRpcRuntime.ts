@@ -7,6 +7,14 @@
  *
  * @module provider/omp/OmpRpcRuntime
  */
+import * as Deferred from "effect/Deferred";
+import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
+import * as Queue from "effect/Queue";
+import * as Schema from "effect/Schema";
+import * as Scope from "effect/Scope";
+import * as Stream from "effect/Stream";
+import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
 /** Maximum UTF-8 size of one newline-delimited RPC frame, including the newline. */
 export const MAX_RPC_FRAME_BYTES = 1024 * 1024;
@@ -140,4 +148,222 @@ export class OmpRpcFrameDecoder {
     }
     return frame;
   }
+}
+
+export interface OmpEnsureSessionInput {
+  readonly sessionKey: string;
+  readonly cwd: string;
+  readonly resumeCursor: string | null;
+}
+
+export interface OmpSessionHandle {
+  readonly sessionKey: string;
+  readonly sessionFile: string;
+}
+
+export class OmpSpawnError extends Schema.TaggedErrorClass<OmpSpawnError>()("OmpSpawnError", {
+  operation: Schema.String,
+  detail: Schema.String,
+  cause: Schema.optional(Schema.Defect()),
+}) {
+  override get message(): string {
+    return `omp rpc ${this.operation}: ${this.detail}`;
+  }
+}
+
+interface LiveOmpSession {
+  readonly handle: OmpSessionHandle;
+  readonly child: ChildProcessSpawner.ChildProcessHandle;
+  readonly scope: Scope.Scope;
+  readonly pending: Map<string, Deferred.Deferred<object, OmpSpawnError>>;
+}
+
+/**
+ * Spawns and owns one `omp --mode rpc` child per T3 thread session.
+ */
+export class OmpRpcRuntime {
+  readonly #sessions = new Map<string, LiveOmpSession>();
+  #nextRequestId = 0;
+
+  public constructor(
+    private readonly processSpawner: ChildProcessSpawner.ChildProcessSpawner["Service"],
+    private readonly binaryPath: string,
+  ) {}
+
+  public ensureSession(
+    input: OmpEnsureSessionInput,
+  ): Effect.Effect<OmpSessionHandle, OmpSpawnError> {
+    return Effect.gen({ self: this }, function* () {
+      const existing = this.#sessions.get(input.sessionKey);
+      if (existing) {
+        return existing.handle;
+      }
+
+      const scope = yield* Scope.make();
+      const child = yield* this.processSpawner
+        .spawn(
+          ChildProcess.make(this.binaryPath, ["--mode", "rpc"], {
+            cwd: input.cwd,
+            extendEnv: true,
+          }),
+        )
+        .pipe(
+          Effect.provideService(Scope.Scope, scope),
+          Effect.mapError(
+            (cause) =>
+              new OmpSpawnError({
+                operation: "spawn",
+                detail: "failed to spawn omp --mode rpc",
+                cause,
+              }),
+          ),
+        );
+
+      const frames = yield* Queue.unbounded<object>();
+      const pending = new Map<string, Deferred.Deferred<object, OmpSpawnError>>();
+      const decoder = new OmpRpcFrameDecoder();
+
+      yield* child.stdout.pipe(
+        Stream.decodeText(),
+        Stream.splitLines,
+        Stream.runForEach((line) => {
+          const trimmed = line.trim();
+          if (trimmed.length === 0) {
+            return Effect.void;
+          }
+          return Effect.try({
+            try: () => {
+              const parsed: unknown = JSON.parse(trimmed);
+              return decoder.push(parsed);
+            },
+            catch: (cause) =>
+              new OmpSpawnError({
+                operation: "decode",
+                detail: "failed to decode omp stdout frame",
+                cause,
+              }),
+          }).pipe(
+            Effect.flatMap((frame) => {
+              if (frame === undefined) {
+                return Effect.void;
+              }
+              if (isRecord(frame) && frame.type === "response" && typeof frame.id === "string") {
+                const waiter = pending.get(frame.id);
+                if (waiter) {
+                  pending.delete(frame.id);
+                  return Deferred.succeed(waiter, frame).pipe(Effect.asVoid);
+                }
+              }
+              return Queue.offer(frames, frame).pipe(Effect.asVoid);
+            }),
+          );
+        }),
+        Effect.forkIn(scope),
+      );
+
+      const handshake = Effect.gen({ self: this }, function* () {
+        yield* waitForReady(frames);
+        yield* this.#request(child, pending, {
+          type: "negotiate_protocol",
+          protocolVersion: 2,
+        });
+        if (input.resumeCursor !== null) {
+          yield* this.#request(child, pending, {
+            type: "switch_session",
+            sessionPath: input.resumeCursor,
+          });
+        }
+        const state = yield* this.#request(child, pending, { type: "get_state" });
+        return yield* sessionFileFromState(state);
+      });
+
+      const sessionFile = yield* handshake.pipe(
+        Effect.tapError(() =>
+          child
+            .kill()
+            .pipe(Effect.ignore, Effect.andThen(Scope.close(scope, Exit.void)), Effect.ignore),
+        ),
+      );
+
+      const handle: OmpSessionHandle = {
+        sessionKey: input.sessionKey,
+        sessionFile,
+      };
+      this.#sessions.set(input.sessionKey, { handle, child, scope, pending });
+      return handle;
+    });
+  }
+
+  public dispose(sessionKey: string): Effect.Effect<void> {
+    return Effect.gen({ self: this }, function* () {
+      const live = this.#sessions.get(sessionKey);
+      if (!live) {
+        return;
+      }
+      this.#sessions.delete(sessionKey);
+      yield* live.child.kill().pipe(Effect.ignore);
+      yield* Scope.close(live.scope, Exit.void).pipe(Effect.ignore);
+    });
+  }
+
+  #request(
+    child: ChildProcessSpawner.ChildProcessHandle,
+    pending: Map<string, Deferred.Deferred<object, OmpSpawnError>>,
+    command: Record<string, unknown>,
+  ): Effect.Effect<object, OmpSpawnError> {
+    return Effect.gen({ self: this }, function* () {
+      const id = `omp-${String(++this.#nextRequestId)}`;
+      const waiter = yield* Deferred.make<object, OmpSpawnError>();
+      pending.set(id, waiter);
+      yield* Stream.run(
+        Stream.encodeText(Stream.make(`${JSON.stringify({ id, ...command })}\n`)),
+        child.stdin,
+      ).pipe(
+        Effect.mapError(
+          (cause) =>
+            new OmpSpawnError({
+              operation: String(command.type),
+              detail: "failed to write omp rpc command",
+              cause,
+            }),
+        ),
+      );
+      const response = yield* Deferred.await(waiter);
+      if (!isRecord(response) || response.success !== true) {
+        return yield* new OmpSpawnError({
+          operation: String(command.type),
+          detail:
+            isRecord(response) && typeof response.error === "string"
+              ? response.error
+              : "command failed",
+        });
+      }
+      return response;
+    });
+  }
+}
+
+const waitForReady = (frames: Queue.Queue<object>): Effect.Effect<object, OmpSpawnError> =>
+  Effect.gen(function* () {
+    for (;;) {
+      const frame = yield* Queue.take(frames);
+      if (isRecord(frame) && frame.type === "ready") {
+        return frame;
+      }
+    }
+  });
+
+function sessionFileFromState(response: object): Effect.Effect<string, OmpSpawnError> {
+  if (
+    !isRecord(response) ||
+    !isRecord(response.data) ||
+    typeof response.data.sessionFile !== "string" ||
+    response.data.sessionFile.length === 0
+  ) {
+    return new OmpSpawnError({
+      operation: "get_state",
+      detail: "response missing sessionFile",
+    });
+  }
+  return Effect.succeed(response.data.sessionFile);
 }
