@@ -169,7 +169,7 @@ export function NewTaskDraftScreen(props: {
       }
 
       settingsRoutePresentedRef.current = false;
-      settingsSheetPresentation.close("dismiss");
+      settingsSheetPresentation.close();
       settingsSheetPresentation.onDismissed();
     }, [settingsSheetPresentation.close, settingsSheetPresentation.onDismissed]),
   );

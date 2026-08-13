@@ -1,6 +1,5 @@
 import type {
   ModelSelection,
-  ProviderInteractionMode,
   ProviderOptionDescriptor,
   ProviderOptionSelection,
   RuntimeMode,
@@ -33,7 +32,7 @@ import { AppText as Text } from "../../components/AppText";
 import { ProviderIcon } from "../../components/ProviderIcon";
 import { cn } from "../../lib/cn";
 import type { ModelOption, ProviderGroup } from "../../lib/modelOptions";
-import { applyProviderOptionSelection, providerOptionValueLabels } from "../../lib/providerOptions";
+import { applyProviderOptionSelection } from "../../lib/providerOptions";
 import { resolveProviderOptionDescriptors } from "../../lib/providerOptions";
 import { useThemeColor } from "../../lib/useThemeColor";
 import { NativeHeaderToolbar } from "../../native/StackHeader";
@@ -43,9 +42,8 @@ import {
 } from "../../native/sheet-surface";
 import { useNewTaskFlow } from "./new-task-flow-provider";
 import { useNewTaskSettingsTransition } from "./new-task-settings-transition";
-import { RUNTIME_MODE_CHOICES, selectableChoices } from "./thread-settings-menu";
+import { RUNTIME_MODE_CHOICES, selectableChoices } from "./thread-settings-options";
 import { pendingModelAfterPress } from "./thread-settings-sheet-state";
-import type { ThreadSettingsSheetCloseReason } from "./use-thread-settings-sheet-presentation";
 
 /**
  * The everyday harnesses stay expanded; every other provider (OpenRouter
@@ -53,25 +51,6 @@ import type { ThreadSettingsSheetCloseReason } from "./use-thread-settings-sheet
  * bury the list.
  */
 const PRIMARY_PROVIDER_DRIVERS: ReadonlySet<string> = new Set(["claudeAgent", "codex"]);
-/**
- * Compact "Fable 5 · Max · Auto" style summary for the composer trigger pill,
- * covering model, provider options, runtime mode, and plan mode in one label.
- */
-export function threadSettingsSummaryLabel(input: {
-  readonly modelLabel: string;
-  readonly optionDescriptors: ReadonlyArray<ProviderOptionDescriptor>;
-  readonly runtimeMode: RuntimeMode;
-  readonly interactionMode: ProviderInteractionMode;
-}): string {
-  const runtime = RUNTIME_MODE_CHOICES.find((choice) => choice.mode === input.runtimeMode);
-  return [
-    input.modelLabel,
-    ...providerOptionValueLabels(input.optionDescriptors),
-    ...(runtime ? [runtime.shortLabel] : []),
-    ...(input.interactionMode === "plan" ? ["Plan"] : []),
-  ].join(" · ");
-}
-
 function ModelRow(props: {
   readonly option: ModelOption;
   readonly selected: boolean;
@@ -726,7 +705,7 @@ type ThreadSettingsPickerStackParams = {
 };
 
 type ThreadSettingsPickerPresentation = {
-  readonly onClose: (reason: ThreadSettingsSheetCloseReason) => void;
+  readonly onClose: () => void;
 };
 
 const ThreadSettingsPickerStack = createNativeStackNavigator<ThreadSettingsPickerStackParams>();
@@ -754,7 +733,7 @@ function ThreadSettingsModelsScreen() {
         <NativeHeaderToolbar.Button
           accessibilityLabel="Cancel thread settings"
           label="Cancel"
-          onPress={() => presentation.onClose("dismiss")}
+          onPress={presentation.onClose}
         />
       </NativeHeaderToolbar>
       <NativeHeaderToolbar placement="right">
@@ -763,7 +742,7 @@ function ThreadSettingsModelsScreen() {
           label={session.pendingModel ? "Save" : "Done"}
           onPress={() => {
             session.commitPendingModel();
-            presentation.onClose("save");
+            presentation.onClose();
           }}
         />
       </NativeHeaderToolbar>

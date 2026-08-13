@@ -3,8 +3,6 @@ import { KeyboardController } from "react-native-keyboard-controller";
 
 import type { ComposerEditorHandle } from "../../components/ComposerEditor";
 
-export type ThreadSettingsSheetCloseReason = "save" | "dismiss";
-
 type PresentationPhase = "closed" | "opening" | "visible" | "closing";
 
 /**
@@ -78,7 +76,7 @@ export function useThreadSettingsSheetPresentation(input: {
     });
   }, [input.editorRef, input.isEditorFocused, input.keepEditorFocused]);
 
-  const close = useCallback((_reason: ThreadSettingsSheetCloseReason) => {
+  const close = useCallback(() => {
     if (!isActiveRef.current) {
       return;
     }

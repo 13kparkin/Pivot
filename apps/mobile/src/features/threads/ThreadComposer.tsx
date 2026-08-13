@@ -675,7 +675,7 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
       }
 
       settingsRoutePresentedRef.current = false;
-      settingsSheetPresentation.close("dismiss");
+      settingsSheetPresentation.close();
       settingsSheetPresentation.onDismissed();
       settingsRoutePresentation.clear(settingsOwnerId);
     }, [settingsOwnerId, settingsRoutePresentation, settingsSheetPresentation]),
