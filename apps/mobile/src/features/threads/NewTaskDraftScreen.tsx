@@ -27,7 +27,7 @@ import {
   ComposerToolbarButton,
   ComposerToolbarRow,
   ComposerToolbarScroller,
-} from "../../components/ComposerToolbarTrigger";
+} from "../../components/ComposerToolbar";
 import { AndroidScreenHeader } from "../../components/AndroidScreenHeader";
 import { ComposerAttachmentStrip } from "../../components/ComposerAttachmentStrip";
 import { ProviderIcon } from "../../components/ProviderIcon";
@@ -169,9 +169,8 @@ export function NewTaskDraftScreen(props: {
       }
 
       settingsRoutePresentedRef.current = false;
-      settingsSheetPresentation.close();
       settingsSheetPresentation.onDismissed();
-    }, [settingsSheetPresentation.close, settingsSheetPresentation.onDismissed]),
+    }, [settingsSheetPresentation.onDismissed]),
   );
   const [importingShareKey, setImportingShareKey] = useState<string | null>(null);
   const [isCancellingShareImport, setIsCancellingShareImport] = useState(false);

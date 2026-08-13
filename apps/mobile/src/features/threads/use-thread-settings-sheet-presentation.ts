@@ -3,7 +3,7 @@ import { KeyboardController } from "react-native-keyboard-controller";
 
 import type { ComposerEditorHandle } from "../../components/ComposerEditor";
 
-type PresentationPhase = "closed" | "opening" | "visible" | "closing";
+type PresentationPhase = "closed" | "opening" | "visible";
 
 /**
  * Keeps the custom native composer and the settings sheet from owning focus at
@@ -76,15 +76,6 @@ export function useThreadSettingsSheetPresentation(input: {
     });
   }, [input.editorRef, input.isEditorFocused, input.keepEditorFocused]);
 
-  const close = useCallback(() => {
-    if (!isActiveRef.current) {
-      return;
-    }
-
-    openingIdRef.current += 1;
-    setPhase("closing");
-  }, []);
-
   const restoreEditorFocus = useCallback(() => {
     if (input.keepEditorFocused) {
       KeyboardController.setFocusTo("current");
@@ -145,23 +136,12 @@ export function useThreadSettingsSheetPresentation(input: {
     }
   }, [restoreEditorFocus]);
 
-  // The new-task screen can have an autofocus queued before the sheet opens.
-  // Preserve that intent without allowing it to focus under the sheet.
-  const requestFocusAfterDismiss = useCallback(() => {
-    if (isActiveRef.current) {
-      restoreFocusAfterDismissRef.current = true;
-    }
-  }, []);
-
   return {
     isActive: phase !== "closed",
-    isActiveRef,
     isVisible: phase === "visible",
     open,
-    close,
     onDismissed,
     beginDismissalFocusRestore,
     cancelDismissalFocusRestore,
-    requestFocusAfterDismiss,
   } as const;
 }

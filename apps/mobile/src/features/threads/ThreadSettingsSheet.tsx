@@ -302,7 +302,10 @@ type DescriptorTemplateEntry = {
   readonly type: "select" | "boolean";
 };
 
-type ThreadSettingsSessionValue = ThreadSettingsSessionProps & {
+type ThreadSettingsSessionValue = {
+  readonly providerGroups: ReadonlyArray<ProviderGroup>;
+  readonly runtimeMode: RuntimeMode;
+  readonly onUpdateRuntimeMode: (mode: RuntimeMode) => void;
   readonly descriptorTemplate: ReadonlyArray<DescriptorTemplateEntry>;
   readonly displayedDescriptors: ReadonlyArray<ProviderOptionDescriptor>;
   readonly expandedProviders: ReadonlySet<string>;
@@ -311,7 +314,6 @@ type ThreadSettingsSessionValue = ThreadSettingsSessionProps & {
   readonly showLegacy: boolean;
   readonly applyOptionChange: (id: string, value: string | boolean) => void;
   readonly commitPendingModel: () => void;
-  readonly isApplied: (option: ModelOption) => boolean;
   readonly isDisplayed: (option: ModelOption) => boolean;
   readonly pressModel: (option: ModelOption) => void;
   readonly toggleLegacy: () => void;
@@ -451,10 +453,6 @@ function ThreadSettingsSessionProvider(
   const value = useMemo<ThreadSettingsSessionValue>(
     () => ({
       providerGroups: props.providerGroups,
-      selectedModel: props.selectedModel,
-      onSelectModel: props.onSelectModel,
-      optionDescriptors: props.optionDescriptors,
-      onUpdateOptionSelections: props.onUpdateOptionSelections,
       runtimeMode: props.runtimeMode,
       onUpdateRuntimeMode: props.onUpdateRuntimeMode,
       descriptorTemplate,
@@ -465,7 +463,6 @@ function ThreadSettingsSessionProvider(
       showLegacy: showLegacyToggle,
       applyOptionChange,
       commitPendingModel,
-      isApplied,
       isDisplayed,
       pressModel,
       toggleLegacy,
@@ -478,17 +475,12 @@ function ThreadSettingsSessionProvider(
       displayedDescriptors,
       expandedProviders,
       hasLegacyModels,
-      isApplied,
       isDisplayed,
       pendingModel,
       pressModel,
-      props.onSelectModel,
-      props.onUpdateOptionSelections,
       props.onUpdateRuntimeMode,
-      props.optionDescriptors,
       props.providerGroups,
       props.runtimeMode,
-      props.selectedModel,
       showLegacyToggle,
       toggleLegacy,
       toggleProvider,
@@ -651,7 +643,6 @@ function ThreadSettingsChoiceContent(props: {
   const submenuContent =
     props.submenu.kind === "runtime"
       ? {
-          title: "Runtime",
           rows: RUNTIME_MODE_CHOICES.map((choice) => ({
             id: choice.mode,
             label: choice.label,
@@ -665,7 +656,6 @@ function ThreadSettingsChoiceContent(props: {
         }
       : activeDescriptor?.type === "select"
         ? {
-            title: activeDescriptor.label,
             rows: selectableChoices(activeDescriptor).map((choice) => ({
               id: choice.id,
               label: choice.label,

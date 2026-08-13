@@ -3,7 +3,7 @@ import type { EnvironmentProject } from "@t3tools/client-runtime/state/shell";
 import { scopedProjectKey } from "../../lib/scopedEntities";
 import type { HomeProjectScope } from "../home/homeThreadList";
 
-export type DraftProjectSelectionResolution =
+type DraftProjectSelectionResolution =
   | { readonly kind: "preserve" }
   | { readonly kind: "select"; readonly project: EnvironmentProject }
   | { readonly kind: "pick" };

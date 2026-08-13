@@ -51,7 +51,7 @@ import {
   ComposerToolbarButton,
   ComposerToolbarRow,
   ComposerToolbarScroller,
-} from "../../components/ComposerToolbarTrigger";
+} from "../../components/ComposerToolbar";
 import { ControlPill } from "../../components/ControlPill";
 import { ProviderIcon } from "../../components/ProviderIcon";
 import type { DraftComposerImageAttachment } from "../../lib/composerImages";
@@ -283,8 +283,8 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
 
   const [previewImageUri, setPreviewImageUri] = useState<string | null>(null);
   const hasContent = props.draftMessage.trim().length > 0 || props.draftAttachments.length > 0;
-  // Opening and closing count as active so the composer stays expanded while
-  // focus moves between its native editor and the settings modal.
+  // Opening and presentation count as active so the composer stays expanded
+  // while focus moves between its native editor and the settings picker.
   const isExpanded = isFocused || settingsSheetPresentation.isActive;
   const canSend = hasContent;
 
@@ -651,13 +651,13 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
   const openSettings = useCallback(() => {
     settingsRoutePresentation.present(settingsRouteSession);
     settingsSheetPresentation.open();
-  }, [settingsRoutePresentation, settingsRouteSession, settingsSheetPresentation]);
+  }, [settingsRoutePresentation.present, settingsRouteSession, settingsSheetPresentation.open]);
 
   useEffect(() => {
     if (settingsSheetPresentation.isActive) {
       settingsRoutePresentation.present(settingsRouteSession);
     }
-  }, [settingsRoutePresentation, settingsRouteSession, settingsSheetPresentation.isActive]);
+  }, [settingsRoutePresentation.present, settingsRouteSession, settingsSheetPresentation.isActive]);
 
   useEffect(() => {
     if (!settingsSheetPresentation.isVisible || settingsRoutePresentedRef.current) {
@@ -675,10 +675,9 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
       }
 
       settingsRoutePresentedRef.current = false;
-      settingsSheetPresentation.close();
       settingsSheetPresentation.onDismissed();
       settingsRoutePresentation.clear(settingsOwnerId);
-    }, [settingsOwnerId, settingsRoutePresentation, settingsSheetPresentation]),
+    }, [settingsOwnerId, settingsRoutePresentation.clear, settingsSheetPresentation.onDismissed]),
   );
 
   return (

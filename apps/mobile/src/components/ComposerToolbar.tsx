@@ -17,13 +17,12 @@ import { cn } from "../lib/cn";
 import { AppText as Text } from "./AppText";
 import { SymbolView } from "./AppSymbol";
 
-export const COMPOSER_TOOLBAR_CONTROL_HEIGHT = 44;
-export const COMPOSER_TOOLBAR_GAP = 8;
-export const COMPOSER_TOOLBAR_FADE_WIDTH = 18;
+const COMPOSER_TOOLBAR_GAP = 8;
+const COMPOSER_TOOLBAR_FADE_WIDTH = 18;
 const COMPOSER_TOOLBAR_SCROLL_EPSILON = 4;
 
 /**
- * Quiet inline control used inside composer cards and their context rows.
+ * Quiet inline composer control used inside cards and their context rows.
  * Unlike ComposerToolbarButton, this does not draw another pill inside the
  * composer surface, so model and workspace controls read as part of the card.
  */
@@ -310,5 +309,3 @@ export function ComposerToolbarButton(props: {
     </Pressable>
   );
 }
-
-export const ComposerToolbarTrigger = ComposerToolbarButton;
