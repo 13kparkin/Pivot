@@ -4,6 +4,7 @@
  * Turn completion (AC11): terminal `agent_end` (`isTerminal !== false`),
  * prompt `data.agentInvoked === false`, and `prompt_result` with
  * `agentInvoked: false`. Empty assistant deltas are not emitted (AC2).
+ * Subagents (AC7): `set_subagent_subscription` + `subagent_*` → `task.*`.
  *
  * @module provider/omp/OmpAdapter
  */
@@ -16,8 +17,10 @@ import {
   type ProviderSessionStartInput,
   type ProviderSendTurnInput,
   type ProviderUserInputAnswers,
+  type RuntimeTaskStatus,
   type ServerProviderModel,
   ProviderDriverKind,
+  RuntimeTaskId,
   type RuntimeMode,
   type ThreadId,
   TurnId,
@@ -113,6 +116,10 @@ export class OmpAdapter {
         Stream.runForEach((frame) => this.#onFrame(session, frame)),
         Effect.forkChild,
       );
+      yield* this.runtime.send(input.threadId, {
+        type: "set_subagent_subscription",
+        level: "progress",
+      });
       yield* this.#applyModelSelection(input.threadId, input.modelSelection?.model);
       return snapshot;
     });
@@ -280,7 +287,117 @@ export class OmpAdapter {
     if (frame.type === "message_update") {
       return this.#onMessageUpdate(session, frame);
     }
+    if (frame.type === "subagent_lifecycle") {
+      return this.#onSubagentLifecycle(session, frame);
+    }
+    if (frame.type === "subagent_progress") {
+      return this.#onSubagentProgress(session, frame);
+    }
     return Effect.void;
+  }
+
+  #onSubagentLifecycle(
+    session: LiveAdapterSession,
+    frame: Record<string, unknown>,
+  ): Effect.Effect<void> {
+    const payload = frame.payload;
+    if (!isRecord(payload) || typeof payload.id !== "string") {
+      return Effect.void;
+    }
+    const taskId = RuntimeTaskId.make(payload.id);
+    const role = typeof payload.agent === "string" ? payload.agent : undefined;
+    const description =
+      typeof payload.description === "string" && payload.description.length > 0
+        ? payload.description
+        : undefined;
+    const toolUseId =
+      typeof payload.parentToolCallId === "string" ? payload.parentToolCallId : undefined;
+    const agentIndex = typeof payload.index === "number" ? payload.index : undefined;
+    const linkage = {
+      ...(role === undefined ? {} : { role }),
+      ...(description === undefined ? {} : { title: description }),
+      ...(toolUseId === undefined ? {} : { toolUseId }),
+      ...(agentIndex === undefined ? {} : { agentIndex }),
+    };
+    if (payload.status === "started") {
+      return this.#emit({
+        type: "task.started",
+        threadId: session.threadId,
+        turnId: session.turnId,
+        payload: {
+          taskId,
+          ...(description === undefined ? {} : { description }),
+          ...linkage,
+        },
+      });
+    }
+    const status =
+      payload.status === "completed"
+        ? ("completed" as const)
+        : payload.status === "failed"
+          ? ("failed" as const)
+          : payload.status === "aborted"
+            ? ("stopped" as const)
+            : undefined;
+    if (status === undefined) {
+      return Effect.void;
+    }
+    return this.#emit({
+      type: "task.completed",
+      threadId: session.threadId,
+      turnId: session.turnId,
+      payload: {
+        taskId,
+        status,
+        ...linkage,
+      },
+    });
+  }
+
+  #onSubagentProgress(
+    session: LiveAdapterSession,
+    frame: Record<string, unknown>,
+  ): Effect.Effect<void> {
+    const payload = frame.payload;
+    if (!isRecord(payload)) {
+      return Effect.void;
+    }
+    const progress = payload.progress;
+    if (!isRecord(progress) || typeof progress.id !== "string") {
+      return Effect.void;
+    }
+    const description =
+      (typeof progress.task === "string" && progress.task.length > 0 ? progress.task : undefined) ??
+      (typeof payload.task === "string" && payload.task.length > 0 ? payload.task : undefined);
+    if (description === undefined) {
+      return Effect.void;
+    }
+    const role =
+      typeof progress.agent === "string"
+        ? progress.agent
+        : typeof payload.agent === "string"
+          ? payload.agent
+          : undefined;
+    const toolUseId =
+      typeof payload.parentToolCallId === "string" ? payload.parentToolCallId : undefined;
+    const lastToolName =
+      typeof progress.currentTool === "string" ? progress.currentTool : undefined;
+    const status = runtimeTaskStatusFromOmpProgress(progress.status);
+    const agentIndex = typeof progress.index === "number" ? progress.index : undefined;
+    return this.#emit({
+      type: "task.progress",
+      threadId: session.threadId,
+      turnId: session.turnId,
+      payload: {
+        taskId: RuntimeTaskId.make(progress.id),
+        description,
+        ...(status === undefined ? {} : { status }),
+        ...(lastToolName === undefined ? {} : { lastToolName }),
+        ...(role === undefined ? {} : { role }),
+        ...(toolUseId === undefined ? {} : { toolUseId }),
+        ...(agentIndex === undefined ? {} : { agentIndex }),
+      },
+    });
   }
 
   #onMessageUpdate(
@@ -380,6 +497,20 @@ function parseOmpModelSlug(slug: string): { provider: string; modelId: string } 
     return null;
   }
   return { provider: slug.slice(0, slash), modelId: slug.slice(slash + 1) };
+}
+
+function runtimeTaskStatusFromOmpProgress(status: unknown): RuntimeTaskStatus | undefined {
+  switch (status) {
+    case "pending":
+    case "running":
+    case "completed":
+    case "failed":
+      return status;
+    case "aborted":
+      return "cancelled";
+    default:
+      return undefined;
+  }
 }
 
 function isLocalOnlyPromptResponse(response: object): boolean {

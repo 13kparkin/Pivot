@@ -6,6 +6,7 @@ import {
   type ProviderRuntimeEvent,
   ProviderDriverKind,
   ProviderInstanceId,
+  RuntimeTaskId,
   ThreadId,
 } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
@@ -383,6 +384,7 @@ describe("OmpAdapter", () => {
       const fake = new FakeOmpRpc();
       const adapter = new OmpAdapter(fake);
       yield* adapter.startSession(startInput);
+      const sentBeforeTurn = fake.sent.length;
       yield* adapter.sendTurn({
         threadId: THREAD_ID,
         input: "hi",
@@ -391,12 +393,13 @@ describe("OmpAdapter", () => {
           model: "openai/gpt-5",
         },
       });
+      const turnCommands = fake.sent.slice(sentBeforeTurn);
       NodeAssert.deepEqual(
-        fake.sent.map((command) => command.type),
+        turnCommands.map((command) => command.type),
         ["set_model", "prompt"],
       );
-      NodeAssert.equal(fake.sent[0]?.provider, "openai");
-      NodeAssert.equal(fake.sent[0]?.modelId, "gpt-5");
+      NodeAssert.equal(turnCommands[0]?.provider, "openai");
+      NodeAssert.equal(turnCommands[0]?.modelId, "gpt-5");
     }),
   );
 
@@ -436,6 +439,114 @@ describe("OmpAdapter", () => {
       NodeAssert.equal(Exit.isFailure(exit), true);
       NodeAssert.deepEqual(fake.disposed, [THREAD_ID]);
       NodeAssert.equal(yield* adapter.hasSession(THREAD_ID), false);
+    }),
+  );
+
+  it.effect("startSession subscribes to omp subagent progress frames", () =>
+    Effect.gen(function* () {
+      const fake = new FakeOmpRpc();
+      const adapter = new OmpAdapter(fake);
+      yield* adapter.startSession(startInput);
+      NodeAssert.equal(fake.sent[0]?.type, "set_subagent_subscription");
+      NodeAssert.equal(fake.sent[0]?.level, "progress");
+    }),
+  );
+
+  it.effect("maps subagent_lifecycle and subagent_progress into task.* events", () =>
+    Effect.gen(function* () {
+      const fake = new FakeOmpRpc();
+      const adapter = new OmpAdapter(fake);
+      const eventsFiber = yield* collectUntilTurnCompleted(adapter.streamEvents).pipe(
+        Effect.forkChild,
+      );
+      yield* adapter.startSession(startInput);
+      yield* adapter.sendTurn({ threadId: THREAD_ID, input: "spawn" });
+      yield* fake.offer(THREAD_ID, {
+        type: "subagent_lifecycle",
+        payload: {
+          id: "agent-1",
+          agent: "scout",
+          agentSource: "bundled",
+          description: "survey repo",
+          status: "started",
+          parentToolCallId: "tool-9",
+          index: 0,
+        },
+      });
+      yield* fake.offer(THREAD_ID, {
+        type: "subagent_progress",
+        payload: {
+          index: 0,
+          agent: "scout",
+          agentSource: "bundled",
+          task: "survey repo",
+          parentToolCallId: "tool-9",
+          progress: {
+            index: 0,
+            id: "agent-1",
+            agent: "scout",
+            agentSource: "bundled",
+            status: "running",
+            task: "survey repo",
+            currentTool: "read",
+          },
+        },
+      });
+      yield* fake.offer(THREAD_ID, {
+        type: "subagent_lifecycle",
+        payload: {
+          id: "agent-1",
+          agent: "scout",
+          agentSource: "bundled",
+          description: "survey repo",
+          status: "completed",
+          parentToolCallId: "tool-9",
+          index: 0,
+        },
+      });
+      yield* fake.offer(THREAD_ID, { type: "agent_end", messages: [], isTerminal: true });
+      const events = yield* Fiber.join(eventsFiber);
+      const started = events.find((event) => event.type === "task.started");
+      const progress = events.find((event) => event.type === "task.progress");
+      const completed = events.find((event) => event.type === "task.completed");
+      NodeAssert.equal(started?.payload.taskId, RuntimeTaskId.make("agent-1"));
+      NodeAssert.equal(started?.payload.description, "survey repo");
+      NodeAssert.equal(started?.payload.role, "scout");
+      NodeAssert.equal(started?.payload.toolUseId, "tool-9");
+      NodeAssert.equal(started?.payload.agentIndex, 0);
+      NodeAssert.equal(progress?.payload.taskId, RuntimeTaskId.make("agent-1"));
+      NodeAssert.equal(progress?.payload.description, "survey repo");
+      NodeAssert.equal(progress?.payload.lastToolName, "read");
+      NodeAssert.equal(progress?.payload.status, "running");
+      NodeAssert.equal(completed?.payload.taskId, RuntimeTaskId.make("agent-1"));
+      NodeAssert.equal(completed?.payload.status, "completed");
+    }),
+  );
+
+  it.effect("maps aborted subagent_lifecycle to task.completed stopped", () =>
+    Effect.gen(function* () {
+      const fake = new FakeOmpRpc();
+      const adapter = new OmpAdapter(fake);
+      const eventsFiber = yield* collectUntilTurnCompleted(adapter.streamEvents).pipe(
+        Effect.forkChild,
+      );
+      yield* adapter.startSession(startInput);
+      yield* adapter.sendTurn({ threadId: THREAD_ID, input: "spawn" });
+      yield* fake.offer(THREAD_ID, {
+        type: "subagent_lifecycle",
+        payload: {
+          id: "agent-2",
+          agent: "scout",
+          agentSource: "bundled",
+          status: "aborted",
+          index: 1,
+        },
+      });
+      yield* fake.offer(THREAD_ID, { type: "agent_end", messages: [], isTerminal: true });
+      const events = yield* Fiber.join(eventsFiber);
+      const completed = events.find((event) => event.type === "task.completed");
+      NodeAssert.equal(completed?.payload.taskId, RuntimeTaskId.make("agent-2"));
+      NodeAssert.equal(completed?.payload.status, "stopped");
     }),
   );
 });
