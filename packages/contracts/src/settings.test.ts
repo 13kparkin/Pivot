@@ -107,7 +107,7 @@ describe("ClientSettings sidebar", () => {
 describe("ServerSettings.providerInstances (slice-2 invariant)", () => {
   it("defaults text generation to Luna at low reasoning effort", () => {
     expect(DEFAULT_SERVER_SETTINGS.textGenerationModelSelection).toEqual({
-      instanceId: ProviderInstanceId.make("codex"),
+      instanceId: ProviderInstanceId.make("omp"),
       model: "gpt-5.6-luna",
       options: [{ id: "reasoningEffort", value: "low" }],
     });
@@ -122,7 +122,7 @@ describe("ServerSettings.providerInstances (slice-2 invariant)", () => {
     expect(decoded.providerInstances).toEqual({});
     // Legacy `providers` struct is still hydrated with its per-driver defaults
     // so existing call sites keep working through the migration.
-    expect(decoded.providers.codex.enabled).toBe(true);
+    expect(decoded.providers.omp.enabled).toBe(true);
   });
 
   it("decodes a multi-instance map mixing first-party and fork drivers", () => {
@@ -246,17 +246,15 @@ describe("ServerSettingsPatch string normalization", () => {
         otlpTracesUrl: "  http://localhost:4318/v1/traces  ",
       },
       providers: {
-        codex: {
-          binaryPath: "  /opt/homebrew/bin/codex  ",
-          homePath: "  ~/.codex  ",
-          launchArgs: "  --strict-config --enable foo  ",
+        omp: {
+          binaryPath: "  /opt/homebrew/bin/omp  ",
         },
       },
       providerInstances: {
-        codex_personal: {
-          driver: "  codex  ",
-          displayName: "  Codex Personal  ",
-          config: { homePath: "  ~/.codex-personal  " },
+        omp_personal: {
+          driver: "  omp  ",
+          displayName: "  omp Personal  ",
+          config: { binaryPath: "  /opt/omp  " },
         },
       },
     });
@@ -264,17 +262,13 @@ describe("ServerSettingsPatch string normalization", () => {
     expect(patch.addProjectBaseDirectory).toBe("~/Development");
     expect(patch.textGenerationModelSelection?.model).toBe("gpt-5.4-mini");
     expect(patch.observability?.otlpTracesUrl).toBe("http://localhost:4318/v1/traces");
-    expect(patch.providers?.codex?.binaryPath).toBe("/opt/homebrew/bin/codex");
-    expect(patch.providers?.codex?.homePath).toBe("~/.codex");
-    expect(patch.providers?.codex?.launchArgs).toBe("--strict-config --enable foo");
-    expect(patch.providerInstances?.[ProviderInstanceId.make("codex_personal")]?.driver).toBe(
-      "codex",
+    expect(patch.providers?.omp?.binaryPath).toBe("/opt/homebrew/bin/omp");
+    expect(patch.providerInstances?.[ProviderInstanceId.make("omp_personal")]?.driver).toBe("omp");
+    expect(patch.providerInstances?.[ProviderInstanceId.make("omp_personal")]?.displayName).toBe(
+      "omp Personal",
     );
-    expect(patch.providerInstances?.[ProviderInstanceId.make("codex_personal")]?.displayName).toBe(
-      "Codex Personal",
-    );
-    expect(patch.providerInstances?.[ProviderInstanceId.make("codex_personal")]?.config).toEqual({
-      homePath: "  ~/.codex-personal  ",
+    expect(patch.providerInstances?.[ProviderInstanceId.make("omp_personal")]?.config).toEqual({
+      binaryPath: "  /opt/omp  ",
     });
   });
 
@@ -285,17 +279,15 @@ describe("ServerSettingsPatch string normalization", () => {
       addProjectBaseDirectory: "  ~/Development  ",
       providers: {
         ...defaultSettings.providers,
-        codex: {
-          ...defaultSettings.providers.codex,
-          binaryPath: "  /opt/homebrew/bin/codex  ",
-          launchArgs: "  --strict-config  ",
+        omp: {
+          ...defaultSettings.providers.omp,
+          binaryPath: "  /opt/homebrew/bin/omp  ",
         },
       },
     });
 
     expect(encoded.addProjectBaseDirectory).toBe("~/Development");
-    expect(encoded.providers?.codex?.binaryPath).toBe("/opt/homebrew/bin/codex");
-    expect(encoded.providers?.codex?.launchArgs).toBe("--strict-config");
+    expect(encoded.providers?.omp?.binaryPath).toBe("/opt/homebrew/bin/omp");
   });
 });
 

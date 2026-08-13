@@ -33,8 +33,7 @@ function providerDisplayLabel(provider: {
   readonly instanceId: string;
 }): string {
   if (provider.displayName) return provider.displayName;
-  if (provider.driver === "codex") return "Codex";
-  if (provider.driver === "claudeAgent") return "Claude";
+  if (provider.driver === "omp") return "omp";
   return provider.instanceId;
 }
 

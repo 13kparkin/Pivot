@@ -586,6 +586,48 @@ export const ServerProviderUpdatedPayload = Schema.Struct({
 });
 export type ServerProviderUpdatedPayload = typeof ServerProviderUpdatedPayload.Type;
 
+/** One omp OAuth/API login target from `get_login_providers`. */
+export const OmpLoginProvider = Schema.Struct({
+  id: TrimmedNonEmptyString,
+  name: TrimmedNonEmptyString,
+  available: Schema.Boolean,
+  authenticated: Schema.Boolean,
+});
+export type OmpLoginProvider = typeof OmpLoginProvider.Type;
+
+export const ServerOmpListLoginProvidersInput = Schema.Struct({
+  instanceId: Schema.optionalKey(ProviderInstanceId),
+});
+export type ServerOmpListLoginProvidersInput = typeof ServerOmpListLoginProvidersInput.Type;
+
+export const ServerOmpListLoginProvidersResult = Schema.Struct({
+  providers: Schema.Array(OmpLoginProvider),
+});
+export type ServerOmpListLoginProvidersResult = typeof ServerOmpListLoginProvidersResult.Type;
+
+export const ServerOmpLoginInput = Schema.Struct({
+  providerId: TrimmedNonEmptyString,
+  instanceId: Schema.optionalKey(ProviderInstanceId),
+});
+export type ServerOmpLoginInput = typeof ServerOmpLoginInput.Type;
+
+export const ServerOmpLoginResult = Schema.Struct({
+  providerId: TrimmedNonEmptyString,
+});
+export type ServerOmpLoginResult = typeof ServerOmpLoginResult.Type;
+
+export class ServerOmpLoginError extends Schema.TaggedErrorClass<ServerOmpLoginError>()(
+  "ServerOmpLoginError",
+  {
+    reason: TrimmedNonEmptyString,
+    cause: Schema.optional(Schema.Defect()),
+  },
+) {
+  override get message(): string {
+    return `omp login failed: ${this.reason}`;
+  }
+}
+
 export const ServerProviderUpdateInput = Schema.Struct({
   provider: ProviderDriverKind,
   instanceId: Schema.optionalKey(ProviderInstanceId),

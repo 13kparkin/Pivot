@@ -22,6 +22,10 @@ export const MAX_RPC_FRAME_BYTES = 1024 * 1024;
 export const MAX_RPC_REASSEMBLED_BYTES = 64 * 1024 * 1024;
 export const RPC_CHUNK_PAYLOAD_BYTES = 256 * 1024;
 
+const UnknownJson = Schema.fromJsonString(Schema.Unknown);
+const decodeUnknownJson = Schema.decodeSync(UnknownJson);
+const encodeUnknownJson = Schema.encodeSync(UnknownJson);
+
 interface PendingRpcChunks {
   chunkId: string;
   count: number;
@@ -84,6 +88,9 @@ export class OmpRpcFrameDecoder {
       typeof chunkId !== "string" ||
       chunkId.length === 0 ||
       chunkId.length > 128 ||
+      typeof index !== "number" ||
+      typeof count !== "number" ||
+      typeof byteLength !== "number" ||
       !Number.isSafeInteger(index) ||
       !Number.isSafeInteger(count) ||
       !Number.isSafeInteger(byteLength) ||
@@ -102,11 +109,12 @@ export class OmpRpcFrameDecoder {
       throw new Error("rpc chunk payload exceeds the transport limit");
     }
 
-    if (!this.#pending) {
+    let pending = this.#pending;
+    if (!pending) {
       if (index !== 0) {
         throw new Error("rpc chunk sequence must start at index 0");
       }
-      this.#pending = {
+      pending = {
         chunkId,
         count,
         byteLength,
@@ -114,9 +122,9 @@ export class OmpRpcFrameDecoder {
         chunks: [],
         receivedBytes: 0,
       };
+      this.#pending = pending;
     }
 
-    const pending = this.#pending;
     if (
       pending.chunkId !== chunkId ||
       pending.count !== count ||
@@ -142,7 +150,7 @@ export class OmpRpcFrameDecoder {
 
     this.#pending = undefined;
     const decoded = new TextDecoder("utf-8", { fatal: true }).decode(Buffer.concat(pending.chunks));
-    const frame: unknown = JSON.parse(decoded);
+    const frame: unknown = decodeUnknownJson(decoded);
     if (!isRecord(frame)) {
       throw new Error("rpc frame must be an object");
     }
@@ -185,11 +193,21 @@ interface LiveOmpSession {
 export class OmpRpcRuntime {
   readonly #sessions = new Map<string, LiveOmpSession>();
   #nextRequestId = 0;
+  readonly #processSpawner: ChildProcessSpawner.ChildProcessSpawner["Service"];
+  #binaryPath: string;
 
   public constructor(
-    private readonly processSpawner: ChildProcessSpawner.ChildProcessSpawner["Service"],
-    private readonly binaryPath: string,
-  ) {}
+    processSpawner: ChildProcessSpawner.ChildProcessSpawner["Service"],
+    binaryPath: string,
+  ) {
+    this.#processSpawner = processSpawner;
+    this.#binaryPath = binaryPath;
+  }
+
+  /** Update the spawn binary after a managed install/refresh. */
+  public setBinaryPath(binaryPath: string): void {
+    this.#binaryPath = binaryPath;
+  }
 
   public ensureSession(
     input: OmpEnsureSessionInput,
@@ -201,11 +219,14 @@ export class OmpRpcRuntime {
       }
 
       const scope = yield* Scope.make();
-      const child = yield* this.processSpawner
+      const child = yield* this.#processSpawner
         .spawn(
-          ChildProcess.make(this.binaryPath, ["--mode", "rpc"], {
+          ChildProcess.make(this.#binaryPath, ["--mode", "rpc"], {
             cwd: input.cwd,
             extendEnv: true,
+            // Keep stdin open across many RPC writes. Default endOnDone ends the
+            // pipe after the first Stream.run, which hangs the next command.
+            stdin: { stream: "pipe", endOnDone: false },
           }),
         )
         .pipe(
@@ -233,10 +254,7 @@ export class OmpRpcRuntime {
             return Effect.void;
           }
           return Effect.try({
-            try: () => {
-              const parsed: unknown = JSON.parse(trimmed);
-              return decoder.push(parsed);
-            },
+            try: () => decoder.push(decodeUnknownJson(trimmed)),
             catch: (cause) =>
               new OmpSpawnError({
                 operation: "decode",
@@ -311,6 +329,33 @@ export class OmpRpcRuntime {
     });
   }
 
+  /** Write a frame without waiting for a correlated `response` (e.g. extension_ui_response). */
+  public write(
+    sessionKey: string,
+    command: Record<string, unknown>,
+  ): Effect.Effect<void, OmpSpawnError> {
+    return Effect.gen({ self: this }, function* () {
+      const live = this.#sessions.get(sessionKey);
+      if (!live) {
+        return yield* new OmpSpawnError({
+          operation: "write",
+          detail: `no live omp session for ${sessionKey}`,
+        });
+      }
+      const payload = `${encodeUnknownJson(command)}\n`;
+      yield* Stream.run(Stream.encodeText(Stream.make(payload)), live.child.stdin).pipe(
+        Effect.mapError(
+          (cause) =>
+            new OmpSpawnError({
+              operation: String(command.type ?? "write"),
+              detail: "failed to write omp rpc frame",
+              cause,
+            }),
+        ),
+      );
+    });
+  }
+
   public streamFrames(sessionKey: string): Stream.Stream<object, OmpSpawnError> {
     const live = this.#sessions.get(sessionKey);
     if (!live) {
@@ -345,10 +390,8 @@ export class OmpRpcRuntime {
       const id = `omp-${String(++this.#nextRequestId)}`;
       const waiter = yield* Deferred.make<object, OmpSpawnError>();
       pending.set(id, waiter);
-      yield* Stream.run(
-        Stream.encodeText(Stream.make(`${JSON.stringify({ id, ...command })}\n`)),
-        child.stdin,
-      ).pipe(
+      const payload = `${encodeUnknownJson({ id, ...command })}\n`;
+      yield* Stream.run(Stream.encodeText(Stream.make(payload)), child.stdin).pipe(
         Effect.mapError(
           (cause) =>
             new OmpSpawnError({

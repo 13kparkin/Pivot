@@ -880,7 +880,7 @@ function normalizeModelSelection(
   // into a driver kind here; they get generic default normalization.
   const driverKindHint =
     normalizeProviderDriverKind(candidate?.provider ?? legacy?.provider) ??
-    ProviderDriverKind.make("codex");
+    ProviderDriverKind.make("omp");
   const model = normalizeModelSlug(rawModel, driverKindHint);
   if (!model) {
     return null;
@@ -1830,7 +1830,7 @@ function migratePersistedComposerDraftStoreState(
   // Migrate sticky state from v2 (dual) to v3 (consolidated)
   const stickyModelOptions = normalizeProviderModelOptions(candidate.stickyModelOptions) ?? {};
   const normalizedStickyModelSelection = normalizeModelSelection(candidate.stickyModelSelection, {
-    provider: candidate.stickyProvider ?? "codex",
+    provider: candidate.stickyProvider ?? "omp",
     model: candidate.stickyModel,
     modelOptions: stickyModelOptions,
   });

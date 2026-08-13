@@ -1,13 +1,24 @@
 import * as NodeAssert from "node:assert/strict";
+import * as NodeChildProcess from "node:child_process";
 
 import { it } from "@effect/vitest";
+import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Queue from "effect/Queue";
+import * as Schema from "effect/Schema";
 import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 import { describe } from "vite-plus/test";
+
+const realOmpBinary = (() => {
+  try {
+    return NodeChildProcess.execFileSync("which", ["omp"], { encoding: "utf8" }).trim();
+  } catch {
+    return null;
+  }
+})();
 
 import {
   MAX_RPC_FRAME_BYTES,
@@ -16,6 +27,10 @@ import {
   OmpRpcRuntime,
   RPC_CHUNK_PAYLOAD_BYTES,
 } from "./OmpRpcRuntime.ts";
+
+const UnknownJson = Schema.fromJsonString(Schema.Unknown);
+const decodeUnknownJson = Schema.decodeSync(UnknownJson);
+const encodeUnknownJson = Schema.encodeSync(UnknownJson);
 
 function makeChunkFrame(input: {
   readonly chunkId: string;
@@ -119,8 +134,8 @@ type SpawnedCommand = {
   readonly args: ReadonlyArray<string>;
   readonly options: {
     readonly cwd?: string;
-    readonly env?: Record<string, string | undefined>;
     readonly extendEnv?: boolean;
+    readonly stdin?: { readonly stream: "pipe"; readonly endOnDone: false };
   };
 };
 
@@ -133,10 +148,23 @@ function asSpawnedCommand(command: ChildProcess.Command): SpawnedCommand {
   if (command._tag !== "StandardCommand") {
     throw new Error("expected StandardCommand");
   }
+  const stdin = command.options.stdin;
   return {
     command: command.command,
     args: command.args,
-    options: command.options,
+    options: {
+      ...(typeof command.options.cwd === "string" ? { cwd: command.options.cwd } : {}),
+      ...(typeof command.options.extendEnv === "boolean"
+        ? { extendEnv: command.options.extendEnv }
+        : {}),
+      ...(typeof stdin === "object" &&
+      stdin !== null &&
+      "stream" in stdin &&
+      stdin.stream === "pipe" &&
+      stdin.endOnDone === false
+        ? { stdin: { stream: "pipe" as const, endOnDone: false as const } }
+        : {}),
+    },
   };
 }
 
@@ -153,7 +181,7 @@ function makeFakeOmpSpawner(input: { readonly sessionFile: string }) {
     Effect.gen(function* () {
       const stdout = yield* Queue.unbounded<Uint8Array>();
       const offer = (frame: unknown) =>
-        Queue.offer(stdout, encoder.encode(`${JSON.stringify(frame)}\n`));
+        Queue.offer(stdout, encoder.encode(`${encodeUnknownJson(frame)}\n`));
       yield* offer({
         type: "ready",
         protocolVersion: 1,
@@ -187,7 +215,7 @@ function makeFakeOmpSpawner(input: { readonly sessionFile: string }) {
               const line = stdinBuf.slice(0, newlineIndex).trim();
               stdinBuf = stdinBuf.slice(newlineIndex + 1);
               if (line.length > 0) {
-                const rpcCommand = JSON.parse(line) as Record<string, unknown>;
+                const rpcCommand = decodeUnknownJson(line) as Record<string, unknown>;
                 spawn.commands.push(rpcCommand);
                 if (rpcCommand.type === "negotiate_protocol") {
                   yield* offer({
@@ -255,6 +283,7 @@ describe("OmpRpcRuntime", () => {
       NodeAssert.ok(!(fake.spawns[0]?.args ?? []).includes("--no-extensions"));
       NodeAssert.equal(fake.spawns[0]?.options.cwd, "/proj");
       NodeAssert.equal(fake.spawns[0]?.options.extendEnv, true);
+      NodeAssert.deepEqual(fake.spawns[0]?.options.stdin, { stream: "pipe", endOnDone: false });
     }),
   );
 
@@ -371,5 +400,84 @@ describe("OmpRpcRuntime", () => {
         "agent_start",
       );
     }),
+  );
+
+  it.effect.skipIf(!realOmpBinary)("live omp ensureSession completes", () =>
+    Effect.gen(function* () {
+      const runtime = new OmpRpcRuntime(
+        yield* ChildProcessSpawner.ChildProcessSpawner,
+        realOmpBinary!,
+      );
+      const handle = yield* runtime
+        .ensureSession({
+          sessionKey: "live-ensure",
+          cwd: "/tmp",
+          resumeCursor: null,
+        })
+        .pipe(Effect.timeout("20 seconds"));
+      NodeAssert.ok(handle.sessionFile.length > 0);
+      yield* runtime.dispose("live-ensure");
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect.skipIf(!realOmpBinary)("live omp get_available_models without streamFrames drain", () =>
+    Effect.gen(function* () {
+      const runtime = new OmpRpcRuntime(
+        yield* ChildProcessSpawner.ChildProcessSpawner,
+        realOmpBinary!,
+      );
+      yield* runtime.ensureSession({
+        sessionKey: "live-models-nodrain",
+        cwd: "/tmp",
+        resumeCursor: null,
+      });
+      const response = yield* runtime
+        .send("live-models-nodrain", { type: "get_available_models" })
+        .pipe(Effect.timeout("30 seconds"));
+      const models =
+        typeof response === "object" &&
+        response !== null &&
+        "data" in response &&
+        typeof response.data === "object" &&
+        response.data !== null &&
+        "models" in response.data &&
+        Array.isArray(response.data.models)
+          ? response.data.models
+          : [];
+      NodeAssert.ok(models.length > 1, `expected many models, got ${String(models.length)}`);
+      yield* runtime.dispose("live-models-nodrain");
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect.skipIf(!realOmpBinary)(
+    "live omp get_available_models while draining streamFrames",
+    () =>
+      Effect.gen(function* () {
+        const runtime = new OmpRpcRuntime(
+          yield* ChildProcessSpawner.ChildProcessSpawner,
+          realOmpBinary!,
+        );
+        yield* runtime.ensureSession({
+          sessionKey: "live-models-drain",
+          cwd: "/tmp",
+          resumeCursor: null,
+        });
+        yield* runtime.streamFrames("live-models-drain").pipe(Stream.runDrain, Effect.forkChild);
+        const response = yield* runtime
+          .send("live-models-drain", { type: "get_available_models" })
+          .pipe(Effect.timeout("30 seconds"));
+        const models =
+          typeof response === "object" &&
+          response !== null &&
+          "data" in response &&
+          typeof response.data === "object" &&
+          response.data !== null &&
+          "models" in response.data &&
+          Array.isArray(response.data.models)
+            ? response.data.models
+            : [];
+        NodeAssert.ok(models.length > 1, `expected many models, got ${String(models.length)}`);
+        yield* runtime.dispose("live-models-drain");
+      }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 });

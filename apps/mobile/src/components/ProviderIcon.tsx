@@ -49,7 +49,7 @@ export function ProviderIcon(props: ProviderIconProps) {
     );
   }
 
-  if (props.provider === "opencode") {
+  if (props.provider === "omp" || props.provider === "opencode") {
     return (
       <Svg width={size} height={size} viewBox="0 0 32 40" fill="none">
         <Path d="M24 32H8V16H24V32Z" fill={isDarkMode ? "#4B4646" : "#CFCECD"} />
@@ -58,7 +58,7 @@ export function ProviderIcon(props: ProviderIconProps) {
     );
   }
 
-  // codex (and unknown drivers)
+  // unknown drivers
   return (
     <Svg width={size} height={size} viewBox="0 0 256 260" fill="none">
       <Path

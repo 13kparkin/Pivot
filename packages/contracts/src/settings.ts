@@ -264,213 +264,6 @@ export function makeProviderSettingsSchema<const Fields extends Schema.Struct.Fi
   );
 }
 
-export const CodexSettings = makeProviderSettingsSchema(
-  {
-    enabled: Schema.Boolean.pipe(
-      Schema.withDecodingDefault(Effect.succeed(true)),
-      Schema.annotateKey({ providerSettingsForm: { hidden: true } }),
-    ),
-    binaryPath: makeBinaryPathSetting("codex").pipe(
-      Schema.annotateKey({
-        title: "Binary path",
-        description: "Path to the Codex binary used by this instance.",
-        providerSettingsForm: { placeholder: "codex", clearWhenEmpty: "omit" },
-      }),
-    ),
-    homePath: TrimmedString.pipe(
-      Schema.withDecodingDefault(Effect.succeed("")),
-      Schema.annotateKey({
-        title: "CODEX_HOME path",
-        description: "Custom Codex home and config directory.",
-        providerSettingsForm: {
-          placeholder: "~/.codex",
-          clearWhenEmpty: "omit",
-        },
-      }),
-    ),
-    shadowHomePath: TrimmedString.pipe(
-      Schema.withDecodingDefault(Effect.succeed("")),
-      Schema.annotateKey({
-        title: "Shadow home path",
-        description:
-          "Account-specific Codex home. Keeps auth.json separate while sharing state from CODEX_HOME.",
-        providerSettingsForm: {
-          placeholder: "~/.codex-t3/personal",
-          clearWhenEmpty: "omit",
-        },
-      }),
-    ),
-    launchArgs: TrimmedString.pipe(
-      Schema.withDecodingDefault(Effect.succeed("")),
-      Schema.annotateKey({
-        title: "Launch arguments",
-        description: "Additional CLI arguments passed to codex app-server on session start.",
-      }),
-    ),
-    customModels: Schema.Array(Schema.String).pipe(
-      Schema.withDecodingDefault(Effect.succeed([])),
-      Schema.annotateKey({ providerSettingsForm: { hidden: true } }),
-    ),
-  },
-  {
-    order: ["binaryPath", "homePath", "shadowHomePath", "launchArgs"],
-  },
-);
-export type CodexSettings = typeof CodexSettings.Type;
-
-export const ClaudeSettings = makeProviderSettingsSchema(
-  {
-    enabled: Schema.Boolean.pipe(
-      Schema.withDecodingDefault(Effect.succeed(true)),
-      Schema.annotateKey({ providerSettingsForm: { hidden: true } }),
-    ),
-    binaryPath: makeBinaryPathSetting("claude").pipe(
-      Schema.annotateKey({
-        title: "Binary path",
-        description: "Path to the Claude binary used by this instance.",
-        providerSettingsForm: { placeholder: "claude", clearWhenEmpty: "omit" },
-      }),
-    ),
-    homePath: TrimmedString.pipe(
-      Schema.withDecodingDefault(Effect.succeed("")),
-      Schema.annotateKey({
-        title: "CLAUDE_CONFIG_DIR path",
-        description:
-          "Custom Claude home and config directory. Keeps .claude.json and .claude separate.",
-        providerSettingsForm: { placeholder: "~/.claude", clearWhenEmpty: "omit" },
-      }),
-    ),
-    customModels: Schema.Array(Schema.String).pipe(
-      Schema.withDecodingDefault(Effect.succeed([])),
-      Schema.annotateKey({ providerSettingsForm: { hidden: true } }),
-    ),
-    launchArgs: Schema.String.pipe(
-      Schema.withDecodingDefault(Effect.succeed("")),
-      Schema.annotateKey({
-        title: "Launch arguments",
-        description: "Additional CLI arguments passed on session start.",
-        providerSettingsForm: {
-          placeholder: "e.g. --chrome",
-          clearWhenEmpty: "omit",
-        },
-      }),
-    ),
-  },
-  {
-    order: ["binaryPath", "homePath", "launchArgs"],
-  },
-);
-export type ClaudeSettings = typeof ClaudeSettings.Type;
-
-export const CursorSettings = makeProviderSettingsSchema(
-  {
-    enabled: Schema.Boolean.pipe(
-      Schema.withDecodingDefault(Effect.succeed(false)),
-      Schema.annotateKey({ providerSettingsForm: { hidden: true } }),
-    ),
-    binaryPath: makeBinaryPathSetting("cursor-agent").pipe(
-      Schema.annotateKey({
-        title: "Binary path",
-        description: "Path to the Cursor agent binary.",
-        providerSettingsForm: { placeholder: "cursor-agent", clearWhenEmpty: "omit" },
-      }),
-    ),
-    apiEndpoint: TrimmedString.pipe(
-      Schema.withDecodingDefault(Effect.succeed("")),
-      Schema.annotateKey({
-        title: "API endpoint",
-        description: "Override the Cursor API endpoint for this instance.",
-        providerSettingsForm: {
-          placeholder: "https://...",
-          clearWhenEmpty: "omit",
-        },
-      }),
-    ),
-    customModels: Schema.Array(Schema.String).pipe(
-      Schema.withDecodingDefault(Effect.succeed([])),
-      Schema.annotateKey({ providerSettingsForm: { hidden: true } }),
-    ),
-  },
-  {
-    order: ["binaryPath", "apiEndpoint"],
-  },
-);
-export type CursorSettings = typeof CursorSettings.Type;
-
-export const GrokSettings = makeProviderSettingsSchema(
-  {
-    enabled: Schema.Boolean.pipe(
-      Schema.withDecodingDefault(Effect.succeed(true)),
-      Schema.annotateKey({ providerSettingsForm: { hidden: true } }),
-    ),
-    binaryPath: makeBinaryPathSetting("grok").pipe(
-      Schema.annotateKey({
-        title: "Binary path",
-        description: "Path to the Grok CLI binary.",
-        providerSettingsForm: { placeholder: "grok", clearWhenEmpty: "omit" },
-      }),
-    ),
-    customModels: Schema.Array(Schema.String).pipe(
-      Schema.withDecodingDefault(Effect.succeed([])),
-      Schema.annotateKey({ providerSettingsForm: { hidden: true } }),
-    ),
-  },
-  {
-    order: ["binaryPath"],
-  },
-);
-export type GrokSettings = typeof GrokSettings.Type;
-
-export const OpenCodeSettings = makeProviderSettingsSchema(
-  {
-    enabled: Schema.Boolean.pipe(
-      Schema.withDecodingDefault(Effect.succeed(true)),
-      Schema.annotateKey({ providerSettingsForm: { hidden: true } }),
-    ),
-    binaryPath: makeBinaryPathSetting("opencode").pipe(
-      Schema.annotateKey({
-        title: "Binary path",
-        description: "Path to the OpenCode binary.",
-        providerSettingsForm: {
-          placeholder: "opencode",
-          clearWhenEmpty: "omit",
-        },
-      }),
-    ),
-    serverUrl: TrimmedString.pipe(
-      Schema.withDecodingDefault(Effect.succeed("")),
-      Schema.annotateKey({
-        title: "Server URL",
-        description: "Leave blank to let T3 Code spawn the server when needed.",
-        providerSettingsForm: {
-          placeholder: "http://127.0.0.1:4096",
-          clearWhenEmpty: "omit",
-        },
-      }),
-    ),
-    serverPassword: TrimmedString.pipe(
-      Schema.withDecodingDefault(Effect.succeed("")),
-      Schema.annotateKey({
-        title: "Server password",
-        description: "Stored in plain text on disk.",
-        providerSettingsForm: {
-          control: "password",
-          placeholder: "Optional",
-          clearWhenEmpty: "omit",
-        },
-      }),
-    ),
-    customModels: Schema.Array(Schema.String).pipe(
-      Schema.withDecodingDefault(Effect.succeed([])),
-      Schema.annotateKey({ providerSettingsForm: { hidden: true } }),
-    ),
-  },
-  {
-    order: ["binaryPath", "serverUrl", "serverPassword"],
-  },
-);
-export type OpenCodeSettings = typeof OpenCodeSettings.Type;
-
 export const OmpSettings = makeProviderSettingsSchema(
   {
     enabled: Schema.Boolean.pipe(
@@ -591,7 +384,7 @@ export const ServerSettings = Schema.Struct({
   textGenerationModelSelection: ModelSelection.pipe(
     Schema.withDecodingDefault(
       Effect.succeed({
-        instanceId: ProviderInstanceId.make("codex"),
+        instanceId: ProviderInstanceId.make("omp"),
         model: DEFAULT_TEXT_GENERATION_MODEL,
         options: [
           {
@@ -616,11 +409,6 @@ export const ServerSettings = Schema.Struct({
   // owns its config in its own package, this struct shrinks to nothing and
   // is removed entirely.
   providers: Schema.Struct({
-    codex: CodexSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
-    claudeAgent: ClaudeSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
-    cursor: CursorSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
-    grok: GrokSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
-    opencode: OpenCodeSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
     omp: OmpSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
   }).pipe(Schema.withDecodingDefault(Effect.succeed({}))),
   // New driver-agnostic instance map. Keyed by `ProviderInstanceId`; values
@@ -687,44 +475,6 @@ const ModelSelectionPatch = Schema.Struct({
   options: Schema.optionalKey(ProviderOptionSelections),
 });
 
-const CodexSettingsPatch = Schema.Struct({
-  enabled: Schema.optionalKey(Schema.Boolean),
-  binaryPath: Schema.optionalKey(TrimmedString),
-  homePath: Schema.optionalKey(TrimmedString),
-  shadowHomePath: Schema.optionalKey(TrimmedString),
-  launchArgs: Schema.optionalKey(TrimmedString),
-  customModels: Schema.optionalKey(Schema.Array(Schema.String)),
-});
-
-const ClaudeSettingsPatch = Schema.Struct({
-  enabled: Schema.optionalKey(Schema.Boolean),
-  binaryPath: Schema.optionalKey(TrimmedString),
-  homePath: Schema.optionalKey(TrimmedString),
-  customModels: Schema.optionalKey(Schema.Array(Schema.String)),
-  launchArgs: Schema.optionalKey(TrimmedString),
-});
-
-const CursorSettingsPatch = Schema.Struct({
-  enabled: Schema.optionalKey(Schema.Boolean),
-  binaryPath: Schema.optionalKey(TrimmedString),
-  apiEndpoint: Schema.optionalKey(TrimmedString),
-  customModels: Schema.optionalKey(Schema.Array(Schema.String)),
-});
-
-const GrokSettingsPatch = Schema.Struct({
-  enabled: Schema.optionalKey(Schema.Boolean),
-  binaryPath: Schema.optionalKey(TrimmedString),
-  customModels: Schema.optionalKey(Schema.Array(Schema.String)),
-});
-
-const OpenCodeSettingsPatch = Schema.Struct({
-  enabled: Schema.optionalKey(Schema.Boolean),
-  binaryPath: Schema.optionalKey(TrimmedString),
-  serverUrl: Schema.optionalKey(TrimmedString),
-  serverPassword: Schema.optionalKey(TrimmedString),
-  customModels: Schema.optionalKey(Schema.Array(Schema.String)),
-});
-
 const OmpSettingsPatch = Schema.Struct({
   enabled: Schema.optionalKey(Schema.Boolean),
   binaryPath: Schema.optionalKey(TrimmedString),
@@ -765,11 +515,6 @@ export const ServerSettingsPatch = Schema.Struct({
   ),
   providers: Schema.optionalKey(
     Schema.Struct({
-      codex: Schema.optionalKey(CodexSettingsPatch),
-      claudeAgent: Schema.optionalKey(ClaudeSettingsPatch),
-      cursor: Schema.optionalKey(CursorSettingsPatch),
-      grok: Schema.optionalKey(GrokSettingsPatch),
-      opencode: Schema.optionalKey(OpenCodeSettingsPatch),
       omp: Schema.optionalKey(OmpSettingsPatch),
     }),
   ),

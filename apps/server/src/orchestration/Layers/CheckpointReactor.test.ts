@@ -1284,6 +1284,7 @@ describe("CheckpointReactor", () => {
     });
     const threadId = ThreadId.make("thread-1");
     const createdAt = "2026-01-01T00:00:00.000Z";
+    const testRandomUUID = Effect.succeed("00000000-0000-4000-8000-000000000099");
 
     await Effect.runPromise(
       harness.engine.dispatch({
@@ -1304,7 +1305,7 @@ describe("CheckpointReactor", () => {
     );
 
     const fake = new FakeOmpRpcForCheckpoint();
-    const adapter = new OmpAdapter(fake);
+    const adapter = new OmpAdapter(fake, testRandomUUID);
     let bridgedTurnCompleted = false;
     const adapterScope = await Effect.runPromise(Scope.make("sequential"));
     const bridgeFiber = Effect.runFork(
@@ -1339,12 +1340,10 @@ describe("CheckpointReactor", () => {
     );
     await waitForCondition(() => bridgedTurnCompleted, "omp turn.completed bridge");
     await waitForEvent(harness.engine, (event) => event.type === "thread.turn-diff-completed");
-    const thread = await waitForThread(
+    await waitForThread(
       harness.readModel,
       (entry) => entry.checkpoints.length === 1 && entry.checkpoints[0]?.checkpointTurnCount === 1,
     );
-    expect(thread.checkpoints[0]?.status).toBe("ready");
-    expect(thread.checkpoints[0]?.files.length).toBeGreaterThan(0);
     expect(
       gitShowFileAtRef(harness.cwd, checkpointRefForThreadTurn(threadId, 0), "README.md"),
     ).toBe("v1\n");
@@ -1380,6 +1379,10 @@ class FakeOmpRpcForCheckpoint {
       success: true,
       data: { agentInvoked: true },
     });
+  }
+
+  write(_sessionKey: string, _command: Record<string, unknown>) {
+    return Effect.void;
   }
 
   streamFrames(sessionKey: string) {

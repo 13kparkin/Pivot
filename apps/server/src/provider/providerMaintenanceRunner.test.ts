@@ -6,6 +6,7 @@ import {
   type ServerProviderUpdateState,
 } from "@t3tools/contracts";
 import { ServerProviderUpdateError } from "@t3tools/contracts";
+import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -20,6 +21,7 @@ import { ChildProcessSpawner } from "effect/unstable/process";
 import { HostProcessEnvironment, HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import { SpawnExecutableResolution } from "@t3tools/shared/shell";
 
+import * as ServerConfig from "../config.ts";
 import { ProviderRegistry, type ProviderRegistryShape } from "./Services/ProviderRegistry.ts";
 import * as ProviderMaintenanceRunner from "./providerMaintenanceRunner.ts";
 import {
@@ -28,6 +30,12 @@ import {
   type ProviderMaintenanceCapabilities,
 } from "./providerMaintenance.ts";
 const isServerProviderUpdateError = Schema.is(ServerProviderUpdateError);
+
+// Provide NodeServices only to build ServerConfig — do not merge it into the
+// runner layer or it overrides the mock ChildProcessSpawner these tests inject.
+const MaintenanceRunnerTestConfig = ServerConfig.layerTest(process.cwd(), {
+  prefix: "t3code-provider-maintenance-test-",
+}).pipe(Layer.provide(NodeServices.layer));
 
 const CODEX_DRIVER = ProviderDriverKind.make("codex");
 const CURSOR_DRIVER = ProviderDriverKind.make("cursor");
@@ -192,6 +200,8 @@ function makeRegistry(
       getProviderMaintenanceCapabilitiesForInstance: (_instanceId, provider) =>
         Effect.succeed(lifecycleFor(provider)),
       setProviderMaintenanceActionState,
+      listOmpLoginProviders: () => Effect.succeed([]),
+      ompLogin: ({ providerId }) => Effect.succeed({ providerId }),
       streamChanges: Stream.empty,
     };
 
@@ -210,6 +220,7 @@ const makeTestRunner = (registry: ProviderRegistryShape) =>
           Layer.mergeAll(
             Layer.succeed(ProviderRegistry, registry),
             Layer.succeed(ProviderVersionCache, new Map()),
+            MaintenanceRunnerTestConfig,
           ),
         ),
       ),

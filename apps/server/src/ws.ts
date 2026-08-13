@@ -57,6 +57,10 @@ import {
   type TerminalMetadataStreamEvent,
   WS_METHODS,
   WsRpcGroup,
+  defaultInstanceIdForDriver,
+  ProviderDriverKind,
+  ServerOmpLoginError,
+  type ProviderInstanceId,
 } from "@t3tools/contracts";
 import { resolveServerBackgroundActivitySettings } from "@t3tools/shared/backgroundActivitySettings";
 import { HttpRouter, HttpServerRequest, HttpServerRespondable } from "effect/unstable/http";
@@ -1445,6 +1449,51 @@ const makeWsRpcLayer = (
               ? providerRegistry.refreshInstance(input.instanceId)
               : providerRegistry.refresh()
             ).pipe(Effect.map((providers) => ({ providers }))),
+            { "rpc.aggregate": "server" },
+          ),
+        [WS_METHODS.serverOmpListLoginProviders]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.serverOmpListLoginProviders,
+            Effect.gen(function* () {
+              const instanceId: ProviderInstanceId =
+                input.instanceId ?? defaultInstanceIdForDriver(ProviderDriverKind.make("omp"));
+              const providers = yield* providerRegistry.listOmpLoginProviders(instanceId).pipe(
+                Effect.mapError(
+                  (cause) =>
+                    new ServerOmpLoginError({
+                      reason: cause instanceof Error ? cause.message : String(cause),
+                      cause,
+                    }),
+                ),
+              );
+              return { providers };
+            }),
+            { "rpc.aggregate": "server" },
+          ),
+        [WS_METHODS.serverOmpLogin]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.serverOmpLogin,
+            Effect.gen(function* () {
+              const instanceId: ProviderInstanceId =
+                input.instanceId ?? defaultInstanceIdForDriver(ProviderDriverKind.make("omp"));
+              const result = yield* providerRegistry
+                .ompLogin({
+                  instanceId,
+                  providerId: input.providerId,
+                  onOpenUrl: (url) => externalLauncher.launchBrowser(url).pipe(Effect.ignore),
+                })
+                .pipe(
+                  Effect.mapError(
+                    (cause) =>
+                      new ServerOmpLoginError({
+                        reason: cause instanceof Error ? cause.message : String(cause),
+                        cause,
+                      }),
+                  ),
+                );
+              yield* providerRegistry.refreshInstance(instanceId).pipe(Effect.ignore);
+              return result;
+            }),
             { "rpc.aggregate": "server" },
           ),
         [WS_METHODS.serverUpdateProvider]: (input) =>

@@ -151,6 +151,11 @@ import {
 import {
   ServerConfigStreamEvent,
   ServerConfig,
+  ServerOmpListLoginProvidersInput,
+  ServerOmpListLoginProvidersResult,
+  ServerOmpLoginError,
+  ServerOmpLoginInput,
+  ServerOmpLoginResult,
   ServerProviderUpdateError,
   ServerProviderUpdateInput,
   ServerLifecycleStreamEvent,
@@ -252,6 +257,8 @@ export const WS_METHODS = {
   serverProbe: "server.probe",
   serverGetConfig: "server.getConfig",
   serverRefreshProviders: "server.refreshProviders",
+  serverOmpListLoginProviders: "server.ompListLoginProviders",
+  serverOmpLogin: "server.ompLogin",
   serverUpdateProvider: "server.updateProvider",
   serverUpdateServer: "server.updateServer",
   serverUpdateServerWithProgress: "server.updateServerWithProgress",
@@ -347,6 +354,18 @@ export const WsServerRefreshProvidersRpc = Rpc.make(WS_METHODS.serverRefreshProv
   }),
   success: ServerProviderUpdatedPayload,
   error: EnvironmentAuthorizationError,
+});
+
+export const WsServerOmpListLoginProvidersRpc = Rpc.make(WS_METHODS.serverOmpListLoginProviders, {
+  payload: ServerOmpListLoginProvidersInput,
+  success: ServerOmpListLoginProvidersResult,
+  error: Schema.Union([ServerOmpLoginError, EnvironmentAuthorizationError]),
+});
+
+export const WsServerOmpLoginRpc = Rpc.make(WS_METHODS.serverOmpLogin, {
+  payload: ServerOmpLoginInput,
+  success: ServerOmpLoginResult,
+  error: Schema.Union([ServerOmpLoginError, EnvironmentAuthorizationError]),
 });
 
 export const WsServerUpdateProviderRpc = Rpc.make(WS_METHODS.serverUpdateProvider, {
@@ -974,6 +993,8 @@ export const WsRpcGroup = RpcGroup.make(
   WsServerProbeRpc,
   WsServerGetConfigRpc,
   WsServerRefreshProvidersRpc,
+  WsServerOmpListLoginProvidersRpc,
+  WsServerOmpLoginRpc,
   WsServerUpdateProviderRpc,
   WsServerUpdateServerRpc,
   WsServerUpdateServerWithProgressRpc,

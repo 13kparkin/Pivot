@@ -9,7 +9,7 @@
  * bundled onto the `ProviderInstance` the registry produces.
  *
  * Each configured instance (including multi-instance setups like
- * `codex_personal` + `codex_work`) contributes one `ProviderSnapshotSource`,
+ * `omp_personal` + `omp_work`) contributes one `ProviderSnapshotSource`,
  * keyed by `instanceId`. Instances whose driver is unavailable or whose
  * config failed to decode are merged from `instanceRegistry.listUnavailable`
  * as shadow snapshots so the UI can render their exact unavailable reason.
@@ -54,6 +54,9 @@ import {
 import type { ProviderInstance } from "../ProviderDriver.ts";
 import { makeManualOnlyProviderMaintenanceCapabilities } from "../providerMaintenance.ts";
 import type { ProviderSnapshotSource } from "../builtInProviderCatalog.ts";
+import { OmpAdapter } from "../omp/OmpAdapter.ts";
+import { listOmpLoginProviders, loginOmpProvider } from "../omp/OmpLogin.ts";
+import * as Crypto from "effect/Crypto";
 
 const loadProviders = (
   providerSources: ReadonlyArray<ProviderSnapshotSource>,
@@ -79,16 +82,9 @@ const hasModelCapabilities = (model: ServerProvider["models"][number]): boolean 
   (model.capabilities?.optionDescriptors?.length ?? 0) > 0;
 
 const shouldRetainMissingProviderModels = (provider: ServerProvider): boolean => {
-  if (provider.driver !== ProviderDriverKind.make("opencode")) {
-    return true;
-  }
-
-  // OpenCode's initial snapshot is deliberately non-authoritative while its
-  // first probe is still running. A probe error from an installed CLI/server
-  // is likewise partial: it could not establish the current inventory.
-  // Conversely, disabled and missing-CLI snapshots are authoritative removals,
-  // as are successful ready/warning inventories (including an empty one after
-  // logout or plugin removal).
+  // omp's initial snapshot is non-authoritative while the first probe is still
+  // running. A probe error from an installed binary is likewise partial.
+  // Disabled / missing-binary snapshots and successful inventories are final.
   const isPendingInitialProbe =
     provider.enabled && !provider.installed && provider.status === "warning";
   const didInstalledProviderProbeFail = provider.installed && provider.status === "error";
@@ -213,6 +209,7 @@ export const ProviderRegistryLive = Layer.effect(
     const config = yield* ServerConfig;
     const fileSystem = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
+    const crypto = yield* Crypto.Crypto;
 
     // Aggregator PubSub — consumers (WS gateway, etc.) subscribe here for
     // coalesced updates across every instance.
@@ -311,7 +308,7 @@ export const ProviderRegistryLive = Layer.effect(
     const persistProvider = (provider: ServerProvider) =>
       Effect.gen(function* () {
         // Persist every instance — the file name is the instance id, so
-        // multi-instance setups (e.g. `codex_personal`, `codex_work`) each
+        // multi-instance setups (e.g. `omp_personal`, `omp_work`) each
         // get their own cache. We resolve the path fresh so snapshots
         // produced by newly-added instances post-boot still land on disk
         // without the aggregator holding a stale `cachePathByInstance`
@@ -704,6 +701,19 @@ export const ProviderRegistryLive = Layer.effect(
       return yield* Ref.get(providersRef);
     });
 
+    const resolveOmpAdapter = (instanceId: ProviderInstanceId) =>
+      Effect.gen(function* () {
+        const instances = yield* instanceRegistry.listInstances;
+        const instance = instances.find((candidate) => candidate.instanceId === instanceId);
+        if (!instance) {
+          return yield* Effect.fail(new Error(`No provider instance bound to id '${instanceId}'`));
+        }
+        if (!(instance.adapter instanceof OmpAdapter)) {
+          return yield* Effect.fail(new Error(`instance ${instanceId} is not an omp adapter`));
+        }
+        return instance.adapter;
+      });
+
     return {
       getProviders: Ref.get(providersRef),
       refresh: (provider?: ProviderDriverKind) =>
@@ -712,6 +722,30 @@ export const ProviderRegistryLive = Layer.effect(
         refreshInstance(instanceId).pipe(Effect.catchCause(recoverRefreshFailure)),
       getProviderMaintenanceCapabilitiesForInstance,
       setProviderMaintenanceActionState,
+      listOmpLoginProviders: (instanceId: ProviderInstanceId) =>
+        Effect.gen(function* () {
+          const adapter = yield* resolveOmpAdapter(instanceId);
+          return yield* listOmpLoginProviders({
+            adapter,
+            randomUUID: crypto.randomUUIDv4.pipe(Effect.orDie),
+            cwd: process.cwd(),
+          }).pipe(
+            Effect.mapError((cause) => (cause instanceof Error ? cause : new Error(String(cause)))),
+          );
+        }),
+      ompLogin: (input) =>
+        Effect.gen(function* () {
+          const adapter = yield* resolveOmpAdapter(input.instanceId);
+          return yield* loginOmpProvider({
+            adapter,
+            randomUUID: crypto.randomUUIDv4.pipe(Effect.orDie),
+            cwd: process.cwd(),
+            providerId: input.providerId,
+            onOpenUrl: (request) => input.onOpenUrl(request.launchUrl ?? request.url),
+          }).pipe(
+            Effect.mapError((cause) => (cause instanceof Error ? cause : new Error(String(cause)))),
+          );
+        }),
       get streamChanges() {
         return Stream.fromPubSub(changesPubSub);
       },

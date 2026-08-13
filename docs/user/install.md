@@ -6,7 +6,7 @@ T3 Code is a web and desktop GUI for running coding agents on your machine.
 
 Node.js `^22.16 || ^23.11 || >=24.10` on the machine that runs the T3 Code server.
 
-At least one provider CLI, installed and authenticated. See [Providers](#providers) below.
+The [omp](https://omp.sh) CLI, installed and authenticated. See [omp](./providers-omp.md).
 
 ## Run Without Installing
 
@@ -43,42 +43,28 @@ yay -S t3code-bin
 
 ## Providers
 
-T3 Code drives provider CLIs; it does not ship them. Install the CLI for each provider you want
-to use, then authenticate it.
+Pivot drives omp; it does not ship the CLI. Install omp on the server host, then authenticate it.
 
-| Provider   | CLI                                                   | Default binary | Log in with           |
-| ---------- | ----------------------------------------------------- | -------------- | --------------------- |
-| Codex      | [Codex CLI](https://developers.openai.com/codex/cli)  | `codex`        | `codex login`         |
-| Claude     | [Claude Code](https://claude.com/product/claude-code) | `claude`       | `claude auth login`   |
-| Cursor     | [Cursor CLI](https://cursor.com/cli)                  | `cursor-agent` | `agent login`         |
-| Grok Build | [Grok Build CLI](https://x.ai/cli)                    | `grok`         | `grok login`          |
-| OpenCode   | [OpenCode](https://opencode.ai)                       | `opencode`     | `opencode auth login` |
+| Provider | CLI                   | Default binary | Notes                                                                                                                       |
+| -------- | --------------------- | -------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| omp      | [omp](https://omp.sh) | `omp`          | Required. Optional: [rtk](https://github.com/rtk-ai/rtk) + `omp plugin install github:authrequest/pi-rtk` for bash rewrite. |
 
-Cursor is the one to watch: install Cursor CLI, which provides the `cursor-agent` binary that
-T3 Code looks for, but authenticate with `agent login`, not `cursor-agent login`.
-
-Run the login command on the machine running the T3 Code server, not on the device you browse
-from.
+Run login and plugin install on the machine running the T3 Code server, not on the device you browse from.
 
 ### Binary Discovery
 
-Each provider CLI must be on the server's `PATH`, or have an explicit binary path set in
-**Settings** → the provider instance → **Binary path**. Use the explicit path when a version
+`omp` must be on the server's `PATH`, or have an explicit binary path set in
+**Settings** → omp → **Binary path**. Use the explicit path when a version
 manager or a non-standard install location keeps the CLI off the `PATH` of the shell that
 started T3 Code.
 
 ### When Auth Is Needed
 
-Provider auth is required before you start a session with that provider, not before you start
-T3 Code. You can install T3 Code, open it, and add providers afterwards. A provider that is not
-authenticated shows its status in **Settings** and fails at session start with the login command
-to run.
-
-For multi-account setups, see [Codex](./providers-codex.md) and [Claude](./providers-claude.md).
+omp auth is required before you start a session, not before you start T3 Code. You can install
+T3 Code, open it, and finish omp setup afterwards. See [omp](./providers-omp.md).
 
 ## Next Steps
 
-- [Permission modes](./permission-modes.md): how much T3 Code asks before acting
-- [Remote access](./remote-access.md): connect from a phone, tablet, or another desktop
-- [Keeping T3 Code in sync](./updating.md): client and server version skew
-- [Running in the background](./background-service.md): Linux background service
+- [Remote access](./remote-access.md)
+- [Permission modes](./permission-modes.md)
+- [Source control](./source-control.md)

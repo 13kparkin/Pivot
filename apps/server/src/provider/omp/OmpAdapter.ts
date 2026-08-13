@@ -4,12 +4,16 @@
  * Turn completion (AC11): terminal `agent_end` (`isTerminal !== false`),
  * prompt `data.agentInvoked === false`, and `prompt_result` with
  * `agentInvoked: false`. Empty assistant deltas are not emitted (AC2).
+ * Tools: `toolcall_end` / `tool_execution_*` → `item.*` (+ output deltas).
+ * Thinking: `thinking_delta` → `content.delta` (`reasoning_text`).
+ * Usage: `get_state.contextUsage` → `thread.token-usage.updated` on turn end.
  * Subagents (AC7): `set_subagent_subscription` + `subagent_*` → `task.*`.
  *
  * @module provider/omp/OmpAdapter
  */
 import {
   type ApprovalRequestId,
+  type CanonicalItemType,
   EventId,
   type ProviderApprovalDecision,
   type ProviderRuntimeEvent,
@@ -17,6 +21,7 @@ import {
   type ProviderSessionStartInput,
   type ProviderSendTurnInput,
   type ProviderUserInputAnswers,
+  RuntimeItemId,
   type RuntimeTaskStatus,
   type ServerProviderModel,
   ProviderDriverKind,
@@ -30,14 +35,16 @@ import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Queue from "effect/Queue";
+import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 
 import {
+  ProviderAdapterProcessError,
   ProviderAdapterRequestError,
   ProviderAdapterSessionNotFoundError,
   ProviderAdapterValidationError,
 } from "../Errors.ts";
-import type { OmpRpcRuntime } from "./OmpRpcRuntime.ts";
+import { OmpSpawnError, type OmpRpcRuntime } from "./OmpRpcRuntime.ts";
 
 const PROVIDER = ProviderDriverKind.make("omp");
 const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
@@ -46,13 +53,44 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+function mapOmpSpawnError(threadId: ThreadId, cause: OmpSpawnError): ProviderAdapterProcessError {
+  return new ProviderAdapterProcessError({
+    provider: PROVIDER,
+    threadId,
+    detail: cause.message,
+    cause,
+  });
+}
+
+export interface OmpLoginProvider {
+  readonly id: string;
+  readonly name: string;
+  readonly available: boolean;
+  readonly authenticated: boolean;
+}
+
+export interface OmpOpenUrlRequest {
+  readonly url: string;
+  readonly launchUrl?: string;
+  readonly instructions?: string;
+}
+
+interface TrackedOmpToolCall {
+  readonly toolName: string;
+  readonly args: unknown;
+  readonly intent: string | undefined;
+}
+
 interface LiveAdapterSession {
   readonly threadId: ThreadId;
   readonly sessionFile: string;
   readonly runtimeMode: RuntimeMode;
   readonly cwd: string;
   readonly snapshot: ProviderSession;
+  readonly scope: Scope.Scope;
+  readonly toolCalls: Map<string, TrackedOmpToolCall>;
   turnId: TurnId | undefined;
+  onOpenUrl: ((request: OmpOpenUrlRequest) => Effect.Effect<void>) | undefined;
 }
 
 /**
@@ -61,7 +99,7 @@ interface LiveAdapterSession {
  */
 export type OmpRpcClient = Pick<
   OmpRpcRuntime,
-  "ensureSession" | "send" | "streamFrames" | "dispose"
+  "ensureSession" | "send" | "write" | "streamFrames" | "dispose"
 >;
 
 export class OmpAdapter {
@@ -69,8 +107,13 @@ export class OmpAdapter {
   readonly capabilities = { sessionModelSwitch: "in-session" as const };
   readonly #events = Effect.runSync(Queue.unbounded<ProviderRuntimeEvent>());
   readonly #sessions = new Map<ThreadId, LiveAdapterSession>();
+  readonly #runtime: OmpRpcClient;
+  readonly #randomUUID: Effect.Effect<string>;
 
-  public constructor(private readonly runtime: OmpRpcClient) {}
+  public constructor(runtime: OmpRpcClient, randomUUID: Effect.Effect<string>) {
+    this.#runtime = runtime;
+    this.#randomUUID = randomUUID;
+  }
 
   public get streamEvents(): Stream.Stream<ProviderRuntimeEvent> {
     return Stream.fromQueue(this.#events);
@@ -87,12 +130,15 @@ export class OmpAdapter {
         });
       }
       const resumeCursor = typeof input.resumeCursor === "string" ? input.resumeCursor : null;
-      const handle = yield* this.runtime.ensureSession({
-        sessionKey: input.threadId,
-        cwd,
-        resumeCursor,
-      });
+      const handle = yield* this.#runtime
+        .ensureSession({
+          sessionKey: input.threadId,
+          cwd,
+          resumeCursor,
+        })
+        .pipe(Effect.mapError((cause) => mapOmpSpawnError(input.threadId, cause)));
       const createdAt = yield* nowIso;
+      const scope = yield* Scope.make("sequential");
       const snapshot: ProviderSession = {
         provider: PROVIDER,
         status: "ready",
@@ -109,17 +155,23 @@ export class OmpAdapter {
         runtimeMode: input.runtimeMode,
         cwd,
         snapshot,
+        scope,
+        toolCalls: new Map(),
         turnId: undefined,
+        onOpenUrl: undefined,
       };
       this.#sessions.set(input.threadId, session);
-      yield* this.runtime.streamFrames(input.threadId).pipe(
+      yield* this.#runtime.streamFrames(input.threadId).pipe(
+        Stream.mapError((cause) => mapOmpSpawnError(input.threadId, cause)),
         Stream.runForEach((frame) => this.#onFrame(session, frame)),
-        Effect.forkScoped,
+        Effect.forkIn(scope),
       );
-      yield* this.runtime.send(input.threadId, {
-        type: "set_subagent_subscription",
-        level: "progress",
-      });
+      yield* this.#runtime
+        .send(input.threadId, {
+          type: "set_subagent_subscription",
+          level: "progress",
+        })
+        .pipe(Effect.mapError((cause) => mapOmpSpawnError(input.threadId, cause)));
       yield* this.#applyModelSelection(input.threadId, input.modelSelection?.model);
       return snapshot;
     });
@@ -134,7 +186,7 @@ export class OmpAdapter {
           threadId: input.threadId,
         });
       }
-      const turnId = TurnId.make(globalThis.crypto.randomUUID());
+      const turnId = yield* this.#randomUUID.pipe(Effect.map(TurnId.make));
       session.turnId = turnId;
       yield* this.#applyModelSelection(input.threadId, input.modelSelection?.model);
       yield* this.#emit({
@@ -143,7 +195,7 @@ export class OmpAdapter {
         turnId,
         payload: input.modelSelection?.model ? { model: input.modelSelection.model } : {},
       });
-      const response = yield* this.runtime.send(input.threadId, {
+      const response = yield* this.#send(input.threadId, {
         type: "prompt",
         ...(input.input === undefined ? {} : { message: input.input }),
       });
@@ -167,21 +219,13 @@ export class OmpAdapter {
   }
 
   public stopSession(threadId: ThreadId) {
-    return Effect.gen({ self: this }, function* () {
-      const session = this.#sessions.get(threadId);
-      if (!session) {
-        return;
-      }
-      this.#sessions.delete(threadId);
-      yield* this.runtime.dispose(threadId);
-    });
+    return this.#clearLiveSession(threadId);
   }
 
   public stopAll() {
     return Effect.gen({ self: this }, function* () {
       const threadIds = Array.from(this.#sessions.keys());
-      this.#sessions.clear();
-      yield* Effect.forEach(threadIds, (threadId) => this.runtime.dispose(threadId), {
+      yield* Effect.forEach(threadIds, (threadId) => this.#clearLiveSession(threadId), {
         discard: true,
       });
     });
@@ -195,7 +239,7 @@ export class OmpAdapter {
           threadId,
         });
       }
-      yield* this.runtime.send(threadId, { type: "abort" });
+      yield* this.#send(threadId, { type: "abort" });
     });
   }
 
@@ -275,13 +319,86 @@ export class OmpAdapter {
           threadId,
         });
       }
-      const response = yield* this.runtime.send(threadId, { type: "get_available_models" });
+      const response = yield* this.#send(threadId, { type: "get_available_models" });
       return yield* modelsFromAvailableModelsResponse(response);
+    });
+  }
+
+  public listLoginProviders(threadId: ThreadId) {
+    return Effect.gen({ self: this }, function* () {
+      if (!this.#sessions.has(threadId)) {
+        return yield* new ProviderAdapterSessionNotFoundError({
+          provider: PROVIDER,
+          threadId,
+        });
+      }
+      const response = yield* this.#send(threadId, { type: "get_login_providers" });
+      return yield* loginProvidersFromResponse(response);
+    });
+  }
+
+  public login(
+    threadId: ThreadId,
+    providerId: string,
+    onOpenUrl: (request: OmpOpenUrlRequest) => Effect.Effect<void>,
+  ) {
+    return Effect.gen({ self: this }, function* () {
+      const session = this.#sessions.get(threadId);
+      if (!session) {
+        return yield* new ProviderAdapterSessionNotFoundError({
+          provider: PROVIDER,
+          threadId,
+        });
+      }
+      session.onOpenUrl = onOpenUrl;
+      return yield* this.#send(threadId, { type: "login", providerId }).pipe(
+        Effect.timeout("10 minutes"),
+        Effect.mapError((cause) =>
+          cause instanceof ProviderAdapterProcessError
+            ? cause
+            : new ProviderAdapterRequestError({
+                provider: PROVIDER,
+                method: "login",
+                detail: cause instanceof Error ? cause.message : String(cause),
+                cause,
+              }),
+        ),
+        Effect.map(() => ({ providerId })),
+        Effect.ensuring(
+          Effect.sync(() => {
+            session.onOpenUrl = undefined;
+          }),
+        ),
+      );
     });
   }
 
   #onFrame(session: LiveAdapterSession, frame: object): Effect.Effect<void> {
     if (!isRecord(frame) || typeof frame.type !== "string") {
+      return Effect.void;
+    }
+    if (frame.type === "extension_ui_request" && frame.method === "open_url") {
+      const handler = session.onOpenUrl;
+      if (handler && typeof frame.url === "string" && frame.url.length > 0) {
+        return handler({
+          url: frame.url,
+          ...(typeof frame.launchUrl === "string" ? { launchUrl: frame.launchUrl } : {}),
+          ...(typeof frame.instructions === "string" ? { instructions: frame.instructions } : {}),
+        });
+      }
+      return Effect.void;
+    }
+    if (frame.type === "extension_ui_request" && frame.method === "input") {
+      // Paste-code completion is not wired in Settings yet — cancel so login fails cleanly.
+      if (typeof frame.id === "string") {
+        return this.#runtime
+          .write(session.threadId, {
+            type: "extension_ui_response",
+            id: frame.id,
+            cancelled: true,
+          })
+          .pipe(Effect.ignore);
+      }
       return Effect.void;
     }
     if (frame.type === "agent_end" && frame.isTerminal !== false) {
@@ -292,6 +409,15 @@ export class OmpAdapter {
     }
     if (frame.type === "message_update") {
       return this.#onMessageUpdate(session, frame);
+    }
+    if (frame.type === "tool_execution_start") {
+      return this.#onToolExecutionStart(session, frame);
+    }
+    if (frame.type === "tool_execution_update") {
+      return this.#onToolExecutionUpdate(session, frame);
+    }
+    if (frame.type === "tool_execution_end") {
+      return this.#onToolExecutionEnd(session, frame);
     }
     if (frame.type === "subagent_lifecycle") {
       return this.#onSubagentLifecycle(session, frame);
@@ -411,30 +537,207 @@ export class OmpAdapter {
     frame: Record<string, unknown>,
   ): Effect.Effect<void> {
     const event = frame.assistantMessageEvent;
-    if (!isRecord(event) || event.type !== "text_delta") {
+    if (!isRecord(event) || typeof event.type !== "string") {
       return Effect.void;
     }
-    const delta = event.delta;
-    if (typeof delta !== "string" || delta.length === 0) {
+    if (event.type === "text_delta") {
+      const delta = event.delta;
+      if (typeof delta !== "string" || delta.length === 0) {
+        return Effect.void;
+      }
+      return this.#emit({
+        type: "content.delta",
+        threadId: session.threadId,
+        turnId: session.turnId,
+        payload: {
+          streamKind: "assistant_text",
+          delta,
+        },
+      });
+    }
+    if (event.type === "thinking_delta") {
+      const delta = event.delta;
+      if (typeof delta !== "string" || delta.length === 0) {
+        return Effect.void;
+      }
+      return this.#emit({
+        type: "content.delta",
+        threadId: session.threadId,
+        turnId: session.turnId,
+        payload: {
+          streamKind: "reasoning_text",
+          delta,
+        },
+      });
+    }
+    if (event.type === "toolcall_end") {
+      const toolCall = event.toolCall;
+      if (
+        !isRecord(toolCall) ||
+        typeof toolCall.id !== "string" ||
+        typeof toolCall.name !== "string"
+      ) {
+        return Effect.void;
+      }
+      return this.#emitToolItemStarted(session, {
+        toolCallId: toolCall.id,
+        toolName: toolCall.name,
+        args: toolCall.arguments,
+        intent: typeof toolCall.intent === "string" ? toolCall.intent : undefined,
+      });
+    }
+    return Effect.void;
+  }
+
+  #onToolExecutionStart(
+    session: LiveAdapterSession,
+    frame: Record<string, unknown>,
+  ): Effect.Effect<void> {
+    if (typeof frame.toolCallId !== "string" || typeof frame.toolName !== "string") {
+      return Effect.void;
+    }
+    return this.#emitToolItemStarted(session, {
+      toolCallId: frame.toolCallId,
+      toolName: frame.toolName,
+      args: frame.args,
+      intent: typeof frame.intent === "string" ? frame.intent : undefined,
+    });
+  }
+
+  #onToolExecutionUpdate(
+    session: LiveAdapterSession,
+    frame: Record<string, unknown>,
+  ): Effect.Effect<void> {
+    if (typeof frame.toolCallId !== "string") {
+      return Effect.void;
+    }
+    const delta = formatOmpToolOutputText(frame.partialResult);
+    if (delta.length === 0) {
       return Effect.void;
     }
     return this.#emit({
       type: "content.delta",
       threadId: session.threadId,
       turnId: session.turnId,
+      itemId: RuntimeItemId.make(frame.toolCallId),
       payload: {
-        streamKind: "assistant_text",
+        streamKind: "command_output",
         delta,
       },
     });
   }
 
-  #emitTurnCompleted(session: LiveAdapterSession): Effect.Effect<void> {
+  #onToolExecutionEnd(
+    session: LiveAdapterSession,
+    frame: Record<string, unknown>,
+  ): Effect.Effect<void> {
+    if (typeof frame.toolCallId !== "string" || typeof frame.toolName !== "string") {
+      return Effect.void;
+    }
+    const toolCallId = frame.toolCallId;
+    const toolName = frame.toolName;
+    const isError = frame.isError === true;
+    const tracked = session.toolCalls.get(toolCallId);
+    const args = frame.args !== undefined ? frame.args : tracked?.args;
+    const intent = typeof frame.intent === "string" ? frame.intent : tracked?.intent;
+    const presentation = presentOmpToolCall({
+      toolCallId,
+      toolName,
+      args,
+      intent,
+      result: frame.result,
+      isError,
+    });
+    session.toolCalls.delete(toolCallId);
     return this.#emit({
-      type: "turn.completed",
+      type: "item.completed",
       threadId: session.threadId,
       turnId: session.turnId,
-      payload: { state: "completed" },
+      itemId: RuntimeItemId.make(toolCallId),
+      payload: {
+        itemType: presentation.itemType,
+        status: isError ? "failed" : "completed",
+        title: presentation.title,
+        ...(presentation.detail !== undefined ? { detail: presentation.detail } : {}),
+        data: presentation.data,
+      },
+    });
+  }
+
+  #emitToolItemStarted(
+    session: LiveAdapterSession,
+    input: {
+      readonly toolCallId: string;
+      readonly toolName: string;
+      readonly args: unknown;
+      readonly intent: string | undefined;
+    },
+  ): Effect.Effect<void> {
+    if (session.toolCalls.has(input.toolCallId)) {
+      return Effect.void;
+    }
+    session.toolCalls.set(input.toolCallId, {
+      toolName: input.toolName,
+      args: input.args,
+      intent: input.intent,
+    });
+    const presentation = presentOmpToolCall(input);
+    return this.#emit({
+      type: "item.started",
+      threadId: session.threadId,
+      turnId: session.turnId,
+      itemId: RuntimeItemId.make(input.toolCallId),
+      payload: {
+        itemType: presentation.itemType,
+        status: "inProgress",
+        title: presentation.title,
+        ...(presentation.detail !== undefined ? { detail: presentation.detail } : {}),
+        data: presentation.data,
+      },
+    });
+  }
+
+  #emitTurnCompleted(session: LiveAdapterSession): Effect.Effect<void> {
+    return Effect.gen({ self: this }, function* () {
+      yield* this.#emitTokenUsageFromState(session).pipe(Effect.ignore);
+      yield* this.#emit({
+        type: "turn.completed",
+        threadId: session.threadId,
+        turnId: session.turnId,
+        payload: { state: "completed" },
+      });
+    });
+  }
+
+  #emitTokenUsageFromState(session: LiveAdapterSession): Effect.Effect<void> {
+    return Effect.gen({ self: this }, function* () {
+      const response = yield* this.#send(session.threadId, { type: "get_state" });
+      if (!isRecord(response) || !isRecord(response.data)) {
+        return;
+      }
+      const contextUsage = response.data.contextUsage;
+      if (!isRecord(contextUsage) || typeof contextUsage.tokens !== "number") {
+        return;
+      }
+      const usedTokens = Math.max(0, Math.floor(contextUsage.tokens));
+      if (usedTokens <= 0) {
+        return;
+      }
+      const maxTokens =
+        typeof contextUsage.contextWindow === "number" && contextUsage.contextWindow > 0
+          ? Math.floor(contextUsage.contextWindow)
+          : undefined;
+      yield* this.#emit({
+        type: "thread.token-usage.updated",
+        threadId: session.threadId,
+        turnId: session.turnId,
+        payload: {
+          usage: {
+            usedTokens,
+            ...(maxTokens === undefined ? {} : { maxTokens }),
+          },
+        },
+      });
     });
   }
 
@@ -453,7 +756,7 @@ export class OmpAdapter {
         });
       }
       const exit = yield* Effect.exit(
-        this.runtime.send(threadId, {
+        this.#send(threadId, {
           type: "set_model",
           provider: parsed.provider,
           modelId: parsed.modelId,
@@ -471,10 +774,20 @@ export class OmpAdapter {
     });
   }
 
+  #send(threadId: ThreadId, command: Record<string, unknown>) {
+    return this.#runtime
+      .send(threadId, command)
+      .pipe(Effect.mapError((cause) => mapOmpSpawnError(threadId, cause)));
+  }
+
   #clearLiveSession(threadId: ThreadId) {
     return Effect.gen({ self: this }, function* () {
+      const session = this.#sessions.get(threadId);
       this.#sessions.delete(threadId);
-      yield* this.runtime.dispose(threadId);
+      if (session) {
+        yield* Scope.close(session.scope, Exit.void).pipe(Effect.ignore);
+      }
+      yield* this.#runtime.dispose(threadId);
     });
   }
 
@@ -485,10 +798,11 @@ export class OmpAdapter {
   ): Effect.Effect<void> {
     return Effect.gen({ self: this }, function* () {
       const createdAt = yield* nowIso;
+      const eventId = yield* this.#randomUUID.pipe(Effect.map(EventId.make));
       const { turnId, ...rest } = event;
       yield* Queue.offer(this.#events, {
         ...rest,
-        eventId: EventId.make(globalThis.crypto.randomUUID()),
+        eventId,
         provider: PROVIDER,
         createdAt,
         ...(turnId === undefined ? {} : { turnId }),
@@ -521,6 +835,191 @@ function runtimeTaskStatusFromOmpProgress(status: unknown): RuntimeTaskStatus | 
 
 function isLocalOnlyPromptResponse(response: object): boolean {
   return isRecord(response) && isRecord(response.data) && response.data.agentInvoked === false;
+}
+
+function ompToolKind(toolName: string): string | undefined {
+  const name = toolName.toLowerCase();
+  if (name === "bash" || name === "shell" || name === "execute") {
+    return "execute";
+  }
+  if (name === "read") {
+    return "read";
+  }
+  if (
+    name === "write" ||
+    name === "edit" ||
+    name === "multiedit" ||
+    name.includes("patch") ||
+    name.includes("edit")
+  ) {
+    return "edit";
+  }
+  if (name.includes("web_search") || name === "websearch" || name === "grep" || name === "find") {
+    return "search";
+  }
+  return undefined;
+}
+
+function ompToolItemType(toolName: string): CanonicalItemType {
+  const name = toolName.toLowerCase();
+  const kind = ompToolKind(toolName);
+  if (kind === "execute") {
+    return "command_execution";
+  }
+  if (kind === "edit") {
+    return "file_change";
+  }
+  if (name.includes("web_search") || name === "websearch") {
+    return "web_search";
+  }
+  if (name.startsWith("mcp__") || name.startsWith("mcp_")) {
+    return "mcp_tool_call";
+  }
+  if (name === "task" || name.includes("collab") || name === "agent") {
+    return "collab_agent_tool_call";
+  }
+  // read + other omp tools: dynamic_tool_call + data.kind for UI presentation
+  return "dynamic_tool_call";
+}
+
+function extractOmpToolCommand(args: unknown): string | undefined {
+  if (!isRecord(args) || typeof args.command !== "string") {
+    return undefined;
+  }
+  const command = args.command.trim();
+  return command.length > 0 ? command : undefined;
+}
+
+function extractOmpToolPath(args: unknown): string | undefined {
+  if (!isRecord(args)) {
+    return undefined;
+  }
+  for (const key of ["path", "filePath", "filename", "file", "target"] as const) {
+    const value = args[key];
+    if (typeof value === "string" && value.trim().length > 0) {
+      return value.trim();
+    }
+  }
+  return undefined;
+}
+
+/** Unwrap omp AgentToolResult `{ content: [{ type:"text", text }] }` to plain text. */
+function formatOmpToolOutputText(value: unknown): string {
+  if (value === undefined || value === null) {
+    return "";
+  }
+  if (typeof value === "string") {
+    return value;
+  }
+  if (typeof value === "number" || typeof value === "boolean") {
+    return String(value);
+  }
+  if (isRecord(value) && Array.isArray(value.content)) {
+    const parts: string[] = [];
+    for (const entry of value.content) {
+      if (isRecord(entry) && typeof entry.text === "string" && entry.text.length > 0) {
+        parts.push(entry.text);
+      }
+    }
+    if (parts.length > 0) {
+      return parts.join("");
+    }
+  }
+  if (isRecord(value)) {
+    if (typeof value.stdout === "string" && value.stdout.length > 0) {
+      return value.stdout;
+    }
+    if (typeof value.text === "string" && value.text.length > 0) {
+      return value.text;
+    }
+  }
+  return "";
+}
+
+function truncateDetail(value: string, maxLength = 500): string {
+  if (value.length <= maxLength) {
+    return value;
+  }
+  return `${value.slice(0, maxLength - 1)}…`;
+}
+
+function presentOmpToolCall(input: {
+  readonly toolCallId: string;
+  readonly toolName: string;
+  readonly args: unknown;
+  readonly intent?: string | undefined;
+  readonly result?: unknown;
+  readonly isError?: boolean;
+}): {
+  readonly itemType: CanonicalItemType;
+  readonly title: string;
+  readonly detail: string | undefined;
+  readonly data: Record<string, unknown>;
+} {
+  const kind = ompToolKind(input.toolName);
+  const command = extractOmpToolCommand(input.args);
+  const path = extractOmpToolPath(input.args);
+  const intent =
+    typeof input.intent === "string" && input.intent.trim().length > 0
+      ? input.intent.trim()
+      : undefined;
+  const detailSource = intent ?? command ?? path;
+  const outputText = formatOmpToolOutputText(input.result);
+  return {
+    itemType: ompToolItemType(input.toolName),
+    title: input.toolName,
+    detail: detailSource !== undefined ? truncateDetail(detailSource) : undefined,
+    data: {
+      toolCallId: input.toolCallId,
+      toolName: input.toolName,
+      ...(kind === undefined ? {} : { kind }),
+      ...(command === undefined ? {} : { command }),
+      ...(input.args === undefined ? {} : { rawInput: input.args, args: input.args }),
+      ...(path === undefined ? {} : { locations: [{ path }] }),
+      ...(outputText.length > 0 ? { rawOutput: { content: outputText } } : {}),
+      ...(input.result === undefined ? {} : { result: input.result }),
+      ...(input.isError === undefined ? {} : { isError: input.isError }),
+    },
+  };
+}
+
+function loginProvidersFromResponse(
+  response: object,
+): Effect.Effect<ReadonlyArray<OmpLoginProvider>, ProviderAdapterRequestError> {
+  if (!isRecord(response) || !isRecord(response.data) || !Array.isArray(response.data.providers)) {
+    return Effect.fail(
+      new ProviderAdapterRequestError({
+        provider: PROVIDER,
+        method: "get_login_providers",
+        detail: "response data.providers must be an array",
+      }),
+    );
+  }
+  const providers: OmpLoginProvider[] = [];
+  for (const entry of response.data.providers) {
+    if (
+      !isRecord(entry) ||
+      typeof entry.id !== "string" ||
+      typeof entry.name !== "string" ||
+      typeof entry.available !== "boolean" ||
+      typeof entry.authenticated !== "boolean"
+    ) {
+      return Effect.fail(
+        new ProviderAdapterRequestError({
+          provider: PROVIDER,
+          method: "get_login_providers",
+          detail: "each login provider requires id, name, available, authenticated",
+        }),
+      );
+    }
+    providers.push({
+      id: entry.id,
+      name: entry.name,
+      available: entry.available,
+      authenticated: entry.authenticated,
+    });
+  }
+  return Effect.succeed(providers);
 }
 
 function modelsFromAvailableModelsResponse(

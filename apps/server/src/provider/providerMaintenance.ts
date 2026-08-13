@@ -379,11 +379,15 @@ function deriveVersionAdvisory(input: {
   readonly currentVersion: string | null;
   readonly latestVersion: string | null;
 }): Pick<ServerProviderVersionAdvisory, "status" | "message"> {
-  if (!input.currentVersion) {
-    return { status: "unknown", message: null };
-  }
   if (!input.latestVersion) {
     return { status: "unknown", message: null };
+  }
+  // Missing current + known latest = Install available (managed providers).
+  if (!input.currentVersion) {
+    return {
+      status: "behind_latest",
+      message: PROVIDER_UPDATE_ACTION_TOAST_MESSAGE,
+    };
   }
   if (compareSemverVersions(input.currentVersion, input.latestVersion) < 0) {
     return {
@@ -443,6 +447,39 @@ const fetchNpmLatestVersion = Effect.fn("fetchNpmLatestVersion")(function* (pack
   return payload ? nonEmptyString(payload.version) : null;
 });
 
+const fetchOhMyPiGithubLatestVersion = Effect.fn("fetchOhMyPiGithubLatestVersion")(function* () {
+  const client = yield* HttpClient.HttpClient;
+  const request = HttpClientRequest.get(
+    "https://api.github.com/repos/can1357/oh-my-pi/releases/latest",
+  ).pipe(
+    HttpClientRequest.setHeader("accept", "application/vnd.github+json"),
+    HttpClientRequest.setHeader("user-agent", "t3code-omp-version-check"),
+  );
+  const response = yield* client.execute(request).pipe(
+    Effect.timeoutOption(LATEST_VERSION_TIMEOUT_MS),
+    Effect.orElseSucceed(() => Option.none()),
+  );
+  if (Option.isNone(response)) {
+    return null;
+  }
+  const httpResponse = response.value;
+  if (httpResponse.status < 200 || httpResponse.status >= 300) {
+    return null;
+  }
+  const payload = yield* httpResponse.json.pipe(
+    Effect.flatMap(
+      Schema.decodeUnknownEffect(
+        Schema.Struct({
+          tag_name: Schema.String,
+        }),
+      ),
+    ),
+    Effect.orElseSucceed(() => null),
+  );
+  const tag = payload ? nonEmptyString(payload.tag_name) : null;
+  return tag ? tag.replace(/^v/i, "") : null;
+});
+
 export const resolveLatestProviderVersion = Effect.fn("resolveLatestProviderVersion")(function* (
   maintenanceCapabilities: ProviderMaintenanceCapabilities,
 ) {
@@ -458,7 +495,10 @@ export const resolveLatestProviderVersion = Effect.fn("resolveLatestProviderVers
     return cached.version;
   }
 
-  const version = yield* fetchNpmLatestVersion(packageName);
+  const version =
+    packageName === "@oh-my-pi/pi-coding-agent"
+      ? yield* fetchOhMyPiGithubLatestVersion()
+      : yield* fetchNpmLatestVersion(packageName);
   latestVersionCache.set(packageName, {
     expiresAt: now + LATEST_VERSION_CACHE_TTL_MS,
     version,
@@ -480,8 +520,8 @@ export const enrichProviderSnapshotWithVersionAdvisory = Effect.fn(
   const shouldResolveLatestVersion =
     options?.enableProviderUpdateChecks !== false &&
     snapshot.enabled &&
-    snapshot.installed &&
-    Boolean(snapshot.version);
+    ((snapshot.installed && Boolean(snapshot.version)) ||
+      (!snapshot.installed && capabilities.update !== null));
   if (!shouldResolveLatestVersion) {
     return {
       ...snapshot,

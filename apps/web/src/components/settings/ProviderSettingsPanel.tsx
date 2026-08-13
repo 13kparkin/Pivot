@@ -828,6 +828,7 @@ export function EnvironmentProviderSettings({
             return (
               <ProviderInstanceCard
                 key={row.instanceId}
+                environmentId={environmentId}
                 instanceId={row.instanceId}
                 instance={row.instance}
                 driverOption={driverOption}

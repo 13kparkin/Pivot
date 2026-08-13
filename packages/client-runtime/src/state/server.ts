@@ -731,6 +731,24 @@ export function createServerEnvironmentAtoms<R, E>(
         key: ({ environmentId }) => environmentId,
       },
     }),
+    ompListLoginProviders: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:omp-list-login-providers",
+      tag: WS_METHODS.serverOmpListLoginProviders,
+      concurrency: {
+        mode: "singleFlight",
+        key: ({ environmentId, input }) =>
+          `${environmentId}:${input.instanceId ?? "omp"}:list-login`,
+      },
+    }),
+    ompLogin: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:omp-login",
+      tag: WS_METHODS.serverOmpLogin,
+      concurrency: {
+        mode: "singleFlight",
+        key: ({ environmentId, input }) =>
+          `${environmentId}:${input.instanceId ?? "omp"}:login:${input.providerId}`,
+      },
+    }),
     updateProvider: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:server:update-provider",
       tag: WS_METHODS.serverUpdateProvider,

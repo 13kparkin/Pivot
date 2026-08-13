@@ -161,13 +161,13 @@ describe("getDesktopUpdateActionError", () => {
 describe("desktop update UI helpers", () => {
   it("builds the stable release URL for a downloaded version", () => {
     expect(getDesktopUpdateReleaseUrl("0.0.30")).toBe(
-      "https://github.com/pingdotgg/t3code/releases/tag/v0.0.30",
+      "https://github.com/13kparkin/Pivot/releases/tag/v0.0.30",
     );
   });
 
   it("builds the nightly release URL without dropping its version suffix", () => {
     expect(getDesktopUpdateReleaseUrl("0.0.30-nightly.20260728.931")).toBe(
-      "https://github.com/pingdotgg/t3code/releases/tag/v0.0.30-nightly.20260728.931",
+      "https://github.com/13kparkin/Pivot/releases/tag/v0.0.30-nightly.20260728.931",
     );
   });
 

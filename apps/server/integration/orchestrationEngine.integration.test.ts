@@ -106,16 +106,6 @@ function withHarness<A, E>(
   ).pipe(Effect.provide(NodeServices.layer));
 }
 
-function withRealCodexHarness<A, E>(
-  use: (harness: OrchestrationIntegrationHarness) => Effect.Effect<A, E>,
-) {
-  return Effect.acquireUseRelease(
-    makeOrchestrationIntegrationHarness({ provider: CODEX_PROVIDER, realCodex: true }),
-    use,
-    (harness) => harness.dispose,
-  ).pipe(Effect.provide(NodeServices.layer));
-}
-
 const seedProjectAndThread = (harness: OrchestrationIntegrationHarness) =>
   Effect.gen(function* () {
     const createdAt = nowIso();
@@ -264,101 +254,6 @@ it.live("runs a single turn end-to-end and persists checkpoint state in sqlite +
       assert.equal(gitShowFileAtRef(harness.workspaceDir, ref1, "README.md"), "v1\n");
     }),
   ),
-);
-
-it.live.skipIf(!process.env.CODEX_BINARY_PATH)(
-  "keeps the same Codex provider thread across runtime mode switches",
-  () =>
-    withRealCodexHarness((harness) =>
-      Effect.gen(function* () {
-        const createdAt = nowIso();
-
-        yield* harness.engine.dispatch({
-          type: "project.create",
-          commandId: CommandId.make("cmd-project-create-real-codex"),
-          projectId: PROJECT_ID,
-          title: "Integration Project",
-          workspaceRoot: harness.workspaceDir,
-          defaultModelSelection: {
-            instanceId: ProviderInstanceId.make("codex"),
-            model: "gpt-5.3-codex",
-          },
-          createdAt,
-        });
-
-        yield* harness.engine.dispatch({
-          type: "thread.create",
-          commandId: CommandId.make("cmd-thread-create-real-codex"),
-          threadId: THREAD_ID,
-          projectId: PROJECT_ID,
-          title: "Integration Thread",
-          modelSelection: {
-            instanceId: ProviderInstanceId.make("codex"),
-            model: "gpt-5.3-codex",
-          },
-          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-          runtimeMode: "full-access",
-          branch: null,
-          worktreePath: harness.workspaceDir,
-          createdAt,
-        });
-
-        yield* harness.engine.dispatch({
-          type: "thread.turn.start",
-          commandId: CommandId.make("cmd-turn-start-real-codex-1"),
-          threadId: THREAD_ID,
-          message: {
-            messageId: asMessageId("msg-real-codex-1"),
-            role: "user",
-            text: "Reply with exactly ALPHA.",
-            attachments: [],
-          },
-          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-          runtimeMode: "full-access",
-          createdAt: nowIso(),
-        });
-
-        const firstThread = yield* harness.waitForThread(
-          THREAD_ID,
-          (entry) =>
-            entry.session?.status === "ready" &&
-            entry.session.providerName === "codex" &&
-            entry.messages.some(
-              (message) => message.role === "assistant" && message.streaming === false,
-            ),
-          180_000,
-        );
-        assert.equal(firstThread.session?.threadId, "thread-1");
-
-        yield* harness.engine.dispatch({
-          type: "thread.turn.start",
-          commandId: CommandId.make("cmd-turn-start-real-codex-2"),
-          threadId: THREAD_ID,
-          message: {
-            messageId: asMessageId("msg-real-codex-2"),
-            role: "user",
-            text: "Reply with exactly BETA.",
-            attachments: [],
-          },
-          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-          runtimeMode: "approval-required",
-          createdAt: nowIso(),
-        });
-
-        const secondThread = yield* harness.waitForThread(
-          THREAD_ID,
-          (entry) =>
-            entry.session?.status === "ready" &&
-            entry.session.providerName === "codex" &&
-            entry.session.runtimeMode === "approval-required" &&
-            entry.messages.some(
-              (message) => message.role === "assistant" && message.text.includes("BETA"),
-            ),
-          180_000,
-        );
-        assert.equal(secondThread.session?.threadId, "thread-1");
-      }),
-    ),
 );
 
 it.live("runs multi-turn file edits and persists checkpoint diffs", () =>
