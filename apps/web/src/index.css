@@ -1705,36 +1705,6 @@ code {
   }
 }
 
-.t3-ghostty-canvas {
-  cursor: text;
-}
-
-.t3-ghostty-scrollbar {
-  position: absolute;
-  z-index: 1;
-  top: 4px;
-  right: 1px;
-  bottom: 4px;
-  width: var(--app-scrollbar-width);
-  cursor: default;
-  touch-action: none;
-}
-
-.t3-ghostty-scrollbar-thumb {
-  position: absolute;
-  top: 0;
-  right: 1px;
-  left: 1px;
-  border-radius: 3px;
-  background: var(--app-scrollbar-thumb);
-  transition: background-color 120ms ease-out;
-}
-
-.t3-ghostty-scrollbar:hover .t3-ghostty-scrollbar-thumb,
-.t3-ghostty-scrollbar:focus-visible .t3-ghostty-scrollbar-thumb {
-  background: var(--app-scrollbar-thumb-hover);
-}
-
 .model-picker-list::-webkit-scrollbar-track {
   margin-block: 0.5rem;
 }
