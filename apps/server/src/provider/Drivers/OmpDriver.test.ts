@@ -156,6 +156,19 @@ function makeFakeOmpSpawner(sessionFile: string) {
                       models: [{ provider: "openai", id: "gpt-5", name: "GPT-5" }],
                     },
                   });
+                } else if (rpcCommand.type === "get_available_commands") {
+                  yield* offer({
+                    id: rpcCommand.id,
+                    type: "response",
+                    command: "get_available_commands",
+                    success: true,
+                    data: {
+                      commands: [
+                        { name: "model", description: "Switch model" },
+                        { name: "review", description: "Review changes" },
+                      ],
+                    },
+                  });
                 } else if (Array.isArray(spawned.args) && spawned.args.includes("--version")) {
                   // Version probes are CLI argv, not RPC — handled below via stdout offer.
                 } else {
@@ -242,6 +255,10 @@ describe("OmpDriver", () => {
         ["openai/gpt-5"],
       );
       NodeAssert.equal(snapshot.models[0]?.name, "GPT-5");
+      NodeAssert.deepEqual(
+        snapshot.slashCommands.map((command) => command.name),
+        ["model", "review"],
+      );
       NodeAssert.equal(snapshot.installed, true);
       NodeAssert.equal(snapshot.version, "17.3.0");
     }).pipe(Effect.scoped),

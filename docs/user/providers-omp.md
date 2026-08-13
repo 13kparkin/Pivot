@@ -25,3 +25,5 @@ Model lists come from omp (`get_available_models`), not from a hardcoded catalog
 Login runs on the machine hosting the T3 server (browser opens there; OAuth callbacks stay there). You can also sign in from a terminal on that host with `omp login`.
 
 When omp asks for a confirmation, a paste code, or a choice (including login paste prompts), Pivot shows the existing approval / user-input panels in the composer. Your answer is sent back to omp over RPC.
+
+Type `/` in the composer to see omp slash commands (from `get_available_commands`), such as `/model` or `/review`. Choosing one inserts the command into the prompt.

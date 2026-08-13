@@ -35,6 +35,7 @@ class FakeOmpRpc {
   failSetModel = false;
   sessionFile = "/tmp/omp-session.jsonl";
   availableModels: ReadonlyArray<object> = [];
+  availableCommands: ReadonlyArray<object> = [];
   contextUsage:
     | {
         readonly tokens: number;
@@ -67,6 +68,13 @@ class FakeOmpRpc {
         type: "response",
         success: true,
         data: { models: this.availableModels },
+      });
+    }
+    if (command.type === "get_available_commands") {
+      return Effect.succeed({
+        type: "response",
+        success: true,
+        data: { commands: this.availableCommands },
       });
     }
     if (command.type === "get_login_providers") {
@@ -744,6 +752,33 @@ describe("OmpAdapter", () => {
         ],
       );
     }),
+  );
+
+  it.effect(
+    "discoverSlashCommands maps get_available_commands into ServerProviderSlashCommand",
+    () =>
+      Effect.gen(function* () {
+        const fake = new FakeOmpRpc();
+        fake.availableCommands = [
+          { name: "model", description: "Switch model", input: { hint: "provider/model" } },
+          { name: "review", description: "Review changes" },
+          { name: "vibe", description: "Enter vibe mode" },
+        ];
+        const adapter = new OmpAdapter(fake, testRandomUUID);
+        yield* adapter.startSession(startInput);
+        const commands = yield* adapter.discoverSlashCommands(THREAD_ID);
+        NodeAssert.equal(fake.sent.at(-1)?.type, "get_available_commands");
+        NodeAssert.deepEqual(commands, [
+          {
+            name: "model",
+            description: "Switch model",
+            input: { hint: "provider/model" },
+          },
+          { name: "review", description: "Review changes" },
+          { name: "vibe", description: "Enter vibe mode" },
+        ]);
+        yield* adapter.stopSession(THREAD_ID);
+      }),
   );
 
   it.effect("listLoginProviders maps get_login_providers", () =>

@@ -27,6 +27,7 @@ import {
   RuntimeRequestId,
   type RuntimeTaskStatus,
   type ServerProviderModel,
+  type ServerProviderSlashCommand,
   ProviderDriverKind,
   RuntimeTaskId,
   type RuntimeMode,
@@ -410,6 +411,19 @@ export class OmpAdapter {
       }
       const response = yield* this.#send(threadId, { type: "get_available_models" });
       return yield* modelsFromAvailableModelsResponse(response);
+    });
+  }
+
+  public discoverSlashCommands(threadId: ThreadId) {
+    return Effect.gen({ self: this }, function* () {
+      if (!this.#sessions.has(threadId)) {
+        return yield* new ProviderAdapterSessionNotFoundError({
+          provider: PROVIDER,
+          threadId,
+        });
+      }
+      const response = yield* this.#send(threadId, { type: "get_available_commands" });
+      return yield* slashCommandsFromAvailableCommandsResponse(response);
     });
   }
 
@@ -1237,6 +1251,49 @@ function loginProvidersFromResponse(
     });
   }
   return Effect.succeed(providers);
+}
+
+function slashCommandsFromAvailableCommandsResponse(
+  response: object,
+): Effect.Effect<ReadonlyArray<ServerProviderSlashCommand>, ProviderAdapterRequestError> {
+  if (!isRecord(response) || !isRecord(response.data) || !Array.isArray(response.data.commands)) {
+    return Effect.fail(
+      new ProviderAdapterRequestError({
+        provider: PROVIDER,
+        method: "get_available_commands",
+        detail: "response data.commands must be an array",
+      }),
+    );
+  }
+  const commands: ServerProviderSlashCommand[] = [];
+  for (const entry of response.data.commands) {
+    if (!isRecord(entry) || typeof entry.name !== "string" || entry.name.trim().length === 0) {
+      return Effect.fail(
+        new ProviderAdapterRequestError({
+          provider: PROVIDER,
+          method: "get_available_commands",
+          detail: "each command requires a non-empty name",
+        }),
+      );
+    }
+    const name = entry.name.trim().replace(/^\//, "");
+    const description =
+      typeof entry.description === "string" && entry.description.trim().length > 0
+        ? entry.description.trim()
+        : undefined;
+    const inputHint =
+      isRecord(entry.input) &&
+      typeof entry.input.hint === "string" &&
+      entry.input.hint.trim().length > 0
+        ? entry.input.hint.trim()
+        : undefined;
+    commands.push({
+      name,
+      ...(description === undefined ? {} : { description }),
+      ...(inputHint === undefined ? {} : { input: { hint: inputHint } }),
+    });
+  }
+  return Effect.succeed(commands);
 }
 
 function modelsFromAvailableModelsResponse(
