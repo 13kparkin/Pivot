@@ -46,7 +46,10 @@ class FakeOmpRpc {
     return Stream.fromQueue(queue);
   }
 
-  dispose(_sessionKey: string) {
+  readonly disposed: string[] = [];
+
+  dispose(sessionKey: string) {
+    this.disposed.push(sessionKey);
     return Effect.void;
   }
 
@@ -210,6 +213,50 @@ describe("OmpAdapter", () => {
         false,
       );
       NodeAssert.equal(events.filter((event) => event.type === "turn.completed").length, 1);
+    }),
+  );
+
+  it.effect("lists a started session and reports hasSession", () =>
+    Effect.gen(function* () {
+      const fake = new FakeOmpRpc();
+      const adapter = new OmpAdapter(fake);
+      NodeAssert.equal(yield* adapter.hasSession(THREAD_ID), false);
+      const session = yield* adapter.startSession(startInput);
+      NodeAssert.equal(yield* adapter.hasSession(THREAD_ID), true);
+      const listed = yield* adapter.listSessions();
+      NodeAssert.equal(listed.length, 1);
+      NodeAssert.equal(listed[0]?.threadId, THREAD_ID);
+      NodeAssert.equal(listed[0]?.resumeCursor, session.resumeCursor);
+    }),
+  );
+
+  it.effect("stopSession disposes the live omp child and drops the session", () =>
+    Effect.gen(function* () {
+      const fake = new FakeOmpRpc();
+      const adapter = new OmpAdapter(fake);
+      yield* adapter.startSession(startInput);
+      yield* adapter.stopSession(THREAD_ID);
+      NodeAssert.deepEqual(fake.disposed, [THREAD_ID]);
+      NodeAssert.equal(yield* adapter.hasSession(THREAD_ID), false);
+      NodeAssert.deepEqual(yield* adapter.listSessions(), []);
+    }),
+  );
+
+  it.effect("stopAll disposes every live omp session", () =>
+    Effect.gen(function* () {
+      const fake = new FakeOmpRpc();
+      const adapter = new OmpAdapter(fake);
+      const threadB = ThreadId.make("thread-2");
+      yield* adapter.startSession(startInput);
+      yield* adapter.startSession({
+        ...startInput,
+        threadId: threadB,
+        cwd: "/proj-b",
+      });
+      yield* adapter.stopAll();
+      NodeAssert.equal(fake.disposed.length, 2);
+      NodeAssert.equal(yield* adapter.hasSession(THREAD_ID), false);
+      NodeAssert.equal(yield* adapter.hasSession(threadB), false);
     }),
   );
 });
