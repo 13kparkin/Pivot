@@ -3,7 +3,9 @@
  *
  * Turn completion (AC11): terminal `agent_end` (`isTerminal !== false`),
  * prompt `data.agentInvoked === false`, and `prompt_result` with
- * `agentInvoked: false`. Empty assistant deltas are not emitted (AC2).
+ * `agentInvoked: false`. Local slash results arrive as `command_output`
+ * frames and become `assistant_text` deltas. Empty assistant deltas are
+ * not emitted (AC2).
  * Tools: `toolcall_end` / `tool_execution_*` → `item.*` (+ output deltas).
  * Thinking: `thinking_delta` → `content.delta` (`reasoning_text`).
  * Usage: `get_state.contextUsage` → `thread.token-usage.updated` on turn end.
@@ -489,6 +491,9 @@ export class OmpAdapter {
     if (frame.type === "prompt_result" && frame.agentInvoked === false) {
       return this.#emitTurnCompleted(session);
     }
+    if (frame.type === "command_output") {
+      return this.#onCommandOutput(session, frame);
+    }
     if (frame.type === "message_update") {
       return this.#onMessageUpdate(session, frame);
     }
@@ -610,6 +615,25 @@ export class OmpAdapter {
         ...(role === undefined ? {} : { role }),
         ...(toolUseId === undefined ? {} : { toolUseId }),
         ...(agentIndex === undefined ? {} : { agentIndex }),
+      },
+    });
+  }
+
+  #onCommandOutput(
+    session: LiveAdapterSession,
+    frame: Record<string, unknown>,
+  ): Effect.Effect<void> {
+    const text = typeof frame.text === "string" ? frame.text : "";
+    if (text.length === 0) {
+      return Effect.void;
+    }
+    return this.#emit({
+      type: "content.delta",
+      threadId: session.threadId,
+      turnId: session.turnId,
+      payload: {
+        streamKind: "assistant_text",
+        delta: text,
       },
     });
   }
