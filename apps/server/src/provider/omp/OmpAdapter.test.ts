@@ -1,13 +1,20 @@
 import * as NodeAssert from "node:assert/strict";
 
 import { it } from "@effect/vitest";
-import { type ProviderRuntimeEvent, ProviderDriverKind, ThreadId } from "@t3tools/contracts";
+import {
+  ApprovalRequestId,
+  type ProviderRuntimeEvent,
+  ProviderDriverKind,
+  ThreadId,
+} from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
 import { describe } from "vite-plus/test";
 
+import { ProviderAdapterRequestError, ProviderAdapterSessionNotFoundError } from "../Errors.ts";
 import { OmpAdapter } from "./OmpAdapter.ts";
 
 class FakeOmpRpc {
@@ -257,6 +264,83 @@ describe("OmpAdapter", () => {
       NodeAssert.equal(fake.disposed.length, 2);
       NodeAssert.equal(yield* adapter.hasSession(THREAD_ID), false);
       NodeAssert.equal(yield* adapter.hasSession(threadB), false);
+    }),
+  );
+
+  it.effect("interruptTurn sends omp abort for a live session", () =>
+    Effect.gen(function* () {
+      const fake = new FakeOmpRpc();
+      const adapter = new OmpAdapter(fake);
+      yield* adapter.startSession(startInput);
+      yield* adapter.interruptTurn(THREAD_ID);
+      NodeAssert.equal(fake.sent.at(-1)?.type, "abort");
+    }),
+  );
+
+  it.effect("interruptTurn fails when the session is missing", () =>
+    Effect.gen(function* () {
+      const adapter = new OmpAdapter(new FakeOmpRpc());
+      const exit = yield* Effect.exit(adapter.interruptTurn(THREAD_ID));
+      NodeAssert.equal(Exit.isFailure(exit), true);
+      if (Exit.isFailure(exit)) {
+        const error = exit.cause.failures[0];
+        NodeAssert.ok(error instanceof ProviderAdapterSessionNotFoundError);
+      }
+    }),
+  );
+
+  it.effect("readThread returns an empty turn list for a live session", () =>
+    Effect.gen(function* () {
+      const adapter = new OmpAdapter(new FakeOmpRpc());
+      yield* adapter.startSession(startInput);
+      const snapshot = yield* adapter.readThread(THREAD_ID);
+      NodeAssert.deepEqual(snapshot, { threadId: THREAD_ID, turns: [] });
+    }),
+  );
+
+  it.effect("rollbackThread fails as explicit unsupported", () =>
+    Effect.gen(function* () {
+      const adapter = new OmpAdapter(new FakeOmpRpc());
+      yield* adapter.startSession(startInput);
+      const exit = yield* Effect.exit(adapter.rollbackThread(THREAD_ID, 1));
+      NodeAssert.equal(Exit.isFailure(exit), true);
+      if (Exit.isFailure(exit)) {
+        const error = exit.cause.failures[0];
+        NodeAssert.ok(error instanceof ProviderAdapterRequestError);
+        NodeAssert.match(error.detail, /unsupported/i);
+      }
+    }),
+  );
+
+  it.effect("respondToRequest fails as explicit unsupported until extension_ui_request", () =>
+    Effect.gen(function* () {
+      const adapter = new OmpAdapter(new FakeOmpRpc());
+      yield* adapter.startSession(startInput);
+      const exit = yield* Effect.exit(
+        adapter.respondToRequest(THREAD_ID, ApprovalRequestId.make("req-1"), "accept"),
+      );
+      NodeAssert.equal(Exit.isFailure(exit), true);
+      if (Exit.isFailure(exit)) {
+        const error = exit.cause.failures[0];
+        NodeAssert.ok(error instanceof ProviderAdapterRequestError);
+        NodeAssert.match(error.detail, /unsupported/i);
+      }
+    }),
+  );
+
+  it.effect("respondToUserInput fails as explicit unsupported until extension_ui_request", () =>
+    Effect.gen(function* () {
+      const adapter = new OmpAdapter(new FakeOmpRpc());
+      yield* adapter.startSession(startInput);
+      const exit = yield* Effect.exit(
+        adapter.respondToUserInput(THREAD_ID, ApprovalRequestId.make("req-1"), {}),
+      );
+      NodeAssert.equal(Exit.isFailure(exit), true);
+      if (Exit.isFailure(exit)) {
+        const error = exit.cause.failures[0];
+        NodeAssert.ok(error instanceof ProviderAdapterRequestError);
+        NodeAssert.match(error.detail, /unsupported/i);
+      }
     }),
   );
 });
