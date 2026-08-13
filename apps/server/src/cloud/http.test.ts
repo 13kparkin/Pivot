@@ -191,7 +191,7 @@ describe("reconcileDesiredCloudLink", () => {
 
       expect(error).toMatchObject({
         _tag: "EnvironmentHttpUnauthorizedError",
-        message: "Run `t3 connect link` to authorize this environment.",
+        message: "Run `pivot connect link` to authorize this environment.",
       });
     }).pipe(
       Effect.provideService(

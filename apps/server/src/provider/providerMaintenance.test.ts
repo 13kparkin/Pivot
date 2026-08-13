@@ -135,7 +135,7 @@ it.layer(NodeServices.layer)("providerMaintenance", (it) => {
     ),
   );
 
-  it("marks providers with unknown current versions as unknown", () => {
+  it("marks providers with missing current versions as behind_latest when latest is known", () => {
     expect(
       createProviderVersionAdvisory({
         driver: driver("packageTool"),
@@ -143,7 +143,7 @@ it.layer(NodeServices.layer)("providerMaintenance", (it) => {
         latestVersion: "9.9.9",
       }),
     ).toMatchObject({
-      status: "unknown",
+      status: "behind_latest",
       currentVersion: null,
       latestVersion: "9.9.9",
     });
