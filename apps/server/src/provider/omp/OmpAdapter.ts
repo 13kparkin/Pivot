@@ -114,7 +114,7 @@ export class OmpAdapter {
       this.#sessions.set(input.threadId, session);
       yield* this.runtime.streamFrames(input.threadId).pipe(
         Stream.runForEach((frame) => this.#onFrame(session, frame)),
-        Effect.forkChild,
+        Effect.forkScoped,
       );
       yield* this.runtime.send(input.threadId, {
         type: "set_subagent_subscription",
