@@ -1,11 +1,18 @@
 import * as NodeAssert from "node:assert/strict";
 
-import { describe, it } from "vite-plus/test";
+import { it } from "@effect/vitest";
+import * as Effect from "effect/Effect";
+import * as Queue from "effect/Queue";
+import * as Sink from "effect/Sink";
+import * as Stream from "effect/Stream";
+import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
+import { describe } from "vite-plus/test";
 
 import {
   MAX_RPC_FRAME_BYTES,
   MAX_RPC_REASSEMBLED_BYTES,
   OmpRpcFrameDecoder,
+  OmpRpcRuntime,
   RPC_CHUNK_PAYLOAD_BYTES,
 } from "./OmpRpcRuntime.ts";
 
@@ -104,4 +111,223 @@ describe("OmpRpcFrameDecoder", () => {
     });
     NodeAssert.throws(() => decoder.push(chunks[1]!), /index 0|sequence must start/i);
   });
+});
+
+type SpawnedCommand = {
+  readonly command: string;
+  readonly args: ReadonlyArray<string>;
+  readonly options: {
+    readonly cwd?: string;
+    readonly env?: Record<string, string | undefined>;
+    readonly extendEnv?: boolean;
+  };
+};
+
+type FakeOmpSpawn = SpawnedCommand & {
+  readonly commands: Array<Record<string, unknown>>;
+  killed: boolean;
+};
+
+function asSpawnedCommand(command: ChildProcess.Command): SpawnedCommand {
+  if (command._tag !== "StandardCommand") {
+    throw new Error("expected StandardCommand");
+  }
+  return {
+    command: command.command,
+    args: command.args,
+    options: command.options,
+  };
+}
+
+function hasModeRpc(args: ReadonlyArray<string>): boolean {
+  const modeIndex = args.indexOf("--mode");
+  return (modeIndex >= 0 && args[modeIndex + 1] === "rpc") || args.includes("--mode=rpc");
+}
+
+function makeFakeOmpSpawner(input: { readonly sessionFile: string }) {
+  const spawns: FakeOmpSpawn[] = [];
+  const encoder = new TextEncoder();
+  const decoder = new TextDecoder();
+  const spawner = ChildProcessSpawner.make((command) =>
+    Effect.gen(function* () {
+      const stdout = yield* Queue.unbounded<Uint8Array>();
+      const offer = (frame: unknown) =>
+        Queue.offer(stdout, encoder.encode(`${JSON.stringify(frame)}\n`));
+      yield* offer({
+        type: "ready",
+        protocolVersion: 1,
+        supportedProtocolVersions: [1, 2],
+        maxFrameBytes: MAX_RPC_FRAME_BYTES,
+        maxReassembledFrameBytes: MAX_RPC_REASSEMBLED_BYTES,
+      });
+      const spawned = asSpawnedCommand(command);
+      const spawn: FakeOmpSpawn = {
+        ...spawned,
+        commands: [],
+        killed: false,
+      };
+      spawns.push(spawn);
+      let sessionFile = input.sessionFile;
+      let stdinBuf = "";
+      return ChildProcessSpawner.makeHandle({
+        pid: ChildProcessSpawner.ProcessId(spawns.length),
+        exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(0)),
+        isRunning: Effect.sync(() => !spawn.killed),
+        kill: () =>
+          Effect.sync(() => {
+            spawn.killed = true;
+          }),
+        unref: Effect.succeed(Effect.void),
+        stdin: Sink.forEach((chunk: Uint8Array) => {
+          stdinBuf += decoder.decode(chunk, { stream: true });
+          return Effect.gen(function* () {
+            let newlineIndex = stdinBuf.indexOf("\n");
+            while (newlineIndex >= 0) {
+              const line = stdinBuf.slice(0, newlineIndex).trim();
+              stdinBuf = stdinBuf.slice(newlineIndex + 1);
+              if (line.length > 0) {
+                const rpcCommand = JSON.parse(line) as Record<string, unknown>;
+                spawn.commands.push(rpcCommand);
+                if (rpcCommand.type === "negotiate_protocol") {
+                  yield* offer({
+                    id: rpcCommand.id,
+                    type: "response",
+                    command: "negotiate_protocol",
+                    success: true,
+                    data: { protocolVersion: 2 },
+                  });
+                } else if (rpcCommand.type === "switch_session") {
+                  sessionFile = String(rpcCommand.sessionPath);
+                  yield* offer({
+                    id: rpcCommand.id,
+                    type: "response",
+                    command: "switch_session",
+                    success: true,
+                  });
+                } else if (rpcCommand.type === "get_state") {
+                  yield* offer({
+                    id: rpcCommand.id,
+                    type: "response",
+                    command: "get_state",
+                    success: true,
+                    data: { sessionFile },
+                  });
+                }
+              }
+              newlineIndex = stdinBuf.indexOf("\n");
+            }
+          });
+        }),
+        stdout: Stream.fromQueue(stdout),
+        stderr: Stream.empty,
+        all: Stream.empty,
+        getInputFd: () => Sink.drain,
+        getOutputFd: () => Stream.empty,
+      });
+    }),
+  );
+  return { spawner, spawns };
+}
+
+describe("OmpRpcRuntime", () => {
+  it.effect("spawns the configured binary in rpc mode without disabling extensions", () =>
+    Effect.gen(function* () {
+      const fake = makeFakeOmpSpawner({ sessionFile: "/tmp/omp-session.jsonl" });
+      const runtime = new OmpRpcRuntime(fake.spawner, "/opt/omp");
+      yield* runtime.ensureSession({
+        sessionKey: "thread-1",
+        cwd: "/proj",
+        resumeCursor: null,
+      });
+      NodeAssert.equal(fake.spawns.length, 1);
+      NodeAssert.equal(fake.spawns[0]?.command, "/opt/omp");
+      NodeAssert.ok(hasModeRpc(fake.spawns[0]?.args ?? []));
+      NodeAssert.ok(!(fake.spawns[0]?.args ?? []).includes("--no-extensions"));
+      NodeAssert.equal(fake.spawns[0]?.options.cwd, "/proj");
+      NodeAssert.equal(fake.spawns[0]?.options.extendEnv, true);
+    }),
+  );
+
+  it.effect("waits for ready, negotiates protocol v2, and returns sessionFile from get_state", () =>
+    Effect.gen(function* () {
+      const fake = makeFakeOmpSpawner({ sessionFile: "/tmp/omp-session.jsonl" });
+      const runtime = new OmpRpcRuntime(fake.spawner, "/opt/omp");
+      const handle = yield* runtime.ensureSession({
+        sessionKey: "thread-1",
+        cwd: "/proj",
+        resumeCursor: null,
+      });
+      NodeAssert.deepEqual(
+        fake.spawns[0]?.commands.map((command) => command.type),
+        ["negotiate_protocol", "get_state"],
+      );
+      NodeAssert.equal(fake.spawns[0]?.commands[0]?.protocolVersion, 2);
+      NodeAssert.equal(handle.sessionKey, "thread-1");
+      NodeAssert.equal(handle.sessionFile, "/tmp/omp-session.jsonl");
+    }),
+  );
+
+  it.effect("resumes an existing omp session via switch_session", () =>
+    Effect.gen(function* () {
+      const fake = makeFakeOmpSpawner({ sessionFile: "/tmp/new.jsonl" });
+      const runtime = new OmpRpcRuntime(fake.spawner, "/opt/omp");
+      const handle = yield* runtime.ensureSession({
+        sessionKey: "thread-1",
+        cwd: "/proj",
+        resumeCursor: "/tmp/existing.jsonl",
+      });
+      NodeAssert.deepEqual(
+        fake.spawns[0]?.commands.map((command) => command.type),
+        ["negotiate_protocol", "switch_session", "get_state"],
+      );
+      NodeAssert.equal(fake.spawns[0]?.commands[1]?.sessionPath, "/tmp/existing.jsonl");
+      NodeAssert.equal(handle.sessionFile, "/tmp/existing.jsonl");
+    }),
+  );
+
+  it.effect("spawns an independent child per session key", () =>
+    Effect.gen(function* () {
+      const fake = makeFakeOmpSpawner({ sessionFile: "/tmp/omp-session.jsonl" });
+      const runtime = new OmpRpcRuntime(fake.spawner, "/opt/omp");
+      yield* runtime.ensureSession({
+        sessionKey: "thread-a",
+        cwd: "/proj-a",
+        resumeCursor: null,
+      });
+      yield* runtime.ensureSession({
+        sessionKey: "thread-b",
+        cwd: "/proj-b",
+        resumeCursor: null,
+      });
+      NodeAssert.equal(fake.spawns.length, 2);
+      NodeAssert.equal(fake.spawns[0]?.options.cwd, "/proj-a");
+      NodeAssert.equal(fake.spawns[1]?.options.cwd, "/proj-b");
+    }),
+  );
+
+  it.effect("dispose kills the live child so the next ensureSession respawns", () =>
+    Effect.gen(function* () {
+      const fake = makeFakeOmpSpawner({ sessionFile: "/tmp/omp-session.jsonl" });
+      const runtime = new OmpRpcRuntime(fake.spawner, "/opt/omp");
+      yield* runtime.ensureSession({
+        sessionKey: "thread-1",
+        cwd: "/proj",
+        resumeCursor: null,
+      });
+      yield* runtime.ensureSession({
+        sessionKey: "thread-1",
+        cwd: "/proj",
+        resumeCursor: null,
+      });
+      NodeAssert.equal(fake.spawns.length, 1);
+      yield* runtime.dispose("thread-1");
+      NodeAssert.equal(fake.spawns[0]?.killed, true);
+      yield* runtime.ensureSession({
+        sessionKey: "thread-1",
+        cwd: "/proj",
+        resumeCursor: null,
+      });
+      NodeAssert.equal(fake.spawns.length, 2);
+    }),
+  );
 });
