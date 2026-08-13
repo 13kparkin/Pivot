@@ -6,6 +6,9 @@ import {
   type ServerProviderUpdateState,
 } from "@t3tools/contracts";
 import { ServerProviderUpdateError } from "@t3tools/contracts";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
+import * as NodeFileSystem from "@effect/platform-node/NodeFileSystem";
+import * as NodePath from "@effect/platform-node/NodePath";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
@@ -36,6 +39,13 @@ const isServerProviderUpdateError = Schema.is(ServerProviderUpdateError);
 const MaintenanceRunnerTestConfig = ServerConfig.layerTest(process.cwd(), {
   prefix: "t3code-provider-maintenance-test-",
 }).pipe(Layer.provide(NodeServices.layer));
+
+// Crypto/FS/Path for managed omp install wiring — without ChildProcessSpawner.
+const MaintenanceRunnerNodePlatform = Layer.mergeAll(
+  NodeCrypto.layer,
+  NodeFileSystem.layer,
+  NodePath.layer,
+);
 
 const CODEX_DRIVER = ProviderDriverKind.make("codex");
 const CURSOR_DRIVER = ProviderDriverKind.make("cursor");
@@ -221,6 +231,7 @@ const makeTestRunner = (registry: ProviderRegistryShape) =>
             Layer.succeed(ProviderRegistry, registry),
             Layer.succeed(ProviderVersionCache, new Map()),
             MaintenanceRunnerTestConfig,
+            MaintenanceRunnerNodePlatform,
           ),
         ),
       ),

@@ -55,7 +55,7 @@ import type { ProviderInstance } from "../ProviderDriver.ts";
 import { makeManualOnlyProviderMaintenanceCapabilities } from "../providerMaintenance.ts";
 import type { ProviderSnapshotSource } from "../builtInProviderCatalog.ts";
 import { OmpAdapter } from "../omp/OmpAdapter.ts";
-import { listOmpLoginProviders, loginOmpProvider } from "../omp/OmpLogin.ts";
+import { listOmpLoginProviders, loginOmpProvider, OmpLoginError } from "../omp/OmpLogin.ts";
 import * as Crypto from "effect/Crypto";
 
 const loadProviders = (
@@ -706,10 +706,14 @@ export const ProviderRegistryLive = Layer.effect(
         const instances = yield* instanceRegistry.listInstances;
         const instance = instances.find((candidate) => candidate.instanceId === instanceId);
         if (!instance) {
-          return yield* Effect.fail(new Error(`No provider instance bound to id '${instanceId}'`));
+          return yield* new OmpLoginError({
+            message: `No provider instance bound to id '${instanceId}'`,
+          });
         }
         if (!(instance.adapter instanceof OmpAdapter)) {
-          return yield* Effect.fail(new Error(`instance ${instanceId} is not an omp adapter`));
+          return yield* new OmpLoginError({
+            message: `instance ${instanceId} is not an omp adapter`,
+          });
         }
         return instance.adapter;
       });
@@ -729,9 +733,7 @@ export const ProviderRegistryLive = Layer.effect(
             adapter,
             randomUUID: crypto.randomUUIDv4.pipe(Effect.orDie),
             cwd: process.cwd(),
-          }).pipe(
-            Effect.mapError((cause) => (cause instanceof Error ? cause : new Error(String(cause)))),
-          );
+          });
         }),
       ompLogin: (input) =>
         Effect.gen(function* () {
@@ -742,9 +744,7 @@ export const ProviderRegistryLive = Layer.effect(
             cwd: process.cwd(),
             providerId: input.providerId,
             onOpenUrl: (request) => input.onOpenUrl(request.launchUrl ?? request.url),
-          }).pipe(
-            Effect.mapError((cause) => (cause instanceof Error ? cause : new Error(String(cause)))),
-          );
+          });
         }),
       get streamChanges() {
         return Stream.fromPubSub(changesPubSub);

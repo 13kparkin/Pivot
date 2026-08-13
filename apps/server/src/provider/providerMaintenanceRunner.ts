@@ -10,12 +10,15 @@ import {
 import { resolveSpawnCommand } from "@t3tools/shared/shell";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
+import * as Crypto from "effect/Crypto";
 import * as Data from "effect/Data";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Path from "effect/Path";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import { HttpClient } from "effect/unstable/http";
@@ -61,7 +64,7 @@ export interface ProviderMaintenanceRunnerShape {
 export class ProviderMaintenanceRunner extends Context.Service<
   ProviderMaintenanceRunner,
   ProviderMaintenanceRunnerShape
->()("t3/provider/providerMaintenanceRunner") {}
+>()("pivot-cli/provider/providerMaintenanceRunner") {}
 
 class ProviderMaintenanceCommandError extends Data.TaggedError("ProviderMaintenanceCommandError")<{
   readonly message: string;
@@ -208,6 +211,9 @@ export const make = Effect.fn("ProviderMaintenanceRunner.make")(function* () {
   const providerRegistry = yield* ProviderRegistry;
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const httpClient = yield* HttpClient.HttpClient;
+  const crypto = yield* Crypto.Crypto;
+  const fileSystem = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
   const serverConfig = yield* ServerConfig.ServerConfig;
   const runMaintenanceCommand = (command: string, args: ReadonlyArray<string>) =>
     runProviderMaintenanceCommandWithSpawner({
@@ -215,12 +221,32 @@ export const make = Effect.fn("ProviderMaintenanceRunner.make")(function* () {
       command,
       args,
     });
+  const provideOmpManagedBinaryServices = <A, E>(
+    effect: Effect.Effect<
+      A,
+      E,
+      | ChildProcessSpawner.ChildProcessSpawner
+      | Crypto.Crypto
+      | FileSystem.FileSystem
+      | HttpClient.HttpClient
+      | Path.Path
+    >,
+  ) =>
+    effect.pipe(
+      Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+      Effect.provideService(Crypto.Crypto, crypto),
+      Effect.provideService(FileSystem.FileSystem, fileSystem),
+      Effect.provideService(HttpClient.HttpClient, httpClient),
+      Effect.provideService(Path.Path, path),
+    );
   const runOmpManagedInstall = Effect.fn("ProviderMaintenanceRunner.runOmpManagedInstall")(
     function* () {
-      const managed = yield* makeOmpManagedBinary({
-        baseDir: serverConfig.baseDir,
-        pathEnv: process.env.PATH,
-      });
+      const managed = yield* provideOmpManagedBinaryServices(
+        makeOmpManagedBinary({
+          baseDir: serverConfig.baseDir,
+          pathEnv: process.env.PATH,
+        }),
+      );
       const installed = yield* managed.install.pipe(
         Effect.mapError(
           (cause) =>

@@ -35,6 +35,7 @@ import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Queue from "effect/Queue";
+import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 
@@ -354,7 +355,7 @@ export class OmpAdapter {
       return yield* this.#send(threadId, { type: "login", providerId }).pipe(
         Effect.timeout("10 minutes"),
         Effect.mapError((cause) =>
-          cause instanceof ProviderAdapterProcessError
+          Schema.is(ProviderAdapterProcessError)(cause)
             ? cause
             : new ProviderAdapterRequestError({
                 provider: PROVIDER,
@@ -709,7 +710,9 @@ export class OmpAdapter {
     });
   }
 
-  #emitTokenUsageFromState(session: LiveAdapterSession): Effect.Effect<void> {
+  #emitTokenUsageFromState(
+    session: LiveAdapterSession,
+  ): Effect.Effect<void, ProviderAdapterProcessError | ProviderAdapterSessionNotFoundError> {
     return Effect.gen({ self: this }, function* () {
       const response = yield* this.#send(session.threadId, { type: "get_state" });
       if (!isRecord(response) || !isRecord(response.data)) {

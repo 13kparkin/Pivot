@@ -55,7 +55,7 @@ function mapOmpError(operation: string, cause: unknown, detail: string): TextGen
   if (isTextGenerationError(cause)) {
     return cause;
   }
-  if (cause instanceof OmpSpawnError) {
+  if (Schema.is(OmpSpawnError)(cause)) {
     return new TextGenerationError({
       operation,
       detail: cause.detail.length > 0 ? cause.detail : detail,

@@ -15,6 +15,7 @@ import type {
 import * as Context from "effect/Context";
 import type * as Effect from "effect/Effect";
 import type * as Stream from "effect/Stream";
+import type { OmpLoginError } from "../omp/OmpLogin.ts";
 import type { ProviderMaintenanceCapabilities } from "../providerMaintenance.ts";
 
 export type ProviderMaintenanceActionKind = "update";
@@ -85,7 +86,7 @@ export interface ProviderRegistryShape {
       readonly available: boolean;
       readonly authenticated: boolean;
     }>,
-    Error
+    OmpLoginError
   >;
 
   /**
@@ -96,9 +97,9 @@ export interface ProviderRegistryShape {
     readonly instanceId: ProviderInstanceId;
     readonly providerId: string;
     readonly onOpenUrl: (url: string) => Effect.Effect<void>;
-  }) => Effect.Effect<{ readonly providerId: string }, Error>;
+  }) => Effect.Effect<{ readonly providerId: string }, OmpLoginError>;
 }
 
 export class ProviderRegistry extends Context.Service<ProviderRegistry, ProviderRegistryShape>()(
-  "t3/provider/Services/ProviderRegistry",
+  "pivot-cli/provider/Services/ProviderRegistry",
 ) {}

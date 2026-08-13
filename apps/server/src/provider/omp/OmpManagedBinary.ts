@@ -6,8 +6,6 @@
  *
  * @module provider/omp/OmpManagedBinary
  */
-import * as NodeFS from "node:fs";
-
 import * as Clock from "effect/Clock";
 import * as Crypto from "effect/Crypto";
 import * as Data from "effect/Data";
@@ -94,12 +92,18 @@ export function isLinuxMuslHost(platform: NodeJS.Platform): boolean {
   if (platform !== "linux") {
     return false;
   }
-  return (
-    NodeFS.existsSync("/lib/ld-musl-x86_64.so.1") ||
-    NodeFS.existsSync("/lib/ld-musl-aarch64.so.1") ||
-    NodeFS.existsSync("/lib/libc.musl-x86_64.so.1") ||
-    NodeFS.existsSync("/lib/libc.musl-aarch64.so.1")
-  );
+  try {
+    const report = process.report?.getReport() as
+      | {
+          readonly header?: {
+            readonly glibcVersionRuntime?: unknown;
+          };
+        }
+      | undefined;
+    return typeof report?.header?.glibcVersionRuntime !== "string";
+  } catch {
+    return true;
+  }
 }
 
 /** Map host platform/arch to an oh-my-pi release asset basename. */

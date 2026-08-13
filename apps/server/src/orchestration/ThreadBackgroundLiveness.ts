@@ -70,7 +70,7 @@ export class ThreadBackgroundLivenessService extends Context.Service<
      */
     readonly getThreadBackgroundLiveness: (threadId: string) => ThreadBackgroundLiveness;
   }
->()("t3/orchestration/ThreadBackgroundLiveness/ThreadBackgroundLivenessService") {}
+>()("pivot-cli/orchestration/ThreadBackgroundLiveness/ThreadBackgroundLivenessService") {}
 
 export function make(): ThreadBackgroundLivenessService["Service"] {
   const stateByThreadId = new Map<string, ThreadLivenessState>();
