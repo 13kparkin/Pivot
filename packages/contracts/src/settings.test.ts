@@ -6,6 +6,7 @@ import {
   ClientSettingsSchema,
   ClientSettingsPatch,
   DEFAULT_SERVER_SETTINGS,
+  OmpSettings,
   ServerSettings,
   ServerSettingsPatch,
 } from "./settings.ts";
@@ -295,5 +296,22 @@ describe("ServerSettingsPatch string normalization", () => {
     expect(encoded.addProjectBaseDirectory).toBe("~/Development");
     expect(encoded.providers?.codex?.binaryPath).toBe("/opt/homebrew/bin/codex");
     expect(encoded.providers?.codex?.launchArgs).toBe("--strict-config");
+  });
+});
+
+describe("OmpSettings", () => {
+  const decodeOmpSettings = Schema.decodeUnknownSync(OmpSettings);
+
+  it("defaults binaryPath to omp", () => {
+    expect(decodeOmpSettings({}).binaryPath).toBe("omp");
+    expect(decodeServerSettings({}).providers.omp.binaryPath).toBe("omp");
+  });
+
+  it("accepts a configured omp binary path", () => {
+    expect(decodeOmpSettings({ binaryPath: "/opt/omp" }).binaryPath).toBe("/opt/omp");
+    const patch = decodeServerSettingsPatch({
+      providers: { omp: { binaryPath: "  /usr/local/bin/omp  " } },
+    });
+    expect(patch.providers?.omp?.binaryPath).toBe("/usr/local/bin/omp");
   });
 });
