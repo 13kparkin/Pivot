@@ -11,11 +11,11 @@ The [omp](https://omp.sh) CLI, installed and authenticated. See [omp](./provider
 ## Run Without Installing
 
 ```bash
-npx t3@latest
+npx pivot-cli@latest
 ```
 
 This starts the T3 Code server on your machine and opens the local web app. Use
-`npx t3@latest --help` for the full CLI reference.
+`npx pivot-cli@latest --help` for the full CLI reference.
 
 ## Desktop App
 

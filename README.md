@@ -26,12 +26,12 @@ We wanted something performant, remote-ready, and truly open. If we ever go the 
 The easiest way to test T3 Code is to run the server in your terminal (requires Node.js 22.16+, 23.11+, or 24.10+):
 
 ```bash
-npx t3@latest
+npx pivot-cli@latest
 ```
 
-This will launch T3 Code's backend on your machine as well as the local web app to control your agents.
+This will launch Pivot's backend on your machine as well as the local web app to control your agents.
 
-Tip: Use `npx t3@latest --help` for the full CLI reference.
+Tip: Use `npx pivot-cli@latest --help` for the full CLI reference.
 
 ### Desktop app
 
