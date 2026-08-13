@@ -10,6 +10,7 @@
 import {
   EventId,
   type ProviderRuntimeEvent,
+  type ProviderSession,
   type ProviderSessionStartInput,
   type ProviderSendTurnInput,
   ProviderDriverKind,
@@ -37,6 +38,7 @@ interface LiveAdapterSession {
   readonly sessionFile: string;
   readonly runtimeMode: RuntimeMode;
   readonly cwd: string;
+  readonly snapshot: ProviderSession;
   turnId: TurnId | undefined;
 }
 
@@ -77,22 +79,10 @@ export class OmpAdapter {
         cwd,
         resumeCursor,
       });
-      const session: LiveAdapterSession = {
-        threadId: input.threadId,
-        sessionFile: handle.sessionFile,
-        runtimeMode: input.runtimeMode,
-        cwd,
-        turnId: undefined,
-      };
-      this.#sessions.set(input.threadId, session);
-      yield* this.runtime.streamFrames(input.threadId).pipe(
-        Stream.runForEach((frame) => this.#onFrame(session, frame)),
-        Effect.forkChild,
-      );
       const createdAt = yield* nowIso;
-      return {
+      const snapshot: ProviderSession = {
         provider: PROVIDER,
-        status: "ready" as const,
+        status: "ready",
         runtimeMode: input.runtimeMode,
         cwd,
         threadId: input.threadId,
@@ -100,6 +90,20 @@ export class OmpAdapter {
         createdAt,
         updatedAt: createdAt,
       };
+      const session: LiveAdapterSession = {
+        threadId: input.threadId,
+        sessionFile: handle.sessionFile,
+        runtimeMode: input.runtimeMode,
+        cwd,
+        snapshot,
+        turnId: undefined,
+      };
+      this.#sessions.set(input.threadId, session);
+      yield* this.runtime.streamFrames(input.threadId).pipe(
+        Stream.runForEach((frame) => this.#onFrame(session, frame)),
+        Effect.forkChild,
+      );
+      return snapshot;
     });
   }
 
@@ -126,6 +130,35 @@ export class OmpAdapter {
         turnId,
         resumeCursor: session.sessionFile,
       };
+    });
+  }
+
+  public hasSession(threadId: ThreadId) {
+    return Effect.succeed(this.#sessions.has(threadId));
+  }
+
+  public listSessions() {
+    return Effect.succeed(Array.from(this.#sessions.values(), (session) => session.snapshot));
+  }
+
+  public stopSession(threadId: ThreadId) {
+    return Effect.gen({ self: this }, function* () {
+      const session = this.#sessions.get(threadId);
+      if (!session) {
+        return;
+      }
+      this.#sessions.delete(threadId);
+      yield* this.runtime.dispose(threadId);
+    });
+  }
+
+  public stopAll() {
+    return Effect.gen({ self: this }, function* () {
+      const threadIds = Array.from(this.#sessions.keys());
+      this.#sessions.clear();
+      yield* Effect.forEach(threadIds, (threadId) => this.runtime.dispose(threadId), {
+        discard: true,
+      });
     });
   }
 
