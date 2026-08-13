@@ -1,5 +1,15 @@
 import { describe, expect, it } from "vite-plus/test";
-import { classifyTaskAgentKind, type OrchestrationThreadActivity } from "@t3tools/contracts";
+import * as DateTime from "effect/DateTime";
+import {
+  classifyTaskAgentKind,
+  NodeId,
+  ProviderDriverKind,
+  ProviderInstanceId,
+  RunId,
+  ThreadId,
+  type OrchestrationThreadActivity,
+  type OrchestrationV2Subagent,
+} from "@t3tools/contracts";
 import {
   deriveAgentPanelModel,
   foldSubagentActivities,
@@ -8,6 +18,7 @@ import {
   isAgentAttributedToolActivity,
   isSubagentActivityKind,
   isTimelineBypassActivity,
+  projectedSubagentsToRuntime,
   workflowCardMembers,
 } from "./subagentRuntime.ts";
 
@@ -383,10 +394,19 @@ describe("deriveAgentPanelModel", () => {
   it("counts idle deliberately and waiting as active", () => {
     const model = deriveAgentPanelModel({ agents: roster });
     expect(model.idleCount).toBe(1);
-    // wf-1 coordinator + member 1 running.
+    // A coordinator with live members is not double-counted in the footer.
     expect(model.runningCount).toBeGreaterThanOrEqual(1);
+    const renderedAgentCount =
+      model.directAgents.length +
+      model.workflows.reduce(
+        (count, group) =>
+          count +
+          group.phases.reduce((phaseCount, phase) => phaseCount + phase.members.length, 0) +
+          group.unphasedMembers.length,
+        0,
+      );
     expect(model.idleCount + model.runningCount + model.waitingCount + model.settledCount).toBe(
-      roster.length,
+      renderedAgentCount,
     );
   });
 
@@ -456,6 +476,40 @@ describe("deriveAgentPanelModel", () => {
     expect(model.workflows[0]!.phases[0]!.state).not.toBe("done");
   });
 
+  it("marks skipped empty phases done after the workflow settles", () => {
+    const settledRoster = fold([
+      activity("task.started", { taskId: "wf-settled", taskType: "local_workflow" }),
+      activity("task.progress", {
+        taskId: "wf-settled",
+        phases: [{ index: 0, title: "Optional review" }],
+      }),
+      activity("task.completed", {
+        taskId: "wf-settled",
+        taskType: "local_workflow",
+        status: "completed",
+      }),
+    ]);
+
+    expect(deriveAgentPanelModel({ agents: settledRoster }).workflows[0]?.phases[0]?.state).toBe(
+      "done",
+    );
+  });
+
+  it("counts a live coordinator between settled-member phases", () => {
+    const betweenPhases = fold([
+      activity("task.started", { taskId: "wf-live", taskType: "local_workflow" }),
+      activity("task.progress", {
+        taskId: "wf-live:wf:0",
+        parentAgentId: "wf-live",
+        status: "completed",
+      }),
+    ]);
+    const model = deriveAgentPanelModel({ agents: betweenPhases });
+
+    expect(model.runningCount).toBe(1);
+    expect(model.settledCount).toBe(1);
+  });
+
   it("v2 projection wins outright and sources are never merged", () => {
     const v2Agent = { ...roster[0]!, id: "v2-only", title: "From v2" };
     const model = deriveAgentPanelModel({ agents: roster, v2Projection: [v2Agent] });
@@ -505,6 +559,98 @@ describe("workflowCardMembers", () => {
     expect(overflow).toBe(2);
     expect(visible[0]!.status).toBe("failed");
     expect(visible.filter((agent) => agent.status === "completed").length).toBeLessThanOrEqual(2);
+  });
+});
+
+describe("projectedSubagentsToRuntime", () => {
+  it("preserves workflow, membership, usage, activity, and idle state", () => {
+    const now = DateTime.makeUnsafe("2026-08-13T10:00:00.000Z");
+    const coordinatorId = NodeId.make("workflow-1");
+    const memberId = NodeId.make("workflow-1:agent-0");
+    const threadId = ThreadId.make("thread-1");
+    const runId = RunId.make("run-1");
+    const providerInstanceId = ProviderInstanceId.make("claude");
+    const coordinator = {
+      id: coordinatorId,
+      threadId,
+      runId,
+      parentNodeId: NodeId.make("root-1"),
+      origin: "provider_native",
+      createdBy: "agent",
+      driver: ProviderDriverKind.make("claude"),
+      providerInstanceId,
+      providerThreadId: null,
+      childThreadId: null,
+      nativeTaskRef: null,
+      prompt: "Run the review workflow",
+      title: "Review",
+      model: "claude-opus-4-1",
+      kind: "workflow",
+      role: { name: "coordinator", source: "provider" },
+      status: "running",
+      progress: "Reviewing",
+      result: null,
+      usage: { totalTokens: 300 },
+      currentActivationId: null,
+      activationCount: 1,
+      workflow: {
+        name: "review",
+        phases: [{ index: 0, title: "Inspect" }],
+        runId: "workflow-run-1",
+        scriptPath: "/tmp/review.js",
+      },
+      workflowMembership: null,
+      recentActivity: [],
+      startedAt: now,
+      completedAt: null,
+      updatedAt: now,
+    } satisfies OrchestrationV2Subagent;
+    const member = {
+      ...coordinator,
+      id: memberId,
+      parentNodeId: coordinatorId,
+      prompt: "Inspect the implementation",
+      title: "Reviewer",
+      kind: "workflow_agent",
+      role: { name: "reviewer", source: "provider" },
+      status: "idle",
+      progress: undefined,
+      usage: { totalTokens: 120, toolUses: 3 },
+      activationCount: 2,
+      workflow: null,
+      workflowMembership: {
+        workflowSubagentId: coordinatorId,
+        agentIndex: 0,
+        phaseIndex: 0,
+        attempt: 2,
+      },
+      recentActivity: [{ at: now, summary: "Inspected the implementation" }],
+    } satisfies OrchestrationV2Subagent;
+
+    const runtime = projectedSubagentsToRuntime([coordinator, member]);
+    const model = deriveAgentPanelModel({ agents: [], v2Projection: runtime });
+
+    expect(model.workflows[0]?.workflow).toMatchObject({
+      id: "workflow-1",
+      kind: "workflow",
+      workflowName: "review",
+      runHandles: { runId: "workflow-run-1", scriptPath: "/tmp/review.js" },
+    });
+    expect(model.workflows[0]?.phases[0]).toMatchObject({
+      index: 0,
+      title: "Inspect",
+      state: "running",
+    });
+    expect(model.workflows[0]?.phases[0]?.members[0]).toMatchObject({
+      id: "workflow-1:agent-0",
+      status: "idle",
+      role: "reviewer",
+      activationCount: 2,
+      usage: { totalTokens: 120, toolUses: 3 },
+      parentAgentId: "workflow-1",
+      phaseTitle: "Inspect",
+      progress: "Inspected the implementation",
+    });
   });
 });
 

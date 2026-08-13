@@ -13,6 +13,7 @@ import {
   type RunId,
 } from "@t3tools/contracts";
 import type { ThreadRunSummary } from "@t3tools/client-runtime/state/shell";
+import type { AgentPanelModel } from "@t3tools/client-runtime/state/subagentRuntime";
 import { formatPendingBackgroundWorkLabel } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
 import {
   resolveT3McpToolPresentation,
@@ -167,6 +168,68 @@ export type TimelineLatestRun = Pick<
   ThreadRunSummary,
   "runId" | "status" | "startedAt" | "completedAt"
 >;
+
+export interface AgentSpawnCtaGroup {
+  readonly workflowId: string | null;
+  readonly agentIds: ReadonlyArray<string>;
+}
+
+/**
+ * Replaces the per-subagent V2 lifecycle cards with one stable CTA anchor per
+ * workflow, or one per-run batch for direct spawns. The Agents panel remains
+ * the only roster; timeline rows only retain enough identity to derive their
+ * live summary from that panel model.
+ */
+export function collapseSubagentTimelineEntries(input: {
+  readonly timelineEntries: ReadonlyArray<TimelineEntry>;
+  readonly agentPanelModel: AgentPanelModel;
+}): {
+  readonly timelineEntries: ReadonlyArray<TimelineEntry>;
+  readonly ctaByItemId: ReadonlyMap<string, AgentSpawnCtaGroup>;
+} {
+  const workflowIdByAgentId = new Map<string, string>();
+  for (const group of input.agentPanelModel.workflows) {
+    workflowIdByAgentId.set(group.workflow.id, group.workflow.id);
+    for (const member of [
+      ...group.phases.flatMap((phase) => phase.members),
+      ...group.unphasedMembers,
+    ]) {
+      workflowIdByAgentId.set(member.id, group.workflow.id);
+    }
+  }
+
+  const timelineEntries: TimelineEntry[] = [];
+  const anchorItemIdByGroup = new Map<string, string>();
+  const ctaByItemId = new Map<string, AgentSpawnCtaGroup>();
+  for (const entry of input.timelineEntries) {
+    if (entry.kind !== "event" || entry.projectedItem.item.type !== "subagent") {
+      timelineEntries.push(entry);
+      continue;
+    }
+
+    const item = entry.projectedItem.item;
+    const workflowId = workflowIdByAgentId.get(item.subagentId) ?? null;
+    const groupKey =
+      workflowId === null ? `direct:${item.runId ?? item.subagentId}` : `workflow:${workflowId}`;
+    const anchorItemId = anchorItemIdByGroup.get(groupKey);
+    if (anchorItemId === undefined) {
+      anchorItemIdByGroup.set(groupKey, item.id);
+      ctaByItemId.set(item.id, { workflowId, agentIds: [item.subagentId] });
+      timelineEntries.push(entry);
+      continue;
+    }
+
+    const current = ctaByItemId.get(anchorItemId);
+    if (current !== undefined && !current.agentIds.includes(item.subagentId)) {
+      ctaByItemId.set(anchorItemId, {
+        ...current,
+        agentIds: [...current.agentIds, item.subagentId],
+      });
+    }
+  }
+
+  return { timelineEntries, ctaByItemId };
+}
 
 export type MessagesTimelineRow =
   | {

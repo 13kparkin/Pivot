@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 import {
+  collapseSubagentTimelineEntries,
   computeStableMessagesTimelineRows,
   computeMessageDurationStart,
   deriveMessagesTimelineRows,
@@ -7,6 +8,151 @@ import {
   resolveAssistantMessageCopyState,
   resolveTimelineToolPresentation,
 } from "./MessagesTimeline.logic";
+import type {
+  AgentPanelModel,
+  RuntimeSubagent,
+} from "@t3tools/client-runtime/state/subagentRuntime";
+import type { TimelineEntry } from "../../session-logic";
+
+function runtimeAgent(id: string, overrides: Partial<RuntimeSubagent> = {}): RuntimeSubagent {
+  return {
+    id,
+    kind: "subagent",
+    title: id,
+    role: null,
+    model: null,
+    effort: null,
+    status: "running",
+    activationCount: 1,
+    usage: null,
+    progress: null,
+    lastToolName: null,
+    result: null,
+    error: null,
+    outputFile: null,
+    parentAgentId: null,
+    agentIndex: null,
+    phaseIndex: null,
+    phaseTitle: null,
+    attempt: null,
+    workflowName: null,
+    phases: [],
+    runHandles: null,
+    recentActivity: [],
+    firstSeenAt: "2026-08-13T10:00:00.000Z",
+    startedAt: "2026-08-13T10:00:00.000Z",
+    completedAt: null,
+    updatedAt: "2026-08-13T10:00:00.000Z",
+    ...overrides,
+  };
+}
+
+function subagentTimelineEntry(id: string, runId: string | null): TimelineEntry {
+  return {
+    id: `entry:${id}`,
+    kind: "event",
+    createdAt: "2026-08-13T10:00:00.000Z",
+    projectedItem: {
+      item: { id: `item:${id}`, type: "subagent", subagentId: id, runId },
+    } as never,
+  };
+}
+
+describe("collapseSubagentTimelineEntries", () => {
+  it("keeps one CTA anchor per workflow and per-run direct-spawn batch", () => {
+    const coordinator = runtimeAgent("workflow-1", {
+      kind: "workflow",
+      phases: [{ index: 0, title: "Inspect" }],
+    });
+    const memberOne = runtimeAgent("member-1", {
+      kind: "workflow_agent",
+      parentAgentId: coordinator.id,
+      phaseIndex: 0,
+    });
+    const memberTwo = runtimeAgent("member-2", {
+      kind: "workflow_agent",
+      parentAgentId: coordinator.id,
+      phaseIndex: 0,
+    });
+    const directOne = runtimeAgent("direct-1");
+    const directTwo = runtimeAgent("direct-2");
+    const agentPanelModel = {
+      workflows: [
+        {
+          workflow: coordinator,
+          phases: [
+            {
+              index: 0,
+              title: "Inspect",
+              members: [memberOne, memberTwo],
+              state: "running",
+              activeCount: 2,
+              settledCount: 0,
+            },
+          ],
+          unphasedMembers: [],
+        },
+      ],
+      directAgents: [directOne, directTwo],
+      runningCount: 5,
+      waitingCount: 0,
+      idleCount: 0,
+      settledCount: 0,
+      totalTokens: 0,
+      hasAgents: true,
+      liveCount: 5,
+    } satisfies AgentPanelModel;
+    const result = collapseSubagentTimelineEntries({
+      timelineEntries: [
+        subagentTimelineEntry(memberOne.id, "run-1"),
+        subagentTimelineEntry(coordinator.id, "run-1"),
+        subagentTimelineEntry(memberTwo.id, "run-1"),
+        subagentTimelineEntry(directOne.id, "run-1"),
+        subagentTimelineEntry(directTwo.id, "run-1"),
+      ],
+      agentPanelModel,
+    });
+
+    expect(result.timelineEntries.map((entry) => entry.id)).toEqual([
+      "entry:member-1",
+      "entry:direct-1",
+    ]);
+    expect(result.ctaByItemId.get("item:member-1")).toEqual({
+      workflowId: "workflow-1",
+      agentIds: ["member-1", "workflow-1", "member-2"],
+    });
+    expect(result.ctaByItemId.get("item:direct-1")).toEqual({
+      workflowId: null,
+      agentIds: ["direct-1", "direct-2"],
+    });
+  });
+
+  it("does not merge direct spawns from different or unknown runs", () => {
+    const emptyModel = {
+      workflows: [],
+      directAgents: [],
+      runningCount: 0,
+      waitingCount: 0,
+      idleCount: 0,
+      settledCount: 0,
+      totalTokens: 0,
+      hasAgents: false,
+      liveCount: 0,
+    } satisfies AgentPanelModel;
+    const result = collapseSubagentTimelineEntries({
+      timelineEntries: [
+        subagentTimelineEntry("direct-1", "run-1"),
+        subagentTimelineEntry("direct-2", "run-2"),
+        subagentTimelineEntry("direct-3", null),
+        subagentTimelineEntry("direct-4", null),
+      ],
+      agentPanelModel: emptyModel,
+    });
+
+    expect(result.timelineEntries).toHaveLength(4);
+    expect(result.ctaByItemId.size).toBe(4);
+  });
+});
 
 describe("computeMessageDurationStart", () => {
   it("returns message createdAt when there is no preceding user message", () => {

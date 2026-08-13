@@ -11,6 +11,11 @@ import {
 } from "@t3tools/contracts";
 import { parseScopedThreadKey } from "@t3tools/client-runtime/environment";
 import { canForkProjectedAssistantItem } from "@t3tools/client-runtime/state/thread-workflows";
+import {
+  emptyAgentPanelModel,
+  formatSubagentTokenCount,
+  type AgentPanelModel,
+} from "@t3tools/client-runtime/state/subagentRuntime";
 import { resolveChatListAnchoredEndSpace } from "@t3tools/shared/chatList";
 import {
   createContext,
@@ -75,6 +80,7 @@ import { shouldAutoExpandChangedFiles } from "./changedFilesPresentation";
 import { MessageCopyButton } from "./MessageCopyButton";
 import {
   computeStableMessagesTimelineRows,
+  collapseSubagentTimelineEntries,
   MAX_VISIBLE_WORK_LOG_ENTRIES,
   deriveMessagesTimelineRows,
   normalizeCompactToolLabel,
@@ -88,6 +94,7 @@ import {
   resolveTimelineMinimapInteractiveWidth,
   resolveTimelineMinimapTopPercent,
   type StableMessagesTimelineRowsState,
+  type AgentSpawnCtaGroup,
   type MessagesTimelineRow,
   TIMELINE_MINIMAP_MIN_ITEMS,
   type TimelineLatestRun,
@@ -172,8 +179,15 @@ interface TimelineRowActivityState {
   latestRunId: RunId | null;
 }
 
+interface TimelineAgentSpawnState {
+  readonly agentPanelModel: AgentPanelModel;
+  readonly ctaByItemId: ReadonlyMap<string, AgentSpawnCtaGroup>;
+  readonly onOpenAgents: () => void;
+}
+
 const TimelineRowCtx = createContext<TimelineRowSharedState>(null!);
 const TimelineRowActivityCtx = createContext<TimelineRowActivityState>(null!);
+const TimelineAgentSpawnCtx = createContext<TimelineAgentSpawnState>(null!);
 const TIMELINE_LIST_HEADER = <div className="h-3 sm:h-4" />;
 const TIMELINE_LIST_FADE_HEADER = <div className="h-10 sm:h-12" />;
 const TIMELINE_LIST_FOOTER = <div className="h-3 sm:h-4" />;
@@ -188,12 +202,16 @@ const TIMELINE_MAINTAIN_SCROLL_AT_END = {
 } as const;
 const EMPTY_TIMELINE_PROVIDERS: ReadonlyArray<ServerProvider> = [];
 const EMPTY_TIMELINE_RUNS: ReadonlyArray<HandoffTimelineRun> = [];
+const EMPTY_AGENT_PANEL_MODEL = emptyAgentPanelModel();
+const NOOP_OPEN_AGENTS = () => {};
 
 // ---------------------------------------------------------------------------
 // Props (public API)
 // ---------------------------------------------------------------------------
 
 interface MessagesTimelineProps {
+  agentPanelModel?: AgentPanelModel;
+  onOpenAgents?: () => void;
   isWorking: boolean;
   activeTurnInProgress: boolean;
   activeTurnStartedAt: string | null;
@@ -254,6 +272,8 @@ interface MessagesTimelineProps {
 // ---------------------------------------------------------------------------
 
 export const MessagesTimeline = memo(function MessagesTimeline({
+  agentPanelModel = EMPTY_AGENT_PANEL_MODEL,
+  onOpenAgents = NOOP_OPEN_AGENTS,
   isWorking,
   activeTurnInProgress,
   activeTurnStartedAt,
@@ -399,10 +419,14 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     });
   }, [latestRun]);
 
+  const agentSpawnTimeline = useMemo(
+    () => collapseSubagentTimelineEntries({ timelineEntries, agentPanelModel }),
+    [agentPanelModel, timelineEntries],
+  );
   const rawRows = useMemo(
     () =>
       deriveMessagesTimelineRows({
-        timelineEntries,
+        timelineEntries: agentSpawnTimeline.timelineEntries,
         latestRun,
         expandedRunIds,
         expandedAttemptIds,
@@ -413,7 +437,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
         revertTurnCountByUserMessageId,
       }),
     [
-      timelineEntries,
+      agentSpawnTimeline.timelineEntries,
       latestRun,
       expandedRunIds,
       expandedAttemptIds,
@@ -582,6 +606,14 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     }),
     [activeTurnInProgress, isRevertingCheckpoint, isWorking, latestRun?.runId],
   );
+  const agentSpawnState = useMemo<TimelineAgentSpawnState>(
+    () => ({
+      agentPanelModel,
+      ctaByItemId: agentSpawnTimeline.ctaByItemId,
+      onOpenAgents,
+    }),
+    [agentPanelModel, agentSpawnTimeline.ctaByItemId, onOpenAgents],
+  );
   const listHeader = useMemo(
     () =>
       parentThreadLink === null ? (
@@ -631,53 +663,55 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   return (
     <TimelineRowCtx value={sharedState}>
       <TimelineRowActivityCtx value={activityState}>
-        <div ref={setTimelineViewportElement} className="relative h-full min-h-0">
-          <LegendList<MessagesTimelineRow>
-            ref={listRef}
-            data={rows}
-            keyExtractor={keyExtractor}
-            getItemType={getItemType}
-            renderItem={renderItem}
-            estimatedItemSize={90}
-            initialScrollAtEnd
-            {...(anchoredEndSpace ? { anchoredEndSpace } : {})}
-            contentInsetEndAdjustment={contentInsetEndAdjustment}
-            // LegendList owns ordinary end-follow (#5449): the app only turns
-            // it off while the user reads history (liveFollowEnabled), while a
-            // sent turn anchors near the top (anchoredEndSpace), or for the
-            // two-frame settle window of a fold toggle.
-            maintainScrollAtEnd={
-              anchoredEndSpace || !liveFollowEnabled || disclosureToggleSettling
-                ? false
-                : TIMELINE_MAINTAIN_SCROLL_AT_END
-            }
-            maintainVisibleContentPosition={maintainVisibleContentPosition}
-            onScroll={handleScroll}
-            className={cn(
-              "messages-timeline-scroll scrollbar-gutter-both h-full min-h-0 overflow-x-hidden overscroll-y-contain px-3 [overflow-anchor:none] sm:px-5",
-              topFadeEnabled && "chat-timeline-scroll-fade",
-            )}
-            ListHeaderComponent={
-              topFadeEnabled && parentThreadLink === null ? TIMELINE_LIST_FADE_HEADER : listHeader
-            }
-            ListFooterComponent={TIMELINE_LIST_FOOTER}
-          />
-          <TimelineMinimap
-            items={minimapItems}
-            bottomInset={contentInsetEndAdjustment}
-            hasPersistentGutter={minimapHasPersistentGutter}
-            hitStripWidth={minimapHitStripWidth}
-            stripMap={minimapStripMap}
-            onSelect={(item) => {
-              onManualNavigation();
-              void listRef.current?.scrollToIndex({
-                index: item.rowIndex,
-                animated: true,
-                viewOffset: 24,
-              });
-            }}
-          />
-        </div>
+        <TimelineAgentSpawnCtx value={agentSpawnState}>
+          <div ref={setTimelineViewportElement} className="relative h-full min-h-0">
+            <LegendList<MessagesTimelineRow>
+              ref={listRef}
+              data={rows}
+              keyExtractor={keyExtractor}
+              getItemType={getItemType}
+              renderItem={renderItem}
+              estimatedItemSize={90}
+              initialScrollAtEnd
+              {...(anchoredEndSpace ? { anchoredEndSpace } : {})}
+              contentInsetEndAdjustment={contentInsetEndAdjustment}
+              // LegendList owns ordinary end-follow (#5449): the app only turns
+              // it off while the user reads history (liveFollowEnabled), while a
+              // sent turn anchors near the top (anchoredEndSpace), or for the
+              // two-frame settle window of a fold toggle.
+              maintainScrollAtEnd={
+                anchoredEndSpace || !liveFollowEnabled || disclosureToggleSettling
+                  ? false
+                  : TIMELINE_MAINTAIN_SCROLL_AT_END
+              }
+              maintainVisibleContentPosition={maintainVisibleContentPosition}
+              onScroll={handleScroll}
+              className={cn(
+                "messages-timeline-scroll scrollbar-gutter-both h-full min-h-0 overflow-x-hidden overscroll-y-contain px-3 [overflow-anchor:none] sm:px-5",
+                topFadeEnabled && "chat-timeline-scroll-fade",
+              )}
+              ListHeaderComponent={
+                topFadeEnabled && parentThreadLink === null ? TIMELINE_LIST_FADE_HEADER : listHeader
+              }
+              ListFooterComponent={TIMELINE_LIST_FOOTER}
+            />
+            <TimelineMinimap
+              items={minimapItems}
+              bottomInset={contentInsetEndAdjustment}
+              hasPersistentGutter={minimapHasPersistentGutter}
+              hitStripWidth={minimapHitStripWidth}
+              stripMap={minimapStripMap}
+              onSelect={(item) => {
+                onManualNavigation();
+                void listRef.current?.scrollToIndex({
+                  index: item.rowIndex,
+                  animated: true,
+                  viewOffset: 24,
+                });
+              }}
+            />
+          </div>
+        </TimelineAgentSpawnCtx>
       </TimelineRowActivityCtx>
     </TimelineRowCtx>
   );
@@ -1482,9 +1516,144 @@ function v2EventPresentation(item: OrchestrationV2TurnItem): {
   }
 }
 
+/** One compact timeline anchor; the Agents panel remains the only roster. */
+const AgentSpawnCtaRow = memo(function AgentSpawnCtaRow(props: {
+  readonly item: Extract<OrchestrationV2TurnItem, { readonly type: "subagent" }>;
+  readonly createdAt: string;
+}) {
+  const shared = use(TimelineRowCtx);
+  const { agentPanelModel, ctaByItemId, onOpenAgents } = use(TimelineAgentSpawnCtx);
+  const spawn = ctaByItemId.get(props.item.id);
+  if (spawn === undefined) {
+    return (
+      <V2LifecycleRow
+        item={props.item}
+        createdAt={props.createdAt}
+        timestampFormat={shared.timestampFormat}
+        providerStatuses={shared.providerStatuses}
+        runs={shared.runs}
+        onOpenThread={shared.onOpenThread}
+      />
+    );
+  }
+
+  const memberIds = new Set(spawn.agentIds);
+  const workflowGroup =
+    spawn.workflowId === null
+      ? undefined
+      : agentPanelModel.workflows.find((group) => group.workflow.id === spawn.workflowId);
+  const agents =
+    workflowGroup === undefined
+      ? agentPanelModel.directAgents.filter((agent) => memberIds.has(agent.id))
+      : [
+          ...workflowGroup.phases.flatMap((phase) => phase.members),
+          ...workflowGroup.unphasedMembers,
+        ];
+  const fallbackMemberCount =
+    spawn.workflowId === null
+      ? memberIds.size
+      : [...memberIds].filter((id) => id !== spawn.workflowId).length;
+  const agentCount = Math.max(agents.length, fallbackMemberCount);
+  const useItemStatus = agents.length === 0;
+  const running = useItemStatus
+    ? props.item.status === "running" || props.item.status === "pending"
+      ? 1
+      : 0
+    : agents.filter((agent) => agent.status === "running" || agent.status === "pending").length;
+  const waiting = useItemStatus
+    ? props.item.status === "waiting"
+      ? 1
+      : 0
+    : agents.filter((agent) => agent.status === "waiting").length;
+  const idle = useItemStatus ? 0 : agents.filter((agent) => agent.status === "idle").length;
+  const failed = useItemStatus
+    ? props.item.status === "failed"
+      ? 1
+      : 0
+    : agents.filter((agent) => agent.status === "failed").length;
+  const stopped = useItemStatus
+    ? props.item.status === "cancelled" || props.item.status === "interrupted"
+      ? 1
+      : 0
+    : agents.filter((agent) => agent.status === "cancelled" || agent.status === "interrupted")
+        .length;
+  const coordinatorStatus = workflowGroup?.workflow.status;
+  const coordinatorSettled =
+    coordinatorStatus === "completed" ||
+    coordinatorStatus === "failed" ||
+    coordinatorStatus === "cancelled" ||
+    coordinatorStatus === "interrupted";
+  const live = workflowGroup === undefined ? running + waiting > 0 : !coordinatorSettled;
+  const totalTokens = agents.reduce(
+    (sum, agent) => sum + (agent.usage?.totalTokens ?? 0),
+    workflowGroup !== undefined && agents.length === 0
+      ? (workflowGroup.workflow.usage?.totalTokens ?? 0)
+      : 0,
+  );
+  const livePhase = workflowGroup?.phases.find((phase) => phase.state === "running");
+  const workflowName =
+    workflowGroup?.workflow.workflowName ?? workflowGroup?.workflow.title ?? null;
+  const working = running + waiting;
+  const dotClass = live
+    ? "bg-info"
+    : failed > 0
+      ? "bg-destructive"
+      : idle > 0
+        ? "bg-muted-foreground/50"
+        : "bg-success";
+  const lead =
+    workflowGroup !== undefined && agentCount === 0
+      ? live
+        ? "Started workflow"
+        : "Ran workflow"
+      : live
+        ? `Kicked off ${agentCount} subagent${agentCount === 1 ? "" : "s"}`
+        : `Ran ${agentCount} subagent${agentCount === 1 ? "" : "s"}`;
+  const status = live
+    ? livePhase
+      ? `${livePhase.title} · ${livePhase.activeCount} working`
+      : working > 0
+        ? `${working} working`
+        : "working"
+    : failed > 0
+      ? `${failed} failed`
+      : idle > 0
+        ? `${idle} idle`
+        : stopped > 0
+          ? `${stopped} stopped`
+          : "✓ completed";
+
+  return (
+    <button
+      type="button"
+      onClick={onOpenAgents}
+      data-v2-item-type="subagent"
+      data-agent-spawn-cta="true"
+      className="-mx-1 flex w-full items-center gap-2 rounded-md border border-border/60 bg-card/50 px-2.5 py-1.5 text-left text-[13px] transition hover:bg-accent/50"
+    >
+      <span aria-hidden className={cn("size-1.5 shrink-0 rounded-full", dotClass)} />
+      <BotIcon aria-hidden className="size-3.5 shrink-0 text-muted-foreground" />
+      <span className="min-w-0 truncate">
+        <span className="font-medium">{lead}</span>
+        {workflowName ? <span className="text-muted-foreground"> · {workflowName}</span> : null}
+      </span>
+      <span className="ml-auto flex shrink-0 items-center gap-2 font-mono text-[.7rem] text-muted-foreground">
+        <span>{status}</span>
+        {totalTokens > 0 ? (
+          <span className="tabular-nums">Σ {formatSubagentTokenCount(totalTokens)}</span>
+        ) : null}
+        <span className="text-info-foreground">{live ? "Open Agents ▸" : "View ▸"}</span>
+      </span>
+    </button>
+  );
+});
+
 function V2EventTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "event" }> }) {
   const ctx = use(TimelineRowCtx);
   const { item, visibility, sourceThreadId } = row.projectedItem;
+  if (item.type === "subagent") {
+    return <AgentSpawnCtaRow item={item} createdAt={row.createdAt} />;
+  }
   if (isV2LifecycleItem(item)) {
     return (
       <V2LifecycleRow
