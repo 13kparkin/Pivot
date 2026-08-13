@@ -350,11 +350,11 @@ describe("OmpRpcRuntime", () => {
         cwd: "/proj",
         resumeCursor: null,
       });
-      const eventsFiber = yield* runtime
-        .streamFrames("thread-1")
-        .pipe(Stream.take(1), Stream.runCollect, Effect.fork);
+      const eventsFiber = yield* Stream.runCollect(
+        Stream.take(runtime.streamFrames("thread-1"), 1),
+      ).pipe(Effect.forkChild);
       const response = yield* runtime.send("thread-1", { type: "prompt", message: "hi" });
-      const events = yield* Fiber.join(eventsFiber);
+      const events = Array.from(yield* Fiber.join(eventsFiber));
       NodeAssert.equal(
         typeof response === "object" &&
           response !== null &&

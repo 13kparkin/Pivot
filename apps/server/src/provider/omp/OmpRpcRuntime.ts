@@ -175,6 +175,7 @@ interface LiveOmpSession {
   readonly handle: OmpSessionHandle;
   readonly child: ChildProcessSpawner.ChildProcessHandle;
   readonly scope: Scope.Scope;
+  readonly frames: Queue.Queue<object>;
   readonly pending: Map<string, Deferred.Deferred<object, OmpSpawnError>>;
 }
 
@@ -289,9 +290,38 @@ export class OmpRpcRuntime {
         sessionKey: input.sessionKey,
         sessionFile,
       };
-      this.#sessions.set(input.sessionKey, { handle, child, scope, pending });
+      this.#sessions.set(input.sessionKey, { handle, child, scope, frames, pending });
       return handle;
     });
+  }
+
+  public send(
+    sessionKey: string,
+    command: Record<string, unknown>,
+  ): Effect.Effect<object, OmpSpawnError> {
+    return Effect.gen({ self: this }, function* () {
+      const live = this.#sessions.get(sessionKey);
+      if (!live) {
+        return yield* new OmpSpawnError({
+          operation: "send",
+          detail: `no live omp session for ${sessionKey}`,
+        });
+      }
+      return yield* this.#request(live.child, live.pending, command);
+    });
+  }
+
+  public streamFrames(sessionKey: string): Stream.Stream<object, OmpSpawnError> {
+    const live = this.#sessions.get(sessionKey);
+    if (!live) {
+      return Stream.fail(
+        new OmpSpawnError({
+          operation: "streamFrames",
+          detail: `no live omp session for ${sessionKey}`,
+        }),
+      );
+    }
+    return Stream.fromQueue(live.frames);
   }
 
   public dispose(sessionKey: string): Effect.Effect<void> {
