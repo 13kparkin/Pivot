@@ -90,6 +90,12 @@ import {
 } from "./MessagesTimeline.logic";
 import { TerminalContextInlineChip } from "./TerminalContextInlineChip";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
+import { WorkEntryExpandedDetail } from "./WorkEntryExpandedDetail";
+import {
+  advisorToneFromSeverity,
+  workEntryHasExpandedDetail,
+  ttsrRuleSummary,
+} from "./workEntryPresentation";
 import {
   deriveDisplayedUserMessageState,
   type ParsedTerminalContextEntry,
@@ -2046,44 +2052,6 @@ function workEntryPreview(
     : `${displayPath} +${workEntry.changedFiles!.length - 1} more`;
 }
 
-function workEntryRawCommand(
-  workEntry: Pick<TimelineWorkEntry, "command" | "rawCommand">,
-): string | null {
-  const rawCommand = workEntry.rawCommand?.trim();
-  if (!rawCommand || !workEntry.command) {
-    return null;
-  }
-  return rawCommand === workEntry.command.trim() ? null : rawCommand;
-}
-
-function buildToolCallExpandedBody(
-  workEntry: TimelineWorkEntry,
-  workspaceRoot: string | undefined,
-): string | null {
-  const blocks: string[] = [];
-  if (workEntry.itemType === "mcp_tool_call" && workEntry.toolData !== undefined) {
-    blocks.push(`MCP call\n${JSON.stringify(workEntry.toolData, null, 2)}`);
-  }
-  const raw = workEntryRawCommand(workEntry);
-  if (raw?.trim()) {
-    blocks.push(raw.trim());
-  } else if (workEntry.command?.trim()) {
-    blocks.push(workEntry.command.trim());
-  }
-  if (workEntry.detail?.trim()) {
-    blocks.push(workEntry.detail.trim());
-  }
-  const changedFiles = workEntry.changedFiles ?? [];
-  if (changedFiles.length > 0) {
-    blocks.push(
-      changedFiles
-        .map((filePath) => formatWorkspaceRelativePath(filePath, workspaceRoot))
-        .join("\n"),
-    );
-  }
-  return blocks.length > 0 ? blocks.join("\n\n") : null;
-}
-
 function workEntryIconName(workEntry: TimelineWorkEntry): WorkEntryIconName {
   if (
     workEntry.sourceActivityKind === "user-input.requested" ||
@@ -2134,6 +2102,29 @@ function toolWorkEntryHeading(workEntry: TimelineWorkEntry): string {
     return capitalizePhrase(normalizeCompactToolLabel(workEntry.label));
   }
   return capitalizePhrase(normalizeCompactToolLabel(workEntry.toolTitle));
+}
+
+/** Row heading for advisor cards: the highest-severity note, or a fallback. */
+function advisorRowHeading(
+  notes: ReadonlyArray<{ readonly note: string; readonly severity?: string | undefined }>,
+): string {
+  let topNote: string | null = null;
+  let topRank = 0;
+  for (const note of notes) {
+    const rank =
+      note.severity === "blocker"
+        ? 3
+        : note.severity === "concern"
+          ? 2
+          : note.severity === "nit"
+            ? 1
+            : 0;
+    if (rank >= topRank) {
+      topRank = rank;
+      topNote = note.note;
+    }
+  }
+  return topNote ? capitalizePhrase(normalizeCompactToolLabel(topNote)) : "Advisor";
 }
 
 const stopRowToggle = (e: { stopPropagation: () => void }) => e.stopPropagation();
@@ -2252,9 +2243,20 @@ const PlainWorkEntryRow = memo(function PlainWorkEntryRow(props: {
   const activity = use(TimelineRowActivityCtx);
   const [expanded, setExpanded] = useState(false);
   const iconConfig = workToneIcon(workEntry.tone);
-  const showWarningIndicator = workEntry.sourceActivityKind === "runtime.warning";
+  const showWarningIndicator =
+    workEntry.sourceActivityKind === "runtime.warning" ||
+    (workEntry.sourceActivityKind === "advisor.comment" &&
+      advisorToneFromSeverity(workEntry.advisorNotes ?? []) === "warning");
   const entryIconName = showWarningIndicator ? "x" : workEntryIconName(workEntry);
-  const heading = toolWorkEntryHeading(workEntry);
+  const advisorHeading =
+    workEntry.sourceActivityKind === "advisor.comment" && (workEntry.advisorNotes?.length ?? 0) > 0
+      ? advisorRowHeading(workEntry.advisorNotes ?? [])
+      : null;
+  const ttsrHeading =
+    workEntry.sourceActivityKind === "ttsr.triggered" && (workEntry.ttsrRules?.length ?? 0) > 0
+      ? ttsrRuleSummary(workEntry.ttsrRules ?? [])
+      : null;
+  const heading = advisorHeading ?? ttsrHeading ?? toolWorkEntryHeading(workEntry);
   const rawPreview = workEntryPreview(workEntry, workspaceRoot);
   const preview =
     rawPreview &&
@@ -2263,8 +2265,7 @@ const PlainWorkEntryRow = memo(function PlainWorkEntryRow(props: {
       ? null
       : rawPreview;
   const displayText = preview ? `${heading} - ${preview}` : heading;
-  const expandedBody = buildToolCallExpandedBody(workEntry, workspaceRoot);
-  const canExpand = expandedBody !== null;
+  const canExpand = workEntryHasExpandedDetail(workEntry);
   const showFailedIndicator = workEntryIndicatesToolFailure(workEntry);
   const showDestructiveRowStyle =
     showFailedIndicator &&
@@ -2408,15 +2409,13 @@ const PlainWorkEntryRow = memo(function PlainWorkEntryRow(props: {
           </div>
         </div>
       </div>
-      {expanded && canExpand && expandedBody ? (
+      {expanded && canExpand ? (
         <div
           className="mt-1 ms-7 cursor-default border-s border-border/45 ps-3 pt-0.5"
           onClick={stopRowToggle}
           onPointerDown={stopRowToggle}
         >
-          <pre className="max-h-64 cursor-text overflow-auto whitespace-pre-wrap break-words font-mono text-secondary-label text-[11px] leading-relaxed select-text">
-            {expandedBody}
-          </pre>
+          <WorkEntryExpandedDetail workEntry={workEntry} workspaceRoot={workspaceRoot} />
         </div>
       ) : null}
     </div>

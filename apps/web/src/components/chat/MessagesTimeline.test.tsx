@@ -774,6 +774,70 @@ describe("MessagesTimeline", () => {
     expect(markup).toContain("lucide-check");
   });
 
+  it("renders advisor rows with severity-tinted headings from the top note", () => {
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        {...buildProps()}
+        timelineEntries={[
+          {
+            id: "entry-1",
+            kind: "work",
+            createdAt: "2026-03-17T19:12:28.000Z",
+            entry: {
+              id: "work-1",
+              createdAt: "2026-03-17T19:12:28.000Z",
+              label: "This must be fixed before merge",
+              tone: "error",
+              sourceActivityKind: "advisor.comment",
+              advisorNotes: [
+                { note: "This must be fixed before merge", severity: "blocker" },
+                {
+                  note: "Consider extracting the helper",
+                  severity: "concern",
+                  advisor: "code-review",
+                },
+              ],
+            },
+          },
+        ]}
+      />,
+    );
+
+    expect(markup).toContain("This must be fixed before merge");
+  });
+
+  it("renders ttsr rows with the first rule name as heading", () => {
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        {...buildProps()}
+        timelineEntries={[
+          {
+            id: "entry-1",
+            kind: "work",
+            createdAt: "2026-03-17T19:12:28.000Z",
+            entry: {
+              id: "work-1",
+              createdAt: "2026-03-17T19:12:28.000Z",
+              label: "codegraph",
+              tone: "info",
+              sourceActivityKind: "ttsr.triggered",
+              ttsrRules: [
+                {
+                  name: "codegraph",
+                  path: "/home/kyle/.omp/agent/rules/codegraph.md",
+                  description: "Query CodeGraph before searching",
+                  interruptMode: "always",
+                },
+              ],
+            },
+          },
+        ]}
+      />,
+    );
+
+    expect(markup).toContain("codegraph");
+  });
+
   it("renders a failure marker for failed tool lifecycle entries", () => {
     const markup = renderToStaticMarkup(
       <MessagesTimeline

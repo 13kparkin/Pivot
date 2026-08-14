@@ -4,11 +4,13 @@ import { isBackgroundTaskActivity } from "@t3tools/client-runtime/state/subagent
 import {
   ApprovalRequestId,
   isToolLifecycleItemType,
+  type AdvisorNote,
   type OrchestrationLatestTurn,
   type OrchestrationThreadActivity,
   type OrchestrationProposedPlanId,
   ProviderDriverKind,
   type ToolLifecycleItemType,
+  type TtsrRule,
   type UserInputQuestion,
   type ThreadId,
   type TurnId,
@@ -58,6 +60,10 @@ export interface WorkLogEntry {
   toolLifecycleStatus?: WorkLogToolLifecycleStatus;
   /** Settled timestamp of the terminal lifecycle activity (tool.completed / settled tool.updated). */
   completedAt?: string;
+  /** Advisor notes (omp advisor cards), severity-tinted in the expanded body. */
+  advisorNotes?: ReadonlyArray<AdvisorNote>;
+  /** TTSR rule firings (omp time-traveling stream rules). */
+  ttsrRules?: ReadonlyArray<TtsrRule>;
   /** Originating orchestration activity kind (e.g. `user-input.requested`) for row chrome. */
   sourceActivityKind?: OrchestrationThreadActivity["kind"];
   /** Grouping key for subagent lifecycle rows (one row per agent). */
@@ -848,13 +854,11 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
   if (title) {
     entry.toolTitle = title;
   }
-  if (itemType === "mcp_tool_call") {
-    const data = asRecord(payload?.data);
-    if (data?.item !== undefined) {
-      entry.toolData = data.item;
-    }
-  }
   if (itemType) {
+    const data = asRecord(payload?.data);
+    if (data !== null) {
+      entry.toolData = itemType === "mcp_tool_call" && data.item !== undefined ? data.item : data;
+    }
     entry.itemType = itemType;
   }
   if (requestKind) {
@@ -862,6 +866,18 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
   }
   if (toolCallId) {
     entry.toolCallId = toolCallId;
+  }
+  if (activity.kind === "advisor.comment") {
+    const notes = asRecord(payload)?.notes;
+    if (Array.isArray(notes)) {
+      entry.advisorNotes = notes as ReadonlyArray<AdvisorNote>;
+    }
+  }
+  if (activity.kind === "ttsr.triggered") {
+    const rules = asRecord(payload)?.rules;
+    if (Array.isArray(rules)) {
+      entry.ttsrRules = rules as ReadonlyArray<TtsrRule>;
+    }
   }
   let toolLifecycleStatus = extractWorkLogToolLifecycleStatus(payload);
   if (!toolLifecycleStatus && activity.kind === "tool.completed") {
