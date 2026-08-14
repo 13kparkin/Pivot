@@ -181,6 +181,66 @@ describe("ProviderRuntimeEvent", () => {
     expect(parsed.payload.usage.maxTokens).toBe(200000);
     expect(parsed.payload.usage.usedTokens).toBe(31251);
   });
+
+  it("decodes advisor.comment events with severity notes", () => {
+    const parsed = decodeRuntimeEvent({
+      type: "advisor.comment",
+      eventId: "event-advisor-1",
+      provider: "omp",
+      createdAt: "2026-02-28T00:00:05.000Z",
+      threadId: "thread-1",
+      turnId: "turn-1",
+      payload: {
+        notes: [
+          { note: "Consider extracting this helper", severity: "concern", advisor: "code-review" },
+          { note: "Nit: rename this variable", severity: "nit" },
+          { note: "This must be fixed before merge", severity: "blocker" },
+        ],
+      },
+    });
+
+    expect(parsed.type).toBe("advisor.comment");
+    if (parsed.type !== "advisor.comment") {
+      throw new Error("expected advisor.comment");
+    }
+    expect(parsed.payload.notes).toHaveLength(3);
+    expect(parsed.payload.notes[0]?.severity).toBe("concern");
+    expect(parsed.payload.notes[0]?.advisor).toBe("code-review");
+    expect(parsed.payload.notes[2]?.severity).toBe("blocker");
+  });
+
+  it("decodes ttsr.triggered events with bounded rule payloads", () => {
+    const parsed = decodeRuntimeEvent({
+      type: "ttsr.triggered",
+      eventId: "event-ttsr-1",
+      provider: "omp",
+      createdAt: "2026-02-28T00:00:06.000Z",
+      threadId: "thread-1",
+      turnId: "turn-1",
+      payload: {
+        rules: [
+          {
+            name: "codegraph",
+            path: "/home/kyle/.omp/agent/rules/codegraph.md",
+            description: "Query CodeGraph before searching",
+            condition: ["grep-like search"],
+            scope: ["server"],
+            interruptMode: "always",
+          },
+        ],
+      },
+    });
+
+    expect(parsed.type).toBe("ttsr.triggered");
+    if (parsed.type !== "ttsr.triggered") {
+      throw new Error("expected ttsr.triggered");
+    }
+    expect(parsed.payload.rules).toHaveLength(1);
+    expect(parsed.payload.rules[0]?.name).toBe("codegraph");
+    expect(parsed.payload.rules[0]?.path).toBe("/home/kyle/.omp/agent/rules/codegraph.md");
+    expect(parsed.payload.rules[0]?.condition).toEqual(["grep-like search"]);
+    expect(parsed.payload.rules[0]?.interruptMode).toBe("always");
+  });
 });
 
 describe("classifyTaskAgentKind", () => {
