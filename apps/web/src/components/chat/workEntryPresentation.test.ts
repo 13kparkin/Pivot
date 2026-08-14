@@ -2,6 +2,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   advisorToneFromSeverity,
+  buildFileChangeDiffEntries,
   buildMcpCallSections,
   deriveWorkEntryDurationMs,
   extractCommandExitCode,
@@ -160,5 +161,64 @@ describe("workEntryHasExpandedDetail", () => {
         ttsrRules: [{ name: "codegraph", path: "/rules/codegraph.md" }],
       }),
     ).toBe(true);
+  });
+});
+
+describe("buildFileChangeDiffEntries", () => {
+  const turnSummary = {
+    turnId: "turn-1",
+    checkpointTurnCount: 2,
+    checkpointRef: "refs/checkpoints/2",
+    status: "captured" as const,
+    assistantMessageId: null,
+    files: [
+      { path: "apps/web/src/session-logic.ts", kind: "modified", additions: 12, deletions: 3 },
+      {
+        path: "apps/web/src/WorkEntryExpandedDetail.tsx",
+        kind: "added",
+        additions: 40,
+        deletions: 0,
+      },
+    ],
+  };
+
+  it("maps the entry's changed files to checkpoint add/del counts", () => {
+    const entries = buildFileChangeDiffEntries(
+      {
+        ...baseEntry,
+        itemType: "file_change",
+        changedFiles: ["apps/web/src/session-logic.ts", "apps/web/src/WorkEntryExpandedDetail.tsx"],
+      },
+      turnSummary,
+    );
+
+    expect(entries).toEqual([
+      { path: "apps/web/src/session-logic.ts", additions: 12, deletions: 3 },
+      { path: "apps/web/src/WorkEntryExpandedDetail.tsx", additions: 40, deletions: 0 },
+    ]);
+  });
+
+  it("keeps unknown paths with zero counts when the summary lacks them", () => {
+    const entries = buildFileChangeDiffEntries(
+      { ...baseEntry, itemType: "file_change", changedFiles: ["docs/plan.md"] },
+      turnSummary,
+    );
+
+    expect(entries).toEqual([{ path: "docs/plan.md", additions: 0, deletions: 0 }]);
+  });
+
+  it("returns the entry's paths with zero counts when no turn summary exists", () => {
+    expect(
+      buildFileChangeDiffEntries(
+        { ...baseEntry, itemType: "file_change", changedFiles: ["src/app.ts"] },
+        undefined,
+      ),
+    ).toEqual([{ path: "src/app.ts", additions: 0, deletions: 0 }]);
+  });
+
+  it("returns an empty list when the entry carries no changed files", () => {
+    expect(
+      buildFileChangeDiffEntries({ ...baseEntry, itemType: "file_change" }, turnSummary),
+    ).toEqual([]);
   });
 });
