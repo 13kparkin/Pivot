@@ -1666,7 +1666,7 @@ describe("OmpAdapter", () => {
   );
 
   describe("capabilities delegation", () => {
-    const snapshot = { settings: { entries: [] }, resources: [] } as const;
+    const snapshot = { settings: { entries: [] }, resources: [], skills: [], rules: [] } as const;
 
     it.effect("capabilitiesSnapshot delegates to the injected service", () =>
       Effect.gen(function* () {
@@ -1685,6 +1685,10 @@ describe("OmpAdapter", () => {
             received.push(input);
             return Effect.succeed(snapshot);
           },
+          readResource: () =>
+            Effect.succeed({ name: "x", scope: "global" as const, content: "", exists: false }),
+          writeResource: () => Effect.succeed(snapshot),
+          deleteResource: () => Effect.succeed(snapshot),
         };
         const adapter = new OmpAdapter(fake, testRandomUUID, { capabilitiesService: service });
         const result = yield* adapter.capabilitiesSnapshot();
@@ -1708,6 +1712,10 @@ describe("OmpAdapter", () => {
             return Effect.succeed(snapshot);
           },
           resetSetting: () => Effect.succeed(snapshot),
+          readResource: () =>
+            Effect.succeed({ name: "x", scope: "global" as const, content: "", exists: false }),
+          writeResource: () => Effect.succeed(snapshot),
+          deleteResource: () => Effect.succeed(snapshot),
         };
         const adapter = new OmpAdapter(fake, testRandomUUID, { capabilitiesService: service });
         const result = yield* adapter.capabilitiesWriteSetting({
@@ -1729,10 +1737,108 @@ describe("OmpAdapter", () => {
             NodeAssert.deepEqual(input, { key: "autoResume", scope: "global", confirm: true });
             return Effect.succeed(snapshot);
           },
+          readResource: () =>
+            Effect.succeed({ name: "x", scope: "global" as const, content: "", exists: false }),
+          writeResource: () => Effect.succeed(snapshot),
+          deleteResource: () => Effect.succeed(snapshot),
         };
         const adapter = new OmpAdapter(fake, testRandomUUID, { capabilitiesService: service });
         const result = yield* adapter.capabilitiesResetSetting({
           key: "autoResume",
+          scope: "global",
+          confirm: true,
+        });
+        NodeAssert.equal(result, snapshot);
+      }),
+    );
+
+    it.effect("capabilitiesReadResource passes the input through", () =>
+      Effect.gen(function* () {
+        const fake = new FakeOmpRpc();
+        const service = {
+          getSnapshot: () => Effect.succeed(snapshot),
+          writeSetting: () => Effect.succeed(snapshot),
+          resetSetting: () => Effect.succeed(snapshot),
+          readResource: (input: unknown) => {
+            NodeAssert.deepEqual(input, { kind: "rules", name: "codegraph", scope: "global" });
+            return Effect.succeed({
+              name: "codegraph",
+              scope: "global" as const,
+              content: "x",
+              exists: true,
+            });
+          },
+          writeResource: () => Effect.succeed(snapshot),
+          deleteResource: () => Effect.succeed(snapshot),
+        };
+        const adapter = new OmpAdapter(fake, testRandomUUID, { capabilitiesService: service });
+        const result = yield* adapter.capabilitiesReadResource({
+          kind: "rules",
+          name: "codegraph",
+          scope: "global",
+        });
+        NodeAssert.equal(result.exists, true);
+        NodeAssert.equal(result.content, "x");
+      }),
+    );
+
+    it.effect("capabilitiesWriteResource passes the input through", () =>
+      Effect.gen(function* () {
+        const fake = new FakeOmpRpc();
+        const service = {
+          getSnapshot: () => Effect.succeed(snapshot),
+          writeSetting: () => Effect.succeed(snapshot),
+          resetSetting: () => Effect.succeed(snapshot),
+          readResource: () =>
+            Effect.succeed({ name: "x", scope: "global" as const, content: "", exists: false }),
+          writeResource: (input: unknown) => {
+            NodeAssert.deepEqual(input, {
+              kind: "skills",
+              name: "create-ticket",
+              content: "body",
+              scope: "global",
+              overwrite: true,
+            });
+            return Effect.succeed(snapshot);
+          },
+          deleteResource: () => Effect.succeed(snapshot),
+        };
+        const adapter = new OmpAdapter(fake, testRandomUUID, { capabilitiesService: service });
+        const result = yield* adapter.capabilitiesWriteResource({
+          kind: "skills",
+          name: "create-ticket",
+          content: "body",
+          scope: "global",
+          overwrite: true,
+        });
+        NodeAssert.equal(result, snapshot);
+      }),
+    );
+
+    it.effect("capabilitiesDeleteResource passes the input through", () =>
+      Effect.gen(function* () {
+        const fake = new FakeOmpRpc();
+        const service = {
+          getSnapshot: () => Effect.succeed(snapshot),
+          writeSetting: () => Effect.succeed(snapshot),
+          resetSetting: () => Effect.succeed(snapshot),
+          readResource: () =>
+            Effect.succeed({ name: "x", scope: "global" as const, content: "", exists: false }),
+          writeResource: () => Effect.succeed(snapshot),
+          deleteResource: (input: unknown) => {
+            NodeAssert.deepEqual(input, {
+              kind: "rules",
+              name: "codegraph",
+              scope: "global",
+              confirm: true,
+            });
+            return Effect.succeed(snapshot);
+          },
+        };
+        const adapter = new OmpAdapter(fake, testRandomUUID, { capabilitiesService: service });
+        const result = yield* adapter.capabilitiesDeleteResource({
+          kind: "rules",
+          name: "codegraph",
           scope: "global",
           confirm: true,
         });

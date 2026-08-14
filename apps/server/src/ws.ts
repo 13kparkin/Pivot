@@ -1627,6 +1627,72 @@ const makeWsRpcLayer = (
             }),
             { "rpc.aggregate": "server" },
           ),
+        [WS_METHODS.serverOmpCapabilitiesReadResource]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.serverOmpCapabilitiesReadResource,
+            Effect.gen(function* () {
+              const instanceId: ProviderInstanceId =
+                input.instanceId ?? defaultInstanceIdForDriver(ProviderDriverKind.make("omp"));
+              const { instanceId: _ignored, ...resourceInput } = input;
+              const resource = yield* providerRegistry
+                .ompCapabilitiesReadResource({ instanceId, ...resourceInput })
+                .pipe(
+                  Effect.mapError(
+                    (cause) =>
+                      new ServerOmpCapabilitiesError({
+                        reason: cause instanceof Error ? cause.message : String(cause),
+                        cause,
+                      }),
+                  ),
+                );
+              return { resource };
+            }),
+            { "rpc.aggregate": "server" },
+          ),
+        [WS_METHODS.serverOmpCapabilitiesWriteResource]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.serverOmpCapabilitiesWriteResource,
+            Effect.gen(function* () {
+              const instanceId: ProviderInstanceId =
+                input.instanceId ?? defaultInstanceIdForDriver(ProviderDriverKind.make("omp"));
+              const { instanceId: _ignored, ...resourceInput } = input;
+              const snapshot = yield* providerRegistry
+                .ompCapabilitiesWriteResource({ instanceId, ...resourceInput })
+                .pipe(
+                  Effect.mapError(
+                    (cause) =>
+                      new ServerOmpCapabilitiesError({
+                        reason: cause instanceof Error ? cause.message : String(cause),
+                        cause,
+                      }),
+                  ),
+                );
+              return { snapshot };
+            }),
+            { "rpc.aggregate": "server" },
+          ),
+        [WS_METHODS.serverOmpCapabilitiesDeleteResource]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.serverOmpCapabilitiesDeleteResource,
+            Effect.gen(function* () {
+              const instanceId: ProviderInstanceId =
+                input.instanceId ?? defaultInstanceIdForDriver(ProviderDriverKind.make("omp"));
+              const { instanceId: _ignored, ...resourceInput } = input;
+              const snapshot = yield* providerRegistry
+                .ompCapabilitiesDeleteResource({ instanceId, ...resourceInput })
+                .pipe(
+                  Effect.mapError(
+                    (cause) =>
+                      new ServerOmpCapabilitiesError({
+                        reason: cause instanceof Error ? cause.message : String(cause),
+                        cause,
+                      }),
+                  ),
+                );
+              return { snapshot };
+            }),
+            { "rpc.aggregate": "server" },
+          ),
         [WS_METHODS.serverUpdateProvider]: (input) =>
           observeRpcEffect(
             WS_METHODS.serverUpdateProvider,

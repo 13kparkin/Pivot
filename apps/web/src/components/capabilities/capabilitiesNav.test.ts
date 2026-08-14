@@ -17,6 +17,16 @@ const ITEMS: ReadonlyArray<CapabilitiesSearchItem> = [
     title: "Settings",
     to: "/capabilities/settings",
   },
+  {
+    id: "capabilities-skills",
+    title: "Skills",
+    to: "/capabilities/skills",
+  },
+  {
+    id: "capabilities-rules",
+    title: "Rules",
+    to: "/capabilities/rules",
+  },
 ];
 
 describe("searchCapabilities", () => {
@@ -33,6 +43,8 @@ describe("searchCapabilities", () => {
     expect(searchCapabilities("capabilities", ITEMS).map((item) => item.id)).toEqual([
       "capabilities-overview",
       "capabilities-settings",
+      "capabilities-skills",
+      "capabilities-rules",
     ]);
     expect(searchCapabilities("/capabilities/settings", ITEMS).map((item) => item.id)).toEqual([
       "capabilities-settings",
@@ -67,6 +79,17 @@ describe("searchCapabilities", () => {
     expect(searchCapabilities("capabilities").map((item) => item.id)).toEqual([
       "capabilities-overview",
       "capabilities-settings",
+      "capabilities-skills",
+      "capabilities-rules",
+    ]);
+  });
+
+  it("matches the new skills and rules sections", () => {
+    expect(searchCapabilities("skill", ITEMS).map((item) => item.id)).toEqual([
+      "capabilities-skills",
+    ]);
+    expect(searchCapabilities("rule", ITEMS).map((item) => item.id)).toEqual([
+      "capabilities-rules",
     ]);
   });
 });

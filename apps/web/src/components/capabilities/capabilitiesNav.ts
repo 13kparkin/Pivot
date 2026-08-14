@@ -1,4 +1,8 @@
-export type CapabilitiesPath = "/capabilities" | "/capabilities/settings";
+export type CapabilitiesPath =
+  | "/capabilities"
+  | "/capabilities/settings"
+  | "/capabilities/skills"
+  | "/capabilities/rules";
 
 export interface CapabilitiesSearchItem {
   readonly id: string;
@@ -13,6 +17,8 @@ export interface CapabilitiesSearchItem {
 export const CAPABILITIES_SECTION_LABELS: Readonly<Record<CapabilitiesPath, string>> = {
   "/capabilities": "Overview",
   "/capabilities/settings": "Settings",
+  "/capabilities/skills": "Skills",
+  "/capabilities/rules": "Rules",
 };
 
 /**
@@ -29,6 +35,16 @@ export const CAPABILITIES_SEARCH_ITEMS = [
     id: "capabilities-settings",
     title: "Settings",
     to: "/capabilities/settings",
+  },
+  {
+    id: "capabilities-skills",
+    title: "Skills",
+    to: "/capabilities/skills",
+  },
+  {
+    id: "capabilities-rules",
+    title: "Rules",
+    to: "/capabilities/rules",
   },
 ] as const satisfies ReadonlyArray<CapabilitiesSearchItem>;
 

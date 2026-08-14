@@ -16,9 +16,18 @@ export const makeProviderRegistryMock = (
   setProviderMaintenanceActionState: () => Effect.succeed(providers),
   listOmpLoginProviders: () => Effect.succeed([]),
   ompLogin: ({ providerId }) => Effect.succeed({ providerId }),
-  ompCapabilitiesGetSnapshot: () => Effect.succeed({ settings: { entries: [] }, resources: [] }),
-  ompCapabilitiesWriteSetting: () => Effect.succeed({ settings: { entries: [] }, resources: [] }),
-  ompCapabilitiesResetSetting: () => Effect.succeed({ settings: { entries: [] }, resources: [] }),
+  ompCapabilitiesGetSnapshot: () =>
+    Effect.succeed({ settings: { entries: [] }, resources: [], skills: [], rules: [] }),
+  ompCapabilitiesWriteSetting: () =>
+    Effect.succeed({ settings: { entries: [] }, resources: [], skills: [], rules: [] }),
+  ompCapabilitiesResetSetting: () =>
+    Effect.succeed({ settings: { entries: [] }, resources: [], skills: [], rules: [] }),
+  ompCapabilitiesReadResource: () =>
+    Effect.succeed({ name: "x", scope: "global", content: "", exists: false }),
+  ompCapabilitiesWriteResource: () =>
+    Effect.succeed({ settings: { entries: [] }, resources: [], skills: [], rules: [] }),
+  ompCapabilitiesDeleteResource: () =>
+    Effect.succeed({ settings: { entries: [] }, resources: [], skills: [], rules: [] }),
   streamChanges: Stream.empty,
 });
 

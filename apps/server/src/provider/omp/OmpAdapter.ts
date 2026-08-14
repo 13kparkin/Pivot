@@ -58,7 +58,14 @@ import {
   ProviderAdapterSessionNotFoundError,
   ProviderAdapterValidationError,
 } from "../Errors.ts";
-import type { OmpResetSettingInput, OmpWriteSettingInput, ProjectId } from "@t3tools/contracts";
+import type {
+  OmpDeleteResourceInput,
+  OmpReadResourceInput,
+  OmpResetSettingInput,
+  OmpWriteResourceInput,
+  OmpWriteSettingInput,
+  ProjectId,
+} from "@t3tools/contracts";
 import type { OmpCapabilitiesService } from "./OmpCapabilitiesService.ts";
 import { OmpSpawnError, type OmpRpcRuntime } from "./OmpRpcRuntime.ts";
 
@@ -153,7 +160,12 @@ export interface OmpAdapterOptions {
   readonly resolveRoleModel?: OmpResolveRoleModel;
   readonly capabilitiesService?: Pick<
     OmpCapabilitiesService,
-    "getSnapshot" | "writeSetting" | "resetSetting"
+    | "getSnapshot"
+    | "writeSetting"
+    | "resetSetting"
+    | "readResource"
+    | "writeResource"
+    | "deleteResource"
   >;
 }
 
@@ -231,6 +243,27 @@ export class OmpAdapter {
   public capabilitiesResetSetting(input: OmpResetSettingInput) {
     return this.requireCapabilitiesService().pipe(
       Effect.flatMap((service) => service.resetSetting(input)),
+    );
+  }
+
+  /** omp Capabilities: read one rule/skill item (non-thread op). */
+  public capabilitiesReadResource(input: OmpReadResourceInput) {
+    return this.requireCapabilitiesService().pipe(
+      Effect.flatMap((service) => service.readResource(input)),
+    );
+  }
+
+  /** omp Capabilities: create/replace a rule/skill item (non-thread op). */
+  public capabilitiesWriteResource(input: OmpWriteResourceInput) {
+    return this.requireCapabilitiesService().pipe(
+      Effect.flatMap((service) => service.writeResource(input)),
+    );
+  }
+
+  /** omp Capabilities: destructive rule/skill delete, confirm-gated (non-thread op). */
+  public capabilitiesDeleteResource(input: OmpDeleteResourceInput) {
+    return this.requireCapabilitiesService().pipe(
+      Effect.flatMap((service) => service.deleteResource(input)),
     );
   }
 

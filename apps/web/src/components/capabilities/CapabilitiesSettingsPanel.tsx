@@ -9,7 +9,7 @@ import type {
 } from "@t3tools/contracts";
 import * as Option from "effect/Option";
 import { AsyncResult, Atom } from "effect/unstable/reactivity";
-import { LoaderIcon, SaveIcon, Undo2Icon } from "lucide-react";
+import { LoaderIcon, SaveIcon, SearchIcon, Undo2Icon } from "lucide-react";
 import { useState } from "react";
 
 import { useActiveEnvironmentId } from "../../state/entities";
@@ -27,6 +27,7 @@ import {
   buildSettingRows,
   buildWriteSettingInput,
   canEditEntry,
+  filterSettingRows,
 } from "./CapabilitiesSettingsPanel.logic";
 import { resolveCapabilitiesProjectId } from "./CapabilitiesOverviewPanel.logic";
 
@@ -174,6 +175,7 @@ export function CapabilitiesSettingsPanel() {
   const groups = useSettingsProjectGroups();
   const projectId = resolveCapabilitiesProjectId(groups, environmentId);
   const [scope, setScope] = useState<OmpCapabilityScope>("global");
+  const [query, setQuery] = useState("");
 
   // Project scope is only available when the active environment has a project.
   const effectiveScope: OmpCapabilityScope =
@@ -223,7 +225,7 @@ export function CapabilitiesSettingsPanel() {
     );
   }
 
-  const rows = buildSettingRows(snapshot.settings.entries);
+  const rows = filterSettingRows(buildSettingRows(snapshot.settings.entries), query);
 
   return (
     <SettingsPageContainer>
@@ -255,8 +257,27 @@ export function CapabilitiesSettingsPanel() {
         <SettingsRow title="Precedence" description={buildPrecedenceLabel(effectiveScope)} />
       </SettingsSection>
       <SettingsSection title="Entries">
+        <div className="relative max-w-72">
+          <SearchIcon className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground/70" />
+          <Input
+            size="sm"
+            type="search"
+            value={query}
+            onChange={(event) => setQuery(event.currentTarget.value)}
+            placeholder="Search settings"
+            aria-label="Search settings"
+            className="h-8 pl-8"
+          />
+        </div>
         {rows.length === 0 ? (
-          <SettingsRow title="No settings" description="omp reported no config settings." />
+          <SettingsRow
+            title={query.trim().length > 0 ? "No matching settings" : "No settings"}
+            description={
+              query.trim().length > 0
+                ? "No settings match the current search."
+                : "omp reported no config settings."
+            }
+          />
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full min-w-[760px] text-left text-xs">

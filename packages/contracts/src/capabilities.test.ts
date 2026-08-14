@@ -6,17 +6,39 @@ import { ProviderInstanceId } from "./providerInstance.ts";
 import {
   OmpCapabilitiesError,
   OmpCapabilitiesSnapshot,
+  OmpCapabilityItem,
+  OmpCapabilityItemName,
   OmpCapabilityResource,
+  OmpSettingsSurfaceEntry,
   OmpCapabilityScope,
   OmpCapabilityKind,
-  OmpSettingsSurfaceEntry,
+  OmpDeleteResourceInput,
+  OmpReadResourceInput,
+  OmpWriteResourceInput,
   OmpWriteSettingInput,
+  ServerOmpCapabilitiesDeleteResourceInput,
   ServerOmpCapabilitiesGetSnapshotInput,
+  ServerOmpCapabilitiesReadResourceInput,
   ServerOmpCapabilitiesResetSettingInput,
+  ServerOmpCapabilitiesWriteResourceInput,
   ServerOmpCapabilitiesWriteSettingInput,
 } from "./capabilities.ts";
 
 const decodeResource = Schema.decodeUnknownSync(OmpCapabilityResource);
+const decodeItem = Schema.decodeUnknownSync(OmpCapabilityItem);
+const decodeItemName = Schema.decodeUnknownSync(OmpCapabilityItemName);
+const decodeReadResource = Schema.decodeUnknownSync(OmpReadResourceInput);
+const decodeWriteResource = Schema.decodeUnknownSync(OmpWriteResourceInput);
+const decodeDeleteResource = Schema.decodeUnknownSync(OmpDeleteResourceInput);
+const decodeReadResourceTransport = Schema.decodeUnknownSync(
+  ServerOmpCapabilitiesReadResourceInput,
+);
+const decodeWriteResourceTransport = Schema.decodeUnknownSync(
+  ServerOmpCapabilitiesWriteResourceInput,
+);
+const decodeDeleteResourceTransport = Schema.decodeUnknownSync(
+  ServerOmpCapabilitiesDeleteResourceInput,
+);
 const encodeResource = Schema.encodeSync(OmpCapabilityResource);
 const decodeSnapshot = Schema.decodeUnknownSync(OmpCapabilitiesSnapshot);
 const decodeSettingsEntry = Schema.decodeUnknownSync(OmpSettingsSurfaceEntry);
@@ -157,14 +179,20 @@ describe("OmpCapabilitiesSnapshot", () => {
           exists: true,
         },
       ],
+      skills: [{ name: "create-ticket", scope: "global" }],
+      rules: [{ name: "codegraph", scope: "global", description: "Prefer CodeGraph" }],
     } as const;
     expect(decodeSnapshot(snapshot).resources[0]?.name).toBe("skills");
+    expect(decodeSnapshot(snapshot).skills[0]?.name).toBe("create-ticket");
+    expect(decodeSnapshot(snapshot).rules[0]?.description).toBe("Prefer CodeGraph");
   });
 
   it("decodes a snapshot without agentDirLabel (no absolute paths leaked)", () => {
     const snapshot = {
       settings: { entries: [] },
       resources: [],
+      skills: [],
+      rules: [],
     } as const;
     expect(decodeSnapshot(snapshot).agentDirLabel).toBeUndefined();
   });
@@ -187,6 +215,104 @@ describe("OmpWriteSettingInput", () => {
     const decoded = decodeWriteSetting(input);
     expect(decoded.projectId).toBe("project-1");
     expect(decoded.confirm).toBe(true);
+  });
+});
+
+describe("OmpCapabilityItemName", () => {
+  it("accepts safe slugs", () => {
+    expect(decodeItemName("codegraph")).toBe("codegraph");
+    expect(decodeItemName("create-ticket")).toBe("create-ticket");
+    expect(decodeItemName("my.rule_2")).toBe("my.rule_2");
+  });
+
+  it("rejects path traversal and unsafe names", () => {
+    for (const bad of ["../evil", "a/b", "..", ".hidden", "", "a b", "a\\b"]) {
+      expect(() => decodeItemName(bad)).toThrow();
+    }
+  });
+});
+
+describe("OmpCapabilityItem", () => {
+  it("round-trips with an optional frontmatter description", () => {
+    const item = { name: "codegraph", scope: "global" } as const;
+    expect(decodeItem(item)).toEqual(item);
+    const withDescription = {
+      name: "codegraph",
+      scope: "project",
+      description: "Use codegraph",
+    } as const;
+    expect(decodeItem(withDescription).description).toBe("Use codegraph");
+  });
+});
+
+describe("OmpReadResourceInput", () => {
+  it("round-trips a global read", () => {
+    const input = { kind: "rules", name: "codegraph", scope: "global" } as const;
+    expect(decodeReadResource(input)).toEqual(input);
+  });
+
+  it("round-trips a project read with projectId", () => {
+    const input = {
+      kind: "skills",
+      name: "create-ticket",
+      scope: "project",
+      projectId: ProjectId.make("project-1"),
+    } as const;
+    expect(decodeReadResource(input).projectId).toEqual(ProjectId.make("project-1"));
+  });
+});
+
+describe("OmpWriteResourceInput", () => {
+  it("requires overwrite", () => {
+    const input = {
+      kind: "rules",
+      name: "codegraph",
+      content: "body",
+      scope: "global",
+      overwrite: false,
+    } as const;
+    expect(decodeWriteResource(input).overwrite).toBe(false);
+  });
+});
+
+describe("OmpDeleteResourceInput", () => {
+  it("requires confirm", () => {
+    const input = {
+      kind: "skills",
+      name: "create-ticket",
+      scope: "global",
+      confirm: true,
+    } as const;
+    expect(decodeDeleteResource(input).confirm).toBe(true);
+  });
+});
+
+describe("Item transport inputs", () => {
+  it("accepts an instanceId on every item RPC input", () => {
+    const instanceId = ProviderInstanceId.make("omp");
+    expect(
+      decodeReadResourceTransport({ instanceId, kind: "rules", name: "x", scope: "global" })
+        .instanceId,
+    ).toEqual(instanceId);
+    expect(
+      decodeWriteResourceTransport({
+        instanceId,
+        kind: "rules",
+        name: "x",
+        content: "c",
+        scope: "global",
+        overwrite: false,
+      }).instanceId,
+    ).toEqual(instanceId);
+    expect(
+      decodeDeleteResourceTransport({
+        instanceId,
+        kind: "rules",
+        name: "x",
+        scope: "global",
+        confirm: true,
+      }).instanceId,
+    ).toEqual(instanceId);
   });
 });
 

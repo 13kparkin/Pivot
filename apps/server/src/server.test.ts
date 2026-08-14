@@ -650,6 +650,12 @@ const buildAppUnderTest = (options?: {
               Effect.die("ProviderRegistry.ompCapabilitiesWriteSetting unsupported in test"),
             ompCapabilitiesResetSetting: () =>
               Effect.die("ProviderRegistry.ompCapabilitiesResetSetting unsupported in test"),
+            ompCapabilitiesReadResource: () =>
+              Effect.die("ProviderRegistry.ompCapabilitiesReadResource unsupported in test"),
+            ompCapabilitiesWriteResource: () =>
+              Effect.die("ProviderRegistry.ompCapabilitiesWriteResource unsupported in test"),
+            ompCapabilitiesDeleteResource: () =>
+              Effect.die("ProviderRegistry.ompCapabilitiesDeleteResource unsupported in test"),
             streamChanges: Stream.empty,
             ...options?.layers?.providerRegistry,
           }),
@@ -4584,17 +4590,34 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
                       ],
                     },
                     resources: [],
+                    skills: [],
+                    rules: [],
                   };
                 }),
               ompCapabilitiesWriteSetting: ({ instanceId, key, value, scope }) =>
                 Effect.sync(() => {
                   capabilitiesCalls.push(`write:${instanceId}:${key}:${String(value)}:${scope}`);
-                  return { settings: { entries: [] }, resources: [] };
+                  return { settings: { entries: [] }, resources: [], skills: [], rules: [] };
                 }),
               ompCapabilitiesResetSetting: ({ instanceId, key }) =>
                 Effect.fail(
                   new OmpCapabilitiesError({ reason: `reset ${key} blocked for ${instanceId}` }),
                 ),
+              ompCapabilitiesReadResource: ({ instanceId, kind, name, scope }) =>
+                Effect.sync(() => {
+                  capabilitiesCalls.push(`read:${instanceId}:${kind}:${name}:${scope}`);
+                  return { name, scope, content: "# rule", exists: true };
+                }),
+              ompCapabilitiesWriteResource: ({ instanceId, kind, name, scope }) =>
+                Effect.sync(() => {
+                  capabilitiesCalls.push(`write-resource:${instanceId}:${kind}:${name}:${scope}`);
+                  return { settings: { entries: [] }, resources: [], skills: [], rules: [] };
+                }),
+              ompCapabilitiesDeleteResource: ({ instanceId, kind, name, scope }) =>
+                Effect.sync(() => {
+                  capabilitiesCalls.push(`delete-resource:${instanceId}:${kind}:${name}:${scope}`);
+                  return { settings: { entries: [] }, resources: [], skills: [], rules: [] };
+                }),
             },
           },
         });
@@ -4629,10 +4652,50 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
           ),
         );
 
+        const readResource = yield* Effect.scoped(
+          withWsRpcClient(wsUrl, (client) =>
+            client[WS_METHODS.serverOmpCapabilitiesReadResource]({
+              instanceId: ProviderInstanceId.make("omp"),
+              kind: "rules",
+              name: "codegraph",
+              scope: "global",
+            }),
+          ),
+        );
+        yield* Effect.scoped(
+          withWsRpcClient(wsUrl, (client) =>
+            client[WS_METHODS.serverOmpCapabilitiesWriteResource]({
+              instanceId: ProviderInstanceId.make("omp"),
+              kind: "skills",
+              name: "create-ticket",
+              content: "# body",
+              scope: "project",
+              projectId: ProjectId.make("project-1"),
+              overwrite: true,
+            }),
+          ),
+        );
+        yield* Effect.scoped(
+          withWsRpcClient(wsUrl, (client) =>
+            client[WS_METHODS.serverOmpCapabilitiesDeleteResource]({
+              instanceId: ProviderInstanceId.make("omp"),
+              kind: "rules",
+              name: "codegraph",
+              scope: "global",
+              confirm: true,
+            }),
+          ),
+        );
+
         assert.equal(snapshot.snapshot.settings.entries[0]?.value, "titanium");
+        assert.equal(readResource.resource.content, "# rule");
+        assert.equal(readResource.resource.exists, true);
         assert.deepEqual(capabilitiesCalls, [
           "get:omp:project-1",
           "write:omp:theme.dark:midnight:global",
+          "read:omp:rules:codegraph:global",
+          "write-resource:omp:skills:create-ticket:project",
+          "delete-resource:omp:rules:codegraph:global",
         ]);
         assert.equal(failure._tag, "Failure");
         if (failure._tag !== "Failure") {

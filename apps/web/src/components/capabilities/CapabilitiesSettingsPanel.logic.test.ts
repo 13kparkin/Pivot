@@ -11,6 +11,7 @@ import {
   buildWriteSettingInput,
   canEditEntry,
   PRECEDENCE_LADDER,
+  filterSettingRows,
 } from "./CapabilitiesSettingsPanel.logic";
 
 describe("PRECEDENCE_LADDER", () => {
@@ -106,5 +107,58 @@ describe("canEditEntry", () => {
   it("accepts unmasked entries", () => {
     expect(canEditEntry(entry({ masked: false }))).toBe(true);
     expect(canEditEntry(entry({ masked: false, value: undefined }))).toBe(true);
+  });
+});
+
+describe("filterSettingRows", () => {
+  const rows = buildSettingRows([
+    {
+      key: "theme.dark",
+      value: "titanium",
+      type: "string",
+      description: "Dark theme",
+      masked: false,
+      scope: "global",
+    },
+    {
+      key: "advisor.enabled",
+      value: true,
+      type: "boolean",
+      description: "Run the advisor",
+      masked: false,
+      scope: "global",
+    },
+    {
+      key: "auth.broker.token",
+      type: "string",
+      description: "Broker token",
+      masked: true,
+      scope: "global",
+    },
+  ]);
+
+  it("returns every row for an empty query", () => {
+    expect(filterSettingRows(rows, "")).toHaveLength(3);
+    expect(filterSettingRows(rows, "   ")).toHaveLength(3);
+  });
+
+  it("matches by key", () => {
+    expect(filterSettingRows(rows, "theme.dark").map((row) => row.key)).toEqual(["theme.dark"]);
+  });
+
+  it("matches by type", () => {
+    expect(filterSettingRows(rows, "boolean").map((row) => row.key)).toEqual(["advisor.enabled"]);
+  });
+
+  it("matches by description", () => {
+    expect(filterSettingRows(rows, "broker").map((row) => row.key)).toEqual(["auth.broker.token"]);
+  });
+
+  it("is case-insensitive and trims the query", () => {
+    expect(filterSettingRows(rows, "  THEME.DARK  ").map((row) => row.key)).toEqual(["theme.dark"]);
+  });
+
+  it("returns no rows when nothing matches", () => {
+    expect(filterSettingRows(rows, "xyzzy")).toEqual([]);
   });
 });

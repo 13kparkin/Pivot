@@ -26,6 +26,24 @@ export function buildSettingRows(
   }));
 }
 
+/**
+ * Filter settings rows by key, type, or description. An empty query returns
+ * every row unchanged so the table never flashes empty while clearing.
+ */
+export function filterSettingRows(
+  rows: ReadonlyArray<SettingsRow>,
+  query: string,
+): ReadonlyArray<SettingsRow> {
+  const normalized = query.trim().toLocaleLowerCase();
+  if (normalized.length === 0) return rows;
+  return rows.filter(
+    (row) =>
+      row.key.toLocaleLowerCase().includes(normalized) ||
+      row.type.toLocaleLowerCase().includes(normalized) ||
+      row.description.toLocaleLowerCase().includes(normalized),
+  );
+}
+
 export interface WriteSettingInput {
   readonly key: string;
   readonly value: unknown;

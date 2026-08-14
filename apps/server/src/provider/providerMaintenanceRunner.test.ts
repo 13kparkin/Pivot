@@ -213,11 +213,17 @@ function makeRegistry(
       listOmpLoginProviders: () => Effect.succeed([]),
       ompLogin: ({ providerId }) => Effect.succeed({ providerId }),
       ompCapabilitiesGetSnapshot: () =>
-        Effect.succeed({ settings: { entries: [] }, resources: [] }),
+        Effect.succeed({ settings: { entries: [] }, resources: [], skills: [], rules: [] }),
       ompCapabilitiesWriteSetting: () =>
-        Effect.succeed({ settings: { entries: [] }, resources: [] }),
+        Effect.succeed({ settings: { entries: [] }, resources: [], skills: [], rules: [] }),
       ompCapabilitiesResetSetting: () =>
-        Effect.succeed({ settings: { entries: [] }, resources: [] }),
+        Effect.succeed({ settings: { entries: [] }, resources: [], skills: [], rules: [] }),
+      ompCapabilitiesReadResource: () =>
+        Effect.succeed({ name: "x", scope: "global", content: "", exists: false }),
+      ompCapabilitiesWriteResource: () =>
+        Effect.succeed({ settings: { entries: [] }, resources: [], skills: [], rules: [] }),
+      ompCapabilitiesDeleteResource: () =>
+        Effect.succeed({ settings: { entries: [] }, resources: [], skills: [], rules: [] }),
       streamChanges: Stream.empty,
     };
 

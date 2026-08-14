@@ -341,4 +341,259 @@ it.layer(NodeServices.layer)("OmpCapabilitiesService", (it) => {
       expect(isError(failure)).toBe(true);
     }),
   );
+
+  it.effect("inventories rule and skill items with frontmatter descriptions", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const agentDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-omp-agent-" });
+      yield* fs.makeDirectory(path.join(agentDir, "rules"), { recursive: true });
+      yield* fs.writeFileString(
+        path.join(agentDir, "rules", "codegraph.md"),
+        '---\ndescription: "Prefer CodeGraph before grep"\n---\n\nBody',
+      );
+      // Non-markdown files and the support bundle are not rules.
+      yield* fs.writeFileString(path.join(agentDir, "rules", "notes.txt"), "ignored");
+      yield* fs.makeDirectory(path.join(agentDir, "rules", "support"), { recursive: true });
+      yield* fs.makeDirectory(path.join(agentDir, "skills", "create-ticket"), { recursive: true });
+      yield* fs.writeFileString(
+        path.join(agentDir, "skills", "create-ticket", "SKILL.md"),
+        '---\nname: create-ticket\ndescription: "Drafting a ticket"\n---\n\nBody',
+      );
+      // Skill dirs without SKILL.md are not skills.
+      yield* fs.makeDirectory(path.join(agentDir, "skills", "draft"), { recursive: true });
+
+      const { runner } = makeRunner({ agentDir });
+      const service = yield* makeService({ agentDir, runner });
+
+      const snapshot = yield* service.getSnapshot();
+      expect(snapshot.rules.map((item) => item.name)).toEqual(["codegraph"]);
+      expect(snapshot.rules[0]?.description).toBe("Prefer CodeGraph before grep");
+      expect(snapshot.skills.map((item) => item.name)).toEqual(["create-ticket"]);
+      expect(snapshot.skills[0]?.description).toBe("Drafting a ticket");
+      // No absolute host paths on the wire.
+      expect(encodeJsonString(snapshot)).not.toContain(agentDir);
+    }),
+  );
+
+  it.effect("inventories project items under the project .omp folder", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const agentDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-omp-agent-" });
+      const projectCwd = yield* fs.makeTempDirectoryScoped({ prefix: "t3-omp-project-" });
+      yield* fs.makeDirectory(path.join(projectCwd, ".omp", "rules"), { recursive: true });
+      yield* fs.writeFileString(
+        path.join(projectCwd, ".omp", "rules", "project-only.md"),
+        '---\ndescription: "Project rule"\n---\n',
+      );
+
+      const { runner } = makeRunner({ agentDir });
+      const service = yield* makeService({ agentDir, projectCwd, runner });
+
+      const snapshot = yield* service.getSnapshot(ProjectId.make("project-1"));
+      const projectRule = snapshot.rules.find((item) => item.scope === "project");
+      expect(projectRule?.name).toBe("project-only");
+      expect(projectRule?.description).toBe("Project rule");
+    }),
+  );
+
+  it.effect("reads a rule file and reports missing items as exists: false", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const agentDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-omp-agent-" });
+      yield* fs.makeDirectory(path.join(agentDir, "rules"), { recursive: true });
+      yield* fs.writeFileString(path.join(agentDir, "rules", "codegraph.md"), "# rule body");
+
+      const { runner } = makeRunner({ agentDir });
+      const service = yield* makeService({ agentDir, runner });
+
+      const existing = yield* service.readResource({
+        kind: "rules",
+        name: "codegraph",
+        scope: "global",
+      });
+      expect(existing).toEqual({
+        name: "codegraph",
+        scope: "global",
+        content: "# rule body",
+        exists: true,
+      });
+      const missing = yield* service.readResource({
+        kind: "rules",
+        name: "nope",
+        scope: "global",
+      });
+      expect(missing.exists).toBe(false);
+      expect(missing.content).toBe("");
+    }),
+  );
+
+  it.effect("creates a rule and a skill, and rejects overwriting without overwrite: true", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const agentDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-omp-agent-" });
+      yield* fs.makeDirectory(path.join(agentDir, "rules"), { recursive: true });
+      yield* fs.writeFileString(path.join(agentDir, "rules", "codegraph.md"), "old");
+
+      const { runner } = makeRunner({ agentDir });
+      const service = yield* makeService({ agentDir, runner });
+
+      const collide = yield* service
+        .writeResource({
+          kind: "rules",
+          name: "codegraph",
+          content: "new",
+          scope: "global",
+          overwrite: false,
+        })
+        .pipe(Effect.flip);
+      expect(collide._tag).toBe("OmpCapabilitiesError");
+      expect(collide.reason).toContain("already exists");
+
+      yield* service.writeResource({
+        kind: "rules",
+        name: "codegraph",
+        content: "new",
+        scope: "global",
+        overwrite: true,
+      });
+      const ruleText = yield* fs.readFileString(path.join(agentDir, "rules", "codegraph.md"));
+      expect(ruleText).toBe("new");
+
+      yield* service.writeResource({
+        kind: "skills",
+        name: "create-ticket",
+        content: "# body",
+        scope: "global",
+        overwrite: false,
+      });
+      const skillText = yield* fs.readFileString(
+        path.join(agentDir, "skills", "create-ticket", "SKILL.md"),
+      );
+      expect(skillText).toBe("# body");
+    }),
+  );
+
+  it.effect("writes project items after a .bak backup and requires a projectId", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const agentDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-omp-agent-" });
+      const projectCwd = yield* fs.makeTempDirectoryScoped({ prefix: "t3-omp-project-" });
+      const rulesDir = path.join(projectCwd, ".omp", "rules");
+      yield* fs.makeDirectory(rulesDir, { recursive: true });
+      yield* fs.writeFileString(path.join(rulesDir, "codegraph.md"), "old");
+
+      const { runner } = makeRunner({ agentDir });
+      const service = yield* makeService({ agentDir, projectCwd, runner });
+
+      const noProject = yield* service
+        .writeResource({
+          kind: "rules",
+          name: "codegraph",
+          content: "new",
+          scope: "project",
+          overwrite: true,
+        })
+        .pipe(Effect.flip);
+      expect(noProject._tag).toBe("OmpCapabilitiesError");
+
+      yield* service.writeResource({
+        kind: "rules",
+        name: "codegraph",
+        content: "new",
+        scope: "project",
+        projectId: ProjectId.make("project-1"),
+        overwrite: true,
+      });
+      const ruleText = yield* fs.readFileString(path.join(rulesDir, "codegraph.md"));
+      expect(ruleText).toBe("new");
+      const backups = yield* fs.readDirectory(rulesDir);
+      expect(backups.some((name) => name.startsWith("codegraph.md.bak-"))).toBe(true);
+    }),
+  );
+
+  it.effect("deletes rules and skill directories only with confirm", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const agentDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-omp-agent-" });
+      yield* fs.makeDirectory(path.join(agentDir, "rules"), { recursive: true });
+      yield* fs.writeFileString(path.join(agentDir, "rules", "codegraph.md"), "body");
+      yield* fs.makeDirectory(path.join(agentDir, "skills", "create-ticket"), { recursive: true });
+      yield* fs.writeFileString(
+        path.join(agentDir, "skills", "create-ticket", "SKILL.md"),
+        "# body",
+      );
+
+      const { runner } = makeRunner({ agentDir });
+      const service = yield* makeService({ agentDir, runner });
+
+      const unconfirmed = yield* service
+        .deleteResource({
+          kind: "rules",
+          name: "codegraph",
+          scope: "global",
+          confirm: false,
+        })
+        .pipe(Effect.flip);
+      expect(unconfirmed._tag).toBe("OmpCapabilitiesError");
+      expect(unconfirmed.reason).toContain("confirm");
+
+      const missing = yield* service
+        .deleteResource({
+          kind: "rules",
+          name: "nope",
+          scope: "global",
+          confirm: true,
+        })
+        .pipe(Effect.flip);
+      expect(missing._tag).toBe("OmpCapabilitiesError");
+
+      yield* service.deleteResource({
+        kind: "rules",
+        name: "codegraph",
+        scope: "global",
+        confirm: true,
+      });
+      expect(yield* fs.exists(path.join(agentDir, "rules", "codegraph.md"))).toBe(false);
+
+      yield* service.deleteResource({
+        kind: "skills",
+        name: "create-ticket",
+        scope: "global",
+        confirm: true,
+      });
+      expect(yield* fs.exists(path.join(agentDir, "skills", "create-ticket"))).toBe(false);
+    }),
+  );
+
+  it.effect("backs up project-scoped deletes before removing", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const agentDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-omp-agent-" });
+      const projectCwd = yield* fs.makeTempDirectoryScoped({ prefix: "t3-omp-project-" });
+      const rulesDir = path.join(projectCwd, ".omp", "rules");
+      yield* fs.makeDirectory(rulesDir, { recursive: true });
+      yield* fs.writeFileString(path.join(rulesDir, "codegraph.md"), "body");
+
+      const { runner } = makeRunner({ agentDir });
+      const service = yield* makeService({ agentDir, projectCwd, runner });
+
+      yield* service.deleteResource({
+        kind: "rules",
+        name: "codegraph",
+        scope: "project",
+        projectId: ProjectId.make("project-1"),
+        confirm: true,
+      });
+      expect(yield* fs.exists(path.join(rulesDir, "codegraph.md"))).toBe(false);
+      const backups = yield* fs.readDirectory(rulesDir);
+      expect(backups.some((name) => name.startsWith("codegraph.md.bak-"))).toBe(true);
+    }),
+  );
 });
