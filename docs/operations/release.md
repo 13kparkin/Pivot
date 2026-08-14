@@ -37,7 +37,6 @@ not part of this release path. Use local web (`pnpm run dev` / `npx t3`) instead
 - **Hosted web / Vercel** — not deployed. Local web only.
 - **T3 Connect** — public config left unset. Local / LAN / Tailscale pairing still works.
   `.github/workflows/deploy-relay.yml` is disabled.
-- **Discord announce** — removed; this fork is not on the upstream T3 Discord.
 
 ## Required credentials
 
