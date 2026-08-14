@@ -972,6 +972,15 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
                   attachments: event.payload.attachments,
                 })
               : previousMessage?.attachments;
+          const nextStatusText = Option.match(existingMessage, {
+            onNone: () => event.payload.statusText ?? null,
+            onSome: (message) =>
+              event.payload.statusText !== undefined
+                ? event.payload.streaming
+                  ? `${message.statusText ?? ""}${event.payload.statusText}`
+                  : event.payload.statusText
+                : (message.statusText ?? null),
+          });
           yield* projectionThreadMessageRepository.upsert({
             messageId: event.payload.messageId,
             threadId: event.payload.threadId,
@@ -979,6 +988,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             role: event.payload.role,
             text: nextText,
             ...(nextAttachments !== undefined ? { attachments: [...nextAttachments] } : {}),
+            ...(nextStatusText !== null ? { statusText: nextStatusText } : {}),
             isStreaming: event.payload.streaming,
             createdAt: previousMessage?.createdAt ?? event.payload.createdAt,
             updatedAt: event.payload.updatedAt,
