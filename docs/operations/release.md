@@ -37,6 +37,7 @@ not part of this release path. Use local web (`pnpm run dev` / `npx t3`) instead
 - **Hosted web / Vercel** — not deployed. Local web only.
 - **T3 Connect** — public config left unset. Local / LAN / Tailscale pairing still works.
   `.github/workflows/deploy-relay.yml` is disabled.
+- **Discord announce** — removed; this fork is not on the upstream T3 Discord.
 
 ## Required credentials
 
@@ -63,6 +64,7 @@ Configure the `pivot-cli` package Trusted Publisher for this repository and
 - GitHub prerelease tag: `vX.Y.Z-nightly.YYYYMMDD.<run_number>`
 - CLI npm dist-tag: `nightly`
 - Does not commit version bumps to `main`
+- `finalize` is skipped (stable-only; see below)
 
 ## Stable builds
 
