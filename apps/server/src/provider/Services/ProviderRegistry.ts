@@ -7,6 +7,12 @@
  * @module ProviderRegistry
  */
 import type {
+  OmpCapabilitiesError,
+  OmpCapabilitiesSnapshot,
+  OmpCapabilityScope,
+  OmpResetSettingInput,
+  OmpWriteSettingInput,
+  ProjectId,
   ProviderInstanceId,
   ProviderDriverKind,
   ServerProvider,
@@ -98,6 +104,33 @@ export interface ProviderRegistryShape {
     readonly providerId: string;
     readonly onOpenUrl: (url: string) => Effect.Effect<void>;
   }) => Effect.Effect<{ readonly providerId: string }, OmpLoginError>;
+
+  /**
+   * omp Capabilities: snapshot of the discovered OMP config surface for one
+   * omp instance (non-thread op, instance-routed).
+   */
+  readonly ompCapabilitiesGetSnapshot: (input: {
+    readonly instanceId: ProviderInstanceId;
+    readonly projectId?: ProjectId;
+  }) => Effect.Effect<OmpCapabilitiesSnapshot, OmpCapabilitiesError>;
+
+  /**
+   * omp Capabilities: scoped setting write (non-thread op, instance-routed).
+   */
+  readonly ompCapabilitiesWriteSetting: (
+    input: {
+      readonly instanceId: ProviderInstanceId;
+    } & OmpWriteSettingInput,
+  ) => Effect.Effect<OmpCapabilitiesSnapshot, OmpCapabilitiesError>;
+
+  /**
+   * omp Capabilities: destructive setting reset, confirm-gated (non-thread op).
+   */
+  readonly ompCapabilitiesResetSetting: (
+    input: {
+      readonly instanceId: ProviderInstanceId;
+    } & OmpResetSettingInput,
+  ) => Effect.Effect<OmpCapabilitiesSnapshot, OmpCapabilitiesError>;
 }
 
 export class ProviderRegistry extends Context.Service<ProviderRegistry, ProviderRegistryShape>()(

@@ -10,6 +10,7 @@ import {
   ThreadId,
 } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
@@ -44,6 +45,17 @@ const collectUntilTurnCompleted = (stream: Stream.Stream<ProviderRuntimeEvent>) 
   Stream.runCollect(stream.pipe(Stream.takeUntil((event) => event.type === "turn.completed"))).pipe(
     Effect.map((chunk) => Array.from(chunk)),
   );
+
+/** Cooperative wait: spins `yieldNow` until the fake has recorded a matching send. */
+const waitForSent = (
+  fake: FakeOmpRpc,
+  predicate: (sent: ReadonlyArray<Record<string, unknown>>) => boolean,
+): Effect.Effect<void> =>
+  Effect.gen(function* () {
+    while (!predicate(fake.sent)) {
+      yield* Effect.yieldNow;
+    }
+  });
 
 describe("OmpAdapter", () => {
   it.effect("completes a T3 turn on terminal agent_end", () =>
@@ -580,6 +592,103 @@ describe("OmpAdapter", () => {
         true,
       );
     }),
+  );
+
+  it.effect(
+    "emits exactly one live token-usage event when concurrent message_update forks race the throttle guard",
+    () =>
+      Effect.gen(function* () {
+        const fake = new FakeOmpRpc();
+        fake.contextUsage = { tokens: 500, contextWindow: 100_000, percent: 5 };
+        const gate = yield* Deferred.make<void>();
+        const adapter = new OmpAdapter(fake, testRandomUUID);
+        const eventsFiber = yield* collectUntilTurnCompleted(adapter.streamEvents).pipe(
+          Effect.forkChild,
+        );
+        yield* adapter.startSession(startInput);
+        yield* adapter.sendTurn({ threadId: THREAD_ID, input: "hi" });
+        fake.getStateGate = gate; // set after sendTurn: the prompt command is not gated
+        yield* fake.offer(THREAD_ID, {
+          type: "message_update",
+          assistantMessageEvent: { type: "text_delta", delta: "a" },
+        });
+        yield* fake.offer(THREAD_ID, {
+          type: "message_update",
+          assistantMessageEvent: { type: "text_delta", delta: "b" },
+        });
+        // Let the detached forks reach their first send; the get_state responses are held at the gate.
+        yield* waitForSent(fake, (sent) => sent.some((c) => c.type === "get_state"));
+        yield* Effect.yieldNow;
+        yield* Effect.yieldNow;
+        // AC2: exactly one fiber passed the guard, so exactly one get_state was sent.
+        NodeAssert.equal(fake.sent.filter((c) => c.type === "get_state").length, 1);
+        // Release: the claiming fiber emits; a loser (pre-fix code) emits too.
+        yield* Deferred.succeed(gate, void 0);
+        yield* waitForSent(fake, (sent) => sent.some((c) => c.type === "get_session_stats"));
+        yield* Effect.yieldNow;
+        yield* Effect.yieldNow;
+        fake.contextUsage = undefined; // turn-complete emit becomes a no-op
+        yield* fake.offer(THREAD_ID, { type: "agent_end", messages: [], isTerminal: true });
+        const events = yield* Fiber.join(eventsFiber);
+        // AC1: exactly one live usage event. Pre-fix this is 2 (both fibers emitted).
+        NodeAssert.equal(
+          events.filter((event) => event.type === "thread.token-usage.updated").length,
+          1,
+        );
+      }),
+  );
+
+  it.effect(
+    "throttles live token-usage emits to one per second and re-enables after the window",
+    () =>
+      Effect.gen(function* () {
+        const fake = new FakeOmpRpc();
+        fake.contextUsage = { tokens: 500, contextWindow: 100_000, percent: 5 };
+        const adapter = new OmpAdapter(fake, testRandomUUID);
+        const eventsFiber = yield* collectUntilTurnCompleted(adapter.streamEvents).pipe(
+          Effect.forkChild,
+        );
+        yield* adapter.startSession(startInput);
+        yield* adapter.sendTurn({ threadId: THREAD_ID, input: "hi" });
+        // Virtual time 0: session init is -1000, so the first guard passes.
+        yield* fake.offer(THREAD_ID, {
+          type: "message_update",
+          assistantMessageEvent: { type: "text_delta", delta: "a" },
+        });
+        yield* waitForSent(
+          fake,
+          (sent) => sent.filter((c) => c.type === "get_session_stats").length >= 1,
+        );
+        // In-window frame: suppressed (same virtual ms).
+        yield* fake.offer(THREAD_ID, {
+          type: "message_update",
+          assistantMessageEvent: { type: "text_delta", delta: "b" },
+        });
+        yield* Effect.yieldNow;
+        yield* Effect.yieldNow;
+        NodeAssert.equal(fake.sent.filter((c) => c.type === "get_state").length, 1);
+        // Window elapses -> next frame emits again.
+        yield* TestClock.adjust("1 second");
+        yield* Effect.yieldNow;
+        yield* fake.offer(THREAD_ID, {
+          type: "message_update",
+          assistantMessageEvent: { type: "text_delta", delta: "c" },
+        });
+        yield* waitForSent(
+          fake,
+          (sent) => sent.filter((c) => c.type === "get_session_stats").length >= 2,
+        );
+        // AC2: only the "a" and "c" frames passed the window guard.
+        NodeAssert.equal(fake.sent.filter((c) => c.type === "get_state").length, 2);
+        yield* Effect.yieldNow;
+        yield* fake.offer(THREAD_ID, { type: "agent_end", messages: [], isTerminal: true });
+        const events = yield* Fiber.join(eventsFiber);
+        // Live emits for "a" and "c" plus the unthrottled turn-complete snapshot.
+        NodeAssert.equal(
+          events.filter((event) => event.type === "thread.token-usage.updated").length,
+          3,
+        );
+      }).pipe(Effect.provide(TestClock.layer())),
   );
 
   it.effect("lists a started session and reports hasSession", () =>
@@ -1451,4 +1560,89 @@ describe("OmpAdapter", () => {
       NodeAssert.equal(result?.isError, undefined);
     }),
   );
+
+  describe("capabilities delegation", () => {
+    const snapshot = { settings: { entries: [] }, resources: [] } as const;
+
+    it.effect("capabilitiesSnapshot delegates to the injected service", () =>
+      Effect.gen(function* () {
+        const fake = new FakeOmpRpc();
+        const received: Array<unknown> = [];
+        const service = {
+          getSnapshot: (projectId?: string) => {
+            received.push(projectId);
+            return Effect.succeed(snapshot);
+          },
+          writeSetting: (input: unknown) => {
+            received.push(input);
+            return Effect.succeed(snapshot);
+          },
+          resetSetting: (input: unknown) => {
+            received.push(input);
+            return Effect.succeed(snapshot);
+          },
+        };
+        const adapter = new OmpAdapter(fake, testRandomUUID, { capabilitiesService: service });
+        const result = yield* adapter.capabilitiesSnapshot();
+        NodeAssert.equal(result, snapshot);
+        NodeAssert.equal(received.length, 1);
+        NodeAssert.equal(received[0], undefined);
+      }),
+    );
+
+    it.effect("capabilitiesWriteSetting passes the input through", () =>
+      Effect.gen(function* () {
+        const fake = new FakeOmpRpc();
+        const service = {
+          getSnapshot: () => Effect.succeed(snapshot),
+          writeSetting: (input: unknown) => {
+            NodeAssert.deepEqual(input, {
+              key: "theme.dark",
+              value: "midnight",
+              scope: "global",
+            });
+            return Effect.succeed(snapshot);
+          },
+          resetSetting: () => Effect.succeed(snapshot),
+        };
+        const adapter = new OmpAdapter(fake, testRandomUUID, { capabilitiesService: service });
+        const result = yield* adapter.capabilitiesWriteSetting({
+          key: "theme.dark",
+          value: "midnight",
+          scope: "global",
+        });
+        NodeAssert.equal(result, snapshot);
+      }),
+    );
+
+    it.effect("capabilitiesResetSetting passes the input through", () =>
+      Effect.gen(function* () {
+        const fake = new FakeOmpRpc();
+        const service = {
+          getSnapshot: () => Effect.succeed(snapshot),
+          writeSetting: () => Effect.succeed(snapshot),
+          resetSetting: (input: unknown) => {
+            NodeAssert.deepEqual(input, { key: "autoResume", scope: "global", confirm: true });
+            return Effect.succeed(snapshot);
+          },
+        };
+        const adapter = new OmpAdapter(fake, testRandomUUID, { capabilitiesService: service });
+        const result = yield* adapter.capabilitiesResetSetting({
+          key: "autoResume",
+          scope: "global",
+          confirm: true,
+        });
+        NodeAssert.equal(result, snapshot);
+      }),
+    );
+
+    it.effect("fails with a request error when the service is not configured", () =>
+      Effect.gen(function* () {
+        const fake = new FakeOmpRpc();
+        const adapter = new OmpAdapter(fake, testRandomUUID);
+        const failure = yield* adapter.capabilitiesSnapshot().pipe(Effect.flip);
+        NodeAssert.ok(isProviderAdapterRequestError(failure));
+      }),
+    );
+  });
 });

@@ -212,6 +212,12 @@ function makeRegistry(
       setProviderMaintenanceActionState,
       listOmpLoginProviders: () => Effect.succeed([]),
       ompLogin: ({ providerId }) => Effect.succeed({ providerId }),
+      ompCapabilitiesGetSnapshot: () =>
+        Effect.succeed({ settings: { entries: [] }, resources: [] }),
+      ompCapabilitiesWriteSetting: () =>
+        Effect.succeed({ settings: { entries: [] }, resources: [] }),
+      ompCapabilitiesResetSetting: () =>
+        Effect.succeed({ settings: { entries: [] }, resources: [] }),
       streamChanges: Stream.empty,
     };
 

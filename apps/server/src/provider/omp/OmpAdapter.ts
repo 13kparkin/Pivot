@@ -58,6 +58,8 @@ import {
   ProviderAdapterSessionNotFoundError,
   ProviderAdapterValidationError,
 } from "../Errors.ts";
+import type { OmpResetSettingInput, OmpWriteSettingInput, ProjectId } from "@t3tools/contracts";
+import type { OmpCapabilitiesService } from "./OmpCapabilitiesService.ts";
 import { OmpSpawnError, type OmpRpcRuntime } from "./OmpRpcRuntime.ts";
 
 const PROVIDER = ProviderDriverKind.make("omp");
@@ -135,6 +137,10 @@ export type OmpResolveRoleModel = (role: string) => Effect.Effect<string | undef
 
 export interface OmpAdapterOptions {
   readonly resolveRoleModel?: OmpResolveRoleModel;
+  readonly capabilitiesService?: Pick<
+    OmpCapabilitiesService,
+    "getSnapshot" | "writeSetting" | "resetSetting"
+  >;
 }
 
 export type OmpSubagentSubscriptionLevel = "off" | "progress" | "events";
@@ -164,6 +170,7 @@ export class OmpAdapter {
   readonly #runtime: OmpRpcClient;
   readonly #randomUUID: Effect.Effect<string>;
   readonly #resolveRoleModel: OmpResolveRoleModel;
+  readonly #capabilitiesService: OmpAdapterOptions["capabilitiesService"];
 
   public constructor(
     runtime: OmpRpcClient,
@@ -173,6 +180,44 @@ export class OmpAdapter {
     this.#runtime = runtime;
     this.#randomUUID = randomUUID;
     this.#resolveRoleModel = options.resolveRoleModel ?? (() => Effect.succeed(undefined));
+    this.#capabilitiesService = options.capabilitiesService;
+  }
+
+  private requireCapabilitiesService(): Effect.Effect<
+    NonNullable<OmpAdapterOptions["capabilitiesService"]>,
+    ProviderAdapterRequestError
+  > {
+    if (this.#capabilitiesService === undefined) {
+      return Effect.fail(
+        new ProviderAdapterRequestError({
+          provider: PROVIDER,
+          method: "capabilities",
+          detail: "omp capabilities service is not configured",
+        }),
+      );
+    }
+    return Effect.succeed(this.#capabilitiesService);
+  }
+
+  /** omp Capabilities: snapshot of the discovered OMP config surface (non-thread op). */
+  public capabilitiesSnapshot(projectId?: ProjectId) {
+    return this.requireCapabilitiesService().pipe(
+      Effect.flatMap((service) => service.getSnapshot(projectId)),
+    );
+  }
+
+  /** omp Capabilities: scoped setting write (non-thread op). */
+  public capabilitiesWriteSetting(input: OmpWriteSettingInput) {
+    return this.requireCapabilitiesService().pipe(
+      Effect.flatMap((service) => service.writeSetting(input)),
+    );
+  }
+
+  /** omp Capabilities: destructive setting reset, confirm-gated (non-thread op). */
+  public capabilitiesResetSetting(input: OmpResetSettingInput) {
+    return this.requireCapabilitiesService().pipe(
+      Effect.flatMap((service) => service.resetSetting(input)),
+    );
   }
 
   public get streamEvents(): Stream.Stream<ProviderRuntimeEvent> {
@@ -1110,7 +1155,8 @@ export class OmpAdapter {
   #emitTurnCompleted(session: LiveAdapterSession): Effect.Effect<void> {
     return Effect.gen({ self: this }, function* () {
       yield* this.#flushFinalAssistantRun(session);
-      yield* this.#emitTokenUsageFromState(session).pipe(Effect.ignore);
+      const now = yield* Clock.currentTimeMillis;
+      yield* this.#emitTokenUsageFromState(session, now).pipe(Effect.ignore);
       const aborted = session.stopRequested;
       session.stopRequested = false;
       const turnId = session.turnId;
@@ -1144,14 +1190,18 @@ export class OmpAdapter {
       if (now - session.lastTokenUsageEmitAtMs < TOKEN_USAGE_EMIT_MIN_INTERVAL_MS) {
         return;
       }
-      yield* this.#emitTokenUsageFromState(session).pipe(Effect.ignore);
+      yield* this.#emitTokenUsageFromState(session, now).pipe(Effect.ignore);
     });
   }
 
   #emitTokenUsageFromState(
     session: LiveAdapterSession,
+    now: number,
   ): Effect.Effect<void, ProviderAdapterProcessError | ProviderAdapterSessionNotFoundError> {
     return Effect.gen({ self: this }, function* () {
+      // D2/D3: claim the throttle slot synchronously, before any RPC yield. The
+      // slot is consumed even if the emit later fails or early-returns (no tokens).
+      session.lastTokenUsageEmitAtMs = now;
       const response = yield* this.#send(session.threadId, { type: "get_state" });
       if (!isRecord(response) || !isRecord(response.data)) {
         return;
@@ -1189,7 +1239,6 @@ export class OmpAdapter {
           ? statsResponse.data
           : undefined;
       const tokens = stats !== undefined && isRecord(stats.tokens) ? stats.tokens : undefined;
-      session.lastTokenUsageEmitAtMs = yield* Clock.currentTimeMillis;
       yield* this.#emit({
         type: "thread.token-usage.updated",
         threadId: session.threadId,

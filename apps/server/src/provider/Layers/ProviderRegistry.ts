@@ -55,8 +55,10 @@ import type { ProviderInstance } from "../ProviderDriver.ts";
 import { makeManualOnlyProviderMaintenanceCapabilities } from "../providerMaintenance.ts";
 import type { ProviderSnapshotSource } from "../builtInProviderCatalog.ts";
 import { OmpAdapter } from "../omp/OmpAdapter.ts";
+import { OmpCapabilitiesError } from "@t3tools/contracts";
 import { listOmpLoginProviders, loginOmpProvider, OmpLoginError } from "../omp/OmpLogin.ts";
 import * as Crypto from "effect/Crypto";
+import * as Schema from "effect/Schema";
 
 const loadProviders = (
   providerSources: ReadonlyArray<ProviderSnapshotSource>,
@@ -201,6 +203,15 @@ const buildSnapshotSource = (instance: ProviderInstance): ProviderSnapshotSource
   refresh: instance.snapshot.refresh,
   streamChanges: instance.snapshot.streamChanges,
 });
+
+const isOmpCapabilitiesError = Schema.is(OmpCapabilitiesError);
+const toOmpCapabilitiesError = (cause: unknown): OmpCapabilitiesError =>
+  isOmpCapabilitiesError(cause)
+    ? cause
+    : new OmpCapabilitiesError({
+        reason: cause instanceof Error ? cause.message : String(cause),
+        cause,
+      });
 
 export const ProviderRegistryLive = Layer.effect(
   ProviderRegistry,
@@ -746,6 +757,21 @@ export const ProviderRegistryLive = Layer.effect(
             onOpenUrl: (request) => input.onOpenUrl(request.launchUrl ?? request.url),
           });
         }),
+      ompCapabilitiesGetSnapshot: ({ instanceId, projectId }) =>
+        Effect.gen(function* () {
+          const adapter = yield* resolveOmpAdapter(instanceId);
+          return yield* adapter.capabilitiesSnapshot(projectId);
+        }).pipe(Effect.mapError(toOmpCapabilitiesError)),
+      ompCapabilitiesWriteSetting: ({ instanceId, ...input }) =>
+        Effect.gen(function* () {
+          const adapter = yield* resolveOmpAdapter(instanceId);
+          return yield* adapter.capabilitiesWriteSetting(input);
+        }).pipe(Effect.mapError(toOmpCapabilitiesError)),
+      ompCapabilitiesResetSetting: ({ instanceId, ...input }) =>
+        Effect.gen(function* () {
+          const adapter = yield* resolveOmpAdapter(instanceId);
+          return yield* adapter.capabilitiesResetSetting(input);
+        }).pipe(Effect.mapError(toOmpCapabilitiesError)),
       get streamChanges() {
         return Stream.fromPubSub(changesPubSub);
       },
