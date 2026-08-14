@@ -199,7 +199,7 @@ function makeOmpSnapshot(input: {
         status: "warning",
         message: input.enabled
           ? "Loading omp binary and models."
-          : "omp is disabled in T3 Code settings.",
+          : "omp is disabled in Pivot settings.",
       },
       [],
     );
@@ -234,7 +234,7 @@ function makeOmpSnapshot(input: {
             installed: false,
             version: null,
             status: "warning",
-            message: "omp is disabled in T3 Code settings.",
+            message: "omp is disabled in Pivot settings.",
           }),
         );
       }

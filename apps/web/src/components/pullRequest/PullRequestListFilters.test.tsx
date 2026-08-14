@@ -118,7 +118,7 @@ describe("pull request filters menu", () => {
         {
           id: projectId,
           environmentId,
-          title: "T3 Code",
+          title: "Pivot",
           workspaceRoot: "/work/t3code",
         },
       ],

@@ -78,8 +78,8 @@ No custom domain is required. `com.13kparkin.pivot` is a stable reverse-DNS root
 
 6. Update `apps/mobile/app.config.ts` to the Locked identity table (names, bundles, schemes, owner/slug placeholders, clear T3 `appleTeamId` / updates URL / projectId until EAS init).
 7. Update `apps/mobile/eas.json` — remove T3 `ascAppId`; leave submit block for after ASC app exists.
-8. Update deep-link / pairing scheme references (`t3code:` → `pivot:`) on mobile + desktop protocol constants.
-9. Update desktop display branding (`T3 Code` → `Pivot`) where users see it (productName, APP_BASE_NAME, menus).
+8. ~~Update deep-link / pairing scheme references (`t3code:` → `pivot:`) on mobile + desktop protocol constants.~~ **Done**
+9. ~~Update desktop display branding (`T3 Code` → `Pivot`) where users see it (productName, APP_BASE_NAME, menus).~~ **Done**
 10. Fix CI: GitHub-hosted runners for EAS production (already drafted on this branch); add fork `EXPO_TOKEN` secret later.
 11. Smoke: local `APP_VARIANT=development` prebuild shows Pivot Dev + new bundle ID.
 
