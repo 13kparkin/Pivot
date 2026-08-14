@@ -961,9 +961,9 @@ function renderFeedEntry(
       );
     }
 
-    // Skip empty assistant messages (no text, no attachments) — they would
-    // render as an orphaned timestamp and break adjacent activity-group merging.
-    if (message.text.trim().length === 0 && attachments.length === 0) {
+    // Skip empty assistant messages (no text, no attachments, no status) — they
+    // would render as an orphaned timestamp and break adjacent activity-group merging.
+    if (message.text.trim().length === 0 && attachments.length === 0 && !message.statusText) {
       return null;
     }
 
@@ -973,6 +973,16 @@ function renderFeedEntry(
         className={cn(showAssistantMeta ? "mb-5 px-1" : "mb-2 px-1")}
         {...(enterAnimated ? { entering: FadeIn.duration(220) } : {})}
       >
+        {message.statusText ? (
+          <AssistantStatusSection
+            statusText={message.statusText}
+            initiallyExpanded={message.text.trim().length === 0}
+            iconSubtleColor={iconSubtleColor}
+            markdownStyles={styles}
+            skills={props.skills}
+            onLinkPress={props.onMarkdownLinkPress}
+          />
+        ) : null}
         {message.text.trim().length > 0 ? (
           hasNativeSelectableMarkdownText() ? (
             <SelectableMarkdownText
@@ -1058,6 +1068,71 @@ const WorkingTimelineRow = memo(function WorkingTimelineRow(props: { readonly st
     </View>
   );
 });
+
+function AssistantStatusSection(props: {
+  readonly statusText: string;
+  readonly initiallyExpanded: boolean;
+  readonly iconSubtleColor: ColorValue;
+  readonly markdownStyles: MarkdownStyleSet;
+  readonly skills?: ReadonlyArray<SelectableMarkdownSkill>;
+  readonly onLinkPress: (href: string) => void;
+}) {
+  const [expanded, setExpanded] = useState(props.initiallyExpanded);
+  const colorScheme = useColorScheme();
+  const pressedBackground = colorScheme === "dark" ? "rgba(255,255,255,0.05)" : "rgba(0,0,0,0.035)";
+
+  return (
+    <View className="-mx-1 mb-1 px-1 py-0">
+      <Pressable
+        accessibilityRole="button"
+        accessibilityState={{ expanded }}
+        accessibilityLabel="Status"
+        hitSlop={4}
+        onPress={() => {
+          void Haptics.selectionAsync();
+          setExpanded((value) => !value);
+        }}
+        style={({ pressed }) => ({
+          backgroundColor: pressed ? pressedBackground : "transparent",
+        })}
+        className="min-h-8 flex-row items-center gap-1.5 rounded-md px-0.5 py-0"
+      >
+        <View className="h-[18px] w-5 items-center justify-center">
+          <SymbolView
+            name={
+              expanded
+                ? { ios: "chevron.up", android: "keyboard_arrow_up" }
+                : { ios: "chevron.down", android: "keyboard_arrow_down" }
+            }
+            size={12}
+            tintColor={props.iconSubtleColor}
+            type="monochrome"
+          />
+        </View>
+        <Text className="font-t3-medium text-xs text-foreground opacity-80">Status</Text>
+      </Pressable>
+      {expanded ? (
+        hasNativeSelectableMarkdownText() ? (
+          <SelectableMarkdownText
+            markdown={props.statusText}
+            skills={props.skills}
+            textStyle={props.markdownStyles.nativeTextStyle}
+            onLinkPress={props.onLinkPress}
+          />
+        ) : (
+          <Markdown
+            options={{ gfm: true }}
+            renderers={props.markdownStyles.renderers}
+            styles={props.markdownStyles.styles}
+            theme={props.markdownStyles.theme}
+          >
+            {props.statusText}
+          </Markdown>
+        )
+      ) : null}
+    </View>
+  );
+}
 
 function UserMessageContent(props: {
   readonly text: string;
