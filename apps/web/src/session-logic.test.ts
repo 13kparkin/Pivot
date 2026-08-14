@@ -1417,13 +1417,86 @@ describe("deriveWorkLogEntries", () => {
     expect(entries).toHaveLength(1);
     expect(entries[0]).toMatchObject({
       id: "tool-complete",
-      createdAt: "2026-02-23T00:00:03.000Z",
+      createdAt: "2026-02-23T00:00:01.000Z",
+      completedAt: "2026-02-23T00:00:03.000Z",
       label: "Tool call completed",
       detail: 'Read: {"file_path":"/tmp/app.ts"}',
       command: "sed -n 1,40p /tmp/app.ts",
       itemType: "dynamic_tool_call",
       toolTitle: "Tool call",
     });
+  });
+
+  it("keeps the start time and completion time on merged tool lifecycle rows", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "tool-start-update",
+        createdAt: "2026-02-23T00:00:01.000Z",
+        kind: "tool.updated",
+        summary: "Tool call",
+        payload: {
+          itemType: "dynamic_tool_call",
+          title: "Tool call",
+          detail: 'Read: {"file_path":"/tmp/app.ts"}',
+          status: "inProgress",
+        },
+      }),
+      makeActivity({
+        id: "tool-complete-time",
+        createdAt: "2026-02-23T00:00:04.000Z",
+        kind: "tool.completed",
+        summary: "Tool call completed",
+        payload: {
+          itemType: "dynamic_tool_call",
+          title: "Tool call",
+          detail: 'Read: {"file_path":"/tmp/app.ts"}',
+        },
+      }),
+    ];
+
+    const entries = deriveWorkLogEntries(activities);
+
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({
+      id: "tool-complete-time",
+      createdAt: "2026-02-23T00:00:01.000Z",
+      completedAt: "2026-02-23T00:00:04.000Z",
+      toolLifecycleStatus: "completed",
+    });
+  });
+
+  it("carries completedAt on an in-progress tool row only once it settles", () => {
+    const inProgress = deriveWorkLogEntries([
+      makeActivity({
+        id: "tool-live",
+        createdAt: "2026-02-23T00:00:01.000Z",
+        kind: "tool.updated",
+        summary: "Tool call",
+        payload: {
+          itemType: "dynamic_tool_call",
+          title: "Tool call",
+          status: "inProgress",
+        },
+      }),
+    ]);
+    expect(inProgress[0]?.createdAt).toBe("2026-02-23T00:00:01.000Z");
+    expect(inProgress[0]?.completedAt).toBeUndefined();
+
+    const settled = deriveWorkLogEntries([
+      makeActivity({
+        id: "tool-settled",
+        createdAt: "2026-02-23T00:00:05.000Z",
+        kind: "tool.completed",
+        summary: "Tool call completed",
+        payload: {
+          itemType: "dynamic_tool_call",
+          title: "Tool call",
+        },
+      }),
+    ]);
+    expect(settled[0]?.createdAt).toBe("2026-02-23T00:00:05.000Z");
+    expect(settled[0]?.completedAt).toBe("2026-02-23T00:00:05.000Z");
+    expect(settled[0]?.toolLifecycleStatus).toBe("completed");
   });
 
   it("keeps separate tool entries when an identical call starts after the prior one completed", () => {
