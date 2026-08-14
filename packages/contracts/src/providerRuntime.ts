@@ -195,6 +195,8 @@ const ProviderRuntimeEventType = Schema.Literals([
   "files.persisted",
   "runtime.warning",
   "runtime.error",
+  "advisor.comment",
+  "ttsr.triggered",
 ]);
 export type ProviderRuntimeEventType = typeof ProviderRuntimeEventType.Type;
 
@@ -247,6 +249,8 @@ const FilesPersistedType = Schema.Literal("files.persisted");
 const ToolDeniedType = Schema.Literal("tool.denied");
 const RuntimeWarningType = Schema.Literal("runtime.warning");
 const RuntimeErrorType = Schema.Literal("runtime.error");
+const AdvisorCommentType = Schema.Literal("advisor.comment");
+const TtsrTriggeredType = Schema.Literal("ttsr.triggered");
 
 const ProviderRuntimeEventBase = Schema.Struct({
   eventId: EventId,
@@ -774,6 +778,44 @@ const RuntimeWarningPayload = Schema.Struct({
   message: TrimmedNonEmptyStringSchema,
   detail: Schema.optional(Schema.Unknown),
 });
+
+const AdvisorNoteSeverity = Schema.Literals(["nit", "concern", "blocker"]);
+export type AdvisorNoteSeverity = typeof AdvisorNoteSeverity.Type;
+
+export const AdvisorNote = Schema.Struct({
+  note: TrimmedNonEmptyStringSchema,
+  severity: Schema.optional(AdvisorNoteSeverity),
+  advisor: Schema.optional(TrimmedNonEmptyStringSchema),
+});
+export type AdvisorNote = typeof AdvisorNote.Type;
+
+const AdvisorCommentPayload = Schema.Struct({
+  notes: Schema.Array(AdvisorNote),
+});
+export type AdvisorCommentPayload = typeof AdvisorCommentPayload.Type;
+
+export const TtsrRuleInterruptMode = Schema.Literals([
+  "never",
+  "prose-only",
+  "tool-only",
+  "always",
+]);
+export type TtsrRuleInterruptMode = typeof TtsrRuleInterruptMode.Type;
+
+export const TtsrRule = Schema.Struct({
+  name: TrimmedNonEmptyStringSchema,
+  path: TrimmedNonEmptyStringSchema,
+  description: Schema.optional(TrimmedNonEmptyStringSchema),
+  condition: Schema.optional(Schema.Array(TrimmedNonEmptyStringSchema)),
+  scope: Schema.optional(Schema.Array(TrimmedNonEmptyStringSchema)),
+  interruptMode: Schema.optional(TtsrRuleInterruptMode),
+});
+export type TtsrRule = typeof TtsrRule.Type;
+
+const TtsrTriggeredPayload = Schema.Struct({
+  rules: Schema.Array(TtsrRule),
+});
+export type TtsrTriggeredPayload = typeof TtsrTriggeredPayload.Type;
 export type RuntimeWarningPayload = typeof RuntimeWarningPayload.Type;
 
 const RuntimeErrorPayload = Schema.Struct({
@@ -1143,6 +1185,20 @@ const ProviderRuntimeErrorEvent = Schema.Struct({
 });
 export type ProviderRuntimeErrorEvent = typeof ProviderRuntimeErrorEvent.Type;
 
+const ProviderRuntimeAdvisorCommentEvent = Schema.Struct({
+  ...ProviderRuntimeEventBase.fields,
+  type: AdvisorCommentType,
+  payload: AdvisorCommentPayload,
+});
+export type ProviderRuntimeAdvisorCommentEvent = typeof ProviderRuntimeAdvisorCommentEvent.Type;
+
+const ProviderRuntimeTtsrTriggeredEvent = Schema.Struct({
+  ...ProviderRuntimeEventBase.fields,
+  type: TtsrTriggeredType,
+  payload: TtsrTriggeredPayload,
+});
+export type ProviderRuntimeTtsrTriggeredEvent = typeof ProviderRuntimeTtsrTriggeredEvent.Type;
+
 export const ProviderRuntimeEventV2 = Schema.Union([
   ProviderRuntimeSessionStartedEvent,
   ProviderRuntimeSessionConfiguredEvent,
@@ -1193,6 +1249,8 @@ export const ProviderRuntimeEventV2 = Schema.Union([
   ProviderRuntimeToolDeniedEvent,
   ProviderRuntimeWarningEvent,
   ProviderRuntimeErrorEvent,
+  ProviderRuntimeAdvisorCommentEvent,
+  ProviderRuntimeTtsrTriggeredEvent,
 ]);
 export type ProviderRuntimeEventV2 = typeof ProviderRuntimeEventV2.Type;
 
