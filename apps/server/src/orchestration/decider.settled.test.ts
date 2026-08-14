@@ -5,6 +5,7 @@ import {
   ProjectId,
   ProviderInstanceId,
   ThreadId,
+  TurnId,
   type OrchestrationReadModel,
   type OrchestrationSession,
   type OrchestrationThread,
@@ -567,6 +568,33 @@ it.layer(NodeServices.layer)("settled thread decider", (it) => {
       expect(unconditionalEvents.map((event) => event.type)).toEqual([
         "thread.session-stop-requested",
       ]);
+    }),
+  );
+
+  it.effect("passes statusText through assistant delta to message-sent", () =>
+    Effect.gen(function* () {
+      const result = yield* decideOrchestrationCommand({
+        command: {
+          type: "thread.message.assistant.delta",
+          commandId: CommandId.make("cmd-assistant-status-delta"),
+          threadId: ThreadId.make("thread-1"),
+          messageId: MessageId.make("assistant:turn-1"),
+          delta: "",
+          statusText: "Fetching latest",
+          turnId: TurnId.make("turn-1"),
+          createdAt: NOW,
+        },
+        readModel: makeReadModel(null),
+      });
+      const events = Array.isArray(result) ? result : [result];
+      expect(events).toHaveLength(1);
+      expect(events[0]?.type).toBe("thread.message-sent");
+      if (events[0]?.type === "thread.message-sent") {
+        expect(events[0].payload.statusText).toBe("Fetching latest");
+        expect(events[0].payload.text).toBe("");
+        expect(events[0].payload.streaming).toBe(true);
+        expect(events[0].payload.messageId).toBe("assistant:turn-1");
+      }
     }),
   );
 });
