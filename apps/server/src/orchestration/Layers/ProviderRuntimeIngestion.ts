@@ -357,6 +357,19 @@ function taskLinkageActivityFields(payload: Record<string, unknown>): Record<str
   return fields;
 }
 
+/** Highest advisor severity wins: blocker -> error, concern -> warning, else info. */
+function advisorCommentTone(
+  notes: ReadonlyArray<{ readonly severity?: "nit" | "concern" | "blocker" | undefined }>,
+): "error" | "warning" | "info" {
+  if (notes.some((note) => note.severity === "blocker")) {
+    return "error";
+  }
+  if (notes.some((note) => note.severity === "concern")) {
+    return "warning";
+  }
+  return "info";
+}
+
 export function runtimeEventToActivities(
   event: ProviderRuntimeEvent,
   taskTitle?: string,
@@ -473,6 +486,54 @@ export function runtimeEventToActivities(
           payload: {
             message: truncateDetail(event.payload.message),
             ...(event.payload.detail !== undefined ? { detail: event.payload.detail } : {}),
+          },
+          turnId: toTurnId(event.turnId) ?? null,
+          ...maybeSequence,
+        },
+      ];
+    }
+
+    case "advisor.comment": {
+      const tone = advisorCommentTone(event.payload.notes);
+      const topNote = event.payload.notes[0]?.note ?? "Advisor comment";
+      return [
+        {
+          id: event.eventId,
+          createdAt: event.createdAt,
+          tone,
+          kind: "advisor.comment",
+          summary: truncateDetail(topNote, 120),
+          payload: {
+            notes: event.payload.notes.map((note) => ({
+              note: note.note,
+              ...(note.severity === undefined ? {} : { severity: note.severity }),
+              ...(note.advisor === undefined ? {} : { advisor: note.advisor }),
+            })),
+          },
+          turnId: toTurnId(event.turnId) ?? null,
+          ...maybeSequence,
+        },
+      ];
+    }
+
+    case "ttsr.triggered": {
+      const firstRule = event.payload.rules[0];
+      return [
+        {
+          id: event.eventId,
+          createdAt: event.createdAt,
+          tone: "info",
+          kind: "ttsr.triggered",
+          summary: firstRule === undefined ? "Stream rule triggered" : firstRule.name,
+          payload: {
+            rules: event.payload.rules.map((rule) => ({
+              name: rule.name,
+              path: rule.path,
+              ...(rule.description === undefined ? {} : { description: rule.description }),
+              ...(rule.condition === undefined ? {} : { condition: rule.condition }),
+              ...(rule.scope === undefined ? {} : { scope: rule.scope }),
+              ...(rule.interruptMode === undefined ? {} : { interruptMode: rule.interruptMode }),
+            })),
           },
           turnId: toTurnId(event.turnId) ?? null,
           ...maybeSequence,

@@ -71,6 +71,20 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+/** Normalize omp Rule condition/scope fields (string or string[]) to string[]. */
+function toRuleStringArray(value: unknown): string[] | undefined {
+  if (typeof value === "string") {
+    return value.length > 0 ? [value] : undefined;
+  }
+  if (Array.isArray(value)) {
+    const entries = value.filter(
+      (entry): entry is string => typeof entry === "string" && entry.length > 0,
+    );
+    return entries.length > 0 ? entries : undefined;
+  }
+  return undefined;
+}
+
 function mapOmpSpawnError(threadId: ThreadId, cause: OmpSpawnError): ProviderAdapterProcessError {
   return new ProviderAdapterProcessError({
     provider: PROVIDER,
@@ -784,6 +798,9 @@ export class OmpAdapter {
     if (frame.type === "command_output") {
       return this.#onCommandOutput(session, frame);
     }
+    if (frame.type === "ttsr_triggered") {
+      return this.#onTtsrTriggered(session, frame);
+    }
     if (frame.type === "message_start") {
       return this.#onMessageStart(session, frame);
     }
@@ -924,10 +941,115 @@ export class OmpAdapter {
     frame: Record<string, unknown>,
   ): Effect.Effect<void> {
     const message = frame.message;
+    if (isRecord(message) && message.role === "custom" && message.customType === "advisor") {
+      return this.#onAdvisorMessage(session, message);
+    }
     if (!isRecord(message) || message.role !== "assistant") {
       return Effect.void;
     }
     return this.#demoteHeldBackRun(session);
+  }
+
+  /**
+   * omp advisor cards arrive as message_start frames with role "custom" and
+   * customType "advisor". The batched notes live in details.notes; the
+   * formatted <advisory> content stays out of the assistant text stream.
+   */
+  #onAdvisorMessage(
+    session: LiveAdapterSession,
+    message: Record<string, unknown>,
+  ): Effect.Effect<void> {
+    const details = message.details;
+    if (!isRecord(details) || !Array.isArray(details.notes)) {
+      return Effect.void;
+    }
+    const notes: Array<{
+      note: string;
+      severity?: "nit" | "concern" | "blocker";
+      advisor?: string;
+    }> = [];
+    for (const entry of details.notes) {
+      if (!isRecord(entry) || typeof entry.note !== "string" || entry.note.length === 0) {
+        continue;
+      }
+      const severity =
+        entry.severity === "nit" || entry.severity === "concern" || entry.severity === "blocker"
+          ? entry.severity
+          : undefined;
+      const advisor =
+        typeof entry.advisor === "string" && entry.advisor.length > 0 ? entry.advisor : undefined;
+      notes.push({
+        note: entry.note,
+        ...(severity === undefined ? {} : { severity }),
+        ...(advisor === undefined ? {} : { advisor }),
+      });
+    }
+    if (notes.length === 0) {
+      return Effect.void;
+    }
+    return this.#emit({
+      type: "advisor.comment",
+      threadId: session.threadId,
+      turnId: session.turnId,
+      payload: { notes },
+    });
+  }
+
+  /**
+   * Time-traveling stream rule firings arrive as raw session events with a
+   * rules array. The wire payload is bounded to name/path/description/
+   * condition/scope/interruptMode; the full rule content stays on disk.
+   */
+  #onTtsrTriggered(
+    session: LiveAdapterSession,
+    frame: Record<string, unknown>,
+  ): Effect.Effect<void> {
+    if (!Array.isArray(frame.rules)) {
+      return Effect.void;
+    }
+    const rules: Array<{
+      name: string;
+      path: string;
+      description?: string;
+      condition?: string[];
+      scope?: string[];
+      interruptMode?: "never" | "prose-only" | "tool-only" | "always";
+    }> = [];
+    for (const rule of frame.rules) {
+      if (!isRecord(rule) || typeof rule.name !== "string" || typeof rule.path !== "string") {
+        continue;
+      }
+      const description =
+        typeof rule.description === "string" && rule.description.length > 0
+          ? rule.description
+          : undefined;
+      const condition = toRuleStringArray(rule.condition);
+      const scope = toRuleStringArray(rule.scope);
+      const interruptMode =
+        rule.interruptMode === "never" ||
+        rule.interruptMode === "prose-only" ||
+        rule.interruptMode === "tool-only" ||
+        rule.interruptMode === "always"
+          ? rule.interruptMode
+          : undefined;
+      rules.push({
+        name: rule.name,
+        path: rule.path,
+        ...(description === undefined ? {} : { description }),
+        ...(condition === undefined ? {} : { condition }),
+        ...(scope === undefined ? {} : { scope }),
+        ...(interruptMode === undefined ? {} : { interruptMode }),
+      });
+    }
+    if (rules.length === 0) {
+      return Effect.void;
+    }
+    return this.#emit({
+      type: "ttsr.triggered",
+      threadId: session.threadId,
+      turnId: session.turnId,
+      payload: { rules },
+    });
   }
 
   #onMessageEnd(session: LiveAdapterSession, frame: Record<string, unknown>): Effect.Effect<void> {
