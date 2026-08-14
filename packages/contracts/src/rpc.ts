@@ -190,7 +190,7 @@ import {
 } from "./resourceTelemetry.ts";
 import { UsageReadError, UsageSummary, UsageSummaryInput } from "./usage.ts";
 import {
-  OmpCapabilitiesError,
+  ServerOmpCapabilitiesError,
   ServerOmpCapabilitiesGetSnapshotInput,
   ServerOmpCapabilitiesGetSnapshotResult,
   ServerOmpCapabilitiesResetSettingInput,
@@ -412,7 +412,7 @@ export const WsServerOmpCapabilitiesGetSnapshotRpc = Rpc.make(
   {
     payload: ServerOmpCapabilitiesGetSnapshotInput,
     success: ServerOmpCapabilitiesGetSnapshotResult,
-    error: Schema.Union([OmpCapabilitiesError, EnvironmentAuthorizationError]),
+    error: Schema.Union([ServerOmpCapabilitiesError, EnvironmentAuthorizationError]),
   },
 );
 export const WsServerOmpCapabilitiesWriteSettingRpc = Rpc.make(
@@ -420,7 +420,7 @@ export const WsServerOmpCapabilitiesWriteSettingRpc = Rpc.make(
   {
     payload: ServerOmpCapabilitiesWriteSettingInput,
     success: ServerOmpCapabilitiesWriteSettingResult,
-    error: Schema.Union([OmpCapabilitiesError, EnvironmentAuthorizationError]),
+    error: Schema.Union([ServerOmpCapabilitiesError, EnvironmentAuthorizationError]),
   },
 );
 export const WsServerOmpCapabilitiesResetSettingRpc = Rpc.make(
@@ -428,7 +428,7 @@ export const WsServerOmpCapabilitiesResetSettingRpc = Rpc.make(
   {
     payload: ServerOmpCapabilitiesResetSettingInput,
     success: ServerOmpCapabilitiesResetSettingResult,
-    error: Schema.Union([OmpCapabilitiesError, EnvironmentAuthorizationError]),
+    error: Schema.Union([ServerOmpCapabilitiesError, EnvironmentAuthorizationError]),
   },
 );
 

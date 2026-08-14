@@ -28,6 +28,8 @@ import {
   ProviderDriverKind,
   ProviderInstanceId,
   ResolvedKeybindingRule,
+  OmpCapabilitiesError,
+  ServerOmpCapabilitiesError,
   ServerOmpHubError,
   ThreadId,
   WS_METHODS,
@@ -642,6 +644,12 @@ const buildAppUnderTest = (options?: {
             setProviderMaintenanceActionState: () => Effect.succeed([]),
             listOmpLoginProviders: () => Effect.succeed([]),
             ompLogin: ({ providerId }) => Effect.succeed({ providerId }),
+            ompCapabilitiesGetSnapshot: () =>
+              Effect.die("ProviderRegistry.ompCapabilitiesGetSnapshot unsupported in test"),
+            ompCapabilitiesWriteSetting: () =>
+              Effect.die("ProviderRegistry.ompCapabilitiesWriteSetting unsupported in test"),
+            ompCapabilitiesResetSetting: () =>
+              Effect.die("ProviderRegistry.ompCapabilitiesResetSetting unsupported in test"),
             streamChanges: Stream.empty,
             ...options?.layers?.providerRegistry,
           }),
@@ -4549,6 +4557,90 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       assert.instanceOf(failure.failure, ServerOmpHubError);
       assert.include(failure.failure.reason, "requires an omp session");
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect(
+    "routes websocket omp capabilities RPCs and maps failures to ServerOmpCapabilitiesError",
+    () =>
+      Effect.gen(function* () {
+        const capabilitiesCalls: string[] = [];
+        yield* buildAppUnderTest({
+          layers: {
+            providerRegistry: {
+              ompCapabilitiesGetSnapshot: ({ instanceId, projectId }) =>
+                Effect.sync(() => {
+                  capabilitiesCalls.push(`get:${instanceId}:${String(projectId)}`);
+                  return {
+                    settings: {
+                      entries: [
+                        {
+                          key: "theme.dark",
+                          value: "titanium",
+                          type: "string",
+                          description: "",
+                          masked: false,
+                          scope: "global",
+                        },
+                      ],
+                    },
+                    resources: [],
+                  };
+                }),
+              ompCapabilitiesWriteSetting: ({ instanceId, key, value, scope }) =>
+                Effect.sync(() => {
+                  capabilitiesCalls.push(`write:${instanceId}:${key}:${String(value)}:${scope}`);
+                  return { settings: { entries: [] }, resources: [] };
+                }),
+              ompCapabilitiesResetSetting: ({ instanceId, key }) =>
+                Effect.fail(
+                  new OmpCapabilitiesError({ reason: `reset ${key} blocked for ${instanceId}` }),
+                ),
+            },
+          },
+        });
+
+        const wsUrl = yield* getWsServerUrl("/ws");
+        const snapshot = yield* Effect.scoped(
+          withWsRpcClient(wsUrl, (client) =>
+            client[WS_METHODS.serverOmpCapabilitiesGetSnapshot]({
+              instanceId: "omp",
+              projectId: "project-1",
+            }),
+          ),
+        );
+        yield* Effect.scoped(
+          withWsRpcClient(wsUrl, (client) =>
+            client[WS_METHODS.serverOmpCapabilitiesWriteSetting]({
+              instanceId: "omp",
+              key: "theme.dark",
+              value: "midnight",
+              scope: "global",
+            }),
+          ),
+        );
+        const failure = yield* Effect.scoped(
+          withWsRpcClient(wsUrl, (client) =>
+            client[WS_METHODS.serverOmpCapabilitiesResetSetting]({
+              instanceId: "omp",
+              key: "autoResume",
+              scope: "global",
+              confirm: true,
+            }).pipe(Effect.result),
+          ),
+        );
+
+        assert.equal(snapshot.snapshot.settings.entries[0]?.value, "titanium");
+        assert.deepEqual(capabilitiesCalls, [
+          "get:omp:project-1",
+          "write:omp:theme.dark:midnight:global",
+        ]);
+        assert.equal(failure._tag, "Failure");
+        if (failure._tag !== "Failure") {
+          return;
+        }
+        assert.instanceOf(failure.failure, ServerOmpCapabilitiesError);
+        assert.include(failure.failure.reason, "reset autoResume blocked");
+      }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
   it.effect("shares one preview automation broker across websocket sessions", () =>

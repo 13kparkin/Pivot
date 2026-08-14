@@ -129,6 +129,22 @@ export class OmpCapabilitiesError extends Schema.TaggedErrorClass<OmpCapabilitie
   }
 }
 
+/**
+ * WS-boundary error for the capabilities surface. The service/registry errors
+ * are mapped to this wrapper at the transport edge, mirroring `ServerOmpHubError`.
+ */
+export class ServerOmpCapabilitiesError extends Schema.TaggedErrorClass<ServerOmpCapabilitiesError>()(
+  "ServerOmpCapabilitiesError",
+  {
+    reason: TrimmedNonEmptyString,
+    cause: Schema.optional(Schema.Defect()),
+  },
+) {
+  override get message(): string {
+    return `omp capabilities failed: ${this.reason}`;
+  }
+}
+
 // Transport (WS) schemas. `instanceId` is optional — the server falls back to
 // the default omp instance like the other omp RPCs.
 
