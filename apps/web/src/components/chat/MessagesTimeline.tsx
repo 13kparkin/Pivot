@@ -1103,11 +1103,38 @@ function TurnFoldTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "turn-
 
 function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" }> }) {
   const ctx = use(TimelineRowCtx);
-  const messageText = row.message.text || (row.message.streaming ? "" : "(empty response)");
+  const statusText = row.message.statusText ?? null;
+  const [statusExpanded, setStatusExpanded] = useState(!row.message.text);
+  const messageText =
+    row.message.text || (row.message.streaming || statusText ? "" : "(empty response)");
 
   return (
     <>
       <div className="relative min-w-0 px-1 py-0.5">
+        {statusText ? (
+          <button
+            type="button"
+            className="flex w-full min-w-0 cursor-pointer items-center gap-2 rounded-md px-0.5 py-0.5 text-left text-[12px] leading-5 transition-colors duration-150 hover:bg-accent/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/70"
+            aria-expanded={statusExpanded}
+            onClick={() => setStatusExpanded((value) => !value)}
+          >
+            {statusExpanded ? (
+              <ChevronDownIcon className="size-3.5 shrink-0 text-muted-foreground/65" />
+            ) : (
+              <ChevronRightIcon className="size-3.5 shrink-0 text-muted-foreground/65" />
+            )}
+            <span className="text-muted-foreground text-xs">Status</span>
+          </button>
+        ) : null}
+        {statusExpanded && statusText ? (
+          <ChatMarkdown
+            text={statusText}
+            cwd={ctx.markdownCwd}
+            threadRef={ctx.threadRef ?? undefined}
+            isStreaming={Boolean(row.message.streaming)}
+            skills={ctx.skills}
+          />
+        ) : null}
         <ChatMarkdown
           text={messageText}
           cwd={ctx.markdownCwd}
