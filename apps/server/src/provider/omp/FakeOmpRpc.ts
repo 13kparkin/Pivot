@@ -3,6 +3,7 @@
  *
  * @module FakeOmpRpc
  */
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
@@ -14,6 +15,8 @@ export class FakeOmpRpc {
   failSetModel = false;
   /** When false, `send` never answers `abort` (simulates a wedged child). */
   respondToAbort = true;
+  /** When set, `get_state` responses are held until this resolves (throttle-race tests). */
+  getStateGate: Deferred.Deferred<void> | undefined = undefined;
   sessionFile = "/tmp/omp-session.jsonl";
   availableModels: ReadonlyArray<object> = [];
   availableCommands: ReadonlyArray<object> = [];
@@ -122,7 +125,7 @@ export class FakeOmpRpc {
       });
     }
     if (command.type === "get_state") {
-      return Effect.succeed({
+      const response = {
         type: "response",
         success: true,
         data: {
@@ -134,7 +137,10 @@ export class FakeOmpRpc {
             ? {}
             : { queuedMessageCount: this.queuedMessageCount }),
         },
-      });
+      };
+      return this.getStateGate === undefined
+        ? Effect.succeed(response)
+        : Deferred.await(this.getStateGate).pipe(Effect.as(response));
     }
     if (command.type === "get_subagent_messages") {
       return Effect.succeed({
