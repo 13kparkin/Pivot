@@ -56,6 +56,8 @@ import {
   ProviderAdapterSessionNotFoundError,
   ProviderAdapterValidationError,
 } from "../Errors.ts";
+import type { OmpResetSettingInput, OmpWriteSettingInput, ProjectId } from "@t3tools/contracts";
+import type { OmpCapabilitiesService } from "./OmpCapabilitiesService.ts";
 import { OmpSpawnError, type OmpRpcRuntime } from "./OmpRpcRuntime.ts";
 
 const PROVIDER = ProviderDriverKind.make("omp");
@@ -133,6 +135,10 @@ export type OmpResolveRoleModel = (role: string) => Effect.Effect<string | undef
 
 export interface OmpAdapterOptions {
   readonly resolveRoleModel?: OmpResolveRoleModel;
+  readonly capabilitiesService?: Pick<
+    OmpCapabilitiesService,
+    "getSnapshot" | "writeSetting" | "resetSetting"
+  >;
 }
 
 export type OmpSubagentSubscriptionLevel = "off" | "progress" | "events";
@@ -162,6 +168,7 @@ export class OmpAdapter {
   readonly #runtime: OmpRpcClient;
   readonly #randomUUID: Effect.Effect<string>;
   readonly #resolveRoleModel: OmpResolveRoleModel;
+  readonly #capabilitiesService: OmpAdapterOptions["capabilitiesService"];
 
   public constructor(
     runtime: OmpRpcClient,
@@ -171,6 +178,41 @@ export class OmpAdapter {
     this.#runtime = runtime;
     this.#randomUUID = randomUUID;
     this.#resolveRoleModel = options.resolveRoleModel ?? (() => Effect.succeed(undefined));
+    this.#capabilitiesService = options.capabilitiesService;
+  }
+
+  private requireCapabilitiesService() {
+    if (this.#capabilitiesService === undefined) {
+      return Effect.fail(
+        new ProviderAdapterRequestError({
+          provider: PROVIDER,
+          method: "capabilities",
+          detail: "omp capabilities service is not configured",
+        }),
+      );
+    }
+    return Effect.succeed(this.#capabilitiesService);
+  }
+
+  /** omp Capabilities: snapshot of the discovered OMP config surface (non-thread op). */
+  public capabilitiesSnapshot(projectId?: ProjectId) {
+    return this.requireCapabilitiesService().pipe(
+      Effect.flatMap((service) => service.getSnapshot(projectId)),
+    );
+  }
+
+  /** omp Capabilities: scoped setting write (non-thread op). */
+  public capabilitiesWriteSetting(input: OmpWriteSettingInput) {
+    return this.requireCapabilitiesService().pipe(
+      Effect.flatMap((service) => service.writeSetting(input)),
+    );
+  }
+
+  /** omp Capabilities: destructive setting reset, confirm-gated (non-thread op). */
+  public capabilitiesResetSetting(input: OmpResetSettingInput) {
+    return this.requireCapabilitiesService().pipe(
+      Effect.flatMap((service) => service.resetSetting(input)),
+    );
   }
 
   public get streamEvents(): Stream.Stream<ProviderRuntimeEvent> {
