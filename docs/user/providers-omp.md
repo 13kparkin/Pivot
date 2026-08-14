@@ -53,16 +53,26 @@ design: Pivot renders and edits omp's config, never a parallel copy.
   the server host via `omp config path`, so profiles, `PI_CODING_AGENT_DIR`,
   `PI_CONFIG_DIR`, and XDG relocation are honored automatically.
 - **Settings** shows the effective omp settings (`omp config list --json`):
-  key, type, description, current value. Secret-typed keys (tokens, keys,
-  passwords) are masked and write-only — their values are managed through
-  omp's own auth/config commands, never edited here.
+  key, type, description, current value. Search filters the list by key,
+  type, or description. Secret-typed keys (tokens, keys, passwords) are
+  masked and write-only — their values are managed through omp's own
+  auth/config commands, never edited here.
+- **Skills** and **Rules** list every skill and rule — global (omp agent
+  directory) and project (`.omp` folder) — in one place, with search. You
+  can create, edit, and delete them directly: skills are `<name>/SKILL.md`
+  files invoked on demand; rules are `<name>.md` files loaded into every
+  session. A project rule with the same name as a global rule shadows it
+  (marked "Overrides global" in the list). New files start from a
+  frontmatter template.
 - Edits are scope-aware: **Global** writes run `omp config set` on the server
   host; **Project** writes merge into the project's `.omp/config.yml`
   (comments and unknown keys are preserved) after a timestamped `.bak`
-  backup. A precedence ladder (defaults ← global ← project ← overlays ←
-  runtime) is shown so you can see which layer wins.
-- Destructive actions (resetting a setting to its default) ask for
-  confirmation before they run.
+  backup. Skill and rule files are written atomically; project-scoped
+  overwrites and deletes take a timestamped `.bak` first. A precedence
+  ladder (defaults ← global ← project ← overlays ← runtime) is shown so you
+  can see which layer wins.
+- Destructive actions (resetting a setting to its default, deleting a skill
+  or rule) ask for confirmation before they run.
 
-Later phases add models & providers, roles, capability-file editing, MCP
-servers, packages/plugins, auth, and themes to the same page.
+Later phases add models & providers, roles, MCP servers, packages/plugins,
+auth, and themes to the same page.

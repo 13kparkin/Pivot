@@ -65,6 +65,39 @@ export type OmpCapabilityResource = typeof OmpCapabilityResource.Type;
  * keys (the CLI omits it). Secret-typed keys carry `masked: true` and a
  * masked `value`.
  */
+/**
+ * Slug addressing one rule or skill item. Safe identifier only — no path
+ * separators, no leading dots — so a client-supplied name can never escape
+ * its capability directory (D5).
+ */
+export const OmpCapabilityItemName = TrimmedNonEmptyString.check(
+  Schema.isPattern(/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/),
+);
+export type OmpCapabilityItemName = typeof OmpCapabilityItemName.Type;
+
+/**
+ * Where a rule/skill item is read or written. Profile scope is not supported
+ * for item edits — the active agent dir is the profile dir when in a profile.
+ */
+export const OmpCapabilityItemScope = Schema.Literals(["global", "project"]);
+export type OmpCapabilityItemScope = typeof OmpCapabilityItemScope.Type;
+
+/** Kinds whose contents are editable as markdown files (rules, skills). */
+export const OmpCapabilityEditableKind = Schema.Literals(["skills", "rules"]);
+export type OmpCapabilityEditableKind = typeof OmpCapabilityEditableKind.Type;
+
+/**
+ * One discovered rule or skill. `name` is the safe slug (rule `foo` maps to
+ * `rules/foo.md`; skill `foo` maps to `skills/foo/SKILL.md`). `description`
+ * comes from the file frontmatter when present.
+ */
+export const OmpCapabilityItem = Schema.Struct({
+  name: OmpCapabilityItemName,
+  scope: OmpCapabilityItemScope,
+  description: Schema.optionalKey(Schema.String),
+});
+export type OmpCapabilityItem = typeof OmpCapabilityItem.Type;
+
 export const OmpSettingsSurfaceEntry = Schema.Struct({
   key: TrimmedNonEmptyString,
   value: Schema.optionalKey(Schema.Unknown),
@@ -88,6 +121,8 @@ export const OmpCapabilitiesSnapshot = Schema.Struct({
   agentDirLabel: Schema.optionalKey(Schema.String),
   settings: OmpSettingsSurface,
   resources: Schema.Array(OmpCapabilityResource),
+  skills: Schema.Array(OmpCapabilityItem),
+  rules: Schema.Array(OmpCapabilityItem),
 });
 export type OmpCapabilitiesSnapshot = typeof OmpCapabilitiesSnapshot.Type;
 
@@ -186,3 +221,102 @@ export const ServerOmpCapabilitiesResetSettingResult = Schema.Struct({
 });
 export type ServerOmpCapabilitiesResetSettingResult =
   typeof ServerOmpCapabilitiesResetSettingResult.Type;
+
+/**
+ * Read one rule/skill file. `projectId` is required for `scope: "project"`
+ * (the server resolves the trusted cwd, never a client path).
+ */
+export const OmpReadResourceInput = Schema.Struct({
+  kind: OmpCapabilityEditableKind,
+  name: OmpCapabilityItemName,
+  scope: OmpCapabilityItemScope,
+  projectId: Schema.optionalKey(ProjectId),
+});
+export type OmpReadResourceInput = typeof OmpReadResourceInput.Type;
+
+export const OmpReadResourceResult = Schema.Struct({
+  name: OmpCapabilityItemName,
+  scope: OmpCapabilityItemScope,
+  content: Schema.String,
+  exists: Schema.Boolean,
+});
+export type OmpReadResourceResult = typeof OmpReadResourceResult.Type;
+
+/**
+ * Create or replace a rule/skill file. `overwrite: true` is required to
+ * replace an existing item; new items must not collide (D7).
+ */
+export const OmpWriteResourceInput = Schema.Struct({
+  kind: OmpCapabilityEditableKind,
+  name: OmpCapabilityItemName,
+  content: Schema.String,
+  scope: OmpCapabilityItemScope,
+  projectId: Schema.optionalKey(ProjectId),
+  overwrite: Schema.Boolean,
+});
+export type OmpWriteResourceInput = typeof OmpWriteResourceInput.Type;
+
+export const OmpWriteResourceResult = Schema.Struct({
+  snapshot: OmpCapabilitiesSnapshot,
+});
+export type OmpWriteResourceResult = typeof OmpWriteResourceResult.Type;
+
+/**
+ * Destructive rule/skill delete (file for rules, directory for skills).
+ * `confirm: true` is required by the server (D7).
+ */
+export const OmpDeleteResourceInput = Schema.Struct({
+  kind: OmpCapabilityEditableKind,
+  name: OmpCapabilityItemName,
+  scope: OmpCapabilityItemScope,
+  projectId: Schema.optionalKey(ProjectId),
+  confirm: Schema.Boolean,
+});
+export type OmpDeleteResourceInput = typeof OmpDeleteResourceInput.Type;
+
+export const OmpDeleteResourceResult = Schema.Struct({
+  snapshot: OmpCapabilitiesSnapshot,
+});
+export type OmpDeleteResourceResult = typeof OmpDeleteResourceResult.Type;
+
+// Transport (WS) schemas for rule/skill item I/O. `instanceId` is optional —
+// the server falls back to the default omp instance like the other omp RPCs.
+
+export const ServerOmpCapabilitiesReadResourceInput = Schema.Struct({
+  instanceId: Schema.optionalKey(ProviderInstanceId),
+  ...OmpReadResourceInput.fields,
+});
+export type ServerOmpCapabilitiesReadResourceInput =
+  typeof ServerOmpCapabilitiesReadResourceInput.Type;
+
+export const ServerOmpCapabilitiesReadResourceResult = Schema.Struct({
+  resource: OmpReadResourceResult,
+});
+export type ServerOmpCapabilitiesReadResourceResult =
+  typeof ServerOmpCapabilitiesReadResourceResult.Type;
+
+export const ServerOmpCapabilitiesWriteResourceInput = Schema.Struct({
+  instanceId: Schema.optionalKey(ProviderInstanceId),
+  ...OmpWriteResourceInput.fields,
+});
+export type ServerOmpCapabilitiesWriteResourceInput =
+  typeof ServerOmpCapabilitiesWriteResourceInput.Type;
+
+export const ServerOmpCapabilitiesWriteResourceResult = Schema.Struct({
+  snapshot: OmpCapabilitiesSnapshot,
+});
+export type ServerOmpCapabilitiesWriteResourceResult =
+  typeof ServerOmpCapabilitiesWriteResourceResult.Type;
+
+export const ServerOmpCapabilitiesDeleteResourceInput = Schema.Struct({
+  instanceId: Schema.optionalKey(ProviderInstanceId),
+  ...OmpDeleteResourceInput.fields,
+});
+export type ServerOmpCapabilitiesDeleteResourceInput =
+  typeof ServerOmpCapabilitiesDeleteResourceInput.Type;
+
+export const ServerOmpCapabilitiesDeleteResourceResult = Schema.Struct({
+  snapshot: OmpCapabilitiesSnapshot,
+});
+export type ServerOmpCapabilitiesDeleteResourceResult =
+  typeof ServerOmpCapabilitiesDeleteResourceResult.Type;

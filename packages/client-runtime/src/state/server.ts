@@ -798,6 +798,33 @@ export function createServerEnvironmentAtoms<R, E>(
           `${environmentId}:${input.instanceId ?? "omp"}:reset-setting:${input.key}:${String(input.scope)}`,
       },
     }),
+    capabilitiesReadResource: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:omp-capabilities-read-resource",
+      tag: WS_METHODS.serverOmpCapabilitiesReadResource,
+      concurrency: {
+        mode: "singleFlight",
+        key: ({ environmentId, input }) =>
+          `${environmentId}:${input.instanceId ?? "omp"}:read-resource:${input.kind}:${input.name}:${input.scope}`,
+      },
+    }),
+    capabilitiesWriteResource: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:omp-capabilities-write-resource",
+      tag: WS_METHODS.serverOmpCapabilitiesWriteResource,
+      concurrency: {
+        mode: "singleFlight",
+        key: ({ environmentId, input }) =>
+          `${environmentId}:${input.instanceId ?? "omp"}:write-resource:${input.kind}:${input.name}:${input.scope}`,
+      },
+    }),
+    capabilitiesDeleteResource: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:omp-capabilities-delete-resource",
+      tag: WS_METHODS.serverOmpCapabilitiesDeleteResource,
+      concurrency: {
+        mode: "singleFlight",
+        key: ({ environmentId, input }) =>
+          `${environmentId}:${input.instanceId ?? "omp"}:delete-resource:${input.kind}:${input.name}:${input.scope}`,
+      },
+    }),
     updateProvider: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:server:update-provider",
       tag: WS_METHODS.serverUpdateProvider,

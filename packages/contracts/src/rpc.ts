@@ -190,11 +190,17 @@ import {
 } from "./resourceTelemetry.ts";
 import { UsageReadError, UsageSummary, UsageSummaryInput } from "./usage.ts";
 import {
+  ServerOmpCapabilitiesDeleteResourceInput,
+  ServerOmpCapabilitiesDeleteResourceResult,
   ServerOmpCapabilitiesError,
   ServerOmpCapabilitiesGetSnapshotInput,
   ServerOmpCapabilitiesGetSnapshotResult,
+  ServerOmpCapabilitiesReadResourceInput,
+  ServerOmpCapabilitiesReadResourceResult,
   ServerOmpCapabilitiesResetSettingInput,
   ServerOmpCapabilitiesResetSettingResult,
+  ServerOmpCapabilitiesWriteResourceInput,
+  ServerOmpCapabilitiesWriteResourceResult,
   ServerOmpCapabilitiesWriteSettingInput,
   ServerOmpCapabilitiesWriteSettingResult,
 } from "./capabilities.ts";
@@ -281,6 +287,9 @@ export const WS_METHODS = {
   serverOmpCapabilitiesGetSnapshot: "server.ompCapabilitiesGetSnapshot",
   serverOmpCapabilitiesWriteSetting: "server.ompCapabilitiesWriteSetting",
   serverOmpCapabilitiesResetSetting: "server.ompCapabilitiesResetSetting",
+  serverOmpCapabilitiesReadResource: "server.ompCapabilitiesReadResource",
+  serverOmpCapabilitiesWriteResource: "server.ompCapabilitiesWriteResource",
+  serverOmpCapabilitiesDeleteResource: "server.ompCapabilitiesDeleteResource",
   serverUpdateProvider: "server.updateProvider",
   serverUpdateServer: "server.updateServer",
   serverUpdateServerWithProgress: "server.updateServerWithProgress",
@@ -428,6 +437,31 @@ export const WsServerOmpCapabilitiesResetSettingRpc = Rpc.make(
   {
     payload: ServerOmpCapabilitiesResetSettingInput,
     success: ServerOmpCapabilitiesResetSettingResult,
+    error: Schema.Union([ServerOmpCapabilitiesError, EnvironmentAuthorizationError]),
+  },
+);
+
+export const WsServerOmpCapabilitiesReadResourceRpc = Rpc.make(
+  WS_METHODS.serverOmpCapabilitiesReadResource,
+  {
+    payload: ServerOmpCapabilitiesReadResourceInput,
+    success: ServerOmpCapabilitiesReadResourceResult,
+    error: Schema.Union([ServerOmpCapabilitiesError, EnvironmentAuthorizationError]),
+  },
+);
+export const WsServerOmpCapabilitiesWriteResourceRpc = Rpc.make(
+  WS_METHODS.serverOmpCapabilitiesWriteResource,
+  {
+    payload: ServerOmpCapabilitiesWriteResourceInput,
+    success: ServerOmpCapabilitiesWriteResourceResult,
+    error: Schema.Union([ServerOmpCapabilitiesError, EnvironmentAuthorizationError]),
+  },
+);
+export const WsServerOmpCapabilitiesDeleteResourceRpc = Rpc.make(
+  WS_METHODS.serverOmpCapabilitiesDeleteResource,
+  {
+    payload: ServerOmpCapabilitiesDeleteResourceInput,
+    success: ServerOmpCapabilitiesDeleteResourceResult,
     error: Schema.Union([ServerOmpCapabilitiesError, EnvironmentAuthorizationError]),
   },
 );
@@ -1065,6 +1099,9 @@ export const WsRpcGroup = RpcGroup.make(
   WsServerOmpCapabilitiesGetSnapshotRpc,
   WsServerOmpCapabilitiesWriteSettingRpc,
   WsServerOmpCapabilitiesResetSettingRpc,
+  WsServerOmpCapabilitiesReadResourceRpc,
+  WsServerOmpCapabilitiesWriteResourceRpc,
+  WsServerOmpCapabilitiesDeleteResourceRpc,
   WsServerUpdateProviderRpc,
   WsServerUpdateServerRpc,
   WsServerUpdateServerWithProgressRpc,

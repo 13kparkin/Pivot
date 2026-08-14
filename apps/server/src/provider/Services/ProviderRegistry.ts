@@ -9,8 +9,11 @@
 import type {
   OmpCapabilitiesError,
   OmpCapabilitiesSnapshot,
-  OmpCapabilityScope,
+  OmpDeleteResourceInput,
+  OmpReadResourceInput,
+  OmpReadResourceResult,
   OmpResetSettingInput,
+  OmpWriteResourceInput,
   OmpWriteSettingInput,
   ProjectId,
   ProviderInstanceId,
@@ -130,6 +133,33 @@ export interface ProviderRegistryShape {
     input: {
       readonly instanceId: ProviderInstanceId;
     } & OmpResetSettingInput,
+  ) => Effect.Effect<OmpCapabilitiesSnapshot, OmpCapabilitiesError>;
+
+  /**
+   * omp Capabilities: read one rule/skill item (non-thread op, instance-routed).
+   */
+  readonly ompCapabilitiesReadResource: (
+    input: {
+      readonly instanceId: ProviderInstanceId;
+    } & OmpReadResourceInput,
+  ) => Effect.Effect<OmpReadResourceResult, OmpCapabilitiesError>;
+
+  /**
+   * omp Capabilities: create/replace a rule/skill item (non-thread op).
+   */
+  readonly ompCapabilitiesWriteResource: (
+    input: {
+      readonly instanceId: ProviderInstanceId;
+    } & OmpWriteResourceInput,
+  ) => Effect.Effect<OmpCapabilitiesSnapshot, OmpCapabilitiesError>;
+
+  /**
+   * omp Capabilities: destructive rule/skill delete, confirm-gated (non-thread op).
+   */
+  readonly ompCapabilitiesDeleteResource: (
+    input: {
+      readonly instanceId: ProviderInstanceId;
+    } & OmpDeleteResourceInput,
   ) => Effect.Effect<OmpCapabilitiesSnapshot, OmpCapabilitiesError>;
 }
 

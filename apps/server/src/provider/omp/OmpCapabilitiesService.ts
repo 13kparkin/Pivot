@@ -19,15 +19,23 @@ import * as NodeOS from "node:os";
 import {
   OmpCapabilitiesError,
   OmpCapabilitiesSnapshot,
+  OmpCapabilityEditableKind,
+  OmpCapabilityItem,
+  OmpCapabilityItemScope,
   OmpCapabilityKind,
   type OmpCapabilityResource,
   type OmpCapabilityScope,
+  OmpDeleteResourceInput,
+  OmpReadResourceInput,
+  OmpReadResourceResult,
   type OmpResetSettingInput,
   type OmpSettingsSurfaceEntry,
+  OmpWriteResourceInput,
   type OmpWriteSettingInput,
   type ProjectId,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 import * as DateTime from "effect/DateTime";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
@@ -68,6 +76,23 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
 const isSecretSetting = (key: string, type: string): boolean =>
   type === "secret" || SECRET_KEY_PATTERN.test(key);
 
+/**
+ * Extract the `description` from a leading YAML frontmatter block, leniently:
+ * only the first `---`-delimited block is inspected and only the first
+ * `description:` line is used. Missing or malformed frontmatter yields
+ * `undefined` (display-only; never fails the snapshot).
+ */
+function parseFrontmatterDescription(content: string): string | undefined {
+  if (!content.startsWith("---")) return undefined;
+  const end = content.indexOf("\n---");
+  if (end < 0) return undefined;
+  const block = content.slice(3, end);
+  const match = block.match(/^\s*description:\s*(.+)$/m);
+  if (match === null) return undefined;
+  const value = (match[1] ?? "").trim().replace(/^["']|["']$/g, "");
+  return value.length > 0 ? value : undefined;
+}
+
 export class OmpCapabilitiesService {
   readonly #fileSystem: FileSystem.FileSystem;
   readonly #path: Path.Path;
@@ -106,11 +131,14 @@ export class OmpCapabilitiesService {
         projectId === undefined ? undefined : yield* this.#resolveProjectCwd(projectId);
       const settings = yield* this.readSettingsSurface();
       const resources = yield* this.inventory(agentDir, projectCwd);
+      const items = yield* this.inventoryItems(agentDir, projectCwd);
       const agentDirLabel = this.tildeLabel(agentDir);
       return {
         ...(agentDirLabel !== undefined ? { agentDirLabel } : {}),
         settings,
         resources,
+        skills: items.skills,
+        rules: items.rules,
       } satisfies OmpCapabilitiesSnapshot;
     });
   }
@@ -162,6 +190,84 @@ export class OmpCapabilitiesService {
         const projectCwd = yield* this.resolveProjectScopeCwd(input.projectId);
         yield* this.backup(projectCwd);
         yield* this.#configStore.writeProjectKey(projectCwd, input.key, undefined);
+      }
+      return yield* this.getSnapshot(input.projectId);
+    });
+  }
+
+  /**
+   * Read one rule/skill item. `exists: false` (empty content) when the item
+   * does not exist — the editor uses this to distinguish create from edit.
+   */
+  public readResource(
+    input: OmpReadResourceInput,
+  ): Effect.Effect<OmpReadResourceResult, OmpCapabilitiesError> {
+    return Effect.gen({ self: this }, function* () {
+      const scopeDir = yield* this.resolveItemScopeDir(input.scope, input.projectId);
+      const { itemFile } = this.resolveItemPaths(input.kind, scopeDir, input.name);
+      const exists = yield* this.existsPath(itemFile);
+      if (!exists) {
+        return { name: input.name, scope: input.scope, content: "", exists: false };
+      }
+      const content = yield* this.readItemFile(itemFile);
+      return { name: input.name, scope: input.scope, content, exists: true };
+    });
+  }
+
+  /**
+   * Create or replace a rule/skill item. Existing items require
+   * `overwrite: true`; project-scoped overwrites back up the target file
+   * first (D7). Returns the refreshed snapshot.
+   */
+  public writeResource(
+    input: OmpWriteResourceInput,
+  ): Effect.Effect<OmpCapabilitiesSnapshot, OmpCapabilitiesError> {
+    return Effect.gen({ self: this }, function* () {
+      const scopeDir = yield* this.resolveItemScopeDir(input.scope, input.projectId);
+      const { itemFile } = this.resolveItemPaths(input.kind, scopeDir, input.name);
+      const exists = yield* this.existsPath(itemFile);
+      if (exists && input.overwrite !== true) {
+        return yield* new OmpCapabilitiesError({
+          reason: `${input.kind} item ${input.name} already exists; pass overwrite: true to replace it`,
+        });
+      }
+      if (input.scope === "project" && exists) {
+        yield* this.backupFile(itemFile);
+      }
+      yield* this.writeItemFile(itemFile, input.content);
+      return yield* this.getSnapshot(input.projectId);
+    });
+  }
+
+  /**
+   * Destructive rule/skill delete, confirm-gated (D7). Rules delete their
+   * file; skills delete the whole item directory. Project-scoped deletes back
+   * up the target file first. Returns the refreshed snapshot.
+   */
+  public deleteResource(
+    input: OmpDeleteResourceInput,
+  ): Effect.Effect<OmpCapabilitiesSnapshot, OmpCapabilitiesError> {
+    return Effect.gen({ self: this }, function* () {
+      if (input.confirm !== true) {
+        return yield* new OmpCapabilitiesError({
+          reason: "deleting a resource is destructive and requires confirm: true",
+        });
+      }
+      const scopeDir = yield* this.resolveItemScopeDir(input.scope, input.projectId);
+      const { itemDir, itemFile } = this.resolveItemPaths(input.kind, scopeDir, input.name);
+      const exists = yield* this.existsPath(itemFile);
+      if (!exists) {
+        return yield* new OmpCapabilitiesError({
+          reason: `no ${input.kind} item named ${input.name}`,
+        });
+      }
+      if (input.scope === "project") {
+        yield* this.backupFile(itemFile);
+      }
+      if (input.kind === "skills") {
+        yield* this.removeItemDir(itemDir);
+      } else {
+        yield* this.removeItemFile(itemFile);
       }
       return yield* this.getSnapshot(input.projectId);
     });
@@ -288,6 +394,109 @@ export class OmpCapabilitiesService {
     );
   }
 
+  /**
+   * Item-level inventory of rules and skills across the global agent dir and
+   * (when resolved) the project `.omp` folder. Non-markdown files, the rules
+   * `support/` bundle, and skill dirs without a `SKILL.md` are not items.
+   */
+  private inventoryItems(
+    agentDir: string,
+    projectCwd: string | undefined,
+  ): Effect.Effect<
+    {
+      readonly skills: ReadonlyArray<OmpCapabilityItem>;
+      readonly rules: ReadonlyArray<OmpCapabilityItem>;
+    },
+    OmpCapabilitiesError
+  > {
+    return Effect.gen({ self: this }, function* () {
+      const scopes: ReadonlyArray<{
+        readonly scope: OmpCapabilityItemScope;
+        readonly dir: string;
+      }> = [
+        { scope: "global", dir: agentDir },
+        ...(projectCwd !== undefined
+          ? [{ scope: "project" as const, dir: this.#path.join(projectCwd, ".omp") }]
+          : []),
+      ];
+      const skills: OmpCapabilityItem[] = [];
+      const rules: OmpCapabilityItem[] = [];
+      for (const scope of scopes) {
+        skills.push(...(yield* this.listItemKind("skills", scope.dir, scope.scope)));
+        rules.push(...(yield* this.listItemKind("rules", scope.dir, scope.scope)));
+      }
+      return { skills, rules };
+    }).pipe(
+      Effect.mapError(
+        (cause) =>
+          new OmpCapabilitiesError({
+            reason: "failed to inventory omp rule and skill items",
+            cause,
+          }),
+      ),
+    );
+  }
+
+  private listItemKind(
+    kind: OmpCapabilityEditableKind,
+    scopeDir: string,
+    scope: OmpCapabilityItemScope,
+  ): Effect.Effect<ReadonlyArray<OmpCapabilityItem>, OmpCapabilitiesError> {
+    return Effect.gen({ self: this }, function* () {
+      const kindDir = this.#path.join(scopeDir, kind);
+      const dirExists = yield* this.existsPath(kindDir);
+      if (!dirExists) return [];
+      const entries = yield* this.#fileSystem.readDirectory(kindDir);
+      const items: OmpCapabilityItem[] = [];
+      for (const entry of entries) {
+        const item = yield* this.itemFromEntry(kind, kindDir, scope, entry);
+        if (item !== undefined) items.push(item);
+      }
+      return items.sort((a, b) => a.name.localeCompare(b.name));
+    }).pipe(
+      Effect.mapError(
+        (cause) =>
+          new OmpCapabilitiesError({
+            reason: `failed to inventory ${kind} items`,
+            cause,
+          }),
+      ),
+    );
+  }
+
+  private itemFromEntry(
+    kind: OmpCapabilityEditableKind,
+    kindDir: string,
+    scope: OmpCapabilityItemScope,
+    entry: string,
+  ): Effect.Effect<OmpCapabilityItem | undefined, OmpCapabilitiesError> {
+    return Effect.gen({ self: this }, function* () {
+      if (kind === "rules") {
+        if (!entry.endsWith(".md")) return undefined;
+        const name = entry.slice(0, -".md".length);
+        if (name.length === 0) return undefined;
+        const description = yield* this.frontmatterDescription(this.#path.join(kindDir, entry));
+        return { name, scope, ...(description !== undefined ? { description } : {}) };
+      }
+      const skillFile = this.#path.join(kindDir, entry, "SKILL.md");
+      const exists = yield* this.existsPath(skillFile);
+      if (!exists) return undefined;
+      const description = yield* this.frontmatterDescription(skillFile);
+      return { name: entry, scope, ...(description !== undefined ? { description } : {}) };
+    });
+  }
+
+  /** Frontmatter `description` for list display; unreadable files degrade to no description. */
+  private frontmatterDescription(
+    filePath: string,
+  ): Effect.Effect<string | undefined, OmpCapabilitiesError> {
+    return Effect.gen({ self: this }, function* () {
+      const contents = yield* this.readItemFile(filePath).pipe(Effect.option);
+      const raw = Option.getOrUndefined(contents);
+      return raw === undefined ? undefined : parseFrontmatterDescription(raw);
+    });
+  }
+
   /** Provenance: profile when the active agent dir lives under a profiles tree. */
   private resolveProvenance(agentDir: string, scope: OmpCapabilityScope): OmpCapabilityScope {
     if (scope === "project") return "project";
@@ -331,15 +540,19 @@ export class OmpCapabilitiesService {
 
   /** Timestamped `.bak` copy of `<projectCwd>/.omp/config.yml` before a mutate (D7). */
   private backup(projectCwd: string): Effect.Effect<void, OmpCapabilitiesError> {
+    return this.backupFile(this.#path.join(projectCwd, ".omp", "config.yml"));
+  }
+
+  /** Timestamped `.bak` copy of a file before a project-scoped mutate (D7). */
+  private backupFile(filePath: string): Effect.Effect<void, OmpCapabilitiesError> {
     return Effect.gen({ self: this }, function* () {
       const fs = this.#fileSystem;
-      const configPath = this.#path.join(projectCwd, ".omp", "config.yml");
-      const exists = yield* fs.exists(configPath);
+      const exists = yield* fs.exists(filePath);
       if (!exists) return;
-      const contents = yield* fs.readFileString(configPath);
+      const contents = yield* fs.readFileString(filePath);
       const timestamp = Math.floor(DateTime.toEpochMillis(yield* DateTime.now) / 1000);
       yield* writeFileStringAtomically({
-        filePath: `${configPath}.bak-${timestamp}`,
+        filePath: `${filePath}.bak-${timestamp}`,
         contents,
       }).pipe(
         Effect.provideService(FileSystem.FileSystem, fs),
@@ -349,7 +562,103 @@ export class OmpCapabilitiesService {
       Effect.mapError(
         (cause) =>
           new OmpCapabilitiesError({
-            reason: "failed to back up the project config before writing",
+            reason: "failed to back up the file before writing",
+            cause,
+          }),
+      ),
+    );
+  }
+
+  /** Scope root for item reads/writes: agent dir (global) or `<cwd>/.omp` (project). */
+  private resolveItemScopeDir(
+    scope: OmpCapabilityItemScope,
+    projectId: ProjectId | undefined,
+  ): Effect.Effect<string, OmpCapabilitiesError> {
+    return Effect.gen({ self: this }, function* () {
+      if (scope === "project") {
+        const projectCwd = yield* this.resolveProjectScopeCwd(projectId);
+        return this.#path.join(projectCwd, ".omp");
+      }
+      return yield* this.resolveAgentDir();
+    });
+  }
+
+  /**
+   * On-disk layout for an item: rules are single `<name>.md` files; skills
+   * are `<name>/SKILL.md` directories.
+   */
+  private resolveItemPaths(
+    kind: OmpCapabilityEditableKind,
+    scopeDir: string,
+    name: string,
+  ): { readonly itemDir: string; readonly itemFile: string } {
+    if (kind === "rules") {
+      const itemFile = this.#path.join(scopeDir, "rules", `${name}.md`);
+      return { itemDir: this.#path.dirname(itemFile), itemFile };
+    }
+    const itemDir = this.#path.join(scopeDir, "skills", name);
+    return { itemDir, itemFile: this.#path.join(itemDir, "SKILL.md") };
+  }
+
+  private existsPath(filePath: string): Effect.Effect<boolean, OmpCapabilitiesError> {
+    return this.#fileSystem.exists(filePath).pipe(
+      Effect.mapError(
+        (cause) =>
+          new OmpCapabilitiesError({
+            reason: "failed to check capability item file",
+            cause,
+          }),
+      ),
+    );
+  }
+
+  private readItemFile(filePath: string): Effect.Effect<string, OmpCapabilitiesError> {
+    return this.#fileSystem.readFileString(filePath).pipe(
+      Effect.mapError(
+        (cause) =>
+          new OmpCapabilitiesError({
+            reason: `failed to read capability item file`,
+            cause,
+          }),
+      ),
+    );
+  }
+
+  private writeItemFile(
+    filePath: string,
+    contents: string,
+  ): Effect.Effect<void, OmpCapabilitiesError> {
+    return writeFileStringAtomically({ filePath, contents }).pipe(
+      Effect.provideService(FileSystem.FileSystem, this.#fileSystem),
+      Effect.provideService(Path.Path, this.#path),
+      Effect.mapError(
+        (cause) =>
+          new OmpCapabilitiesError({
+            reason: "failed to write capability item file",
+            cause,
+          }),
+      ),
+    );
+  }
+
+  private removeItemFile(filePath: string): Effect.Effect<void, OmpCapabilitiesError> {
+    return this.#fileSystem.remove(filePath, { force: true }).pipe(
+      Effect.mapError(
+        (cause) =>
+          new OmpCapabilitiesError({
+            reason: "failed to delete capability item file",
+            cause,
+          }),
+      ),
+    );
+  }
+
+  private removeItemDir(dirPath: string): Effect.Effect<void, OmpCapabilitiesError> {
+    return this.#fileSystem.remove(dirPath, { recursive: true, force: true }).pipe(
+      Effect.mapError(
+        (cause) =>
+          new OmpCapabilitiesError({
+            reason: "failed to delete capability item directory",
             cause,
           }),
       ),
