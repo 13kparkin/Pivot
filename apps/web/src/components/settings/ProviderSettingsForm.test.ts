@@ -14,7 +14,25 @@ describe("ProviderSettingsForm helpers", () => {
     const omp = DRIVER_OPTION_BY_VALUE[ProviderDriverKind.make("omp")];
 
     expect(omp).toBeDefined();
-    expect(deriveProviderSettingsFields(omp!).map((field) => field.key)).toEqual(["binaryPath"]);
+    expect(deriveProviderSettingsFields(omp!).map((field) => field.key)).toEqual([
+      "binaryPath",
+      "roleDefault",
+      "roleSmol",
+      "roleSlow",
+      "rolePlan",
+      "roleAdvisor",
+      "roleTask",
+      "roleVision",
+      "roleDesigner",
+      "roleCommit",
+      "roleTiny",
+      "autoCompactionEnabled",
+      "autoRetryEnabled",
+      "advisorEnabled",
+      "memoryBackend",
+      "toolGithubEnabled",
+      "toolSecurityScanEnabled",
+    ]);
   });
 
   it("sources labels and descriptions from schema annotations", () => {
