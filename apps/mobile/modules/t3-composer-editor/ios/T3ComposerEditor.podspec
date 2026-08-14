@@ -1,7 +1,7 @@
 Pod::Spec.new do |s|
   s.name           = 'T3ComposerEditor'
   s.version        = '1.0.0'
-  s.summary        = 'Native attributed composer editor for T3 Code mobile.'
+  s.summary        = 'Native attributed composer editor for Pivot mobile.'
   s.description    = 'UIKit-backed rich text composer with atomic skill and file tokens.'
   s.author         = 'Pivot'
   s.homepage       = 'https://github.com/13kparkin/Pivot'

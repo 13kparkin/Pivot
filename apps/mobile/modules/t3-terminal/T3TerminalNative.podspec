@@ -5,7 +5,7 @@ package = JSON.parse(File.read(File.join(__dir__, 'package.json')))
 Pod::Spec.new do |s|
   s.name = 'T3TerminalNative'
   s.version = package['version']
-  s.summary = 'Native terminal surface for T3 Code mobile.'
+  s.summary = 'Native terminal surface for Pivot mobile.'
   s.description = 'Native terminal surface bridge used by the Pivot React Native app.'
   s.homepage = 'https://github.com/13kparkin/Pivot'
   s.license = { :type => 'UNLICENSED' }

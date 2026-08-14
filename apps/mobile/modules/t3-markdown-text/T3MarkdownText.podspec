@@ -6,7 +6,7 @@ new_arch_enabled = ENV["RCT_NEW_ARCH_ENABLED"] == "1"
 Pod::Spec.new do |s|
   s.name = "T3MarkdownText"
   s.version = package["version"]
-  s.summary = "Native selectable markdown renderer for T3 Code mobile."
+  s.summary = "Native selectable markdown renderer for Pivot mobile."
   s.description = "Fabric-backed attributed text and markdown rendering primitives owned by Pivot."
   s.homepage = "https://github.com/13kparkin/Pivot"
   s.license = { :type => "MIT", :file => "LICENSE" }
