@@ -3,8 +3,8 @@ Pod::Spec.new do |s|
   s.version        = '1.0.0'
   s.summary        = 'Native UIKit controls for T3 Code mobile.'
   s.description    = 'UIKit-backed controls that match native iOS navigation chrome.'
-  s.author         = 'T3 Tools'
-  s.homepage       = 'https://t3tools.com'
+  s.author         = 'Pivot'
+  s.homepage       = 'https://github.com/13kparkin/Pivot'
   s.platforms      = {
     :ios => '18.0',
   }
