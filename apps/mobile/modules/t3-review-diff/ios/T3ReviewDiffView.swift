@@ -313,7 +313,7 @@ private struct ReviewDiffNativeStyle {
 
 public final class T3ReviewDiffView: ExpoView, UIScrollViewDelegate {
   private let payloadDecodeQueue = DispatchQueue(
-    label: "com.t3tools.review-diff.payload-decode",
+    label: "com.13kparkin.pivot.review-diff.payload-decode",
     qos: .userInitiated
   )
   private let scrollView = UIScrollView()

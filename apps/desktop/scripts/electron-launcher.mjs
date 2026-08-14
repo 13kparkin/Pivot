@@ -15,7 +15,7 @@ const repoRoot = NodePath.resolve(desktopDir, "..", "..");
 const devBundleIdSuffix = NodePath.basename(repoRoot)
   .toLowerCase()
   .replaceAll(/[^a-z0-9]+/g, "");
-export const APP_DISPLAY_NAME = isDevelopment ? "T3 Code (Dev)" : "T3 Code (Alpha)";
+export const APP_DISPLAY_NAME = isDevelopment ? "Pivot (Dev)" : "Pivot (Alpha)";
 export const APP_BUNDLE_ID = isDevelopment
   ? `com.13kparkin.pivot.dev.${devBundleIdSuffix || "local"}`
   : "com.13kparkin.pivot";
