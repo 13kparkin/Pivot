@@ -150,6 +150,8 @@ interface TimelineRowSharedState {
   onToggleWorkGroup: (groupId: string, anchorKey: string) => void;
   agentPanelModel: AgentPanelModel;
   onOpenAgents: () => void;
+  /** Checkpoint summaries by assistant message id, for file-change rows. */
+  turnDiffSummaryByAssistantMessageId: Map<MessageId, TurnDiffSummary>;
 }
 
 interface TimelineRowActivityState {
@@ -523,6 +525,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       onToggleWorkGroup,
       agentPanelModel,
       onOpenAgents,
+      turnDiffSummaryByAssistantMessageId,
     }),
     [
       timestampFormat,
@@ -539,6 +542,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       onToggleWorkGroup,
       agentPanelModel,
       onOpenAgents,
+      turnDiffSummaryByAssistantMessageId,
     ],
   );
   const activityState = useMemo<TimelineRowActivityState>(
@@ -2241,7 +2245,26 @@ const PlainWorkEntryRow = memo(function PlainWorkEntryRow(props: {
 }) {
   const { workEntry, workspaceRoot } = props;
   const activity = use(TimelineRowActivityCtx);
+  const ctx = use(TimelineRowCtx);
   const [expanded, setExpanded] = useState(false);
+  const turnSummaryForWorkEntry = useMemo(() => {
+    const turnId = workEntry.turnId;
+    if (turnId === undefined || turnId === null) {
+      return undefined;
+    }
+    for (const summary of ctx.turnDiffSummaryByAssistantMessageId.values()) {
+      if (summary.turnId === turnId) {
+        return summary;
+      }
+    }
+    return undefined;
+  }, [ctx.turnDiffSummaryByAssistantMessageId, workEntry.turnId]);
+  const activityOnOpenTurnDiff = useCallback(
+    (turnId: string, filePath?: string) => {
+      ctx.onOpenTurnDiff(turnId as TurnId, filePath);
+    },
+    [ctx.onOpenTurnDiff],
+  );
   const iconConfig = workToneIcon(workEntry.tone);
   const showWarningIndicator =
     workEntry.sourceActivityKind === "runtime.warning" ||
@@ -2415,7 +2438,14 @@ const PlainWorkEntryRow = memo(function PlainWorkEntryRow(props: {
           onClick={stopRowToggle}
           onPointerDown={stopRowToggle}
         >
-          <WorkEntryExpandedDetail workEntry={workEntry} workspaceRoot={workspaceRoot} />
+          <WorkEntryExpandedDetail
+            workEntry={workEntry}
+            workspaceRoot={workspaceRoot}
+            {...(turnSummaryForWorkEntry === undefined
+              ? {}
+              : { turnSummary: turnSummaryForWorkEntry })}
+            onOpenTurnDiff={activityOnOpenTurnDiff}
+          />
         </div>
       ) : null}
     </div>

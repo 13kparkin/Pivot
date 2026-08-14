@@ -7,6 +7,7 @@ import { cn } from "~/lib/utils";
 import type { WorkLogEntry } from "../../session-logic";
 import {
   advisorToneFromSeverity,
+  buildFileChangeDiffEntries,
   buildMcpCallSections,
   extractCommandExitCode,
 } from "./workEntryPresentation";
@@ -225,6 +226,53 @@ function TtsrDetail({ workEntry }: { workEntry: WorkLogEntry }) {
   );
 }
 
+function FileChangeDetail({
+  workEntry,
+  workspaceRoot,
+  turnSummary,
+  onOpenTurnDiff,
+}: {
+  workEntry: WorkLogEntry;
+  workspaceRoot: string | undefined;
+  turnSummary?: {
+    readonly files: ReadonlyArray<{
+      readonly path: string;
+      readonly additions: number;
+      readonly deletions: number;
+    }>;
+  } | null;
+  onOpenTurnDiff: (turnId: string, filePath?: string) => void;
+}) {
+  const files = buildFileChangeDiffEntries(workEntry, turnSummary);
+  const turnId = workEntry.turnId;
+  if (files.length === 0) {
+    return null;
+  }
+  return (
+    <div className="space-y-1">
+      {files.map((file) => (
+        <div key={file.path} className="flex min-w-0 items-center gap-2">
+          <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-secondary-label">
+            {formatWorkspaceRelativePath(file.path, workspaceRoot)}
+          </span>
+          <span className="shrink-0 text-[10px] tabular-nums text-success">+{file.additions}</span>
+          <span className="shrink-0 text-[10px] tabular-nums text-destructive">
+            -{file.deletions}
+          </span>
+          <button
+            type="button"
+            className="shrink-0 rounded-sm px-1 py-0.5 text-[10px] font-medium text-foreground/80 transition-colors hover:bg-accent/60 hover:text-foreground"
+            aria-label={`Open full diff for ${file.path}`}
+            onClick={() => onOpenTurnDiff(turnId ?? "", file.path)}
+          >
+            Open full diff
+          </button>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function FlatTextDetail({
   workEntry,
   workspaceRoot,
@@ -259,9 +307,21 @@ function FlatTextDetail({
 export function WorkEntryExpandedDetail({
   workEntry,
   workspaceRoot,
+  turnSummary,
+  onOpenTurnDiff,
 }: {
   workEntry: WorkLogEntry;
   workspaceRoot: string | undefined;
+  /** Checkpoint summary for the entry's turn, when available (file-change rows). */
+  turnSummary?: {
+    readonly files: ReadonlyArray<{
+      readonly path: string;
+      readonly additions: number;
+      readonly deletions: number;
+    }>;
+  } | null;
+  /** Deep link to the full DiffPanel at the entry's turn + file. */
+  onOpenTurnDiff: (turnId: string, filePath?: string) => void;
 }) {
   switch (workEntry.itemType ?? workEntry.sourceActivityKind) {
     case "command_execution":
@@ -270,6 +330,15 @@ export function WorkEntryExpandedDetail({
       return <McpCallDetail workEntry={workEntry} />;
     case "web_search":
       return <WebSearchDetail workEntry={workEntry} />;
+    case "file_change":
+      return (
+        <FileChangeDetail
+          workEntry={workEntry}
+          workspaceRoot={workspaceRoot}
+          {...(turnSummary === undefined ? {} : { turnSummary })}
+          onOpenTurnDiff={onOpenTurnDiff}
+        />
+      );
     case "advisor.comment":
       return <AdvisorDetail workEntry={workEntry} />;
     case "ttsr.triggered":

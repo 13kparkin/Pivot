@@ -76,6 +76,48 @@ export function ttsrRuleSummary(
   return rules.length === 1 ? firstName : `${firstName} +${rules.length - 1} more`;
 }
 
+export interface FileChangeDiffEntry {
+  readonly path: string;
+  readonly additions: number;
+  readonly deletions: number;
+}
+
+/**
+ * Per-file diff rows for a file-change work entry. Paths come from the
+ * entry's changedFiles; add/del counts from the turn's checkpoint summary
+ * when it names the same path (zero counts otherwise). Sorted by path.
+ */
+export function buildFileChangeDiffEntries(
+  workEntry: Pick<WorkLogEntry, "changedFiles" | "itemType">,
+  turnSummary:
+    | {
+        readonly files: ReadonlyArray<{
+          readonly path: string;
+          readonly additions: number;
+          readonly deletions: number;
+        }>;
+      }
+    | null
+    | undefined,
+): ReadonlyArray<FileChangeDiffEntry> {
+  const changedFiles = workEntry.changedFiles ?? [];
+  if (changedFiles.length === 0) {
+    return [];
+  }
+  const countsByPath = new Map<string, { additions: number; deletions: number }>();
+  for (const file of turnSummary?.files ?? []) {
+    countsByPath.set(file.path, { additions: file.additions, deletions: file.deletions });
+  }
+  return changedFiles
+    .map((path) => countsByPath.get(path) ?? { additions: 0, deletions: 0 })
+    .map((counts, index) => ({
+      path: changedFiles[index]!,
+      additions: counts.additions,
+      deletions: counts.deletions,
+    }))
+    .toSorted((left, right) => left.path.localeCompare(right.path));
+}
+
 export function workEntryHasExpandedDetail(workEntry: WorkLogEntry): boolean {
   if (workEntry.itemType === "mcp_tool_call" && workEntry.toolData !== undefined) {
     return true;
