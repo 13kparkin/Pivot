@@ -713,7 +713,7 @@ describe("advisor and ttsr feed rows", () => {
           id: EventId.make("advisor-concern"),
           kind: "advisor.comment",
           summary: "Consider extracting the helper",
-          tone: "warning",
+          tone: "info",
           createdAt: "2026-04-01T00:00:01.000Z",
           payload: {
             notes: [
@@ -738,6 +738,8 @@ describe("advisor and ttsr feed rows", () => {
     expect(row.canExpand).toBe(true);
     expect(row.getFullDetail()).toContain("Consider extracting the helper");
     expect(row.getFullDetail()).toContain("code-review");
+    // Severity drives the icon even though the coarse activity tone is "info".
+    expect(row.icon).toBe("warning");
   });
 
   it("renders ttsr rows from ttsr.triggered activities with rule context", () => {

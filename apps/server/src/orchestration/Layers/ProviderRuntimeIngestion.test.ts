@@ -2992,7 +2992,7 @@ describe("ProviderRuntimeIngestion", () => {
     expect(payload?.notes?.[1]?.severity).toBe("concern");
   });
 
-  it("maps advisor.comment with only nits to info tone", async () => {
+  it("maps advisor.comment with nits and concerns to the coarse info tone", async () => {
     const harness = await createHarness();
     const now = "2026-01-01T00:00:00.000Z";
 
@@ -3007,12 +3007,30 @@ describe("ProviderRuntimeIngestion", () => {
       },
     });
 
+    harness.emit({
+      type: "advisor.comment",
+      eventId: asEventId("evt-advisor-concern"),
+      provider: ProviderDriverKind.make("omp"),
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      payload: {
+        notes: [{ note: "Consider extracting the helper", severity: "concern" }],
+      },
+    });
+
     const thread = await waitForThread(harness.readModel, (entry) =>
-      entry.activities.some((activity) => activity.id === "evt-advisor-nit"),
+      entry.activities.some((activity) => activity.id === "evt-advisor-concern"),
     );
-    const activity = thread.activities.find((entry) => entry.id === "evt-advisor-nit");
-    expect(activity?.kind).toBe("advisor.comment");
-    expect(activity?.tone).toBe("info");
+    const nit = thread.activities.find((entry) => entry.id === "evt-advisor-nit");
+    expect(nit?.kind).toBe("advisor.comment");
+    expect(nit?.tone).toBe("info");
+    // The persisted activity keeps the coarse tone vocabulary (nit/concern ->
+    // info); the severity rides in the payload notes and drives client tint.
+    const concern = thread.activities.find((entry) => entry.id === "evt-advisor-concern");
+    expect(concern?.tone).toBe("info");
+    expect(
+      (concern?.payload as { notes?: ReadonlyArray<{ severity?: string }> }).notes?.[0]?.severity,
+    ).toBe("concern");
   });
 
   it("maps ttsr.triggered runtime events into info rule activities", async () => {

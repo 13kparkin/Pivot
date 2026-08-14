@@ -357,17 +357,16 @@ function taskLinkageActivityFields(payload: Record<string, unknown>): Record<str
   return fields;
 }
 
-/** Highest advisor severity wins: blocker -> error, concern -> warning, else info. */
+/**
+ * Coarse activity tone for advisor cards. The persisted activity keeps the
+ * shared coarse vocabulary (blocker -> error, else info); the finer
+ * nit/concern/blocker distinction lives in the payload notes and drives the
+ * client's severity tint.
+ */
 function advisorCommentTone(
   notes: ReadonlyArray<{ readonly severity?: "nit" | "concern" | "blocker" | undefined }>,
-): "error" | "warning" | "info" {
-  if (notes.some((note) => note.severity === "blocker")) {
-    return "error";
-  }
-  if (notes.some((note) => note.severity === "concern")) {
-    return "warning";
-  }
-  return "info";
+): "error" | "info" {
+  return notes.some((note) => note.severity === "blocker") ? "error" : "info";
 }
 
 export function runtimeEventToActivities(

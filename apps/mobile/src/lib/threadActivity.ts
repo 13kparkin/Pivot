@@ -71,7 +71,7 @@ interface WorkLogEntry {
   command?: string;
   rawCommand?: string;
   changedFiles?: ReadonlyArray<string>;
-  tone: "thinking" | "tool" | "info" | "warning" | "error";
+  tone: "thinking" | "tool" | "info" | "error";
   toolTitle?: string;
   itemType?: ToolLifecycleItemType;
   requestKind?: PendingApproval["requestKind"];
@@ -659,8 +659,17 @@ function workEntryIcon(entry: DerivedWorkLogEntry): ThreadFeedActivity["icon"] {
   }
   if (entry.activityKind === "runtime.warning") return "warning";
   if (entry.activityKind === "advisor.comment") {
-    if (entry.tone === "error") return "alert";
-    if (entry.tone === "warning") return "warning";
+    // Severity drives the icon (like web's advisor tint); the coarse tone
+    // stays "error"/"info" and the notes carry nit/concern/blocker.
+    if (
+      entry.tone === "error" ||
+      (entry.advisorNotes?.some((note) => note.severity === "blocker") ?? false)
+    ) {
+      return "alert";
+    }
+    if (entry.advisorNotes?.some((note) => note.severity === "concern") ?? false) {
+      return "warning";
+    }
     return "message";
   }
   if (entry.activityKind === "ttsr.triggered") return "zap";

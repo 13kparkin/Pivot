@@ -1184,7 +1184,7 @@ describe("AC10 guard: no new collapse behavior", () => {
           createdAt: "2026-01-01T00:00:01Z",
           turnId: "turn-1" as never,
           label: "Consider extracting the helper",
-          tone: "warning" as const,
+          tone: "info" as const,
           sourceActivityKind: "advisor.comment" as const,
           advisorNotes: [{ note: "Consider extracting the helper", severity: "concern" as const }],
         },
