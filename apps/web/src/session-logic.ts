@@ -854,11 +854,13 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
   if (title) {
     entry.toolTitle = title;
   }
-  if (itemType) {
+  if (itemType === "mcp_tool_call") {
     const data = asRecord(payload?.data);
-    if (data !== null) {
-      entry.toolData = itemType === "mcp_tool_call" && data.item !== undefined ? data.item : data;
+    if (data?.item !== undefined) {
+      entry.toolData = data.item;
     }
+  }
+  if (itemType) {
     entry.itemType = itemType;
   }
   if (requestKind) {

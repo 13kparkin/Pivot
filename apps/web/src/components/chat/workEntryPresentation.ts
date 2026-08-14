@@ -20,7 +20,19 @@ export function deriveWorkEntryDurationMs(
   return endedAt - startedAt;
 }
 
-export function extractCommandExitCode(workEntry: Pick<WorkLogEntry, "toolData">): number | null {
+export function extractCommandExitCode(
+  workEntry: Pick<WorkLogEntry, "detail" | "toolData">,
+): number | null {
+  // Prefer the trailing "<exited with exit code N>" marker on the detail text
+  // (projection-stable), then a numeric exit code in toolData when present.
+  const detail = workEntry.detail?.trim() ?? "";
+  const marker = /<exited with exit code (?<code>\d+)>\s*$/i.exec(detail);
+  if (marker?.groups?.code !== undefined) {
+    const parsed = Number.parseInt(marker.groups.code, 10);
+    if (Number.isInteger(parsed)) {
+      return parsed;
+    }
+  }
   const data = asRecord(workEntry.toolData);
   const rawOutput = asRecord(data?.rawOutput);
   const exitCode = rawOutput?.exitCode;

@@ -47,11 +47,21 @@ describe("extractCommandExitCode", () => {
     ).toBe(1);
   });
 
+  it("reads the trailing exit code marker from the detail text", () => {
+    expect(
+      extractCommandExitCode({
+        ...baseEntry,
+        detail: "bun test\n<exited with exit code 2>",
+      }),
+    ).toBe(2);
+  });
+
   it("returns null when no exit code is known", () => {
     expect(extractCommandExitCode(baseEntry)).toBeNull();
     expect(
       extractCommandExitCode({ ...baseEntry, toolData: { rawOutput: { stdout: "ok" } } }),
     ).toBeNull();
+    expect(extractCommandExitCode({ ...baseEntry, detail: "bun test passed" })).toBeNull();
   });
 });
 
