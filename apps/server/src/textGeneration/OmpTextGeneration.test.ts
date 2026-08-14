@@ -4,6 +4,7 @@ import { it } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { OmpSettings, ProviderInstanceId } from "@t3tools/contracts";
 import { createModelSelection } from "@t3tools/shared/model";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
@@ -46,12 +47,13 @@ function makeFakeOmpSpawner(sessionFile: string) {
         supportedProtocolVersions: [1, 2],
       });
       asSpawnedCommand(command);
+      const exit = yield* Deferred.make<ChildProcessSpawner.ExitCode, never>();
       let stdinBuf = "";
       return ChildProcessSpawner.makeHandle({
         pid: ChildProcessSpawner.ProcessId(1),
-        exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(0)),
+        exitCode: Deferred.await(exit),
         isRunning: Effect.succeed(true),
-        kill: () => Effect.void,
+        kill: () => Deferred.succeed(exit, ChildProcessSpawner.ExitCode(143)).pipe(Effect.asVoid),
         unref: Effect.succeed(Effect.void),
         stdin: Sink.forEach((chunk: Uint8Array) => {
           stdinBuf += decoder.decode(chunk, { stream: true });

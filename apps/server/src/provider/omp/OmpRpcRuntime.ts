@@ -8,6 +8,7 @@
  * @module provider/omp/OmpRpcRuntime
  */
 import { mergePathValues } from "@t3tools/shared/shell";
+import * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -262,6 +263,30 @@ export class OmpRpcRuntime {
       const pending = new Map<string, Deferred.Deferred<object, OmpSpawnError>>();
       const decoder = new OmpRpcFrameDecoder();
 
+      // Watch for child death (crash, host restart, kill from outside) and
+      // surface it to every in-flight request and to the frame stream. Without
+      // this a dead `omp --mode rpc` leaves awaiting Deferreds hanging and
+      // `streamFrames` idle forever: the adapter never settles the turn and the
+      // thread stays "running" in the UI with a stop button that does nothing.
+      yield* child.exitCode.pipe(
+        Effect.map(Number),
+        Effect.orElseSucceed(() => 1),
+        Effect.flatMap((code) =>
+          Effect.gen(function* () {
+            const cause = new OmpSpawnError({
+              operation: "child-exit",
+              detail: `omp rpc child exited (code ${code})`,
+            });
+            yield* Effect.forEach(Array.from(pending.values()), (waiter) =>
+              Deferred.fail(waiter, cause).pipe(Effect.ignore),
+            ).pipe(Effect.asVoid);
+            pending.clear();
+            yield* Queue.shutdown(frames).pipe(Effect.ignore);
+          }),
+        ),
+        Effect.forkIn(scope),
+      );
+
       yield* child.stdout.pipe(
         Stream.decodeText(),
         Stream.splitLines,
@@ -314,6 +339,17 @@ export class OmpRpcRuntime {
       });
 
       const sessionFile = yield* handshake.pipe(
+        Effect.catchCause((cause) =>
+          Cause.hasInterruptsOnly(cause)
+            ? Effect.interrupt
+            : Effect.fail(
+                new OmpSpawnError({
+                  operation: "handshake",
+                  detail: "omp rpc handshake failed (child may have exited)",
+                  cause,
+                }),
+              ),
+        ),
         Effect.tapError(() =>
           child
             .kill()
@@ -407,6 +443,17 @@ export class OmpRpcRuntime {
       const id = `omp-${String(++this.#nextRequestId)}`;
       const waiter = yield* Deferred.make<object, OmpSpawnError>();
       pending.set(id, waiter);
+      // Close the race with the exit watcher: a request registering after the
+      // child died (watcher already cleared `pending`) must fail fast instead
+      // of awaiting a response that can never arrive.
+      const alive = yield* child.isRunning.pipe(Effect.orElseSucceed(() => false));
+      if (!alive) {
+        pending.delete(id);
+        return yield* new OmpSpawnError({
+          operation: String(command.type),
+          detail: "omp rpc child is not running",
+        });
+      }
       const payload = `${encodeUnknownJson({ id, ...command })}\n`;
       yield* Stream.run(Stream.encodeText(Stream.make(payload)), child.stdin).pipe(
         Effect.mapError(

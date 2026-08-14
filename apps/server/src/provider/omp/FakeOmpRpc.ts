@@ -12,6 +12,8 @@ import { OmpSpawnError } from "./OmpRpcRuntime.ts";
 export class FakeOmpRpc {
   agentInvoked: boolean | undefined = true;
   failSetModel = false;
+  /** When false, `send` never answers `abort` (simulates a wedged child). */
+  respondToAbort = true;
   sessionFile = "/tmp/omp-session.jsonl";
   availableModels: ReadonlyArray<object> = [];
   availableCommands: ReadonlyArray<object> = [];
@@ -161,6 +163,12 @@ export class FakeOmpRpc {
         data: this.sessionStats ?? {},
       });
     }
+    if (command.type === "abort") {
+      if (!this.respondToAbort) {
+        return Effect.never;
+      }
+      return Effect.succeed({ type: "response", success: true, data: {} });
+    }
     if (
       command.type === "steer" ||
       command.type === "set_subagent_subscription" ||
@@ -207,5 +215,14 @@ export class FakeOmpRpc {
       return Effect.die(`no live omp session for ${sessionKey}`);
     }
     return Queue.offer(queue, frame);
+  }
+
+  /** End the frame stream for a session, simulating child exit / transport end. */
+  closeFrames(sessionKey: string) {
+    const queue = this.frames.get(sessionKey);
+    if (!queue) {
+      return Effect.void;
+    }
+    return Queue.shutdown(queue);
   }
 }

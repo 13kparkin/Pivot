@@ -140,6 +140,17 @@ export interface ProviderServiceShape {
   }) => Effect.Effect<{ readonly level: "off" | "progress" | "events" }, ProviderServiceError>;
 
   /**
+   * Settle provider sessions that did not survive a server restart.
+   *
+   * Every persisted binding that claims a running/starting session with no
+   * live adapter session behind it (the provider child died with the previous
+   * process) is marked stopped, and one synthetic `session.exited` runtime
+   * event per binding is returned for the caller to feed through runtime
+   * ingestion so the projection leaves "running".
+   */
+  readonly reconcileStaleSessions: () => Effect.Effect<ReadonlyArray<ProviderRuntimeEvent>>;
+
+  /**
    * Canonical provider runtime event stream.
    *
    * Fan-out is owned by ProviderService (not by a standalone event-bus service).

@@ -343,6 +343,7 @@ describe("ProviderCommandReactor", () => {
       ompGetSubagentMessages: () => unsupported(),
       ompSteer: () => unsupported(),
       ompSetSubagentSubscription: () => unsupported(),
+      reconcileStaleSessions: () => unsupported(),
       get streamEvents() {
         return Stream.fromPubSub(runtimeEventPubSub);
       },
