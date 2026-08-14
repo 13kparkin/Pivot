@@ -775,6 +775,29 @@ export function createServerEnvironmentAtoms<R, E>(
           `${environmentId}:${input.threadId}:subagent-sub:${input.level}`,
       },
     }),
+    capabilitiesSnapshot: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:server:omp-capabilities-snapshot",
+      tag: WS_METHODS.serverOmpCapabilitiesGetSnapshot,
+      staleTimeMs: 30_000,
+    }),
+    capabilitiesWriteSetting: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:omp-capabilities-write-setting",
+      tag: WS_METHODS.serverOmpCapabilitiesWriteSetting,
+      concurrency: {
+        mode: "singleFlight",
+        key: ({ environmentId, input }) =>
+          `${environmentId}:${input.instanceId ?? "omp"}:write-setting:${input.key}:${String(input.scope)}`,
+      },
+    }),
+    capabilitiesResetSetting: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:omp-capabilities-reset-setting",
+      tag: WS_METHODS.serverOmpCapabilitiesResetSetting,
+      concurrency: {
+        mode: "singleFlight",
+        key: ({ environmentId, input }) =>
+          `${environmentId}:${input.instanceId ?? "omp"}:reset-setting:${input.key}:${String(input.scope)}`,
+      },
+    }),
     updateProvider: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:server:update-provider",
       tag: WS_METHODS.serverUpdateProvider,
