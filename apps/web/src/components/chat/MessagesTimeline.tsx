@@ -2246,7 +2246,11 @@ const PlainWorkEntryRow = memo(function PlainWorkEntryRow(props: {
   const { workEntry, workspaceRoot } = props;
   const activity = use(TimelineRowActivityCtx);
   const ctx = use(TimelineRowCtx);
-  const [expanded, setExpanded] = useState(false);
+  const persistedExpanded = useUiStateStore(
+    (store) => store.threadWorkEntryExpandedById[ctx.routeThreadKey]?.[workEntry.id] ?? false,
+  );
+  const setExpanded = useUiStateStore((store) => store.setThreadWorkEntryExpanded);
+  const expanded = persistedExpanded;
   const turnSummaryForWorkEntry = useMemo(() => {
     const turnId = workEntry.turnId;
     if (turnId === undefined || turnId === null) {
@@ -2324,11 +2328,11 @@ const PlainWorkEntryRow = memo(function PlainWorkEntryRow(props: {
         role: "button" as const,
         tabIndex: 0 as const,
         "aria-label": displayText,
-        onClick: () => setExpanded((v) => !v),
+        onClick: () => setExpanded(ctx.routeThreadKey, workEntry.id, !expanded),
         onKeyDown: (e: KeyboardEvent<HTMLDivElement>) => {
           if (e.key === "Enter" || e.key === " ") {
             e.preventDefault();
-            setExpanded((v) => !v);
+            setExpanded(ctx.routeThreadKey, workEntry.id, !expanded);
           }
         },
       }

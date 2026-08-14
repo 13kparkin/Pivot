@@ -27,6 +27,7 @@ export interface PersistedUiState {
   defaultAdvertisedEndpointKey?: string | null;
   threadChangedFilesExpansionVersion?: typeof THREAD_CHANGED_FILES_EXPANSION_VERSION;
   threadChangedFilesExpandedById?: Record<string, Record<string, boolean>>;
+  threadWorkEntryExpandedById?: Record<string, Record<string, boolean>>;
 }
 
 export interface UiProjectState {
@@ -37,6 +38,7 @@ export interface UiProjectState {
 export interface UiThreadState {
   threadLastVisitedAtById: Record<string, string>;
   threadChangedFilesExpandedById: Record<string, Record<string, boolean>>;
+  threadWorkEntryExpandedById: Record<string, Record<string, boolean>>;
 }
 
 export interface UiEndpointState {
@@ -50,6 +52,7 @@ const initialState: UiState = {
   projectOrder: [],
   threadLastVisitedAtById: {},
   threadChangedFilesExpandedById: {},
+  threadWorkEntryExpandedById: {},
   defaultAdvertisedEndpointKey: null,
 };
 
@@ -130,6 +133,9 @@ export function parsePersistedState(parsed: PersistedUiState): UiState {
       parsed.threadChangedFilesExpansionVersion === THREAD_CHANGED_FILES_EXPANSION_VERSION
         ? sanitizePersistedThreadChangedFilesExpanded(parsed.threadChangedFilesExpandedById)
         : {},
+    threadWorkEntryExpandedById: sanitizePersistedThreadWorkEntryExpanded(
+      parsed.threadWorkEntryExpandedById,
+    ),
     defaultAdvertisedEndpointKey:
       typeof parsed.defaultAdvertisedEndpointKey === "string" &&
       parsed.defaultAdvertisedEndpointKey.length > 0
@@ -188,6 +194,30 @@ function sanitizePersistedThreadChangedFilesExpanded(
   return nextState;
 }
 
+function sanitizePersistedThreadWorkEntryExpanded(
+  value: PersistedUiState["threadWorkEntryExpandedById"],
+): Record<string, Record<string, boolean>> {
+  if (!value || typeof value !== "object") {
+    return {};
+  }
+  const nextState: Record<string, Record<string, boolean>> = {};
+  for (const [threadId, entries] of Object.entries(value)) {
+    if (!threadId || !entries || typeof entries !== "object") {
+      continue;
+    }
+    const nextEntries: Record<string, boolean> = {};
+    for (const [entryId, expanded] of Object.entries(entries)) {
+      if (entryId && typeof expanded === "boolean") {
+        nextEntries[entryId] = expanded;
+      }
+    }
+    if (Object.keys(nextEntries).length > 0) {
+      nextState[threadId] = nextEntries;
+    }
+  }
+  return nextState;
+}
+
 export function persistState(state: UiState): void {
   if (typeof window === "undefined") {
     return;
@@ -207,6 +237,7 @@ export function persistState(state: UiState): void {
         defaultAdvertisedEndpointKey: state.defaultAdvertisedEndpointKey,
         threadChangedFilesExpansionVersion: THREAD_CHANGED_FILES_EXPANSION_VERSION,
         threadChangedFilesExpandedById: state.threadChangedFilesExpandedById,
+        threadWorkEntryExpandedById: state.threadWorkEntryExpandedById,
       } satisfies PersistedUiState),
     );
     if (!legacyKeysCleanedUp) {
@@ -288,6 +319,28 @@ export function setThreadChangedFilesExpanded(
       [threadId]: {
         ...currentThreadState,
         [turnId]: expanded,
+      },
+    },
+  };
+}
+
+export function setThreadWorkEntryExpanded(
+  state: UiState,
+  threadId: string,
+  entryId: string,
+  expanded: boolean,
+): UiState {
+  const currentThreadState = state.threadWorkEntryExpandedById[threadId] ?? {};
+  if (currentThreadState[entryId] === expanded) {
+    return state;
+  }
+  return {
+    ...state,
+    threadWorkEntryExpandedById: {
+      ...state.threadWorkEntryExpandedById,
+      [threadId]: {
+        ...currentThreadState,
+        [entryId]: expanded,
       },
     },
   };
@@ -385,6 +438,7 @@ interface UiStateStore extends UiState {
   markThreadVisited: (threadId: string, visitedAt: string) => void;
   markThreadUnread: (threadId: string, latestTurnCompletedAt: string | null | undefined) => void;
   setThreadChangedFilesExpanded: (threadId: string, turnId: string, expanded: boolean) => void;
+  setThreadWorkEntryExpanded: (threadId: string, entryId: string, expanded: boolean) => void;
   setDefaultAdvertisedEndpointKey: (key: string | null) => void;
   setProjectExpanded: (projectIds: string | readonly string[], expanded: boolean) => void;
   reorderProjects: (
@@ -402,6 +456,8 @@ export const useUiStateStore = create<UiStateStore>((set) => ({
     set((state) => markThreadUnread(state, threadId, latestTurnCompletedAt)),
   setThreadChangedFilesExpanded: (threadId, turnId, expanded) =>
     set((state) => setThreadChangedFilesExpanded(state, threadId, turnId, expanded)),
+  setThreadWorkEntryExpanded: (threadId, entryId, expanded) =>
+    set((state) => setThreadWorkEntryExpanded(state, threadId, entryId, expanded)),
   setDefaultAdvertisedEndpointKey: (key) =>
     set((state) => setDefaultAdvertisedEndpointKey(state, key)),
   setProjectExpanded: (projectIds, expanded) =>
