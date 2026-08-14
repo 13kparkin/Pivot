@@ -4603,15 +4603,15 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         const snapshot = yield* Effect.scoped(
           withWsRpcClient(wsUrl, (client) =>
             client[WS_METHODS.serverOmpCapabilitiesGetSnapshot]({
-              instanceId: "omp",
-              projectId: "project-1",
+              instanceId: ProviderInstanceId.make("omp"),
+              projectId: ProjectId.make("project-1"),
             }),
           ),
         );
         yield* Effect.scoped(
           withWsRpcClient(wsUrl, (client) =>
             client[WS_METHODS.serverOmpCapabilitiesWriteSetting]({
-              instanceId: "omp",
+              instanceId: ProviderInstanceId.make("omp"),
               key: "theme.dark",
               value: "midnight",
               scope: "global",
@@ -4621,7 +4621,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         const failure = yield* Effect.scoped(
           withWsRpcClient(wsUrl, (client) =>
             client[WS_METHODS.serverOmpCapabilitiesResetSetting]({
-              instanceId: "omp",
+              instanceId: ProviderInstanceId.make("omp"),
               key: "autoResume",
               scope: "global",
               confirm: true,

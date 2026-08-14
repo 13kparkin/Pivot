@@ -28,6 +28,7 @@ import {
   type ProjectId,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
+import * as DateTime from "effect/DateTime";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
@@ -68,19 +69,33 @@ const isSecretSetting = (key: string, type: string): boolean =>
   type === "secret" || SECRET_KEY_PATTERN.test(key);
 
 export class OmpCapabilitiesService {
+  readonly #fileSystem: FileSystem.FileSystem;
+  readonly #path: Path.Path;
+  /** Same binary the driver resolved (`omp config path` authority must match). */
+  readonly #binaryPath: string;
+  readonly #commandRunner: ProcessRunner.ProcessRunner["Service"];
+  /** Agent-dir-scoped store; each call rebinds via `forAgentDir`. */
+  readonly #configStore: OmpConfigStore;
+  /** Trusted project cwd from the orchestration read model — never a client path. */
+  readonly #resolveProjectCwd: (
+    projectId: ProjectId,
+  ) => Effect.Effect<string, OmpCapabilitiesError>;
+
   public constructor(
-    private readonly fileSystem: FileSystem.FileSystem,
-    private readonly path: Path.Path,
-    /** Same binary the driver resolved (`omp config path` authority must match). */
-    private readonly binaryPath: string,
-    private readonly commandRunner: ProcessRunner.ProcessRunner["Service"],
-    /** Agent-dir-scoped store; each call rebinds via `forAgentDir`. */
-    private readonly configStore: OmpConfigStore,
-    /** Trusted project cwd from the orchestration read model — never a client path. */
-    private readonly resolveProjectCwd: (
-      projectId: ProjectId,
-    ) => Effect.Effect<string, OmpCapabilitiesError>,
-  ) {}
+    fileSystem: FileSystem.FileSystem,
+    path: Path.Path,
+    binaryPath: string,
+    commandRunner: ProcessRunner.ProcessRunner["Service"],
+    configStore: OmpConfigStore,
+    resolveProjectCwd: (projectId: ProjectId) => Effect.Effect<string, OmpCapabilitiesError>,
+  ) {
+    this.#fileSystem = fileSystem;
+    this.#path = path;
+    this.#binaryPath = binaryPath;
+    this.#commandRunner = commandRunner;
+    this.#configStore = configStore;
+    this.#resolveProjectCwd = resolveProjectCwd;
+  }
 
   public getSnapshot(
     projectId?: ProjectId,
@@ -88,13 +103,12 @@ export class OmpCapabilitiesService {
     return Effect.gen({ self: this }, function* () {
       const agentDir = yield* this.resolveAgentDir();
       const projectCwd =
-        projectId === undefined ? undefined : yield* this.resolveProjectCwd(projectId);
+        projectId === undefined ? undefined : yield* this.#resolveProjectCwd(projectId);
       const settings = yield* this.readSettingsSurface();
       const resources = yield* this.inventory(agentDir, projectCwd);
+      const agentDirLabel = this.tildeLabel(agentDir);
       return {
-        ...(this.tildeLabel(agentDir) !== undefined
-          ? { agentDirLabel: this.tildeLabel(agentDir) }
-          : {}),
+        ...(agentDirLabel !== undefined ? { agentDirLabel } : {}),
         settings,
         resources,
       } satisfies OmpCapabilitiesSnapshot;
@@ -121,7 +135,7 @@ export class OmpCapabilitiesService {
       } else {
         const projectCwd = yield* this.resolveProjectScopeCwd(input.projectId);
         yield* this.backup(projectCwd);
-        yield* this.configStore.writeProjectKey(projectCwd, input.key, input.value);
+        yield* this.#configStore.writeProjectKey(projectCwd, input.key, input.value);
       }
       return yield* this.getSnapshot(input.projectId);
     });
@@ -147,7 +161,7 @@ export class OmpCapabilitiesService {
       } else {
         const projectCwd = yield* this.resolveProjectScopeCwd(input.projectId);
         yield* this.backup(projectCwd);
-        yield* this.configStore.writeProjectKey(projectCwd, input.key, undefined);
+        yield* this.#configStore.writeProjectKey(projectCwd, input.key, undefined);
       }
       return yield* this.getSnapshot(input.projectId);
     });
@@ -161,7 +175,7 @@ export class OmpCapabilitiesService {
         reason: "project-scoped writes require a projectId (the server resolves the trusted cwd)",
       });
     }
-    return this.resolveProjectCwd(projectId);
+    return this.#resolveProjectCwd(projectId);
   }
 
   /** `omp config path` stdout is the active agent dir — authoritative, fail closed. */
@@ -184,15 +198,17 @@ export class OmpCapabilitiesService {
   > {
     return Effect.gen({ self: this }, function* () {
       const result = yield* this.runOmpConfig(["list", "--json"]);
-      let raw: unknown;
-      try {
-        raw = JSON.parse(result.stdout);
-      } catch (cause) {
-        return yield* new OmpCapabilitiesError({
-          reason: "omp config list --json returned invalid JSON",
-          cause,
-        });
-      }
+      const decodeListJson = Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Unknown));
+      const decoded = yield* decodeListJson(result.stdout).pipe(
+        Effect.mapError(
+          (cause) =>
+            new OmpCapabilitiesError({
+              reason: "omp config list --json returned invalid JSON",
+              cause,
+            }),
+        ),
+      );
+      const raw = decoded;
       if (!isRecord(raw)) {
         return yield* new OmpCapabilitiesError({
           reason: "omp config list --json returned an unexpected shape",
@@ -234,10 +250,10 @@ export class OmpCapabilitiesService {
       for (const scope of scopes) {
         // Agent-dir resources sit directly inside the agent dir; project
         // resources live under the project's `.omp` folder.
-        const scopeDir = scope.scope === "project" ? this.path.join(scope.dir, ".omp") : scope.dir;
+        const scopeDir = scope.scope === "project" ? this.#path.join(scope.dir, ".omp") : scope.dir;
         for (const [kind, fileName] of FILE_KINDS) {
-          const filePath = this.path.join(scopeDir, fileName);
-          const exists = yield* this.fileSystem.exists(filePath);
+          const filePath = this.#path.join(scopeDir, fileName);
+          const exists = yield* this.#fileSystem.exists(filePath);
           resources.push({
             kind,
             name: fileName,
@@ -249,8 +265,8 @@ export class OmpCapabilitiesService {
           } satisfies OmpCapabilityResource);
         }
         for (const kind of DIR_KINDS) {
-          const dirPath = this.path.join(scopeDir, kind);
-          const exists = yield* this.fileSystem.exists(dirPath);
+          const dirPath = this.#path.join(scopeDir, kind);
+          const exists = yield* this.#fileSystem.exists(dirPath);
           resources.push({
             kind,
             name: kind,
@@ -261,20 +277,28 @@ export class OmpCapabilitiesService {
         }
       }
       return resources;
-    });
+    }).pipe(
+      Effect.mapError(
+        (cause) =>
+          new OmpCapabilitiesError({
+            reason: "failed to inventory omp capability resources",
+            cause,
+          }),
+      ),
+    );
   }
 
   /** Provenance: profile when the active agent dir lives under a profiles tree. */
   private resolveProvenance(agentDir: string, scope: OmpCapabilityScope): OmpCapabilityScope {
     if (scope === "project") return "project";
-    return agentDir.includes(`${this.path.sep}profiles${this.path.sep}`) ? "profile" : "global";
+    return agentDir.includes(`${this.#path.sep}profiles${this.#path.sep}`) ? "profile" : "global";
   }
 
   /** Display-only `~`-relative label; never an absolute host path on the wire. */
   private tildeLabel(agentDir: string): string | undefined {
     const home = NodeOS.homedir();
     if (agentDir === home) return "~";
-    if (agentDir.startsWith(home + this.path.sep)) {
+    if (agentDir.startsWith(home + this.#path.sep)) {
       return `~${agentDir.slice(home.length)}`;
     }
     return undefined;
@@ -284,8 +308,8 @@ export class OmpCapabilitiesService {
     args: ReadonlyArray<string>,
   ): Effect.Effect<ProcessRunner.ProcessRunOutput, OmpCapabilitiesError> {
     return Effect.gen({ self: this }, function* () {
-      const result = yield* this.commandRunner
-        .run({ command: this.binaryPath, args: ["config", ...args] })
+      const result = yield* this.#commandRunner
+        .run({ command: this.#binaryPath, args: ["config", ...args] })
         .pipe(
           Effect.mapError(
             (cause) =>
@@ -308,18 +332,18 @@ export class OmpCapabilitiesService {
   /** Timestamped `.bak` copy of `<projectCwd>/.omp/config.yml` before a mutate (D7). */
   private backup(projectCwd: string): Effect.Effect<void, OmpCapabilitiesError> {
     return Effect.gen({ self: this }, function* () {
-      const fs = this.fileSystem;
-      const configPath = this.path.join(projectCwd, ".omp", "config.yml");
+      const fs = this.#fileSystem;
+      const configPath = this.#path.join(projectCwd, ".omp", "config.yml");
       const exists = yield* fs.exists(configPath);
       if (!exists) return;
       const contents = yield* fs.readFileString(configPath);
-      const timestamp = Math.floor(Date.now() / 1000);
+      const timestamp = Math.floor(DateTime.toEpochMillis(yield* DateTime.now) / 1000);
       yield* writeFileStringAtomically({
         filePath: `${configPath}.bak-${timestamp}`,
         contents,
       }).pipe(
         Effect.provideService(FileSystem.FileSystem, fs),
-        Effect.provideService(Path.Path, this.path),
+        Effect.provideService(Path.Path, this.#path),
       );
     }).pipe(
       Effect.mapError(

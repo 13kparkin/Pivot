@@ -6,17 +6,24 @@ import * as Path from "effect/Path";
 import { expect } from "vite-plus/test";
 import * as Schema from "effect/Schema";
 
-import { OmpCapabilitiesError } from "@t3tools/contracts";
+import { OmpCapabilitiesError, ProjectId } from "@t3tools/contracts";
 import * as ProcessRunner from "../../processRunner.ts";
+import { ChildProcessSpawner } from "effect/unstable/process";
 import { OmpConfigStore } from "./OmpConfigStore.ts";
 import { OmpCapabilitiesService } from "./OmpCapabilitiesService.ts";
 
 const OMP = "omp";
 
-const emptyProcessOutput = (overrides: Partial<ProcessRunner.ProcessRunOutput> = {}) => ({
+/** JSON string encoder for runner outputs / payload assertions (schema-based). */
+const encodeJsonString = (value: unknown): string =>
+  Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))(value);
+
+const emptyProcessOutput = (
+  overrides: Partial<ProcessRunner.ProcessRunOutput> = {},
+): ProcessRunner.ProcessRunOutput => ({
   stdout: "",
   stderr: "",
-  code: 0,
+  code: ChildProcessSpawner.ExitCode(0),
   timedOut: false,
   stdoutTruncated: false,
   stderrTruncated: false,
@@ -38,7 +45,7 @@ function makeRunner(options: {
 }) {
   const calls: Array<{ readonly command: string; readonly args: ReadonlyArray<string> }> = [];
   const runner = ProcessRunner.ProcessRunner.of({
-    run: (input) =>
+    run: (input): Effect.Effect<ProcessRunner.ProcessRunOutput, ProcessRunner.ProcessRunError> =>
       Effect.sync(() => {
         calls.push({ command: input.command, args: [...input.args] });
         const key = `${input.command} ${input.args.join(" ")}`;
@@ -46,13 +53,16 @@ function makeRunner(options: {
           return emptyProcessOutput({ stdout: options.agentDir });
         }
         if (key === `${OMP} config list --json`) {
-          return emptyProcessOutput({ stdout: JSON.stringify(options.listJson ?? LIST_JSON) });
+          return emptyProcessOutput({ stdout: encodeJsonString(options.listJson ?? LIST_JSON) });
         }
         if (input.args[0] === "config") {
           // set/reset succeed by default
           return emptyProcessOutput();
         }
-        return emptyProcessOutput({ code: 1, stderr: `unknown command ${key}` });
+        return emptyProcessOutput({
+          code: ChildProcessSpawner.ExitCode(1),
+          stderr: `unknown command ${key}`,
+        });
       }),
   });
   return { runner, calls };
@@ -106,14 +116,17 @@ it.layer(NodeServices.layer)("OmpCapabilitiesService", (it) => {
       const models = snapshot.resources.find((r) => r.kind === "models");
       expect(models?.exists).toBe(false);
       // No absolute host paths on the wire.
-      expect(JSON.stringify(snapshot)).not.toContain(agentDir);
+      expect(encodeJsonString(snapshot)).not.toContain(agentDir);
     }),
   );
 
   it.effect("fails closed when omp config path fails (no env-var fallback)", () =>
     Effect.gen(function* () {
       const runner = ProcessRunner.ProcessRunner.of({
-        run: () => Effect.sync(() => emptyProcessOutput({ code: 1, stderr: "not found" })),
+        run: () =>
+          Effect.sync(() =>
+            emptyProcessOutput({ code: ChildProcessSpawner.ExitCode(1), stderr: "not found" }),
+          ),
       });
       const service = yield* makeService({ agentDir: "/unused", runner });
       const failure = yield* service.getSnapshot().pipe(Effect.flip);
@@ -133,7 +146,7 @@ it.layer(NodeServices.layer)("OmpCapabilitiesService", (it) => {
       const { runner } = makeRunner({ agentDir });
       const service = yield* makeService({ agentDir, projectCwd, runner });
 
-      const snapshot = yield* service.getSnapshot("project-1");
+      const snapshot = yield* service.getSnapshot(ProjectId.make("project-1"));
       const projectSkills = snapshot.resources.find(
         (r) => r.kind === "skills" && r.scope === "project",
       );
@@ -157,7 +170,7 @@ it.layer(NodeServices.layer)("OmpCapabilitiesService", (it) => {
       expect(token?.masked).toBe(true);
       expect(token?.value).toBe("********");
       // Secrets never appear in the payload.
-      expect(JSON.stringify(snapshot)).not.toContain("broker-token-value");
+      expect(encodeJsonString(snapshot)).not.toContain("broker-token-value");
     }),
   );
 
@@ -199,7 +212,7 @@ it.layer(NodeServices.layer)("OmpCapabilitiesService", (it) => {
         key: "autoResume",
         value: true,
         scope: "project",
-        projectId: "project-1",
+        projectId: ProjectId.make("project-1"),
       });
 
       const text = yield* fs.readFileString(path.join(ompDir, "config.yml"));
@@ -259,7 +272,7 @@ it.layer(NodeServices.layer)("OmpCapabilitiesService", (it) => {
       yield* service.resetSetting({
         key: "autoResume",
         scope: "project",
-        projectId: "project-1",
+        projectId: ProjectId.make("project-1"),
         confirm: true,
       });
 
@@ -285,7 +298,7 @@ it.layer(NodeServices.layer)("OmpCapabilitiesService", (it) => {
       expect(env?.hasValue).toBe(true);
       const models = snapshot.resources.find((r) => r.kind === "models");
       expect(models?.masked).toBe(true);
-      const payload = JSON.stringify(snapshot);
+      const payload = encodeJsonString(snapshot);
       expect(payload).not.toContain("super-secret");
       expect(payload).not.toContain("another-secret");
     }),
@@ -300,7 +313,10 @@ it.layer(NodeServices.layer)("OmpCapabilitiesService", (it) => {
           Effect.sync(() =>
             input.args.includes("path")
               ? emptyProcessOutput({ stdout: agentDir })
-              : emptyProcessOutput({ code: 1, stderr: "list failed" }),
+              : emptyProcessOutput({
+                  code: ChildProcessSpawner.ExitCode(1),
+                  stderr: "list failed",
+                }),
           ),
       });
       const service = yield* makeService({ agentDir, runner });
@@ -315,7 +331,10 @@ it.layer(NodeServices.layer)("OmpCapabilitiesService", (it) => {
       const fs = yield* FileSystem.FileSystem;
       const agentDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-omp-agent-" });
       const runner = ProcessRunner.ProcessRunner.of({
-        run: () => Effect.sync(() => emptyProcessOutput({ code: 1, stderr: "boom" })),
+        run: () =>
+          Effect.sync(() =>
+            emptyProcessOutput({ code: ChildProcessSpawner.ExitCode(1), stderr: "boom" }),
+          ),
       });
       const service = yield* makeService({ agentDir, runner });
       const failure = yield* service.getSnapshot().pipe(Effect.flip);

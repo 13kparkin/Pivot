@@ -181,7 +181,10 @@ export class OmpAdapter {
     this.#capabilitiesService = options.capabilitiesService;
   }
 
-  private requireCapabilitiesService() {
+  private requireCapabilitiesService(): Effect.Effect<
+    NonNullable<OmpAdapterOptions["capabilitiesService"]>,
+    ProviderAdapterRequestError
+  > {
     if (this.#capabilitiesService === undefined) {
       return Effect.fail(
         new ProviderAdapterRequestError({

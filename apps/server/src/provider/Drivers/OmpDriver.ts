@@ -410,7 +410,7 @@ export const OmpDriver: ProviderDriver<OmpSettings, OmpDriverEnv> = {
           .pipe(Effect.orDie);
         const stdout = result.stdout.trim();
         if (result.code !== 0 || result.timedOut || stdout.length === 0) {
-          return yield* Effect.fail(new Error("omp config path failed"));
+          return yield* Effect.fail("omp config path failed");
         }
         return stdout;
       });
@@ -435,9 +435,9 @@ export const OmpDriver: ProviderDriver<OmpSettings, OmpDriverEnv> = {
         }).pipe(Effect.orElseSucceed(() => undefined));
       // Trusted project cwd from the orchestration read model — capabilities
       // inputs carry only a ProjectId, never a client-supplied path.
+      const snapshotQuery = yield* ProjectionSnapshotQuery;
       const resolveProjectCwd = (projectId: ProjectId) =>
         Effect.gen(function* () {
-          const snapshotQuery = yield* ProjectionSnapshotQuery;
           const project = yield* snapshotQuery.getProjectShellById(projectId).pipe(
             Effect.mapError(
               (cause) =>

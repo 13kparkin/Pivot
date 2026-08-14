@@ -43,26 +43,9 @@ const OmpDriverTestLayer = ServerConfig.layerTest(process.cwd(), {
   Layer.provideMerge(NodeServices.layer),
   Layer.provideMerge(FetchHttpClient.layer),
   Layer.provideMerge(
-    Layer.succeed(
-      ProjectionSnapshotQuery,
-      ProjectionSnapshotQuery.of({
-        getCommandReadModel: () => Effect.succeed({ projects: [], threads: [], messages: [] }),
-        getSnapshot: () => Effect.succeed({ projects: [], threads: [], messages: [] }),
-        getShellSnapshot: () => Effect.succeed({ projects: [], threads: [] }),
-        getArchivedShellSnapshot: () => Effect.succeed({ projects: [], threads: [] }),
-        searchThreads: () => Effect.succeed({ threads: [], query: "" }),
-        getSnapshotSequence: () => Effect.succeed(0),
-        getCounts: () => Effect.succeed({ projectCount: 0, threadCount: 0 }),
-        getActiveProjectByWorkspaceRoot: () => Effect.succeed(Option.none()),
-        getProjectShellById: () => Effect.succeed(Option.none()),
-        getFirstActiveThreadIdByProjectId: () => Effect.succeed(Option.none()),
-        getThreadCheckpointContext: () => Effect.succeed(Option.none()),
-        getFullThreadDiffContext: () => Effect.succeed(Option.none()),
-        getThreadShellById: () => Effect.succeed(Option.none()),
-        getThreadDetailById: () => Effect.succeed(Option.none()),
-        getThreadDetailSnapshot: () => Effect.succeed(Option.none()),
-      }),
-    ),
+    Layer.mock(ProjectionSnapshotQuery)({
+      getProjectShellById: () => Effect.succeed(Option.none()),
+    }),
   ),
 );
 

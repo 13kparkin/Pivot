@@ -1566,7 +1566,10 @@ const makeWsRpcLayer = (
               const instanceId: ProviderInstanceId =
                 input.instanceId ?? defaultInstanceIdForDriver(ProviderDriverKind.make("omp"));
               const snapshot = yield* providerRegistry
-                .ompCapabilitiesGetSnapshot({ instanceId, projectId: input.projectId })
+                .ompCapabilitiesGetSnapshot({
+                  instanceId,
+                  ...(input.projectId === undefined ? {} : { projectId: input.projectId }),
+                })
                 .pipe(
                   Effect.mapError(
                     (cause) =>
