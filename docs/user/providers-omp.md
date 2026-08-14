@@ -4,7 +4,7 @@ Pivot drives [omp](https://omp.sh) over `omp --mode rpc`. omp is the only built-
 
 ## Install
 
-1. Open **Settings → omp** and click **Install**. Pivot downloads a managed omp binary into the T3 home (`tools/omp/`), then downloads managed [rtk](https://github.com/rtk-ai/rtk) into `tools/rtk/` and runs `rtk init -g --agent omp` so bash rewrite hooks are active for omp.
+1. Open **Settings → omp** and click **Install**. Pivot downloads a managed omp binary into the T3 home (`tools/omp/`), then downloads managed [rtk](https://github.com/rtk-ai/rtk) into `tools/rtk/` and runs `rtk init -g --agent pi` so bash rewrite hooks are active for omp.
 2. Authenticate omp for the models you use (Settings → omp accounts, or `omp login` on the server host).
 
 When Pivot detects that managed omp **or** managed rtk is behind the latest GitHub release, Settings shows the same Update action. Updating refreshes both binaries and re-runs the omp hook init.

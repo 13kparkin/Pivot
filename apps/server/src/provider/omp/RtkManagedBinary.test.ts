@@ -5,6 +5,7 @@ import {
   parseChecksumLine,
   parseRtkVersionOutput,
   resolveRtkReleaseAssetName,
+  RTK_OMP_HOOK_INIT_ARGS,
 } from "./RtkManagedBinary.ts";
 
 describe("RtkManagedBinary helpers", () => {
@@ -41,5 +42,12 @@ describe("RtkManagedBinary helpers", () => {
       ),
     ).toBe("abc123abc123abc123abc123abc123abc123abc123abc123abc123abc123abc1");
     expect(parseChecksumLine("not-a-checksum", "rtk-x86_64-unknown-linux-musl.tar.gz")).toBeNull();
+  });
+
+  it("activates the omp hook with rtk's current agent name (pi, not omp)", () => {
+    // rtk 0.45.0 dropped the `omp` --agent value (canonicalized to `pi`); a
+    // stale value makes `rtk init -g --agent omp` exit 2 and fail install.
+    expect([...RTK_OMP_HOOK_INIT_ARGS]).toEqual(["init", "-g", "--agent", "pi"]);
+    expect(RTK_OMP_HOOK_INIT_ARGS).not.toContain("omp");
   });
 });
