@@ -1077,6 +1077,119 @@ describe("ProviderRuntimeIngestion", () => {
     expect(message?.streaming).toBe(false);
   });
 
+  it("projects status_text and assistant_text onto the same per-turn message", async () => {
+    const harness = await createHarness();
+    const now = "2026-01-01T00:00:00.000Z";
+    const turnId = asTurnId("turn-status-coalesce");
+
+    harness.emit({
+      type: "content.delta",
+      eventId: asEventId("evt-status-delta-1"),
+      provider: ProviderDriverKind.make("omp"),
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId,
+      payload: {
+        streamKind: "status_text",
+        delta: "Fetching latest",
+      },
+    });
+
+    const afterStatus = await waitForThread(harness.readModel, (entry) =>
+      entry.messages.some(
+        (message: ProviderRuntimeTestMessage) =>
+          message.turnId === turnId && message.role === "assistant",
+      ),
+    );
+    const statusMessage = afterStatus.messages.find(
+      (message: ProviderRuntimeTestMessage) => message.turnId === turnId,
+    );
+    expect(statusMessage?.id).toBe("assistant:turn-status-coalesce");
+    expect(statusMessage?.streaming).toBe(true);
+
+    harness.emit({
+      type: "content.delta",
+      eventId: asEventId("evt-assistant-delta-1"),
+      provider: ProviderDriverKind.make("omp"),
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId,
+      payload: {
+        streamKind: "assistant_text",
+        delta: "24 commits behind.",
+      },
+    });
+    harness.emit({
+      type: "turn.completed",
+      eventId: asEventId("evt-status-coalesce-completed"),
+      provider: ProviderDriverKind.make("omp"),
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId,
+      payload: {
+        state: "completed",
+      },
+    });
+
+    const thread = await waitForThread(harness.readModel, (entry) =>
+      entry.messages.some(
+        (message: ProviderRuntimeTestMessage) =>
+          message.id === statusMessage?.id &&
+          message.text === "24 commits behind." &&
+          !message.streaming,
+      ),
+    );
+    const assistantMessages = thread.messages.filter(
+      (message: ProviderRuntimeTestMessage) => message.role === "assistant",
+    );
+    expect(assistantMessages).toHaveLength(1);
+    expect(assistantMessages[0]?.id).toBe("assistant:turn-status-coalesce");
+    expect(assistantMessages[0]?.text).toBe("24 commits behind.");
+  });
+
+  it("finalizes a status-only turn with streaming false", async () => {
+    const harness = await createHarness();
+    const now = "2026-01-01T00:00:00.000Z";
+    const turnId = asTurnId("turn-status-only");
+
+    harness.emit({
+      type: "content.delta",
+      eventId: asEventId("evt-status-only-delta"),
+      provider: ProviderDriverKind.make("omp"),
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId,
+      payload: {
+        streamKind: "status_text",
+        delta: "No background jobs running.",
+      },
+    });
+    harness.emit({
+      type: "turn.completed",
+      eventId: asEventId("evt-status-only-completed"),
+      provider: ProviderDriverKind.make("omp"),
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId,
+      payload: {
+        state: "completed",
+      },
+    });
+
+    const thread = await waitForThread(harness.readModel, (entry) =>
+      entry.messages.some(
+        (message: ProviderRuntimeTestMessage) =>
+          message.turnId === turnId && message.role === "assistant" && !message.streaming,
+      ),
+    );
+    const message = thread.messages.find(
+      (entry: ProviderRuntimeTestMessage) => entry.turnId === turnId,
+    );
+    expect(message?.id).toBe("assistant:turn-status-only");
+    expect(message?.text).toBe("");
+    expect(message?.streaming).toBe(false);
+  });
+
   it("uses assistant item completion detail when no assistant deltas were streamed", async () => {
     const harness = await createHarness();
     const now = "2026-01-01T00:00:00.000Z";

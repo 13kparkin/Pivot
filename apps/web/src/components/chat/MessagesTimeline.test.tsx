@@ -299,6 +299,67 @@ describe("MessagesTimeline", () => {
     expect(markup).toContain("1 changed file");
   });
 
+  it("keeps the status chip collapsed when the assistant already has an answer", () => {
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        {...buildProps()}
+        timelineEntries={[
+          {
+            id: "entry-assistant-status-and-answer",
+            kind: "message",
+            createdAt: MESSAGE_CREATED_AT,
+            message: {
+              id: MessageId.make("message-assistant-status-and-answer"),
+              role: "assistant",
+              text: "24 commits behind.",
+              statusText: "Fetching latest upstream.",
+              turnId: TurnId.make("turn-status-and-answer"),
+              createdAt: MESSAGE_CREATED_AT,
+              updatedAt: MESSAGE_CREATED_AT,
+              streaming: false,
+            },
+          },
+        ]}
+      />,
+    );
+
+    expect(markup).toContain("24 commits behind.");
+    expect(markup).toContain("Status");
+    expect(markup).toContain('aria-expanded="false"');
+    expect(markup).not.toContain("Fetching latest upstream.");
+    expect(markup).not.toContain("(empty response)");
+  });
+
+  it("expands the status chip for status-only assistant messages and skips empty-response", () => {
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        {...buildProps()}
+        timelineEntries={[
+          {
+            id: "entry-assistant-status-only",
+            kind: "message",
+            createdAt: MESSAGE_CREATED_AT,
+            message: {
+              id: MessageId.make("message-assistant-status-only"),
+              role: "assistant",
+              text: "",
+              statusText: "No background jobs running.",
+              turnId: TurnId.make("turn-status-only"),
+              createdAt: MESSAGE_CREATED_AT,
+              updatedAt: MESSAGE_CREATED_AT,
+              streaming: false,
+            },
+          },
+        ]}
+      />,
+    );
+
+    expect(markup).toContain("Status");
+    expect(markup).toContain('aria-expanded="true"');
+    expect(markup).toContain("No background jobs running.");
+    expect(markup).not.toContain("(empty response)");
+  });
+
   it("treats only the strict list end as the live edge", async () => {
     const {
       resolveTimelineIsAtEnd,

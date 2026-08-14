@@ -85,6 +85,7 @@ const RuntimeContentStreamKind = Schema.Literals([
   "plan_text",
   "command_output",
   "file_change_output",
+  "status_text",
   "unknown",
 ]);
 export type RuntimeContentStreamKind = typeof RuntimeContentStreamKind.Type;

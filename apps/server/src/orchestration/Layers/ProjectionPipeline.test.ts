@@ -2790,3 +2790,105 @@ engineLayer("OrchestrationProjectionPipeline via engine dispatch", (it) => {
     }),
   );
 });
+
+it.layer(Layer.fresh(makeProjectionPipelinePrefixedTestLayer("t3-status-text-")))(
+  "OrchestrationProjectionPipeline statusText",
+  (it) => {
+    it.effect("accumulates statusText independently of assistant text while streaming", () =>
+      Effect.gen(function* () {
+        const projectionPipeline = yield* OrchestrationProjectionPipeline;
+        const eventStore = yield* OrchestrationEventStore;
+        const sql = yield* SqlClient.SqlClient;
+        const now = "2026-01-01T00:00:00.000Z";
+        const later = "2026-01-01T00:00:01.000Z";
+        const done = "2026-01-01T00:00:02.000Z";
+        const threadId = ThreadId.make("thread-status-text");
+        const messageId = MessageId.make("message-status-text");
+
+        yield* eventStore.append({
+          type: "thread.message-sent",
+          eventId: EventId.make("evt-status-1"),
+          aggregateKind: "thread",
+          aggregateId: threadId,
+          occurredAt: now,
+          commandId: CommandId.make("cmd-status-1"),
+          causationEventId: null,
+          correlationId: CommandId.make("cmd-status-1"),
+          metadata: {},
+          payload: {
+            threadId,
+            messageId,
+            role: "assistant",
+            text: "",
+            statusText: "Fetching",
+            turnId: TurnId.make("turn-status-text"),
+            streaming: true,
+            createdAt: now,
+            updatedAt: now,
+          },
+        });
+        yield* eventStore.append({
+          type: "thread.message-sent",
+          eventId: EventId.make("evt-status-2"),
+          aggregateKind: "thread",
+          aggregateId: threadId,
+          occurredAt: later,
+          commandId: CommandId.make("cmd-status-2"),
+          causationEventId: null,
+          correlationId: CommandId.make("cmd-status-2"),
+          metadata: {},
+          payload: {
+            threadId,
+            messageId,
+            role: "assistant",
+            text: "24 commits behind.",
+            statusText: " latest",
+            turnId: TurnId.make("turn-status-text"),
+            streaming: true,
+            createdAt: now,
+            updatedAt: later,
+          },
+        });
+        yield* eventStore.append({
+          type: "thread.message-sent",
+          eventId: EventId.make("evt-status-3"),
+          aggregateKind: "thread",
+          aggregateId: threadId,
+          occurredAt: done,
+          commandId: CommandId.make("cmd-status-3"),
+          causationEventId: null,
+          correlationId: CommandId.make("cmd-status-3"),
+          metadata: {},
+          payload: {
+            threadId,
+            messageId,
+            role: "assistant",
+            text: "",
+            turnId: TurnId.make("turn-status-text"),
+            streaming: false,
+            createdAt: now,
+            updatedAt: done,
+          },
+        });
+
+        yield* projectionPipeline.bootstrap;
+
+        const messageRows = yield* sql<{
+          readonly text: string;
+          readonly statusText: string | null;
+          readonly isStreaming: number;
+        }>`
+          SELECT
+            text,
+            status_text AS "statusText",
+            is_streaming AS "isStreaming"
+          FROM projection_thread_messages
+          WHERE message_id = 'message-status-text'
+        `;
+        assert.deepEqual(messageRows, [
+          { text: "24 commits behind.", statusText: "Fetching latest", isStreaming: 0 },
+        ]);
+      }),
+    );
+  },
+);

@@ -132,15 +132,18 @@ describe("OmpAdapter", () => {
       yield* fake.offer(THREAD_ID, { type: "agent_end", messages: [], isTerminal: true });
       const events = yield* Fiber.join(eventsFiber);
       NodeAssert.equal(events.filter((event) => event.type === "turn.completed").length, 1);
-      NodeAssert.equal(
-        events.some(
+      const assistantDeltas = events
+        .filter(
           (event) =>
-            event.type === "content.delta" &&
-            event.payload.streamKind === "assistant_text" &&
-            event.payload.delta === "hi",
-        ),
-        true,
+            event.type === "content.delta" && event.payload.streamKind === "assistant_text",
+        )
+        .map((event) => (event as { payload: { delta: string } }).payload.delta);
+      NodeAssert.deepEqual(assistantDeltas, ["hi"]);
+      const completedIndex = events.findIndex((event) => event.type === "turn.completed");
+      const firstAssistantIndex = events.findIndex(
+        (event) => event.type === "content.delta" && event.payload.streamKind === "assistant_text",
       );
+      NodeAssert.equal(firstAssistantIndex >= 0 && firstAssistantIndex < completedIndex, true);
     }),
   );
 
@@ -181,7 +184,7 @@ describe("OmpAdapter", () => {
     }),
   );
 
-  it.effect("surfaces command_output text from local slash prompts as assistant_text", () =>
+  it.effect("routes command_output frames to status_text", () =>
     Effect.gen(function* () {
       const fake = new FakeOmpRpc();
       fake.agentInvoked = undefined;
@@ -197,20 +200,24 @@ describe("OmpAdapter", () => {
       });
       yield* fake.offer(THREAD_ID, { type: "prompt_result", id: "req_1", agentInvoked: false });
       const events = yield* Fiber.join(eventsFiber);
-      NodeAssert.equal(
-        events.some(
+      const statusDeltas = events
+        .filter(
+          (event) => event.type === "content.delta" && event.payload.streamKind === "status_text",
+        )
+        .map((event) => (event as { payload: { delta: string } }).payload.delta);
+      const assistantDeltas = events
+        .filter(
           (event) =>
-            event.type === "content.delta" &&
-            event.payload.streamKind === "assistant_text" &&
-            event.payload.delta === "No background jobs running.",
-        ),
-        true,
-      );
+            event.type === "content.delta" && event.payload.streamKind === "assistant_text",
+        )
+        .map((event) => (event as { payload: { delta: string } }).payload.delta);
+      NodeAssert.deepEqual(statusDeltas, ["No background jobs running."]);
+      NodeAssert.deepEqual(assistantDeltas, []);
       NodeAssert.equal(events.filter((event) => event.type === "turn.completed").length, 1);
     }),
   );
 
-  it.effect("separates consecutive assistant messages with a paragraph break", () =>
+  it.effect("emits only the final assistant run as assistant_text", () =>
     Effect.gen(function* () {
       const fake = new FakeOmpRpc();
       const adapter = new OmpAdapter(fake, testRandomUUID);
@@ -243,17 +250,23 @@ describe("OmpAdapter", () => {
       });
       yield* fake.offer(THREAD_ID, { type: "agent_end", messages: [], isTerminal: true });
       const events = yield* Fiber.join(eventsFiber);
-      const deltas = events
+      const statusDeltas = events
+        .filter(
+          (event) => event.type === "content.delta" && event.payload.streamKind === "status_text",
+        )
+        .map((event) => (event as { payload: { delta: string } }).payload.delta);
+      const assistantDeltas = events
         .filter(
           (event) =>
             event.type === "content.delta" && event.payload.streamKind === "assistant_text",
         )
         .map((event) => (event as { payload: { delta: string } }).payload.delta);
-      NodeAssert.deepEqual(deltas, ["Fetching latest upstream.", "\n\n24 commits behind."]);
+      NodeAssert.deepEqual(statusDeltas, ["Fetching latest upstream."]);
+      NodeAssert.deepEqual(assistantDeltas, ["24 commits behind."]);
     }),
   );
 
-  it.effect("tool-only assistant messages do not add paragraph breaks", () =>
+  it.effect("tool-only assistant messages emit no status or assistant deltas", () =>
     Effect.gen(function* () {
       const fake = new FakeOmpRpc();
       const adapter = new OmpAdapter(fake, testRandomUUID);
@@ -272,23 +285,20 @@ describe("OmpAdapter", () => {
         message: { role: "assistant", content: [] },
       });
       yield* fake.offer(THREAD_ID, {
-        type: "message_start",
-        message: { role: "assistant", content: [] },
-      });
-      yield* fake.offer(THREAD_ID, {
-        type: "message_update",
-        assistantMessageEvent: { type: "text_delta", delta: "first text" },
+        type: "message_end",
         message: { role: "assistant", content: [] },
       });
       yield* fake.offer(THREAD_ID, { type: "agent_end", messages: [], isTerminal: true });
       const events = yield* Fiber.join(eventsFiber);
-      const deltas = events
-        .filter(
+      NodeAssert.equal(
+        events.some(
           (event) =>
-            event.type === "content.delta" && event.payload.streamKind === "assistant_text",
-        )
-        .map((event) => (event as { payload: { delta: string } }).payload.delta);
-      NodeAssert.deepEqual(deltas, ["first text"]);
+            event.type === "content.delta" &&
+            (event.payload.streamKind === "assistant_text" ||
+              event.payload.streamKind === "status_text"),
+        ),
+        false,
+      );
     }),
   );
 
@@ -732,6 +742,58 @@ describe("OmpAdapter", () => {
       yield* adapter.startSession(startInput);
       yield* adapter.interruptTurn(THREAD_ID);
       NodeAssert.equal(fake.sent.at(-1)?.type, "abort");
+    }),
+  );
+
+  it.effect("interrupted turn flushes held run as assistant_text before turn.aborted", () =>
+    Effect.gen(function* () {
+      const fake = new FakeOmpRpc();
+      const adapter = new OmpAdapter(fake, testRandomUUID);
+      const eventsFiber = yield* Stream.runCollect(
+        adapter.streamEvents.pipe(
+          Stream.takeUntil(
+            (event) => event.type === "turn.aborted" || event.type === "turn.completed",
+          ),
+        ),
+      ).pipe(
+        Effect.map((chunk) => Array.from(chunk)),
+        Effect.forkChild,
+      );
+      yield* adapter.startSession(startInput);
+      yield* adapter.sendTurn({ threadId: THREAD_ID, input: "hi" });
+      yield* fake.offer(THREAD_ID, {
+        type: "message_start",
+        message: { role: "assistant", content: [] },
+      });
+      yield* fake.offer(THREAD_ID, {
+        type: "message_update",
+        assistantMessageEvent: { type: "text_delta", delta: "partial answer" },
+        message: { role: "assistant", content: [] },
+      });
+      yield* adapter.interruptTurn(THREAD_ID);
+      yield* fake.offer(THREAD_ID, { type: "agent_end", messages: [], isTerminal: true });
+      const events = yield* Fiber.join(eventsFiber);
+      const assistantDeltas = events
+        .filter(
+          (event) =>
+            event.type === "content.delta" && event.payload.streamKind === "assistant_text",
+        )
+        .map((event) => (event as { payload: { delta: string } }).payload.delta);
+      NodeAssert.deepEqual(assistantDeltas, ["partial answer"]);
+      const abortedIndex = events.findIndex(
+        (event) => event.type === "turn.aborted" && event.payload.reason === "user_abort",
+      );
+      const flushIndex = events.findIndex(
+        (event) =>
+          event.type === "content.delta" &&
+          event.payload.streamKind === "assistant_text" &&
+          event.payload.delta === "partial answer",
+      );
+      NodeAssert.equal(abortedIndex >= 0 && flushIndex >= 0 && flushIndex < abortedIndex, true);
+      NodeAssert.equal(
+        events.some((event) => event.type === "turn.completed"),
+        false,
+      );
     }),
   );
 

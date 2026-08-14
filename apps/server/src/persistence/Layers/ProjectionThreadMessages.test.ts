@@ -111,4 +111,47 @@ layer("ProjectionThreadMessageRepository", (it) => {
       assert.deepEqual(rows[0]?.attachments, []);
     }),
   );
+
+  it.effect("preserves existing statusText when upsert omits statusText", () =>
+    Effect.gen(function* () {
+      const repository = yield* ProjectionThreadMessageRepository;
+      const threadId = ThreadId.make("thread-preserve-status-text");
+      const messageId = MessageId.make("message-preserve-status-text");
+      const createdAt = "2026-02-28T19:20:00.000Z";
+
+      yield* repository.upsert({
+        messageId,
+        threadId,
+        turnId: null,
+        role: "assistant",
+        text: "initial",
+        statusText: "Fetching latest",
+        isStreaming: true,
+        createdAt,
+        updatedAt: createdAt,
+      });
+
+      yield* repository.upsert({
+        messageId,
+        threadId,
+        turnId: null,
+        role: "assistant",
+        text: "updated",
+        isStreaming: true,
+        createdAt,
+        updatedAt: "2026-02-28T19:20:01.000Z",
+      });
+
+      const rows = yield* repository.listByThreadId({ threadId });
+      assert.equal(rows.length, 1);
+      assert.equal(rows[0]?.text, "updated");
+      assert.equal(rows[0]?.statusText, "Fetching latest");
+
+      const rowById = yield* repository.getByMessageId({ messageId });
+      assert.equal(rowById._tag, "Some");
+      if (rowById._tag === "Some") {
+        assert.equal(rowById.value.statusText, "Fetching latest");
+      }
+    }),
+  );
 });

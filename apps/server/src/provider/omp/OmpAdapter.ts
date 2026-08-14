@@ -4,7 +4,9 @@
  * Turn completion (AC11): terminal `agent_end` (`isTerminal !== false`),
  * prompt `data.agentInvoked === false`, and `prompt_result` with
  * `agentInvoked: false`. Local slash results arrive as `command_output`
- * frames and become `assistant_text` deltas. Empty assistant deltas are
+ * frames and become `status_text` deltas. Interim assistant runs are
+ * classified as `status_text`; the held-back run is flushed as
+ * `assistant_text` at terminal completion. Empty assistant deltas are
  * not emitted (AC2).
  * Tools: `toolcall_end` / `tool_execution_*` → `item.*` (+ output deltas).
  * Thinking: `thinking_delta` → `content.delta` (`reasoning_text`).
@@ -118,10 +120,10 @@ interface LiveAdapterSession {
   stopRequested: boolean;
   /** Wall-clock ms of the last mid-turn token-usage emit (throttle). */
   lastTokenUsageEmitAtMs: number;
-  /** Whether any assistant text delta was emitted for the current turn. */
-  assistantTextEmitted: boolean;
-  /** An assistant message started while prior assistant text already exists. */
-  pendingAssistantMessageBoundary: boolean;
+  /** Text deltas of the currently-open assistant run (null = no open run). */
+  openRunText: string | null;
+  /** Text of the most recently closed run, parked as candidate-final. */
+  heldBackRunText: string | null;
   interactionMode: ProviderInteractionMode;
   prePlanModelSlug: string | undefined;
   onOpenUrl: ((request: OmpOpenUrlRequest) => Effect.Effect<void>) | undefined;
@@ -265,8 +267,8 @@ export class OmpAdapter {
         stopRequested: false,
         // Negative so the first mid-turn emit is not throttled when Clock is 0 (TestClock).
         lastTokenUsageEmitAtMs: -TOKEN_USAGE_EMIT_MIN_INTERVAL_MS,
-        assistantTextEmitted: false,
-        pendingAssistantMessageBoundary: false,
+        openRunText: null,
+        heldBackRunText: null,
         interactionMode: "default",
         prePlanModelSlug: undefined,
         onOpenUrl: undefined,
@@ -308,8 +310,8 @@ export class OmpAdapter {
       const turnId = yield* this.#randomUUID.pipe(Effect.map(TurnId.make));
       session.turnId = turnId;
       session.stopRequested = false;
-      session.assistantTextEmitted = false;
-      session.pendingAssistantMessageBoundary = false;
+      session.openRunText = null;
+      session.heldBackRunText = null;
       yield* this.#applyInteractionMode(session, input.interactionMode);
       if (session.interactionMode !== "plan") {
         yield* this.#applyModelSelection(input.threadId, input.modelSelection?.model);
@@ -785,6 +787,9 @@ export class OmpAdapter {
     if (frame.type === "message_start") {
       return this.#onMessageStart(session, frame);
     }
+    if (frame.type === "message_end") {
+      return this.#onMessageEnd(session, frame);
+    }
     if (frame.type === "message_update") {
       return this.#onMessageUpdate(session, frame).pipe(
         Effect.tap(() =>
@@ -922,9 +927,16 @@ export class OmpAdapter {
     if (!isRecord(message) || message.role !== "assistant") {
       return Effect.void;
     }
-    if (session.assistantTextEmitted) {
-      session.pendingAssistantMessageBoundary = true;
+    return this.#demoteHeldBackRun(session);
+  }
+
+  #onMessageEnd(session: LiveAdapterSession, frame: Record<string, unknown>): Effect.Effect<void> {
+    const message = frame.message;
+    if (!isRecord(message) || message.role !== "assistant") {
+      return Effect.void;
     }
+    session.heldBackRunText = session.openRunText;
+    session.openRunText = null;
     return Effect.void;
   }
 
@@ -936,13 +948,12 @@ export class OmpAdapter {
     if (text.length === 0) {
       return Effect.void;
     }
-    session.assistantTextEmitted = true;
     return this.#emit({
       type: "content.delta",
       threadId: session.threadId,
       turnId: session.turnId,
       payload: {
-        streamKind: "assistant_text",
+        streamKind: "status_text",
         delta: text,
       },
     });
@@ -961,24 +972,8 @@ export class OmpAdapter {
       if (typeof delta !== "string" || delta.length === 0) {
         return Effect.void;
       }
-      // omp streams each assistant message as its own message_start/delta run.
-      // Without a boundary the status lines of consecutive messages concatenate
-      // into one unreadable blob (e.g. "fresh main.24 commits behind."). Insert a
-      // paragraph break before the first text of a message that follows earlier
-      // assistant text; tool-only messages leave the pending flag untouched so
-      // they never introduce a stray blank separator.
-      const boundary = session.pendingAssistantMessageBoundary ? "\n\n" : "";
-      session.pendingAssistantMessageBoundary = false;
-      session.assistantTextEmitted = true;
-      return this.#emit({
-        type: "content.delta",
-        threadId: session.threadId,
-        turnId: session.turnId,
-        payload: {
-          streamKind: "assistant_text",
-          delta: `${boundary}${delta}`,
-        },
-      });
+      session.openRunText = `${session.openRunText ?? ""}${delta}`;
+      return Effect.void;
     }
     if (event.type === "thinking_delta") {
       const delta = event.delta;
@@ -1122,8 +1117,44 @@ export class OmpAdapter {
     });
   }
 
+  #demoteHeldBackRun(session: LiveAdapterSession): Effect.Effect<void> {
+    const text = session.heldBackRunText;
+    session.heldBackRunText = null;
+    if (text === null || text.length === 0) {
+      return Effect.void;
+    }
+    return this.#emit({
+      type: "content.delta",
+      threadId: session.threadId,
+      turnId: session.turnId,
+      payload: {
+        streamKind: "status_text",
+        delta: text,
+      },
+    });
+  }
+
+  #flushFinalAssistantRun(session: LiveAdapterSession): Effect.Effect<void> {
+    const text = session.heldBackRunText ?? session.openRunText;
+    session.heldBackRunText = null;
+    session.openRunText = null;
+    if (text === null || text.length === 0) {
+      return Effect.void;
+    }
+    return this.#emit({
+      type: "content.delta",
+      threadId: session.threadId,
+      turnId: session.turnId,
+      payload: {
+        streamKind: "assistant_text",
+        delta: text,
+      },
+    });
+  }
+
   #emitTurnCompleted(session: LiveAdapterSession): Effect.Effect<void> {
     return Effect.gen({ self: this }, function* () {
+      yield* this.#flushFinalAssistantRun(session);
       const now = yield* Clock.currentTimeMillis;
       yield* this.#emitTokenUsageFromState(session, now).pipe(Effect.ignore);
       const aborted = session.stopRequested;
