@@ -1079,7 +1079,8 @@ export class OmpAdapter {
 
   #emitTurnCompleted(session: LiveAdapterSession): Effect.Effect<void> {
     return Effect.gen({ self: this }, function* () {
-      yield* this.#emitTokenUsageFromState(session).pipe(Effect.ignore);
+      const now = yield* Clock.currentTimeMillis;
+      yield* this.#emitTokenUsageFromState(session, now).pipe(Effect.ignore);
       const aborted = session.stopRequested;
       session.stopRequested = false;
       const turnId = session.turnId;
@@ -1113,14 +1114,18 @@ export class OmpAdapter {
       if (now - session.lastTokenUsageEmitAtMs < TOKEN_USAGE_EMIT_MIN_INTERVAL_MS) {
         return;
       }
-      yield* this.#emitTokenUsageFromState(session).pipe(Effect.ignore);
+      yield* this.#emitTokenUsageFromState(session, now).pipe(Effect.ignore);
     });
   }
 
   #emitTokenUsageFromState(
     session: LiveAdapterSession,
+    now: number,
   ): Effect.Effect<void, ProviderAdapterProcessError | ProviderAdapterSessionNotFoundError> {
     return Effect.gen({ self: this }, function* () {
+      // D2/D3: claim the throttle slot synchronously, before any RPC yield. The
+      // slot is consumed even if the emit later fails or early-returns (no tokens).
+      session.lastTokenUsageEmitAtMs = now;
       const response = yield* this.#send(session.threadId, { type: "get_state" });
       if (!isRecord(response) || !isRecord(response.data)) {
         return;
@@ -1158,7 +1163,6 @@ export class OmpAdapter {
           ? statsResponse.data
           : undefined;
       const tokens = stats !== undefined && isRecord(stats.tokens) ? stats.tokens : undefined;
-      session.lastTokenUsageEmitAtMs = yield* Clock.currentTimeMillis;
       yield* this.#emit({
         type: "thread.token-usage.updated",
         threadId: session.threadId,
