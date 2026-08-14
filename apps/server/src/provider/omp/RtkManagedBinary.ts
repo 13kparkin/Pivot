@@ -30,6 +30,11 @@ import { isLinuxMuslHost, normalizeReleaseVersion, platformKey } from "./OmpMana
 export const RTK_GITHUB_REPO = "rtk-ai/rtk";
 /** Cache key for ProviderVersionCache companion checks. */
 export const RTK_VERSION_CACHE_KEY = "github:rtk-ai/rtk";
+/**
+ * Args for `rtk init` hook activation. rtk 0.45.0 renamed the Oh My Pi agent
+ * value from `omp` to `pi`; keep in sync with rtk's `--agent` enum.
+ */
+export const RTK_OMP_HOOK_INIT_ARGS = ["init", "-g", "--agent", "pi"] as const;
 
 const INSTALL_LOCK_RETRY_COUNT = 100;
 const INSTALL_LOCK_RETRY_DELAY = "100 millis";
@@ -591,10 +596,10 @@ export const makeRtkManagedBinary = Effect.fn("rtkManagedBinary.make")(function*
         message: "Managed rtk is not available; cannot activate the omp rewrite hook.",
       });
     }
-    yield* runCommand(status.executablePath, ["init", "-g", "--agent", "omp"]).pipe(
+    yield* runCommand(status.executablePath, RTK_OMP_HOOK_INIT_ARGS).pipe(
       wrapInstallFailure(
         "validation_failed",
-        "Could not run `rtk init -g --agent omp` for the managed rtk binary.",
+        "Could not run `rtk init -g --agent pi` for the managed rtk binary.",
       ),
     );
   });

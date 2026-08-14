@@ -290,7 +290,7 @@ export const make = Effect.fn("ProviderMaintenanceRunner.make")(function* () {
         ),
       );
       return {
-        stdout: `Installed omp ${installed.version ?? "unknown"} at ${installed.executablePath}; rtk ${rtkInstalled.version ?? "unknown"} at ${rtkInstalled.executablePath}; ran rtk init -g --agent omp`,
+        stdout: `Installed omp ${installed.version ?? "unknown"} at ${installed.executablePath}; rtk ${rtkInstalled.version ?? "unknown"} at ${rtkInstalled.executablePath}; ran rtk init -g --agent pi`,
         stderr: "",
         exitCode: 0,
         timedOut: false,
