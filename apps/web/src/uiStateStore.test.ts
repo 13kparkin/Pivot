@@ -14,6 +14,7 @@ import {
   setDefaultAdvertisedEndpointKey,
   setProjectExpanded,
   setThreadChangedFilesExpanded,
+  setThreadWorkEntryExpanded,
   type UiState,
 } from "./uiStateStore";
 
@@ -133,6 +134,47 @@ describe("uiStateStore pure functions", () => {
         "turn-1": true,
       },
     });
+  });
+
+  it("stores per-thread work-entry expansion choices", () => {
+    const threadId = ThreadId.make("thread-1");
+    const collapsed = setThreadWorkEntryExpanded(makeUiState(), threadId, "work-1", false);
+
+    expect(collapsed.threadWorkEntryExpandedById).toEqual({
+      [threadId]: {
+        "work-1": false,
+      },
+    });
+    expect(
+      setThreadWorkEntryExpanded(collapsed, threadId, "work-1", true).threadWorkEntryExpandedById,
+    ).toEqual({
+      [threadId]: {
+        "work-1": true,
+      },
+    });
+  });
+
+  it("keeps other threads' work-entry expansion isolated per thread", () => {
+    const threadA = ThreadId.make("thread-a");
+    const threadB = ThreadId.make("thread-b");
+    const withA = setThreadWorkEntryExpanded(makeUiState(), threadA, "work-1", true);
+
+    const withB = setThreadWorkEntryExpanded(withA, threadB, "work-1", true);
+
+    expect(withB.threadWorkEntryExpandedById[threadA]).toEqual({ "work-1": true });
+    expect(withB.threadWorkEntryExpandedById[threadB]).toEqual({ "work-1": true });
+  });
+
+  it("returns the same state for a no-op work-entry expansion toggle", () => {
+    const state = setThreadWorkEntryExpanded(
+      makeUiState(),
+      ThreadId.make("thread-1"),
+      "work-1",
+      true,
+    );
+    expect(setThreadWorkEntryExpanded(state, ThreadId.make("thread-1"), "work-1", true)).toBe(
+      state,
+    );
   });
 
   it("stores the endpoint preference by stable key", () => {
