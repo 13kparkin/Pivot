@@ -322,6 +322,12 @@ export const ThreadTokenUsageSnapshot = Schema.Struct({
   toolUses: Schema.optional(NonNegativeInt),
   durationMs: Schema.optional(NonNegativeInt),
   compactsAutomatically: Schema.optional(Schema.Boolean),
+  /** omp `get_state.tokensPerSecond` while streaming; omit when unavailable. */
+  tokensPerSecond: Schema.optional(Schema.Number),
+  /** omp `get_state.queuedMessageCount`. */
+  queuedMessageCount: Schema.optional(NonNegativeInt),
+  /** omp `contextUsage.percent` as 0–100 when provided. */
+  contextUsedPercent: Schema.optional(Schema.Number),
 });
 export type ThreadTokenUsageSnapshot = typeof ThreadTokenUsageSnapshot.Type;
 

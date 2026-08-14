@@ -112,6 +112,8 @@ export interface ThreadComposerProps {
   readonly onNativePasteImages: (uris: ReadonlyArray<string>) => Promise<void>;
   readonly onRemoveDraftImage: (imageId: string) => void;
   readonly onStopThread: () => void;
+  /** Stop requested; waiting for the provider to confirm the turn ended. */
+  readonly isStoppingTurn?: boolean;
   readonly onSendMessage: () => Promise<MessageId | null>;
   readonly onUpdateModelSelection: (modelSelection: ModelSelection) => void;
   readonly onUpdateRuntimeMode: (runtimeMode: RuntimeMode) => void;
@@ -325,8 +327,10 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
     onEditorFocusChange?.(false);
   }, [onEditorFocusChange]);
   const showStopAction =
+    props.isStoppingTurn === true ||
     props.selectedThread.session?.status === "running" ||
     props.selectedThread.session?.status === "starting";
+  const stopLabel = props.isStoppingTurn === true ? "Stopping" : "Stop";
 
   const sendLabel =
     props.connectionState !== "connected" || props.activeThreadBusy || props.queueCount > 0
@@ -830,7 +834,13 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
           {!isExpanded ? (
             <Animated.View entering={FadeIn.duration(180)} exiting={FadeOut.duration(100)}>
               {showStopAction ? (
-                <ControlPill icon="stop.fill" variant="danger" onPress={props.onStopThread} />
+                <ControlPill
+                  icon="stop.fill"
+                  variant="danger"
+                  disabled={props.isStoppingTurn === true}
+                  accessibilityLabel={stopLabel}
+                  onPress={props.onStopThread}
+                />
               ) : (
                 <ControlPill
                   icon="arrow.up"
@@ -884,9 +894,10 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
                 )}
                 {showStopAction ? (
                   <ComposerToolbarButton
-                    accessibilityLabel="Stop"
+                    accessibilityLabel={stopLabel}
                     icon="stop.fill"
                     variant="danger"
+                    disabled={props.isStoppingTurn === true}
                     onPress={props.onStopThread}
                     showChevron={false}
                   />

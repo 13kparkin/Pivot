@@ -2,13 +2,16 @@
  * OmpDriver — ProviderDriver for `omp --mode rpc`.
  *
  * create() owns one OmpRpcRuntime + OmpAdapter per instance and tears them
- * down when the registry scope closes. Model discovery (AC3) probes
- * `get_available_models` through a short-lived adapter session on refresh.
+ * down when the registry scope closes. Model discovery (AC3) and slash-command
+ * discovery probe `get_available_models` / `get_available_commands` through a
+ * short-lived adapter session on refresh.
  * Binary resolution prefers a Pivot-managed GitHub install under
  * `{baseDir}/tools/omp/current`, then PATH / settings override.
  *
  * @module provider/Drivers/OmpDriver
  */
+import * as NodeOS from "node:os";
+
 import {
   OmpSettings,
   ProviderDriverKind,
@@ -40,6 +43,8 @@ import {
   OMP_MANAGED_UPDATE_LOCK_KEY,
   OMP_NPM_PACKAGE_NAME,
 } from "../omp/OmpManagedBinary.ts";
+import { OmpConfigStore, syncOmpSettingsToConfigStore } from "../omp/OmpConfigStore.ts";
+import { parseOmpModelRoleSlug } from "../omp/ompModelRoles.ts";
 import { OmpRpcRuntime } from "../omp/OmpRpcRuntime.ts";
 import {
   defaultProviderContinuationIdentity,
@@ -56,7 +61,7 @@ const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
 
 const OMP_PRESENTATION = {
   displayName: "omp",
-  showInteractionModeToggle: false,
+  showInteractionModeToggle: true,
   requiresNewThreadForModelChange: false,
 } as const;
 
@@ -164,6 +169,7 @@ function makeOmpSnapshot(input: {
         readonly status: "ready" | "warning" | "error";
         readonly message: string;
       },
+      slashCommands: ReadonlyArray<ServerProvider["slashCommands"][number]> = [],
     ) =>
       Effect.gen(function* () {
         const checkedAt = yield* nowIso;
@@ -173,6 +179,7 @@ function makeOmpSnapshot(input: {
             enabled: input.enabled,
             checkedAt,
             models,
+            slashCommands,
             probe: {
               installed: probe.installed,
               version: probe.version,
@@ -184,14 +191,18 @@ function makeOmpSnapshot(input: {
         );
       });
 
-    const initial = yield* buildSnapshot([], {
-      installed: false,
-      version: null,
-      status: "warning",
-      message: input.enabled
-        ? "Loading omp binary and models."
-        : "omp is disabled in T3 Code settings.",
-    });
+    const initial = yield* buildSnapshot(
+      [],
+      {
+        installed: false,
+        version: null,
+        status: "warning",
+        message: input.enabled
+          ? "Loading omp binary and models."
+          : "omp is disabled in T3 Code settings.",
+      },
+      [],
+    );
     const latest = yield* Ref.make(initial);
     const changes = yield* PubSub.unbounded<ServerProvider>();
     yield* Effect.addFinalizer(() => PubSub.shutdown(changes));
@@ -253,16 +264,24 @@ function makeOmpSnapshot(input: {
         cwd: process.cwd(),
         runtimeMode: "full-access",
       });
-      const models = yield* input.adapter
-        .discoverModels(threadId)
-        .pipe(Effect.ensuring(input.adapter.stopSession(threadId)));
+      const discovered = yield* Effect.gen(function* () {
+        const models = yield* input.adapter.discoverModels(threadId);
+        const slashCommands = yield* input.adapter
+          .discoverSlashCommands(threadId)
+          .pipe(Effect.catch(() => Effect.succeed([])));
+        return { models, slashCommands };
+      }).pipe(Effect.ensuring(input.adapter.stopSession(threadId)));
       return yield* publish(
-        yield* buildSnapshot(models, {
-          installed: true,
-          version: resolved.version,
-          status: "ready",
-          message: `omp models loaded from get_available_models (${resolved.source}).`,
-        }),
+        yield* buildSnapshot(
+          discovered.models,
+          {
+            installed: true,
+            version: resolved.version,
+            status: "ready",
+            message: `omp models loaded from get_available_models (${resolved.source}).`,
+          },
+          discovered.slashCommands,
+        ),
       );
     }).pipe(
       Effect.scoped,
@@ -316,7 +335,7 @@ export const OmpDriver: ProviderDriver<OmpSettings, OmpDriverEnv> = {
         accentColor,
         continuationGroupKey: continuationIdentity.continuationKey,
       });
-      const effectiveConfig = { ...config, enabled } satisfies OmpSettings;
+      const effectiveConfig = decodeOmpSettings({ ...config, enabled });
       const crypto = yield* Crypto.Crypto;
       const randomUUID = crypto.randomUUIDv4.pipe(Effect.orDie);
 
@@ -364,7 +383,29 @@ export const OmpDriver: ProviderDriver<OmpSettings, OmpDriverEnv> = {
       const runtime = new OmpRpcRuntime(spawner, launchBinary, {
         pathPrefixDirs: [rtkCurrentDir],
       });
-      const adapter = new OmpAdapter(runtime, randomUUID);
+      const fs = yield* FileSystem.FileSystem;
+      const ompHomeEnv = process.env.OMP_HOME?.trim();
+      const ompHome =
+        ompHomeEnv && ompHomeEnv.length > 0
+          ? ompHomeEnv
+          : pathService.join(NodeOS.homedir(), ".omp");
+      const ompConfigStore = new OmpConfigStore(fs, pathService, ompHome);
+      // Settings updates recreate the instance via ProviderInstanceRegistryMutator,
+      // so create() is the sync point for OmpSettings → omp config.yml.
+      yield* syncOmpSettingsToConfigStore(effectiveConfig, ompConfigStore).pipe(
+        Effect.orElseSucceed(() => undefined),
+      );
+      const resolveRoleModel = (role: string) =>
+        Effect.gen(function* () {
+          const configPath = pathService.join(ompHome, "agent", "config.yml");
+          const exists = yield* fs.exists(configPath);
+          if (!exists) {
+            return undefined;
+          }
+          const text = yield* fs.readFileString(configPath);
+          return parseOmpModelRoleSlug(text, role);
+        }).pipe(Effect.orElseSucceed(() => undefined));
+      const adapter = new OmpAdapter(runtime, randomUUID, { resolveRoleModel });
       yield* Effect.addFinalizer(() => adapter.stopAll());
 
       // Keep runtime binaryPath aligned after managed install/refresh by

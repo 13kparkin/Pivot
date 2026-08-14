@@ -60,6 +60,7 @@ import {
   defaultInstanceIdForDriver,
   ProviderDriverKind,
   ServerOmpLoginError,
+  ServerOmpHubError,
   type ProviderInstanceId,
 } from "@t3tools/contracts";
 import { resolveServerBackgroundActivitySettings } from "@t3tools/shared/backgroundActivitySettings";
@@ -83,6 +84,7 @@ import {
   observeRpcStreamEffect as instrumentRpcStreamEffect,
 } from "./observability/RpcInstrumentation.ts";
 import * as ProviderRegistry from "./provider/Services/ProviderRegistry.ts";
+import * as ProviderService from "./provider/Services/ProviderService.ts";
 import * as ProviderMaintenanceRunner from "./provider/providerMaintenanceRunner.ts";
 import * as ServerSelfUpdate from "./cloud/selfUpdate.ts";
 import * as ServerLifecycleEvents from "./serverLifecycleEvents.ts";
@@ -373,6 +375,7 @@ const makeWsRpcLayer = (
       const previewManager = yield* PreviewManager.PreviewManager;
       const portDiscovery = yield* PortScanner.PortDiscovery;
       const providerRegistry = yield* ProviderRegistry.ProviderRegistry;
+      const providerService = yield* ProviderService.ProviderService;
       const providerMaintenanceRunner = yield* ProviderMaintenanceRunner.ProviderMaintenanceRunner;
       const serverSelfUpdate = yield* ServerSelfUpdate.ServerSelfUpdate;
       const config = yield* ServerConfig.ServerConfig;
@@ -1494,6 +1497,65 @@ const makeWsRpcLayer = (
               yield* providerRegistry.refreshInstance(instanceId).pipe(Effect.ignore);
               return result;
             }),
+            { "rpc.aggregate": "server" },
+          ),
+        [WS_METHODS.serverOmpGetSubagentMessages]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.serverOmpGetSubagentMessages,
+            providerService
+              .ompGetSubagentMessages({
+                threadId: input.threadId,
+                subagentId: input.subagentId,
+                ...(input.fromByte === undefined ? {} : { fromByte: input.fromByte }),
+              })
+              .pipe(
+                Effect.mapError(
+                  (cause) =>
+                    new ServerOmpHubError({
+                      reason: cause instanceof Error ? cause.message : String(cause),
+                      cause,
+                    }),
+                ),
+              ),
+            { "rpc.aggregate": "server" },
+          ),
+        [WS_METHODS.serverOmpSteer]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.serverOmpSteer,
+            providerService
+              .ompSteer({
+                threadId: input.threadId,
+                message: input.message,
+              })
+              .pipe(
+                Effect.as({}),
+                Effect.mapError(
+                  (cause) =>
+                    new ServerOmpHubError({
+                      reason: cause instanceof Error ? cause.message : String(cause),
+                      cause,
+                    }),
+                ),
+              ),
+            { "rpc.aggregate": "server" },
+          ),
+        [WS_METHODS.serverOmpSetSubagentSubscription]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.serverOmpSetSubagentSubscription,
+            providerService
+              .ompSetSubagentSubscription({
+                threadId: input.threadId,
+                level: input.level,
+              })
+              .pipe(
+                Effect.mapError(
+                  (cause) =>
+                    new ServerOmpHubError({
+                      reason: cause instanceof Error ? cause.message : String(cause),
+                      cause,
+                    }),
+                ),
+              ),
             { "rpc.aggregate": "server" },
           ),
         [WS_METHODS.serverUpdateProvider]: (input) =>

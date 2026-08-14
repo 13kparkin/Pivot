@@ -3,11 +3,18 @@
  *
  * Turn completion (AC11): terminal `agent_end` (`isTerminal !== false`),
  * prompt `data.agentInvoked === false`, and `prompt_result` with
- * `agentInvoked: false`. Empty assistant deltas are not emitted (AC2).
+ * `agentInvoked: false`. Local slash results arrive as `command_output`
+ * frames and become `assistant_text` deltas. Empty assistant deltas are
+ * not emitted (AC2).
  * Tools: `toolcall_end` / `tool_execution_*` → `item.*` (+ output deltas).
  * Thinking: `thinking_delta` → `content.delta` (`reasoning_text`).
  * Usage: `get_state.contextUsage` → `thread.token-usage.updated` on turn end.
  * Subagents (AC7): `set_subagent_subscription` + `subagent_*` → `task.*`.
+ * Host UI: `extension_ui_request` confirm/select/input/editor → approval /
+ * user-input events; replies via `extension_ui_response`.
+ * Plan mode: on `interactionMode: "plan"` remember the current model via
+ * `get_state`, `set_model` to the resolved plan role, and restore on exit.
+ * While plan is active, turn `modelSelection` is ignored.
  *
  * @module provider/omp/OmpAdapter
  */
@@ -22,15 +29,19 @@ import {
   type ProviderSendTurnInput,
   type ProviderUserInputAnswers,
   RuntimeItemId,
+  RuntimeRequestId,
   type RuntimeTaskStatus,
   type ServerProviderModel,
+  type ServerProviderSlashCommand,
   ProviderDriverKind,
   RuntimeTaskId,
   type RuntimeMode,
+  type ProviderInteractionMode,
   type ThreadId,
   TurnId,
 } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
+import * as Clock from "effect/Clock";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -49,6 +60,8 @@ import { OmpSpawnError, type OmpRpcRuntime } from "./OmpRpcRuntime.ts";
 
 const PROVIDER = ProviderDriverKind.make("omp");
 const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
+const isProviderAdapterProcessError = Schema.is(ProviderAdapterProcessError);
+const isOmpSpawnError = Schema.is(OmpSpawnError);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -82,6 +95,13 @@ interface TrackedOmpToolCall {
   readonly intent: string | undefined;
 }
 
+type PendingExtensionUiKind = "confirm" | "select" | "input" | "editor" | "host_uri";
+
+interface PendingExtensionUiRequest {
+  readonly kind: PendingExtensionUiKind;
+  readonly ompId: string;
+}
+
 interface LiveAdapterSession {
   readonly threadId: ThreadId;
   readonly sessionFile: string;
@@ -90,8 +110,33 @@ interface LiveAdapterSession {
   readonly snapshot: ProviderSession;
   readonly scope: Scope.Scope;
   readonly toolCalls: Map<string, TrackedOmpToolCall>;
+  readonly pendingUiRequests: Map<string, PendingExtensionUiRequest>;
   turnId: TurnId | undefined;
+  /** Set by interruptTurn; cleared when the terminal agent_end confirms stop. */
+  stopRequested: boolean;
+  /** Wall-clock ms of the last mid-turn token-usage emit (throttle). */
+  lastTokenUsageEmitAtMs: number;
+  interactionMode: ProviderInteractionMode;
+  prePlanModelSlug: string | undefined;
   onOpenUrl: ((request: OmpOpenUrlRequest) => Effect.Effect<void>) | undefined;
+}
+
+const TOKEN_USAGE_EMIT_MIN_INTERVAL_MS = 1_000;
+
+export type OmpResolveRoleModel = (role: string) => Effect.Effect<string | undefined>;
+
+export interface OmpAdapterOptions {
+  readonly resolveRoleModel?: OmpResolveRoleModel;
+}
+
+export type OmpSubagentSubscriptionLevel = "off" | "progress" | "events";
+
+export interface OmpSubagentTranscriptPage {
+  readonly sessionFile: string;
+  readonly fromByte: number;
+  readonly nextByte: number;
+  readonly reset: boolean;
+  readonly messages: ReadonlyArray<unknown>;
 }
 
 /**
@@ -110,10 +155,16 @@ export class OmpAdapter {
   readonly #sessions = new Map<ThreadId, LiveAdapterSession>();
   readonly #runtime: OmpRpcClient;
   readonly #randomUUID: Effect.Effect<string>;
+  readonly #resolveRoleModel: OmpResolveRoleModel;
 
-  public constructor(runtime: OmpRpcClient, randomUUID: Effect.Effect<string>) {
+  public constructor(
+    runtime: OmpRpcClient,
+    randomUUID: Effect.Effect<string>,
+    options: OmpAdapterOptions = {},
+  ) {
     this.#runtime = runtime;
     this.#randomUUID = randomUUID;
+    this.#resolveRoleModel = options.resolveRoleModel ?? (() => Effect.succeed(undefined));
   }
 
   public get streamEvents(): Stream.Stream<ProviderRuntimeEvent> {
@@ -158,7 +209,13 @@ export class OmpAdapter {
         snapshot,
         scope,
         toolCalls: new Map(),
+        pendingUiRequests: new Map(),
         turnId: undefined,
+        stopRequested: false,
+        // Negative so the first mid-turn emit is not throttled when Clock is 0 (TestClock).
+        lastTokenUsageEmitAtMs: -TOKEN_USAGE_EMIT_MIN_INTERVAL_MS,
+        interactionMode: "default",
+        prePlanModelSlug: undefined,
         onOpenUrl: undefined,
       };
       this.#sessions.set(input.threadId, session);
@@ -189,7 +246,12 @@ export class OmpAdapter {
       }
       const turnId = yield* this.#randomUUID.pipe(Effect.map(TurnId.make));
       session.turnId = turnId;
-      yield* this.#applyModelSelection(input.threadId, input.modelSelection?.model);
+      session.stopRequested = false;
+      yield* this.#applyInteractionMode(session, input.interactionMode);
+      if (session.interactionMode !== "plan") {
+        yield* this.#applyModelSelection(input.threadId, input.modelSelection?.model);
+      }
+      yield* this.#applyTurnOptions(input.threadId, input.modelSelection?.options);
       yield* this.#emit({
         type: "turn.started",
         threadId: input.threadId,
@@ -234,13 +296,71 @@ export class OmpAdapter {
 
   public interruptTurn(threadId: ThreadId, _turnId?: TurnId) {
     return Effect.gen({ self: this }, function* () {
+      const session = this.#sessions.get(threadId);
+      if (!session) {
+        return yield* new ProviderAdapterSessionNotFoundError({
+          provider: PROVIDER,
+          threadId,
+        });
+      }
+      session.stopRequested = true;
+      yield* this.#send(threadId, { type: "abort" });
+    });
+  }
+
+  public fetchSubagentTranscript(threadId: ThreadId, subagentId: string, fromByte?: number) {
+    return Effect.gen({ self: this }, function* () {
       if (!this.#sessions.has(threadId)) {
         return yield* new ProviderAdapterSessionNotFoundError({
           provider: PROVIDER,
           threadId,
         });
       }
-      yield* this.#send(threadId, { type: "abort" });
+      const response = yield* this.#send(threadId, {
+        type: "get_subagent_messages",
+        subagentId,
+        ...(fromByte === undefined ? {} : { fromByte }),
+      });
+      if (!isRecord(response) || !isRecord(response.data)) {
+        return yield* new ProviderAdapterRequestError({
+          provider: PROVIDER,
+          method: "get_subagent_messages",
+          detail: "response data missing",
+        });
+      }
+      const data = response.data;
+      const messages = Array.isArray(data.messages) ? data.messages : [];
+      return {
+        sessionFile: typeof data.sessionFile === "string" ? data.sessionFile : "",
+        fromByte: typeof data.fromByte === "number" ? data.fromByte : 0,
+        nextByte: typeof data.nextByte === "number" ? data.nextByte : 0,
+        reset: data.reset === true,
+        messages,
+      } satisfies OmpSubagentTranscriptPage;
+    });
+  }
+
+  public steerSession(threadId: ThreadId, message: string) {
+    return Effect.gen({ self: this }, function* () {
+      if (!this.#sessions.has(threadId)) {
+        return yield* new ProviderAdapterSessionNotFoundError({
+          provider: PROVIDER,
+          threadId,
+        });
+      }
+      yield* this.#send(threadId, { type: "steer", message });
+    });
+  }
+
+  public setSubagentSubscription(threadId: ThreadId, level: OmpSubagentSubscriptionLevel) {
+    return Effect.gen({ self: this }, function* () {
+      if (!this.#sessions.has(threadId)) {
+        return yield* new ProviderAdapterSessionNotFoundError({
+          provider: PROVIDER,
+          threadId,
+        });
+      }
+      yield* this.#send(threadId, { type: "set_subagent_subscription", level });
     });
   }
 
@@ -256,7 +376,7 @@ export class OmpAdapter {
     });
   }
 
-  public rollbackThread(threadId: ThreadId, _numTurns: number) {
+  public setThinkingLevel(threadId: ThreadId, level: string) {
     return Effect.gen({ self: this }, function* () {
       if (!this.#sessions.has(threadId)) {
         return yield* new ProviderAdapterSessionNotFoundError({
@@ -264,50 +384,231 @@ export class OmpAdapter {
           threadId,
         });
       }
-      return yield* new ProviderAdapterRequestError({
-        provider: PROVIDER,
-        method: "rollbackThread",
-        detail: "unsupported: omp branch rollback is not wired yet",
+      yield* this.#send(threadId, { type: "set_thinking_level", level });
+    });
+  }
+
+  public setFastMode(threadId: ThreadId, enabled: boolean) {
+    return Effect.gen({ self: this }, function* () {
+      if (!this.#sessions.has(threadId)) {
+        return yield* new ProviderAdapterSessionNotFoundError({
+          provider: PROVIDER,
+          threadId,
+        });
+      }
+      yield* this.#send(threadId, { type: "set_fast_mode", enabled });
+    });
+  }
+
+  public setAutoCompaction(threadId: ThreadId, enabled: boolean) {
+    return Effect.gen({ self: this }, function* () {
+      if (!this.#sessions.has(threadId)) {
+        return yield* new ProviderAdapterSessionNotFoundError({
+          provider: PROVIDER,
+          threadId,
+        });
+      }
+      yield* this.#send(threadId, { type: "set_auto_compaction", enabled });
+    });
+  }
+
+  public setAutoRetry(threadId: ThreadId, enabled: boolean) {
+    return Effect.gen({ self: this }, function* () {
+      if (!this.#sessions.has(threadId)) {
+        return yield* new ProviderAdapterSessionNotFoundError({
+          provider: PROVIDER,
+          threadId,
+        });
+      }
+      yield* this.#send(threadId, { type: "set_auto_retry", enabled });
+    });
+  }
+
+  public compact(threadId: ThreadId, customInstructions?: string) {
+    return Effect.gen({ self: this }, function* () {
+      if (!this.#sessions.has(threadId)) {
+        return yield* new ProviderAdapterSessionNotFoundError({
+          provider: PROVIDER,
+          threadId,
+        });
+      }
+      yield* this.#send(threadId, {
+        type: "compact",
+        ...(customInstructions === undefined ? {} : { customInstructions }),
       });
+    });
+  }
+
+  public rollbackThread(threadId: ThreadId, numTurns: number) {
+    return Effect.gen({ self: this }, function* () {
+      if (!this.#sessions.has(threadId)) {
+        return yield* new ProviderAdapterSessionNotFoundError({
+          provider: PROVIDER,
+          threadId,
+        });
+      }
+      if (numTurns <= 0) {
+        return { threadId, turns: [] as const };
+      }
+      const response = yield* this.#send(threadId, { type: "get_branch_messages" });
+      if (
+        !isRecord(response) ||
+        !isRecord(response.data) ||
+        !Array.isArray(response.data.messages)
+      ) {
+        return yield* new ProviderAdapterRequestError({
+          provider: PROVIDER,
+          method: "rollbackThread",
+          detail: "get_branch_messages returned no messages",
+        });
+      }
+      const messages = response.data.messages;
+      if (messages.length < numTurns) {
+        return yield* new ProviderAdapterRequestError({
+          provider: PROVIDER,
+          method: "rollbackThread",
+          detail: `cannot rollback ${numTurns} turns; only ${messages.length} branch messages available`,
+        });
+      }
+      const target = messages[messages.length - numTurns];
+      if (!isRecord(target) || typeof target.entryId !== "string" || target.entryId.length === 0) {
+        return yield* new ProviderAdapterRequestError({
+          provider: PROVIDER,
+          method: "rollbackThread",
+          detail: "branch message missing entryId",
+        });
+      }
+      yield* this.#send(threadId, { type: "branch", entryId: target.entryId });
+      return { threadId, turns: [] as const };
     });
   }
 
   public respondToRequest(
     threadId: ThreadId,
-    _requestId: ApprovalRequestId,
-    _decision: ProviderApprovalDecision,
+    requestId: ApprovalRequestId,
+    decision: ProviderApprovalDecision,
   ) {
     return Effect.gen({ self: this }, function* () {
-      if (!this.#sessions.has(threadId)) {
+      const session = this.#sessions.get(threadId);
+      if (!session) {
         return yield* new ProviderAdapterSessionNotFoundError({
           provider: PROVIDER,
           threadId,
         });
       }
-      return yield* new ProviderAdapterRequestError({
-        provider: PROVIDER,
-        method: "respondToRequest",
-        detail: "unsupported: extension_ui_request approval bridge is not wired yet",
+      const pending = session.pendingUiRequests.get(requestId);
+      if (!pending || (pending.kind !== "confirm" && pending.kind !== "host_uri")) {
+        return yield* new ProviderAdapterRequestError({
+          provider: PROVIDER,
+          method: "respondToRequest",
+          detail: `no pending extension_ui confirm for ${requestId}`,
+        });
+      }
+      const accepted = decision === "accept" || decision === "acceptForSession";
+      const response =
+        pending.kind === "host_uri"
+          ? decision === "cancel" || !accepted
+            ? {
+                type: "host_uri_result" as const,
+                id: pending.ompId,
+                isError: true as const,
+                error: "rejected by user",
+              }
+            : { type: "host_uri_result" as const, id: pending.ompId }
+          : decision === "cancel"
+            ? {
+                type: "extension_ui_response" as const,
+                id: pending.ompId,
+                cancelled: true as const,
+              }
+            : {
+                type: "extension_ui_response" as const,
+                id: pending.ompId,
+                confirmed: accepted,
+              };
+      yield* this.#runtime.write(threadId, response).pipe(
+        Effect.mapError((cause) =>
+          isOmpSpawnError(cause)
+            ? mapOmpSpawnError(threadId, cause)
+            : new ProviderAdapterRequestError({
+                provider: PROVIDER,
+                method: "respondToRequest",
+                detail: String(cause),
+                cause,
+              }),
+        ),
+      );
+      session.pendingUiRequests.delete(requestId);
+      yield* this.#emit({
+        type: "request.resolved",
+        threadId,
+        turnId: session.turnId,
+        requestId: RuntimeRequestId.make(pending.ompId),
+        payload: {
+          requestType: "command_execution_approval",
+          decision,
+        },
       });
     });
   }
 
   public respondToUserInput(
     threadId: ThreadId,
-    _requestId: ApprovalRequestId,
-    _answers: ProviderUserInputAnswers,
+    requestId: ApprovalRequestId,
+    answers: ProviderUserInputAnswers,
   ) {
     return Effect.gen({ self: this }, function* () {
-      if (!this.#sessions.has(threadId)) {
+      const session = this.#sessions.get(threadId);
+      if (!session) {
         return yield* new ProviderAdapterSessionNotFoundError({
           provider: PROVIDER,
           threadId,
         });
       }
-      return yield* new ProviderAdapterRequestError({
-        provider: PROVIDER,
-        method: "respondToUserInput",
-        detail: "unsupported: extension_ui_request user-input bridge is not wired yet",
+      const pending = session.pendingUiRequests.get(requestId);
+      if (
+        !pending ||
+        (pending.kind !== "select" && pending.kind !== "input" && pending.kind !== "editor")
+      ) {
+        return yield* new ProviderAdapterRequestError({
+          provider: PROVIDER,
+          method: "respondToUserInput",
+          detail: `no pending extension_ui user-input for ${requestId}`,
+        });
+      }
+      const value = firstUserInputAnswer(answers);
+      if (value === undefined) {
+        return yield* new ProviderAdapterRequestError({
+          provider: PROVIDER,
+          method: "respondToUserInput",
+          detail: "user-input answers did not include a string value",
+        });
+      }
+      yield* this.#runtime
+        .write(threadId, {
+          type: "extension_ui_response",
+          id: pending.ompId,
+          value,
+        })
+        .pipe(
+          Effect.mapError((cause) =>
+            isOmpSpawnError(cause)
+              ? mapOmpSpawnError(threadId, cause)
+              : new ProviderAdapterRequestError({
+                  provider: PROVIDER,
+                  method: "respondToUserInput",
+                  detail: String(cause),
+                  cause,
+                }),
+          ),
+        );
+      session.pendingUiRequests.delete(requestId);
+      yield* this.#emit({
+        type: "user-input.resolved",
+        threadId,
+        turnId: session.turnId,
+        requestId: RuntimeRequestId.make(pending.ompId),
+        payload: { answers },
       });
     });
   }
@@ -322,6 +623,19 @@ export class OmpAdapter {
       }
       const response = yield* this.#send(threadId, { type: "get_available_models" });
       return yield* modelsFromAvailableModelsResponse(response);
+    });
+  }
+
+  public discoverSlashCommands(threadId: ThreadId) {
+    return Effect.gen({ self: this }, function* () {
+      if (!this.#sessions.has(threadId)) {
+        return yield* new ProviderAdapterSessionNotFoundError({
+          provider: PROVIDER,
+          threadId,
+        });
+      }
+      const response = yield* this.#send(threadId, { type: "get_available_commands" });
+      return yield* slashCommandsFromAvailableCommandsResponse(response);
     });
   }
 
@@ -355,7 +669,7 @@ export class OmpAdapter {
       return yield* this.#send(threadId, { type: "login", providerId }).pipe(
         Effect.timeout("10 minutes"),
         Effect.mapError((cause) =>
-          Schema.is(ProviderAdapterProcessError)(cause)
+          isProviderAdapterProcessError(cause)
             ? cause
             : new ProviderAdapterRequestError({
                 provider: PROVIDER,
@@ -378,29 +692,14 @@ export class OmpAdapter {
     if (!isRecord(frame) || typeof frame.type !== "string") {
       return Effect.void;
     }
-    if (frame.type === "extension_ui_request" && frame.method === "open_url") {
-      const handler = session.onOpenUrl;
-      if (handler && typeof frame.url === "string" && frame.url.length > 0) {
-        return handler({
-          url: frame.url,
-          ...(typeof frame.launchUrl === "string" ? { launchUrl: frame.launchUrl } : {}),
-          ...(typeof frame.instructions === "string" ? { instructions: frame.instructions } : {}),
-        });
-      }
-      return Effect.void;
+    if (frame.type === "extension_ui_request") {
+      return this.#onExtensionUiRequest(session, frame);
     }
-    if (frame.type === "extension_ui_request" && frame.method === "input") {
-      // Paste-code completion is not wired in Settings yet — cancel so login fails cleanly.
-      if (typeof frame.id === "string") {
-        return this.#runtime
-          .write(session.threadId, {
-            type: "extension_ui_response",
-            id: frame.id,
-            cancelled: true,
-          })
-          .pipe(Effect.ignore);
-      }
-      return Effect.void;
+    if (frame.type === "host_uri_request") {
+      return this.#onHostUriRequest(session, frame);
+    }
+    if (frame.type === "host_uri_cancel") {
+      return this.#onHostUriCancel(session, frame);
     }
     if (frame.type === "agent_end" && frame.isTerminal !== false) {
       return this.#emitTurnCompleted(session);
@@ -408,8 +707,15 @@ export class OmpAdapter {
     if (frame.type === "prompt_result" && frame.agentInvoked === false) {
       return this.#emitTurnCompleted(session);
     }
+    if (frame.type === "command_output") {
+      return this.#onCommandOutput(session, frame);
+    }
     if (frame.type === "message_update") {
-      return this.#onMessageUpdate(session, frame);
+      return this.#onMessageUpdate(session, frame).pipe(
+        Effect.tap(() =>
+          this.#maybeEmitLiveTokenUsage(session).pipe(Effect.forkDetach, Effect.asVoid),
+        ),
+      );
     }
     if (frame.type === "tool_execution_start") {
       return this.#onToolExecutionStart(session, frame);
@@ -529,6 +835,25 @@ export class OmpAdapter {
         ...(role === undefined ? {} : { role }),
         ...(toolUseId === undefined ? {} : { toolUseId }),
         ...(agentIndex === undefined ? {} : { agentIndex }),
+      },
+    });
+  }
+
+  #onCommandOutput(
+    session: LiveAdapterSession,
+    frame: Record<string, unknown>,
+  ): Effect.Effect<void> {
+    const text = typeof frame.text === "string" ? frame.text : "";
+    if (text.length === 0) {
+      return Effect.void;
+    }
+    return this.#emit({
+      type: "content.delta",
+      threadId: session.threadId,
+      turnId: session.turnId,
+      payload: {
+        streamKind: "assistant_text",
+        delta: text,
       },
     });
   }
@@ -701,12 +1026,36 @@ export class OmpAdapter {
   #emitTurnCompleted(session: LiveAdapterSession): Effect.Effect<void> {
     return Effect.gen({ self: this }, function* () {
       yield* this.#emitTokenUsageFromState(session).pipe(Effect.ignore);
+      const aborted = session.stopRequested;
+      session.stopRequested = false;
+      if (aborted) {
+        yield* this.#emit({
+          type: "turn.aborted",
+          threadId: session.threadId,
+          turnId: session.turnId,
+          payload: { reason: "user_abort" },
+        });
+        return;
+      }
       yield* this.#emit({
         type: "turn.completed",
         threadId: session.threadId,
         turnId: session.turnId,
         payload: { state: "completed" },
       });
+    });
+  }
+
+  #maybeEmitLiveTokenUsage(session: LiveAdapterSession): Effect.Effect<void> {
+    return Effect.gen({ self: this }, function* () {
+      if (session.turnId === undefined) {
+        return;
+      }
+      const now = yield* Clock.currentTimeMillis;
+      if (now - session.lastTokenUsageEmitAtMs < TOKEN_USAGE_EMIT_MIN_INTERVAL_MS) {
+        return;
+      }
+      yield* this.#emitTokenUsageFromState(session).pipe(Effect.ignore);
     });
   }
 
@@ -718,7 +1067,8 @@ export class OmpAdapter {
       if (!isRecord(response) || !isRecord(response.data)) {
         return;
       }
-      const contextUsage = response.data.contextUsage;
+      const state = response.data;
+      const contextUsage = state.contextUsage;
       if (!isRecord(contextUsage) || typeof contextUsage.tokens !== "number") {
         return;
       }
@@ -730,6 +1080,27 @@ export class OmpAdapter {
         typeof contextUsage.contextWindow === "number" && contextUsage.contextWindow > 0
           ? Math.floor(contextUsage.contextWindow)
           : undefined;
+      const contextUsedPercent =
+        typeof contextUsage.percent === "number" && Number.isFinite(contextUsage.percent)
+          ? Math.min(100, Math.max(0, Math.round(contextUsage.percent * 1000) / 10))
+          : undefined;
+      const tokensPerSecond =
+        typeof state.tokensPerSecond === "number" && Number.isFinite(state.tokensPerSecond)
+          ? state.tokensPerSecond
+          : undefined;
+      const queuedMessageCount =
+        typeof state.queuedMessageCount === "number" && state.queuedMessageCount >= 0
+          ? Math.floor(state.queuedMessageCount)
+          : undefined;
+      const statsResponse = yield* this.#send(session.threadId, { type: "get_session_stats" }).pipe(
+        Effect.orElseSucceed(() => undefined),
+      );
+      const stats =
+        statsResponse !== undefined && isRecord(statsResponse) && isRecord(statsResponse.data)
+          ? statsResponse.data
+          : undefined;
+      const tokens = stats !== undefined && isRecord(stats.tokens) ? stats.tokens : undefined;
+      session.lastTokenUsageEmitAtMs = yield* Clock.currentTimeMillis;
       yield* this.#emit({
         type: "thread.token-usage.updated",
         threadId: session.threadId,
@@ -738,9 +1109,138 @@ export class OmpAdapter {
           usage: {
             usedTokens,
             ...(maxTokens === undefined ? {} : { maxTokens }),
+            ...(contextUsedPercent === undefined ? {} : { contextUsedPercent }),
+            ...(tokensPerSecond === undefined ? {} : { tokensPerSecond }),
+            ...(queuedMessageCount === undefined ? {} : { queuedMessageCount }),
+            ...(tokens !== undefined && typeof tokens.input === "number"
+              ? { inputTokens: Math.max(0, Math.floor(tokens.input)) }
+              : {}),
+            ...(tokens !== undefined && typeof tokens.output === "number"
+              ? { outputTokens: Math.max(0, Math.floor(tokens.output)) }
+              : {}),
+            ...(tokens !== undefined && typeof tokens.reasoning === "number"
+              ? { reasoningOutputTokens: Math.max(0, Math.floor(tokens.reasoning)) }
+              : {}),
+            ...(stats !== undefined && typeof stats.toolUses === "number"
+              ? { toolUses: Math.max(0, Math.floor(stats.toolUses)) }
+              : {}),
+            ...(stats !== undefined && typeof stats.durationMs === "number"
+              ? { durationMs: Math.max(0, Math.floor(stats.durationMs)) }
+              : {}),
           },
         },
       });
+    });
+  }
+
+  #applyTurnOptions(
+    threadId: ThreadId,
+    options: ReadonlyArray<{ readonly id: string; readonly value: string | boolean }> | undefined,
+  ) {
+    return Effect.gen({ self: this }, function* () {
+      if (options === undefined) {
+        return;
+      }
+      for (const option of options) {
+        if (
+          (option.id === "effort" ||
+            option.id === "thinking" ||
+            option.id === "reasoningEffort" ||
+            option.id === "thinkingLevel") &&
+          typeof option.value === "string"
+        ) {
+          yield* this.#send(threadId, { type: "set_thinking_level", level: option.value });
+        }
+        if (option.id === "fastMode" && typeof option.value === "boolean") {
+          yield* this.#send(threadId, { type: "set_fast_mode", enabled: option.value });
+        }
+      }
+    });
+  }
+
+  #onHostUriRequest(
+    session: LiveAdapterSession,
+    frame: Record<string, unknown>,
+  ): Effect.Effect<void> {
+    if (typeof frame.id !== "string" || frame.id.length === 0) {
+      return Effect.void;
+    }
+    const operation = frame.operation === "write" ? "write" : "read";
+    const url = typeof frame.url === "string" ? frame.url : "";
+    const title = operation === "write" ? "Accept proposed edit" : "Allow host URI read";
+    const detail = url.length > 0 ? `${title}\n${url}` : title;
+    session.pendingUiRequests.set(frame.id, { kind: "host_uri", ompId: frame.id });
+    return this.#emit({
+      type: "request.opened",
+      threadId: session.threadId,
+      turnId: session.turnId,
+      requestId: RuntimeRequestId.make(frame.id),
+      payload: {
+        requestType: operation === "write" ? "file_change_approval" : "file_read_approval",
+        detail,
+      },
+    });
+  }
+
+  #onHostUriCancel(
+    session: LiveAdapterSession,
+    frame: Record<string, unknown>,
+  ): Effect.Effect<void> {
+    const targetId = typeof frame.targetId === "string" ? frame.targetId : undefined;
+    if (targetId === undefined) {
+      return Effect.void;
+    }
+    const pending = session.pendingUiRequests.get(targetId);
+    if (!pending || pending.kind !== "host_uri") {
+      return Effect.void;
+    }
+    session.pendingUiRequests.delete(targetId);
+    return this.#emit({
+      type: "request.resolved",
+      threadId: session.threadId,
+      turnId: session.turnId,
+      requestId: RuntimeRequestId.make(targetId),
+      payload: { requestType: "file_change_approval", decision: "cancel" },
+    });
+  }
+
+  #applyInteractionMode(session: LiveAdapterSession, mode: ProviderInteractionMode | undefined) {
+    return Effect.gen({ self: this }, function* () {
+      if (mode === undefined || mode === session.interactionMode) {
+        return;
+      }
+      if (mode === "plan") {
+        session.prePlanModelSlug = yield* this.#readCurrentModelSlug(session.threadId);
+        const planSlug = yield* this.#resolveRoleModel("plan");
+        if (planSlug !== undefined) {
+          yield* this.#applyModelSelection(session.threadId, planSlug);
+        }
+        session.interactionMode = "plan";
+        return;
+      }
+      const restoreSlug = session.prePlanModelSlug;
+      session.prePlanModelSlug = undefined;
+      session.interactionMode = "default";
+      if (restoreSlug !== undefined) {
+        yield* this.#applyModelSelection(session.threadId, restoreSlug);
+      }
+    });
+  }
+
+  #readCurrentModelSlug(threadId: ThreadId) {
+    return Effect.gen({ self: this }, function* () {
+      const response = yield* this.#send(threadId, { type: "get_state" });
+      if (!isRecord(response) || !isRecord(response.data)) {
+        return undefined;
+      }
+      const model = response.data.model;
+      if (!isRecord(model)) {
+        return undefined;
+      }
+      if (typeof model.provider !== "string" || typeof model.id !== "string") {
+        return undefined;
+      }
+      return `${model.provider}/${model.id}`;
     });
   }
 
@@ -794,6 +1294,138 @@ export class OmpAdapter {
     });
   }
 
+  #onExtensionUiRequest(
+    session: LiveAdapterSession,
+    frame: Record<string, unknown>,
+  ): Effect.Effect<void> {
+    const method = frame.method;
+    if (method === "open_url") {
+      const handler = session.onOpenUrl;
+      if (handler && typeof frame.url === "string" && frame.url.length > 0) {
+        return handler({
+          url: frame.url,
+          ...(typeof frame.launchUrl === "string" ? { launchUrl: frame.launchUrl } : {}),
+          ...(typeof frame.instructions === "string" ? { instructions: frame.instructions } : {}),
+        });
+      }
+      return Effect.void;
+    }
+    if (method === "cancel") {
+      const targetId = typeof frame.targetId === "string" ? frame.targetId : undefined;
+      if (targetId === undefined) {
+        return Effect.void;
+      }
+      const pending = session.pendingUiRequests.get(targetId);
+      if (!pending) {
+        return Effect.void;
+      }
+      session.pendingUiRequests.delete(targetId);
+      if (pending.kind === "confirm") {
+        return this.#emit({
+          type: "request.resolved",
+          threadId: session.threadId,
+          turnId: session.turnId,
+          requestId: RuntimeRequestId.make(targetId),
+          payload: {
+            requestType: "command_execution_approval",
+            decision: "cancel",
+          },
+        });
+      }
+      return this.#emit({
+        type: "user-input.resolved",
+        threadId: session.threadId,
+        turnId: session.turnId,
+        requestId: RuntimeRequestId.make(targetId),
+        payload: { answers: {} },
+      });
+    }
+    if (method === "notify") {
+      const message = typeof frame.message === "string" ? frame.message : undefined;
+      if (message === undefined || message.length === 0) {
+        return Effect.void;
+      }
+      return this.#emit({
+        type: "runtime.warning",
+        threadId: session.threadId,
+        turnId: session.turnId,
+        payload: { message },
+      });
+    }
+    if (typeof frame.id !== "string" || frame.id.length === 0) {
+      return Effect.void;
+    }
+    if (method === "confirm") {
+      const title = typeof frame.title === "string" ? frame.title : "Confirm";
+      const message = typeof frame.message === "string" ? frame.message : "";
+      const detail = message.length > 0 ? `${title}\n${message}` : title;
+      session.pendingUiRequests.set(frame.id, { kind: "confirm", ompId: frame.id });
+      return this.#emit({
+        type: "request.opened",
+        threadId: session.threadId,
+        turnId: session.turnId,
+        requestId: RuntimeRequestId.make(frame.id),
+        payload: {
+          requestType: "command_execution_approval",
+          detail,
+        },
+      });
+    }
+    if (method === "select") {
+      const title = typeof frame.title === "string" ? frame.title : "Select";
+      const options = Array.isArray(frame.options)
+        ? frame.options.filter((option): option is string => typeof option === "string")
+        : [];
+      session.pendingUiRequests.set(frame.id, { kind: "select", ompId: frame.id });
+      return this.#emit({
+        type: "user-input.requested",
+        threadId: session.threadId,
+        turnId: session.turnId,
+        requestId: RuntimeRequestId.make(frame.id),
+        payload: {
+          questions: [
+            {
+              id: "choice",
+              header: title,
+              question: title,
+              options: options.map((option) => ({ label: option, description: option })),
+            },
+          ],
+        },
+      });
+    }
+    if (method === "input" || method === "editor") {
+      const title = typeof frame.title === "string" ? frame.title : "Input";
+      const placeholder =
+        typeof frame.placeholder === "string"
+          ? frame.placeholder
+          : typeof frame.prefill === "string"
+            ? frame.prefill
+            : "";
+      session.pendingUiRequests.set(frame.id, {
+        kind: method === "editor" ? "editor" : "input",
+        ompId: frame.id,
+      });
+      return this.#emit({
+        type: "user-input.requested",
+        threadId: session.threadId,
+        turnId: session.turnId,
+        requestId: RuntimeRequestId.make(frame.id),
+        payload: {
+          questions: [
+            {
+              id: "input",
+              header: title,
+              question: placeholder.length > 0 ? placeholder : title,
+              options: [],
+            },
+          ],
+        },
+      });
+    }
+    return Effect.void;
+  }
+
   #emit(
     event: Omit<ProviderRuntimeEvent, "eventId" | "provider" | "createdAt"> & {
       readonly turnId?: TurnId | undefined;
@@ -812,6 +1444,21 @@ export class OmpAdapter {
       } as ProviderRuntimeEvent);
     });
   }
+}
+
+function firstUserInputAnswer(answers: ProviderUserInputAnswers): string | undefined {
+  for (const value of Object.values(answers)) {
+    if (typeof value === "string" && value.length > 0) {
+      return value;
+    }
+    if (Array.isArray(value)) {
+      const first = value.find((entry) => typeof entry === "string" && entry.length > 0);
+      if (typeof first === "string") {
+        return first;
+      }
+    }
+  }
+  return undefined;
 }
 
 function parseOmpModelSlug(slug: string): { provider: string; modelId: string } | null {
@@ -1025,6 +1672,49 @@ function loginProvidersFromResponse(
   return Effect.succeed(providers);
 }
 
+function slashCommandsFromAvailableCommandsResponse(
+  response: object,
+): Effect.Effect<ReadonlyArray<ServerProviderSlashCommand>, ProviderAdapterRequestError> {
+  if (!isRecord(response) || !isRecord(response.data) || !Array.isArray(response.data.commands)) {
+    return Effect.fail(
+      new ProviderAdapterRequestError({
+        provider: PROVIDER,
+        method: "get_available_commands",
+        detail: "response data.commands must be an array",
+      }),
+    );
+  }
+  const commands: ServerProviderSlashCommand[] = [];
+  for (const entry of response.data.commands) {
+    if (!isRecord(entry) || typeof entry.name !== "string" || entry.name.trim().length === 0) {
+      return Effect.fail(
+        new ProviderAdapterRequestError({
+          provider: PROVIDER,
+          method: "get_available_commands",
+          detail: "each command requires a non-empty name",
+        }),
+      );
+    }
+    const name = entry.name.trim().replace(/^\//, "");
+    const description =
+      typeof entry.description === "string" && entry.description.trim().length > 0
+        ? entry.description.trim()
+        : undefined;
+    const inputHint =
+      isRecord(entry.input) &&
+      typeof entry.input.hint === "string" &&
+      entry.input.hint.trim().length > 0
+        ? entry.input.hint.trim()
+        : undefined;
+    commands.push({
+      name,
+      ...(description === undefined ? {} : { description }),
+      ...(inputHint === undefined ? {} : { input: { hint: inputHint } }),
+    });
+  }
+  return Effect.succeed(commands);
+}
+
 function modelsFromAvailableModelsResponse(
   response: object,
 ): Effect.Effect<ReadonlyArray<ServerProviderModel>, ProviderAdapterRequestError> {
@@ -1062,3 +1752,5 @@ function modelsFromAvailableModelsResponse(
   }
   return Effect.succeed(models);
 }
+
+const OMP_THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;

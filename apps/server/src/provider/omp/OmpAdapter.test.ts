@@ -13,7 +13,6 @@ import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
-import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import { describe } from "vite-plus/test";
@@ -21,128 +20,14 @@ import { describe } from "vite-plus/test";
 import { ProviderAdapterRequestError, ProviderAdapterSessionNotFoundError } from "../Errors.ts";
 const isProviderAdapterSessionNotFoundError = Schema.is(ProviderAdapterSessionNotFoundError);
 const isProviderAdapterRequestError = Schema.is(ProviderAdapterRequestError);
+import { FakeOmpRpc } from "./FakeOmpRpc.ts";
 import { OmpAdapter } from "./OmpAdapter.ts";
-import { OmpSpawnError } from "./OmpRpcRuntime.ts";
 
 let nextTestUuid = 0;
 const testRandomUUID = Effect.sync(() => {
   nextTestUuid += 1;
   return `00000000-0000-4000-8000-${String(nextTestUuid).padStart(12, "0")}`;
 });
-
-class FakeOmpRpc {
-  agentInvoked: boolean | undefined = true;
-  failSetModel = false;
-  sessionFile = "/tmp/omp-session.jsonl";
-  availableModels: ReadonlyArray<object> = [];
-  contextUsage:
-    | {
-        readonly tokens: number;
-        readonly contextWindow?: number;
-      }
-    | undefined = undefined;
-  readonly sent: Array<Record<string, unknown>> = [];
-  readonly frames = new Map<string, Queue.Queue<object>>();
-
-  ensureSession(input: {
-    readonly sessionKey: string;
-    readonly cwd: string;
-    readonly resumeCursor: string | null;
-  }) {
-    return Effect.gen({ self: this }, function* () {
-      if (!this.frames.has(input.sessionKey)) {
-        this.frames.set(input.sessionKey, yield* Queue.unbounded<object>());
-      }
-      return { sessionKey: input.sessionKey, sessionFile: this.sessionFile };
-    });
-  }
-
-  send(sessionKey: string, command: Record<string, unknown>) {
-    this.sent.push(command);
-    if (command.type === "set_model" && this.failSetModel) {
-      return Effect.fail(new OmpSpawnError({ operation: "set_model", detail: "set_model failed" }));
-    }
-    if (command.type === "get_available_models") {
-      return Effect.succeed({
-        type: "response",
-        success: true,
-        data: { models: this.availableModels },
-      });
-    }
-    if (command.type === "get_login_providers") {
-      return Effect.succeed({
-        type: "response",
-        success: true,
-        data: {
-          providers: [
-            {
-              id: "openai-codex",
-              name: "ChatGPT Plus/Pro",
-              available: true,
-              authenticated: true,
-            },
-            {
-              id: "anthropic",
-              name: "Anthropic",
-              available: true,
-              authenticated: false,
-            },
-          ],
-        },
-      });
-    }
-    if (command.type === "login") {
-      return Effect.succeed({
-        type: "response",
-        success: true,
-        data: { providerId: command.providerId },
-      });
-    }
-    if (command.type === "get_state") {
-      return Effect.succeed({
-        type: "response",
-        success: true,
-        data: {
-          sessionFile: this.sessionFile,
-          ...(this.contextUsage === undefined ? {} : { contextUsage: this.contextUsage }),
-        },
-      });
-    }
-    return Effect.succeed({
-      type: "response",
-      success: true,
-      ...(this.agentInvoked === undefined ? {} : { data: { agentInvoked: this.agentInvoked } }),
-    });
-  }
-
-  write(_sessionKey: string, command: Record<string, unknown>) {
-    this.sent.push(command);
-    return Effect.void;
-  }
-
-  streamFrames(sessionKey: string) {
-    const queue = this.frames.get(sessionKey);
-    if (!queue) {
-      return Stream.die(`no live omp session for ${sessionKey}`);
-    }
-    return Stream.fromQueue(queue);
-  }
-
-  readonly disposed: string[] = [];
-
-  dispose(sessionKey: string) {
-    this.disposed.push(sessionKey);
-    return Effect.void;
-  }
-
-  offer(sessionKey: string, frame: object) {
-    const queue = this.frames.get(sessionKey);
-    if (!queue) {
-      return Effect.die(`no live omp session for ${sessionKey}`);
-    }
-    return Queue.offer(queue, frame);
-  }
-}
 
 const THREAD_ID = ThreadId.make("thread-1");
 const PROVIDER = ProviderDriverKind.make("omp");
@@ -279,6 +164,59 @@ describe("OmpAdapter", () => {
       yield* adapter.sendTurn({ threadId: THREAD_ID, input: "/help" });
       yield* fake.offer(THREAD_ID, { type: "prompt_result", id: "req_1", agentInvoked: false });
       const events = yield* Fiber.join(eventsFiber);
+      NodeAssert.equal(events.filter((event) => event.type === "turn.completed").length, 1);
+    }),
+  );
+
+  it.effect("surfaces command_output text from local slash prompts as assistant_text", () =>
+    Effect.gen(function* () {
+      const fake = new FakeOmpRpc();
+      fake.agentInvoked = undefined;
+      const adapter = new OmpAdapter(fake, testRandomUUID);
+      const eventsFiber = yield* collectUntilTurnCompleted(adapter.streamEvents).pipe(
+        Effect.forkChild,
+      );
+      yield* adapter.startSession(startInput);
+      yield* adapter.sendTurn({ threadId: THREAD_ID, input: "/jobs" });
+      yield* fake.offer(THREAD_ID, {
+        type: "command_output",
+        text: "No background jobs running.",
+      });
+      yield* fake.offer(THREAD_ID, { type: "prompt_result", id: "req_1", agentInvoked: false });
+      const events = yield* Fiber.join(eventsFiber);
+      NodeAssert.equal(
+        events.some(
+          (event) =>
+            event.type === "content.delta" &&
+            event.payload.streamKind === "assistant_text" &&
+            event.payload.delta === "No background jobs running.",
+        ),
+        true,
+      );
+      NodeAssert.equal(events.filter((event) => event.type === "turn.completed").length, 1);
+    }),
+  );
+
+  it.effect("ignores empty command_output text from local slash prompts", () =>
+    Effect.gen(function* () {
+      const fake = new FakeOmpRpc();
+      fake.agentInvoked = undefined;
+      const adapter = new OmpAdapter(fake, testRandomUUID);
+      const eventsFiber = yield* collectUntilTurnCompleted(adapter.streamEvents).pipe(
+        Effect.forkChild,
+      );
+      yield* adapter.startSession(startInput);
+      yield* adapter.sendTurn({ threadId: THREAD_ID, input: "/jobs" });
+      yield* fake.offer(THREAD_ID, { type: "command_output", text: "" });
+      yield* fake.offer(THREAD_ID, { type: "prompt_result", id: "req_1", agentInvoked: false });
+      const events = yield* Fiber.join(eventsFiber);
+      NodeAssert.equal(
+        events.some(
+          (event) =>
+            event.type === "content.delta" && event.payload.streamKind === "assistant_text",
+        ),
+        false,
+      );
       NodeAssert.equal(events.filter((event) => event.type === "turn.completed").length, 1);
     }),
   );
@@ -480,7 +418,9 @@ describe("OmpAdapter", () => {
   it.effect("emits thread token usage from get_state contextUsage on turn complete", () =>
     Effect.gen(function* () {
       const fake = new FakeOmpRpc();
-      fake.contextUsage = { tokens: 1100, contextWindow: 200_000 };
+      fake.contextUsage = { tokens: 1100, contextWindow: 200_000, percent: 0.55 };
+      fake.tokensPerSecond = 42;
+      fake.queuedMessageCount = 2;
       const adapter = new OmpAdapter(fake, testRandomUUID);
       const eventsFiber = yield* collectUntilTurnCompleted(adapter.streamEvents).pipe(
         Effect.forkChild,
@@ -494,12 +434,56 @@ describe("OmpAdapter", () => {
           (event) =>
             event.type === "thread.token-usage.updated" &&
             event.payload.usage.usedTokens === 1100 &&
-            event.payload.usage.maxTokens === 200_000,
+            event.payload.usage.maxTokens === 200_000 &&
+            event.payload.usage.contextUsedPercent === 55 &&
+            event.payload.usage.tokensPerSecond === 42 &&
+            event.payload.usage.queuedMessageCount === 2,
         ),
         true,
       );
       NodeAssert.equal(
         fake.sent.some((command) => command.type === "get_state"),
+        true,
+      );
+    }),
+  );
+
+  it.effect("emits live thread token usage during message_update", () =>
+    Effect.gen(function* () {
+      const fake = new FakeOmpRpc();
+      fake.contextUsage = { tokens: 500, contextWindow: 100_000, percent: 0.05 };
+      fake.tokensPerSecond = 12.5;
+      fake.queuedMessageCount = 1;
+      const adapter = new OmpAdapter(fake, testRandomUUID);
+      const eventsFiber = yield* Stream.runCollect(
+        adapter.streamEvents.pipe(
+          Stream.takeUntil(
+            (event) =>
+              event.type === "thread.token-usage.updated" &&
+              event.payload.usage.tokensPerSecond === 12.5,
+          ),
+        ),
+      ).pipe(
+        Effect.map((chunk) => Array.from(chunk)),
+        Effect.timeout("2 seconds"),
+        Effect.forkChild,
+      );
+      yield* adapter.startSession(startInput);
+      yield* adapter.sendTurn({ threadId: THREAD_ID, input: "hi" });
+      yield* fake.offer(THREAD_ID, {
+        type: "message_update",
+        assistantMessageEvent: { type: "text_delta", delta: "hello" },
+      });
+      const events = yield* Fiber.join(eventsFiber);
+      NodeAssert.equal(
+        events.some(
+          (event) =>
+            event.type === "thread.token-usage.updated" &&
+            event.payload.usage.usedTokens === 500 &&
+            event.payload.usage.contextUsedPercent === 5 &&
+            event.payload.usage.tokensPerSecond === 12.5 &&
+            event.payload.usage.queuedMessageCount === 1,
+        ),
         true,
       );
     }),
@@ -559,6 +543,62 @@ describe("OmpAdapter", () => {
     }),
   );
 
+  it.effect("emits turn.aborted after interrupt when agent_end confirms the stop", () =>
+    Effect.gen(function* () {
+      const fake = new FakeOmpRpc();
+      const adapter = new OmpAdapter(fake, testRandomUUID);
+      const eventsFiber = yield* Stream.runCollect(
+        adapter.streamEvents.pipe(
+          Stream.takeUntil(
+            (event) => event.type === "turn.aborted" || event.type === "turn.completed",
+          ),
+        ),
+      ).pipe(
+        Effect.map((chunk) => Array.from(chunk)),
+        Effect.forkChild,
+      );
+      yield* adapter.startSession(startInput);
+      yield* adapter.sendTurn({ threadId: THREAD_ID, input: "hi" });
+      yield* adapter.interruptTurn(THREAD_ID);
+      yield* fake.offer(THREAD_ID, { type: "agent_end", messages: [], isTerminal: true });
+      const events = yield* Fiber.join(eventsFiber);
+      NodeAssert.equal(
+        events.some(
+          (event) => event.type === "turn.aborted" && event.payload.reason === "user_abort",
+        ),
+        true,
+      );
+      NodeAssert.equal(
+        events.some((event) => event.type === "turn.completed"),
+        false,
+      );
+    }),
+  );
+
+  it.effect("emits turn.completed when agent_end arrives without interrupt", () =>
+    Effect.gen(function* () {
+      const fake = new FakeOmpRpc();
+      const adapter = new OmpAdapter(fake, testRandomUUID);
+      const eventsFiber = yield* collectUntilTurnCompleted(adapter.streamEvents).pipe(
+        Effect.forkChild,
+      );
+      yield* adapter.startSession(startInput);
+      yield* adapter.sendTurn({ threadId: THREAD_ID, input: "hi" });
+      yield* fake.offer(THREAD_ID, { type: "agent_end", messages: [], isTerminal: true });
+      const events = yield* Fiber.join(eventsFiber);
+      NodeAssert.equal(
+        events.some(
+          (event) => event.type === "turn.completed" && event.payload.state === "completed",
+        ),
+        true,
+      );
+      NodeAssert.equal(
+        events.some((event) => event.type === "turn.aborted"),
+        false,
+      );
+    }),
+  );
+
   it.effect("interruptTurn fails when the session is missing", () =>
     Effect.gen(function* () {
       const adapter = new OmpAdapter(new FakeOmpRpc(), testRandomUUID);
@@ -579,48 +619,151 @@ describe("OmpAdapter", () => {
     }),
   );
 
-  it.effect("rollbackThread fails as explicit unsupported", () =>
+  it.effect("rollbackThread branches to the selected entryId", () =>
     Effect.gen(function* () {
-      const adapter = new OmpAdapter(new FakeOmpRpc(), testRandomUUID);
+      const fake = new FakeOmpRpc();
+      fake.branchMessages = [
+        { entryId: "e1", text: "first" },
+        { entryId: "e2", text: "second" },
+      ];
+      const adapter = new OmpAdapter(fake, testRandomUUID);
       yield* adapter.startSession(startInput);
-      const exit = yield* Effect.exit(adapter.rollbackThread(THREAD_ID, 1));
-      NodeAssert.equal(Exit.isFailure(exit), true);
-      if (Exit.isFailure(exit)) {
-        const error = Cause.squash(exit.cause);
-        NodeAssert.ok(isProviderAdapterRequestError(error));
-        NodeAssert.match(error.detail, /unsupported/i);
-      }
+      const sentBefore = fake.sent.length;
+      yield* adapter.rollbackThread(THREAD_ID, 1);
+      const commands = fake.sent.slice(sentBefore).map((command) => command.type);
+      NodeAssert.deepEqual(commands, ["get_branch_messages", "branch"]);
+      NodeAssert.equal(fake.sent.at(-1)?.entryId, "e2");
     }),
   );
 
-  it.effect("respondToRequest fails as explicit unsupported until extension_ui_request", () =>
+  it.effect("maps extension_ui_request confirm to request.opened and replies with confirmed", () =>
+    Effect.gen(function* () {
+      const fake = new FakeOmpRpc();
+      const adapter = new OmpAdapter(fake, testRandomUUID);
+      const eventsFiber = yield* Stream.runCollect(
+        adapter.streamEvents.pipe(Stream.takeUntil((event) => event.type === "request.opened")),
+      ).pipe(Effect.timeout("2 seconds"), Effect.forkChild);
+      yield* adapter.startSession(startInput);
+      yield* fake.offer(THREAD_ID, {
+        type: "extension_ui_request",
+        id: "ui-confirm-1",
+        method: "confirm",
+        title: "Allow bash?",
+        message: "Run git status",
+      });
+      const events = yield* Fiber.join(eventsFiber);
+      const opened = events.find((event) => event.type === "request.opened");
+      NodeAssert.ok(opened);
+      NodeAssert.equal(opened.requestId, "ui-confirm-1");
+      NodeAssert.equal(opened.payload.requestType, "command_execution_approval");
+      NodeAssert.match(String(opened.payload.detail ?? ""), /Allow bash/);
+
+      yield* adapter.respondToRequest(THREAD_ID, ApprovalRequestId.make("ui-confirm-1"), "accept");
+      const response = fake.sent.find((command) => command.type === "extension_ui_response");
+      NodeAssert.deepEqual(response, {
+        type: "extension_ui_response",
+        id: "ui-confirm-1",
+        confirmed: true,
+      });
+      yield* adapter.stopSession(THREAD_ID);
+    }),
+  );
+
+  it.effect("maps extension_ui_request input to user-input.requested and replies with value", () =>
+    Effect.gen(function* () {
+      const fake = new FakeOmpRpc();
+      const adapter = new OmpAdapter(fake, testRandomUUID);
+      const eventsFiber = yield* Stream.runCollect(
+        adapter.streamEvents.pipe(
+          Stream.takeUntil((event) => event.type === "user-input.requested"),
+        ),
+      ).pipe(Effect.timeout("2 seconds"), Effect.forkChild);
+      yield* adapter.startSession(startInput);
+      yield* fake.offer(THREAD_ID, {
+        type: "extension_ui_request",
+        id: "ui-input-1",
+        method: "input",
+        title: "Paste login code",
+        placeholder: "one-time code",
+      });
+      const events = yield* Fiber.join(eventsFiber);
+      const requested = events.find((event) => event.type === "user-input.requested");
+      NodeAssert.ok(requested);
+      NodeAssert.equal(requested.requestId, "ui-input-1");
+      NodeAssert.equal(requested.payload.questions[0]?.header, "Paste login code");
+      NodeAssert.equal(requested.payload.questions[0]?.options.length, 0);
+
+      // Must not auto-cancel paste/input prompts.
+      NodeAssert.equal(
+        fake.sent.some(
+          (command) => command.type === "extension_ui_response" && command.cancelled === true,
+        ),
+        false,
+      );
+
+      yield* adapter.respondToUserInput(THREAD_ID, ApprovalRequestId.make("ui-input-1"), {
+        input: "abc-123",
+      });
+      const response = fake.sent.find((command) => command.type === "extension_ui_response");
+      NodeAssert.deepEqual(response, {
+        type: "extension_ui_response",
+        id: "ui-input-1",
+        value: "abc-123",
+      });
+      yield* adapter.stopSession(THREAD_ID);
+    }),
+  );
+
+  it.effect("maps extension_ui_request select options into user-input questions", () =>
+    Effect.gen(function* () {
+      const fake = new FakeOmpRpc();
+      const adapter = new OmpAdapter(fake, testRandomUUID);
+      const eventsFiber = yield* Stream.runCollect(
+        adapter.streamEvents.pipe(
+          Stream.takeUntil((event) => event.type === "user-input.requested"),
+        ),
+      ).pipe(Effect.timeout("2 seconds"), Effect.forkChild);
+      yield* adapter.startSession(startInput);
+      yield* fake.offer(THREAD_ID, {
+        type: "extension_ui_request",
+        id: "ui-select-1",
+        method: "select",
+        title: "Pick provider",
+        options: ["openai", "anthropic"],
+      });
+      const events = yield* Fiber.join(eventsFiber);
+      const requested = events.find((event) => event.type === "user-input.requested");
+      NodeAssert.ok(requested);
+      NodeAssert.deepEqual(
+        requested.payload.questions[0]?.options.map((option) => option.label),
+        ["openai", "anthropic"],
+      );
+
+      yield* adapter.respondToUserInput(THREAD_ID, ApprovalRequestId.make("ui-select-1"), {
+        choice: "anthropic",
+      });
+      const response = fake.sent.find((command) => command.type === "extension_ui_response");
+      NodeAssert.deepEqual(response, {
+        type: "extension_ui_response",
+        id: "ui-select-1",
+        value: "anthropic",
+      });
+      yield* adapter.stopSession(THREAD_ID);
+    }),
+  );
+
+  it.effect("respondToRequest without a pending confirm fails clearly", () =>
     Effect.gen(function* () {
       const adapter = new OmpAdapter(new FakeOmpRpc(), testRandomUUID);
       yield* adapter.startSession(startInput);
       const exit = yield* Effect.exit(
-        adapter.respondToRequest(THREAD_ID, ApprovalRequestId.make("req-1"), "accept"),
+        adapter.respondToRequest(THREAD_ID, ApprovalRequestId.make("missing"), "accept"),
       );
       NodeAssert.equal(Exit.isFailure(exit), true);
       if (Exit.isFailure(exit)) {
         const error = Cause.squash(exit.cause);
         NodeAssert.ok(isProviderAdapterRequestError(error));
-        NodeAssert.match(error.detail, /unsupported/i);
-      }
-    }),
-  );
-
-  it.effect("respondToUserInput fails as explicit unsupported until extension_ui_request", () =>
-    Effect.gen(function* () {
-      const adapter = new OmpAdapter(new FakeOmpRpc(), testRandomUUID);
-      yield* adapter.startSession(startInput);
-      const exit = yield* Effect.exit(
-        adapter.respondToUserInput(THREAD_ID, ApprovalRequestId.make("req-1"), {}),
-      );
-      NodeAssert.equal(Exit.isFailure(exit), true);
-      if (Exit.isFailure(exit)) {
-        const error = Cause.squash(exit.cause);
-        NodeAssert.ok(isProviderAdapterRequestError(error));
-        NodeAssert.match(error.detail, /unsupported/i);
+        NodeAssert.match(error.detail, /no pending/i);
       }
     }),
   );
@@ -644,6 +787,33 @@ describe("OmpAdapter", () => {
         ],
       );
     }),
+  );
+
+  it.effect(
+    "discoverSlashCommands maps get_available_commands into ServerProviderSlashCommand",
+    () =>
+      Effect.gen(function* () {
+        const fake = new FakeOmpRpc();
+        fake.availableCommands = [
+          { name: "model", description: "Switch model", input: { hint: "provider/model" } },
+          { name: "review", description: "Review changes" },
+          { name: "vibe", description: "Enter vibe mode" },
+        ];
+        const adapter = new OmpAdapter(fake, testRandomUUID);
+        yield* adapter.startSession(startInput);
+        const commands = yield* adapter.discoverSlashCommands(THREAD_ID);
+        NodeAssert.equal(fake.sent.at(-1)?.type, "get_available_commands");
+        NodeAssert.deepEqual(commands, [
+          {
+            name: "model",
+            description: "Switch model",
+            input: { hint: "provider/model" },
+          },
+          { name: "review", description: "Review changes" },
+          { name: "vibe", description: "Enter vibe mode" },
+        ]);
+        yield* adapter.stopSession(THREAD_ID);
+      }),
   );
 
   it.effect("listLoginProviders maps get_login_providers", () =>
@@ -703,6 +873,78 @@ describe("OmpAdapter", () => {
       );
       NodeAssert.equal(turnCommands[0]?.provider, "openai");
       NodeAssert.equal(turnCommands[0]?.modelId, "gpt-5");
+    }),
+  );
+
+  it.effect("sendTurn plan mode switches to the plan-role model then restores on default", () =>
+    Effect.gen(function* () {
+      const fake = new FakeOmpRpc();
+      fake.stateModel = { provider: "openai", id: "gpt-5" };
+      const adapter = new OmpAdapter(fake, testRandomUUID, {
+        resolveRoleModel: (role) =>
+          Effect.succeed(role === "plan" ? "anthropic/claude-plan" : undefined),
+      });
+      yield* adapter.startSession(startInput);
+
+      const enterPlanFrom = fake.sent.length;
+      yield* adapter.sendTurn({
+        threadId: THREAD_ID,
+        input: "design it",
+        interactionMode: "plan",
+      });
+      const enterPlanCommands = fake.sent.slice(enterPlanFrom);
+      NodeAssert.deepEqual(
+        enterPlanCommands.map((command) => command.type),
+        ["get_state", "set_model", "prompt"],
+      );
+      NodeAssert.equal(enterPlanCommands[1]?.provider, "anthropic");
+      NodeAssert.equal(enterPlanCommands[1]?.modelId, "claude-plan");
+
+      const exitPlanFrom = fake.sent.length;
+      yield* adapter.sendTurn({
+        threadId: THREAD_ID,
+        input: "build it",
+        interactionMode: "default",
+      });
+      const exitPlanCommands = fake.sent.slice(exitPlanFrom);
+      NodeAssert.deepEqual(
+        exitPlanCommands.map((command) => command.type),
+        ["set_model", "prompt"],
+      );
+      NodeAssert.equal(exitPlanCommands[0]?.provider, "openai");
+      NodeAssert.equal(exitPlanCommands[0]?.modelId, "gpt-5");
+    }),
+  );
+
+  it.effect("sendTurn plan mode skips modelSelection while plan role is active", () =>
+    Effect.gen(function* () {
+      const fake = new FakeOmpRpc();
+      fake.stateModel = { provider: "openai", id: "gpt-5" };
+      const adapter = new OmpAdapter(fake, testRandomUUID, {
+        resolveRoleModel: (role) =>
+          Effect.succeed(role === "plan" ? "anthropic/claude-plan" : undefined),
+      });
+      yield* adapter.startSession(startInput);
+      yield* adapter.sendTurn({
+        threadId: THREAD_ID,
+        input: "design it",
+        interactionMode: "plan",
+      });
+      const stayingInPlanFrom = fake.sent.length;
+      yield* adapter.sendTurn({
+        threadId: THREAD_ID,
+        input: "more plan",
+        interactionMode: "plan",
+        modelSelection: {
+          instanceId: ProviderInstanceId.make("omp"),
+          model: "openai/gpt-4o",
+        },
+      });
+      const stayingInPlanCommands = fake.sent.slice(stayingInPlanFrom);
+      NodeAssert.deepEqual(
+        stayingInPlanCommands.map((command) => command.type),
+        ["prompt"],
+      );
     }),
   );
 
@@ -850,6 +1092,131 @@ describe("OmpAdapter", () => {
       const completed = events.find((event) => event.type === "task.completed");
       NodeAssert.equal(completed?.payload.taskId, RuntimeTaskId.make("agent-2"));
       NodeAssert.equal(completed?.payload.status, "stopped");
+    }),
+  );
+
+  it.effect("fetchSubagentTranscript sends get_subagent_messages", () =>
+    Effect.gen(function* () {
+      const fake = new FakeOmpRpc();
+      fake.subagentMessages = {
+        sessionFile: "/tmp/sub.jsonl",
+        fromByte: 0,
+        nextByte: 42,
+        reset: false,
+        messages: [{ role: "assistant", content: "nested" }],
+      };
+      const adapter = new OmpAdapter(fake, testRandomUUID);
+      yield* adapter.startSession(startInput);
+      const sentBefore = fake.sent.length;
+      const page = yield* adapter.fetchSubagentTranscript(THREAD_ID, "agent-1", 10);
+      NodeAssert.deepEqual(
+        fake.sent.slice(sentBefore).map((command) => command.type),
+        ["get_subagent_messages"],
+      );
+      NodeAssert.equal(fake.sent.at(-1)?.subagentId, "agent-1");
+      NodeAssert.equal(fake.sent.at(-1)?.fromByte, 10);
+      NodeAssert.equal(page.sessionFile, "/tmp/sub.jsonl");
+      NodeAssert.equal(page.nextByte, 42);
+      NodeAssert.equal(page.messages.length, 1);
+    }),
+  );
+
+  it.effect("steerSession sends steer", () =>
+    Effect.gen(function* () {
+      const fake = new FakeOmpRpc();
+      const adapter = new OmpAdapter(fake, testRandomUUID);
+      yield* adapter.startSession(startInput);
+      const sentBefore = fake.sent.length;
+      yield* adapter.steerSession(THREAD_ID, "focus on tests");
+      NodeAssert.deepEqual(
+        fake.sent.slice(sentBefore).map((command) => command.type),
+        ["steer"],
+      );
+      NodeAssert.equal(fake.sent.at(-1)?.message, "focus on tests");
+    }),
+  );
+
+  it.effect("setSubagentSubscription sends set_subagent_subscription", () =>
+    Effect.gen(function* () {
+      const fake = new FakeOmpRpc();
+      const adapter = new OmpAdapter(fake, testRandomUUID);
+      yield* adapter.startSession(startInput);
+      const sentBefore = fake.sent.length;
+      yield* adapter.setSubagentSubscription(THREAD_ID, "events");
+      NodeAssert.deepEqual(
+        fake.sent.slice(sentBefore).map((command) => command.type),
+        ["set_subagent_subscription"],
+      );
+      NodeAssert.equal(fake.sent.at(-1)?.level, "events");
+    }),
+  );
+
+  it.effect("sendTurn applies thinking and fastMode options before prompt", () =>
+    Effect.gen(function* () {
+      const fake = new FakeOmpRpc();
+      const adapter = new OmpAdapter(fake, testRandomUUID);
+      yield* adapter.startSession(startInput);
+      const sentBefore = fake.sent.length;
+      yield* adapter.sendTurn({
+        threadId: THREAD_ID,
+        input: "hi",
+        modelSelection: {
+          instanceId: ProviderInstanceId.make("omp"),
+          model: "openai/gpt-5",
+          options: [
+            { id: "effort", value: "high" },
+            { id: "fastMode", value: true },
+          ],
+        },
+      });
+      NodeAssert.deepEqual(
+        fake.sent.slice(sentBefore).map((command) => command.type),
+        ["set_model", "set_thinking_level", "set_fast_mode", "prompt"],
+      );
+      NodeAssert.equal(fake.sent.slice(sentBefore)[1]?.level, "high");
+      NodeAssert.equal(fake.sent.slice(sentBefore)[2]?.enabled, true);
+    }),
+  );
+
+  it.effect("compact and auto toggles send omp RPC", () =>
+    Effect.gen(function* () {
+      const fake = new FakeOmpRpc();
+      const adapter = new OmpAdapter(fake, testRandomUUID);
+      yield* adapter.startSession(startInput);
+      const sentBefore = fake.sent.length;
+      yield* adapter.setAutoCompaction(THREAD_ID, true);
+      yield* adapter.setAutoRetry(THREAD_ID, false);
+      yield* adapter.compact(THREAD_ID, "keep tests");
+      NodeAssert.deepEqual(
+        fake.sent.slice(sentBefore).map((command) => command.type),
+        ["set_auto_compaction", "set_auto_retry", "compact"],
+      );
+    }),
+  );
+
+  it.effect("maps host_uri_request write to request.opened and accepts via host_uri_result", () =>
+    Effect.gen(function* () {
+      const fake = new FakeOmpRpc();
+      const adapter = new OmpAdapter(fake, testRandomUUID);
+      const eventsFiber = yield* Stream.runCollect(
+        adapter.streamEvents.pipe(Stream.takeUntil((event) => event.type === "request.opened")),
+      ).pipe(Effect.timeout("2 seconds"), Effect.forkChild);
+      yield* adapter.startSession(startInput);
+      yield* fake.offer(THREAD_ID, {
+        type: "host_uri_request",
+        id: "uri-1",
+        operation: "write",
+        url: "edit://file.ts",
+        content: "new",
+      });
+      const events = yield* Fiber.join(eventsFiber);
+      const opened = events.find((event) => event.type === "request.opened");
+      NodeAssert.ok(opened);
+      NodeAssert.equal(opened?.payload.requestType, "file_change_approval");
+      yield* adapter.respondToRequest(THREAD_ID, ApprovalRequestId.make("uri-1"), "accept");
+      const result = fake.sent.find((command) => command.type === "host_uri_result");
+      NodeAssert.equal(result?.id, "uri-1");
+      NodeAssert.equal(result?.isError, undefined);
     }),
   );
 });

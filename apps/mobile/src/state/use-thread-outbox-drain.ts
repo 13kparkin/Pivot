@@ -26,6 +26,7 @@ import {
   ensureThreadOutboxLoaded,
   removeThreadOutboxMessage,
 } from "./thread-outbox";
+import { holdThreadOutboxDrain, isThreadOutboxDrainHeld } from "./thread-outbox-interrupt-hold";
 import {
   isQueuedThreadCreationSendable,
   modelSelectionsEqual,
@@ -107,6 +108,7 @@ export function useThreadOutboxDrain(): void {
   const retryAttemptRef = useRef(new Map<MessageId, number>());
   const retryNotBeforeRef = useRef(new Map<MessageId, number>());
   const retryTimersRef = useRef(new Map<MessageId, ReturnType<typeof setTimeout>>());
+  const previousThreadBusyRef = useRef(new Map<string, boolean>());
 
   useEffect(() => {
     ensureThreadOutboxLoaded();
@@ -309,14 +311,28 @@ export function useThreadOutboxDrain(): void {
         (candidate) => candidate.environmentId === nextQueuedMessage.environmentId,
       );
       const shellStatus = shellStatuses.get(nextQueuedMessage.environmentId) ?? "empty";
+      const threadBusy =
+        thread?.session?.status === "running" || thread?.session?.status === "starting";
+      const wasBusy = previousThreadBusyRef.current.get(threadKey) ?? false;
+      previousThreadBusyRef.current.set(threadKey, threadBusy);
+      if (wasBusy && !threadBusy && thread?.latestTurn?.state === "interrupted") {
+        holdThreadOutboxDrain(threadKey);
+      }
       const deliveryAction = resolveThreadOutboxDeliveryAction({
         isCreation: creation !== undefined,
         threadExists: thread !== undefined,
         shellStatus,
         environmentConnected: environment?.connectionState === "connected",
-        threadBusy: thread?.session?.status === "running" || thread?.session?.status === "starting",
+        threadBusy,
       });
       if (deliveryAction === "wait") {
+        continue;
+      }
+      if (
+        creation === undefined &&
+        deliveryAction === "send" &&
+        isThreadOutboxDrainHeld(threadKey)
+      ) {
         continue;
       }
       // The live project shell is preferred for the workspace path, with the

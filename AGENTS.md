@@ -101,10 +101,19 @@ An empty database is a bad test. Seed your worktree's `.t3` with a copy of real 
 - Bring `secrets` and `settings.json` only if the flow under test needs them.
 - Copy in, never symlink. Data flows one way: into your sandbox, never back out.
 
+## Git hooks
+
+`prepare` installs Vite+ hooks under `.vite-hooks` (`vp config --no-agent`).
+
+- **pre-commit** — `vp staged` → `vp check --fix` on staged files (format + lint).
+- **pre-push** — full `vp check`, then `vpr typecheck`.
+
+Bypass for a single command: `VP_GIT_HOOKS=0 git commit` / `VP_GIT_HOOKS=0 git push`. Prefer fixing the failure over bypassing.
+
 ## Verifying
 
 - Smallest proof that the change works. `vp test run <files>` for the tests you touched, targeted lint and typecheck for the scope you changed.
-- **Do not run repo-wide checks.** No `vp check`, no `vp run -r test`, no `vp run -r typecheck` unless I ask. CI owns the full suite.
+- **Do not run repo-wide checks.** No `vp check`, no `vp run -r test`, no `vp run -r typecheck` unless I ask. CI owns the full suite. Hooks still run on commit/push unless `VP_GIT_HOOKS=0`.
 - Backend behavior changes ship with focused tests for that behavior.
 - The server is event-sourced and its async flows emit typed receipts. Wait on receipts and worker drains, never on sleeps or polling. A test that needs a timeout to pass is wrong.
 - Upon request, user-visible frontend changes should get one integrated pass in a real client: `test-t3-app` for web, `test-t3-mobile` for mobile. The primary agent does this once after integrating. Subagents do not launch their own dev servers. Ask permission before doing computer use or spinning up browsers.

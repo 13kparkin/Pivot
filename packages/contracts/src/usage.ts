@@ -1,11 +1,10 @@
 /**
  * Usage reporting contract.
  *
- * Each environment scans the provider CLIs' own on-disk session transcripts
- * (`~/.claude/projects/**\/*.jsonl`, `~/.codex/sessions/**\/*.jsonl`) rather than
- * relying on T3 Code's own orchestration projections, so usage stays complete
- * even for turns that were never driven through T3 Code. This mirrors the
- * approach `ccusage` takes.
+ * Each environment scans the provider CLI's own on-disk session transcripts
+ * (`$OMP_HOME/agent/sessions/**\/*.jsonl`, default `~/.omp/agent/sessions`)
+ * rather than relying on T3 Code's own orchestration projections, so usage
+ * stays complete even for turns that were never driven through T3 Code.
  *
  * Environments return pre-aggregated `(day, hourStart?, provider, model)`
  * buckets. Raw transcript records never cross the wire.
@@ -21,9 +20,9 @@ import { NonNegativeInt, TrimmedNonEmptyString } from "./baseSchemas.ts";
  * client renders partial coverage when an environment reports an older version
  * rather than failing the whole page.
  */
-export const USAGE_CONTRACT_VERSION = 4 as const;
+export const USAGE_CONTRACT_VERSION = 6 as const;
 
-export const UsageProviderKind = Schema.Literals(["claude", "codex"]);
+export const UsageProviderKind = Schema.Literals(["omp", "claude", "codex"]);
 export type UsageProviderKind = typeof UsageProviderKind.Type;
 
 /**
@@ -179,6 +178,33 @@ export const UsageSummaryInput = Schema.Struct({
 });
 export type UsageSummaryInput = typeof UsageSummaryInput.Type;
 
+/**
+ * One plan/quota window from `omp usage` (subscription capacity, not token
+ * history). Example: openai-codex Plus 7d window at 41% used / 59% remaining.
+ */
+export const UsagePlanLimit = Schema.Struct({
+  id: TrimmedNonEmptyString,
+  label: TrimmedNonEmptyString,
+  windowLabel: TrimmedNonEmptyString,
+  resetsAtMs: Schema.optional(Schema.Number),
+  used: Schema.Number,
+  limit: Schema.optional(Schema.Number),
+  remaining: Schema.optional(Schema.Number),
+  usedFraction: Schema.optional(Schema.Number),
+  remainingFraction: Schema.optional(Schema.Number),
+  unit: TrimmedNonEmptyString,
+  status: TrimmedNonEmptyString,
+});
+export type UsagePlanLimit = typeof UsagePlanLimit.Type;
+
+/** Live plan report for one authenticated omp upstream provider. */
+export const UsagePlanProvider = Schema.Struct({
+  provider: TrimmedNonEmptyString,
+  planType: Schema.optional(TrimmedNonEmptyString),
+  limits: Schema.Array(UsagePlanLimit),
+});
+export type UsagePlanProvider = typeof UsagePlanProvider.Type;
+
 export const UsageSummary = Schema.Struct({
   contractVersion: Schema.Number,
   readAt: Schema.String,
@@ -190,6 +216,11 @@ export const UsageSummary = Schema.Struct({
   pricing: UsagePricing,
   /** Wall-clock cost of the scan, surfaced in diagnostics. */
   scanDurationMs: NonNegativeInt,
+  /**
+   * Live subscription/plan limits from `omp usage` (used/remaining per
+   * upstream provider). Absent/empty when omp is unavailable or reports nothing.
+   */
+  planProviders: Schema.optional(Schema.Array(UsagePlanProvider)),
 });
 export type UsageSummary = typeof UsageSummary.Type;
 

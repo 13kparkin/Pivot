@@ -255,6 +255,48 @@ describe("mergeUsage", () => {
     expect(merged.costUsd).toBe(0);
     expect(merged.daily).toHaveLength(0);
     expect(merged.hourly).toHaveLength(0);
+    expect(merged.planProviders).toEqual([]);
+  });
+
+  it("keeps planProviders from the first environment that reported them", () => {
+    const planProviders = [
+      {
+        provider: "openai-codex",
+        planType: "plus",
+        limits: [
+          {
+            id: "openai-codex:primary",
+            label: "7 days",
+            windowLabel: "7 days",
+            used: 41,
+            remaining: 59,
+            usedFraction: 0.41,
+            remainingFraction: 0.59,
+            unit: "percent",
+            status: "ok",
+          },
+        ],
+      },
+    ];
+    const withPlans = summary(
+      [bucket()],
+      [{ provider: "omp", hostId: "mac", homePath: "/a/.omp" }],
+    );
+    const merged = mergeUsage(
+      [
+        environment("env-a", { ...withPlans, planProviders }),
+        environment(
+          "env-b",
+          summary(
+            [bucket({ costUsd: 1 })],
+            [{ provider: "omp", hostId: "linux", homePath: "/b/.omp" }],
+          ),
+        ),
+      ],
+      USAGE_CONTRACT_VERSION,
+    );
+
+    expect(merged.planProviders).toEqual(planProviders);
   });
 
   it("derives hourly totals without losing the daily rollup", () => {

@@ -59,6 +59,8 @@ import * as ServerConfig from "../../config.ts";
 import * as ServerSettings from "../../serverSettings.ts";
 import * as AnalyticsService from "../../telemetry/AnalyticsService.ts";
 import { makeAdapterRegistryMock } from "../testUtils/providerAdapterRegistryMock.ts";
+import { FakeOmpRpc } from "../omp/FakeOmpRpc.ts";
+import { OmpAdapter } from "../omp/OmpAdapter.ts";
 
 const defaultServerSettingsLayer = ServerSettings.ServerSettingsService.layerTest();
 const serverConfigTestLayer = ServerConfig.layerTest(process.cwd(), process.cwd()).pipe(
@@ -70,8 +72,10 @@ const asEventId = (value: string): EventId => EventId.make(value);
 const asThreadId = (value: string): ThreadId => ThreadId.make(value);
 const asTurnId = (value: string): TurnId => TurnId.make(value);
 const codexInstanceId = ProviderInstanceId.make("codex");
+const ompInstanceId = ProviderInstanceId.make("omp");
 const claudeAgentInstanceId = ProviderInstanceId.make("claudeAgent");
 const CODEX_DRIVER = ProviderDriverKind.make("codex");
+const OMP_DRIVER = ProviderDriverKind.make("omp");
 const CLAUDE_AGENT_DRIVER = ProviderDriverKind.make("claudeAgent");
 const CURSOR_DRIVER = ProviderDriverKind.make("cursor");
 
@@ -1954,6 +1958,181 @@ validation.layer("ProviderServiceLive validation", (it) => {
       if (Option.isSome(runtime)) {
         assert.equal(runtime.value.threadId, session.threadId);
       }
+    }),
+  );
+});
+
+function makeOmpHubProviderServiceLayer() {
+  let nextTestUuid = 0;
+  const testRandomUUID = Effect.sync(() => {
+    nextTestUuid += 1;
+    return `00000000-0000-4000-8000-${String(nextTestUuid).padStart(12, "0")}`;
+  });
+  const fakeRpc = new FakeOmpRpc();
+  const ompAdapter = new OmpAdapter(fakeRpc, testRandomUUID);
+  const codex = makeFakeCodexAdapter();
+  const registry = makeAdapterRegistryMock({
+    [OMP_DRIVER]: ompAdapter as ProviderAdapterShape<ProviderAdapterError>,
+    [CODEX_DRIVER]: codex.adapter,
+  });
+
+  const providerAdapterLayer = Layer.succeed(
+    ProviderAdapterRegistry.ProviderAdapterRegistry,
+    registry,
+  );
+  const runtimeRepositoryLayer = ProviderSessionRuntime.layer.pipe(
+    Layer.provide(SqlitePersistenceMemory),
+  );
+  const directoryLayer = ProviderSessionDirectoryLive.pipe(Layer.provide(runtimeRepositoryLayer));
+
+  const layer = it.layer(
+    Layer.mergeAll(
+      makeProviderServiceLive().pipe(
+        Layer.provide(providerAdapterLayer),
+        Layer.provide(directoryLayer),
+        Layer.provide(defaultServerSettingsLayer),
+        Layer.provide(serverConfigTestLayer),
+        Layer.provideMerge(AnalyticsService.layerTest),
+        Layer.provide(
+          Layer.succeed(
+            ProviderEventLoggers.ProviderEventLoggers,
+            ProviderEventLoggers.NoOpProviderEventLoggers,
+          ),
+        ),
+      ),
+      directoryLayer,
+      runtimeRepositoryLayer,
+      NodeServices.layer,
+    ),
+  );
+
+  return { fakeRpc, ompAdapter, codex, layer };
+}
+
+const ompHub = makeOmpHubProviderServiceLayer();
+
+ompHub.layer("ProviderService omp hub", (it) => {
+  it.effect("forwards get/steer/subscribe hub calls to OmpAdapter", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService.ProviderService;
+      const threadId = asThreadId("thread-omp-hub");
+      ompHub.fakeRpc.subagentMessages = {
+        sessionFile: "/tmp/sub.jsonl",
+        fromByte: 10,
+        nextByte: 42,
+        reset: false,
+        messages: [{ role: "assistant", content: "nested" }],
+      };
+
+      yield* provider.startSession(threadId, {
+        provider: OMP_DRIVER,
+        providerInstanceId: ompInstanceId,
+        threadId,
+        cwd: "/tmp/omp-project",
+        runtimeMode: "full-access",
+      });
+      const sentBefore = ompHub.fakeRpc.sent.length;
+
+      const page = yield* provider.ompGetSubagentMessages({
+        threadId,
+        subagentId: "agent-1",
+        fromByte: 10,
+      });
+      yield* provider.ompSteer({ threadId, message: "focus on tests" });
+      const subscription = yield* provider.ompSetSubagentSubscription({
+        threadId,
+        level: "events",
+      });
+
+      assert.equal(page.sessionFile, "/tmp/sub.jsonl");
+      assert.equal(page.nextByte, 42);
+      assert.equal(page.messages.length, 1);
+      assert.deepEqual(subscription, { level: "events" });
+      assert.deepEqual(
+        ompHub.fakeRpc.sent.slice(sentBefore).map((command) => command.type),
+        ["get_subagent_messages", "steer", "set_subagent_subscription"],
+      );
+      assert.equal(ompHub.fakeRpc.sent.at(-2)?.message, "focus on tests");
+      assert.equal(ompHub.fakeRpc.sent.at(-1)?.level, "events");
+    }),
+  );
+
+  it.effect("rejects hub calls for non-omp sessions", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService.ProviderService;
+      const threadId = asThreadId("thread-codex-hub");
+
+      yield* provider.startSession(threadId, {
+        provider: CODEX_DRIVER,
+        providerInstanceId: codexInstanceId,
+        threadId,
+        cwd: "/tmp/project",
+        runtimeMode: "full-access",
+      });
+
+      const failure = yield* Effect.result(
+        provider.ompSteer({ threadId, message: "should not route" }),
+      );
+      assert.equal(failure._tag, "Failure");
+      if (failure._tag !== "Failure") {
+        return;
+      }
+      assert.instanceOf(failure.failure, ProviderValidationError);
+      assert.equal(
+        failure.failure.issue.includes("requires an omp session"),
+        true,
+        failure.failure.issue,
+      );
+    }),
+  );
+
+  it.effect("rejects hub calls when no persisted binding exists", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService.ProviderService;
+      const failure = yield* Effect.result(
+        provider.ompGetSubagentMessages({
+          threadId: asThreadId("thread-unbound"),
+          subagentId: "agent-1",
+        }),
+      );
+      assert.equal(failure._tag, "Failure");
+      if (failure._tag !== "Failure") {
+        return;
+      }
+      assert.instanceOf(failure.failure, ProviderValidationError);
+      assert.equal(
+        failure.failure.issue.includes("no persisted provider binding"),
+        true,
+        failure.failure.issue,
+      );
+    }),
+  );
+
+  it.effect("recovers a stale omp session before hub calls", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService.ProviderService;
+      const threadId = asThreadId("thread-omp-recover");
+
+      yield* provider.startSession(threadId, {
+        provider: OMP_DRIVER,
+        providerInstanceId: ompInstanceId,
+        threadId,
+        cwd: "/tmp/omp-recover",
+        runtimeMode: "full-access",
+      });
+      yield* ompHub.ompAdapter.stopSession(threadId);
+      assert.equal(yield* ompHub.ompAdapter.hasSession(threadId), false);
+      const sentBefore = ompHub.fakeRpc.sent.length;
+
+      yield* provider.ompSteer({ threadId, message: "after recovery" });
+
+      const sentAfter = ompHub.fakeRpc.sent.slice(sentBefore);
+      assert.equal(
+        sentAfter.some((command) => command.type === "steer"),
+        true,
+      );
+      assert.equal(yield* ompHub.ompAdapter.hasSession(threadId), true);
+      assert.equal(sentAfter.at(-1)?.message, "after recovery");
     }),
   );
 });

@@ -19,6 +19,8 @@ interface ComposerPrimaryActionsProps {
   compact: boolean;
   pendingAction: PendingActionState | null;
   isRunning: boolean;
+  /** Stop requested; waiting for the provider to confirm the turn ended. */
+  isStopping?: boolean;
   showPlanFollowUpPrompt: boolean;
   promptHasText: boolean;
   isSendBusy: boolean;
@@ -59,6 +61,7 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
   compact,
   pendingAction,
   isRunning,
+  isStopping = false,
   showPlanFollowUpPrompt,
   promptHasText,
   isSendBusy,
@@ -87,14 +90,21 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
       className={cn(
         "flex cursor-pointer items-center justify-center rounded-full bg-destructive/90 text-white shadow-xs shadow-destructive/24 inset-shadow-[0_1px_--theme(--color-white/16%)] transition-all duration-150 hover:bg-destructive hover:scale-105 active:inset-shadow-[0_1px_--theme(--color-black/8%)] active:shadow-none",
         insidePendingAction ? "size-8 sm:size-7" : "size-8 sm:h-8 sm:w-8",
+        isStopping && "pointer-events-none opacity-80",
       )}
       {...pointerFocusProps}
       onClick={onInterrupt}
-      aria-label="Stop generation"
+      disabled={isStopping}
+      aria-label={isStopping ? "Stopping" : "Stop generation"}
+      aria-busy={isStopping}
     >
-      <svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor" aria-hidden="true">
-        <rect x="2" y="2" width="8" height="8" rx="1.5" />
-      </svg>
+      {isStopping ? (
+        <Spinner className="size-3.5" aria-hidden="true" />
+      ) : (
+        <svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor" aria-hidden="true">
+          <rect x="2" y="2" width="8" height="8" rx="1.5" />
+        </svg>
+      )}
     </button>
   );
 
@@ -153,8 +163,27 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
     );
   }
 
-  if (isRunning) {
-    return renderStopGenerationButton(false);
+  if (isRunning || isStopping) {
+    return (
+      <div className={cn("flex items-center justify-end", compact ? "gap-1.5" : "gap-2")}>
+        {renderStopGenerationButton(false)}
+        {hasSendableContent && !isStopping ? (
+          <Button
+            type="submit"
+            size="sm"
+            className={cn(
+              "rounded-full bg-message-action text-message-action-foreground hover:bg-message-action-hover",
+              compact ? "h-9 px-3 sm:h-8" : "h-9 px-4 sm:h-8",
+            )}
+            {...pointerFocusProps}
+            disabled={isSendBusy || isSendDisabled || isConnecting || isEnvironmentUnavailable}
+            aria-label="Queue follow-up message"
+          >
+            Queue
+          </Button>
+        ) : null}
+      </div>
+    );
   }
 
   if (showPlanFollowUpPrompt) {

@@ -184,6 +184,9 @@ describe("ProviderSessionReaper", () => {
         });
       },
       rollbackConversation: () => unsupported(),
+      ompGetSubagentMessages: () => unsupported(),
+      ompSteer: () => unsupported(),
+      ompSetSubagentSubscription: () => unsupported(),
       streamEvents: Stream.empty,
     };
 

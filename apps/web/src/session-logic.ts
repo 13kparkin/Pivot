@@ -1598,14 +1598,12 @@ export function inferCheckpointTurnCountByTurnId(
 }
 
 export function derivePhase(session: ThreadSession | null): SessionPhase {
-  if (
-    !session ||
-    session.status === "stopped" ||
-    session.status === "interrupted" ||
-    session.status === "error"
-  ) {
+  if (!session || session.status === "stopped" || session.status === "error") {
     return "disconnected";
   }
+  // Confirmed stop leaves the session "interrupted"; that is idle for send,
+  // not a dead connection.
+  if (session.status === "interrupted") return "ready";
   if (session.status === "starting") return "connecting";
   if (session.status === "running") return "running";
   return "ready";

@@ -9,6 +9,7 @@
 import type {
   EnvironmentId,
   UsageBucket,
+  UsagePlanProvider,
   UsageProviderKind,
   UsageSourceFingerprint,
   UsageSummary,
@@ -79,6 +80,11 @@ export interface MergedUsage {
   readonly duplicateSources: readonly string[];
   readonly contributingEnvironments: readonly EnvironmentId[];
   readonly staleEnvironments: readonly EnvironmentId[];
+  /**
+   * Live omp plan/quota reports (used/remaining). Taken from the first
+   * environment that reported any, since plans are host-local credentials.
+   */
+  readonly planProviders: readonly UsagePlanProvider[];
 }
 
 /**
@@ -187,6 +193,7 @@ const EMPTY_MERGED: MergedUsage = {
   duplicateSources: [],
   contributingEnvironments: [],
   staleEnvironments: [],
+  planProviders: [],
 };
 
 /**
@@ -253,8 +260,12 @@ export function mergeUsage(
     }
   >();
   const contributingEnvironments: EnvironmentId[] = [];
+  let planProviders: readonly UsagePlanProvider[] = [];
 
   for (const environment of current) {
+    if (planProviders.length === 0 && (environment.summary.planProviders?.length ?? 0) > 0) {
+      planProviders = environment.summary.planProviders ?? [];
+    }
     const { buckets, sessions: environmentSessions } = ownedContribution(
       environment,
       ownerByFingerprint,
@@ -394,5 +405,6 @@ export function mergeUsage(
     duplicateSources: duplicates,
     contributingEnvironments,
     staleEnvironments,
+    planProviders,
   };
 }

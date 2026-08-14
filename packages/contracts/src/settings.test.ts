@@ -299,6 +299,18 @@ describe("OmpSettings", () => {
     expect(decodeServerSettings({}).providers.omp.binaryPath).toBe("omp");
   });
 
+  it("defaults role, advisor, memory, and tool fields", () => {
+    const decoded = decodeOmpSettings({});
+    expect(decoded.rolePlan).toBe("");
+    expect(decoded.roleDefault).toBe("");
+    expect(decoded.autoCompactionEnabled).toBe(false);
+    expect(decoded.autoRetryEnabled).toBe(false);
+    expect(decoded.advisorEnabled).toBe(false);
+    expect(decoded.memoryBackend).toBe("");
+    expect(decoded.toolGithubEnabled).toBe(false);
+    expect(decoded.toolSecurityScanEnabled).toBe(false);
+  });
+
   it("accepts a configured omp binary path", () => {
     expect(decodeOmpSettings({ binaryPath: "/opt/omp" }).binaryPath).toBe("/opt/omp");
     const patch = decodeServerSettingsPatch({

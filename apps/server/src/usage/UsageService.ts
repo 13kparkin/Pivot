@@ -1,15 +1,16 @@
 /**
  * UsageService - priced usage buckets for the usage page.
  *
- * Pivot is omp-native: live thread chrome uses `thread.token-usage.updated`
- * from omp `get_state.contextUsage`. Full Cursor-like transcript/stats fidelity
- * is deferred to omp-usage-fidelity; this service no longer scans removed
- * Claude/Codex home transcripts.
+ * Scans omp on-disk session transcripts under `$OMP_HOME/agent/sessions`
+ * (recursive `.jsonl`) and prices buckets with LiteLLM rates (preferring
+ * omp-reported cost when present). Live thread chrome still uses
+ * `thread.token-usage.updated`.
  *
  * @module UsageService
  */
 import * as NodeOS from "node:os";
 
+import * as NodeChildProcessSpawner from "@effect/platform-node/NodeChildProcessSpawner";
 import {
   USAGE_CONTRACT_VERSION,
   type UsageProviderKind,
@@ -28,9 +29,12 @@ import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import { HttpClient, HttpClientResponse } from "effect/unstable/http";
+import { ChildProcessSpawner } from "effect/unstable/process";
 
 import { ServerConfig } from "../config.ts";
+import { ServerSettingsService } from "../serverSettings.ts";
 import { UsageAggregator } from "./usageAggregation.ts";
+import { fetchOmpPlanUsage } from "./ompPlanUsage.ts";
 import { parseRateTable, type RateTable } from "./usagePricing.ts";
 import {
   listTranscriptFiles,
@@ -106,6 +110,7 @@ export const layerTest = Layer.succeed(
           knownModels: 0,
         },
         scanDurationMs: 0,
+        planProviders: [],
       }),
   }),
 );
@@ -115,6 +120,8 @@ export const make = Effect.gen(function* () {
   const path = yield* Path.Path;
   const config = yield* ServerConfig;
   const httpClient = yield* HttpClient.HttpClient;
+  const settingsService = yield* ServerSettingsService;
+  const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
 
   const fileCache: ScanCache = new Map();
   let cacheDirty = false;
@@ -176,8 +183,15 @@ export const make = Effect.gen(function* () {
     );
   });
 
-  /** No host transcript dirs while Claude/Codex drivers are removed (omp-only). */
-  const resolveTranscriptDirs = () => Effect.succeed([] as const);
+  /** omp session transcripts under `$OMP_HOME` (default `~/.omp`). */
+  const resolveTranscriptDirs = () => {
+    const ompHomeEnv = process.env.OMP_HOME?.trim();
+    const ompHome =
+      ompHomeEnv && ompHomeEnv.length > 0 ? ompHomeEnv : path.join(NodeOS.homedir(), ".omp");
+    return Effect.succeed([
+      { provider: "omp" as const, dir: path.join(ompHome, "agent", "sessions") },
+    ] as const);
+  };
 
   /**
    * Loads the persisted scan cache exactly once per process.
@@ -372,6 +386,18 @@ export const make = Effect.gen(function* () {
     yield* persistScanCache();
 
     const aggregated = aggregator.finish();
+
+    const ompHomeEnv = process.env.OMP_HOME?.trim();
+    const ompHome =
+      ompHomeEnv && ompHomeEnv.length > 0 ? ompHomeEnv : path.join(NodeOS.homedir(), ".omp");
+    const settings = yield* settingsService.getSettings.pipe(
+      Effect.catchCause(() => Effect.succeed(null)),
+    );
+    const binaryPath = settings?.providers.omp.binaryPath?.trim() || "omp";
+    const planProviders = yield* fetchOmpPlanUsage({ binaryPath, ompHome }).pipe(
+      Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+    );
+
     const readAt = yield* DateTime.now;
     const finishedAtMs = yield* Clock.currentTimeMillis;
 
@@ -393,10 +419,13 @@ export const make = Effect.gen(function* () {
         knownModels: rates.size,
       },
       scanDurationMs: Math.max(0, finishedAtMs - startedAtMs),
+      planProviders,
     } satisfies UsageSummary;
   });
 
   return { readSummary } as const;
 });
 
-export const layer = Layer.effect(UsageService, make);
+export const layer = Layer.effect(UsageService, make).pipe(
+  Layer.provide(NodeChildProcessSpawner.layer),
+);

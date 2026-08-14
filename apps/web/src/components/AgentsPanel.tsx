@@ -10,6 +10,7 @@
  * - Workflow expansion is presentation state. A live run stays expanded when
  *   it settles; older collapsed runs can still be opened at run granularity.
  * - Static status dots, DOM-write elapsed timers, plain token counters.
+ * - Clicking an agent opens a nested read-only omp transcript pane (steer/stop).
  */
 import { useAtomValue } from "@effect/atom-react";
 import type {
@@ -27,7 +28,43 @@ import { useEffect, useRef, useState } from "react";
 
 import { cn } from "~/lib/utils";
 import { orchestrationEnvironment } from "~/state/orchestration";
+import { serverEnvironment } from "~/state/server";
+import { threadEnvironment } from "~/state/threads";
+import { useAtomCommand } from "~/state/use-atom-command";
 import { ScrollArea } from "~/components/ui/scroll-area";
+
+/** Extract plain text from an omp transcript message for the nested pane. */
+export function formatOmpTranscriptMessage(message: unknown): string {
+  if (typeof message === "string") {
+    return message;
+  }
+  if (typeof message !== "object" || message === null) {
+    return String(message);
+  }
+  const record = message as Record<string, unknown>;
+  if (typeof record.content === "string") {
+    return record.content;
+  }
+  if (Array.isArray(record.content)) {
+    return record.content
+      .map((part) => {
+        if (typeof part === "string") {
+          return part;
+        }
+        if (typeof part === "object" && part !== null && "text" in part) {
+          const text = (part as { text?: unknown }).text;
+          return typeof text === "string" ? text : "";
+        }
+        return "";
+      })
+      .filter((part) => part.length > 0)
+      .join("");
+  }
+  if (typeof record.text === "string") {
+    return record.text;
+  }
+  return JSON.stringify(record);
+}
 
 /**
  * In-flight states all present as Working (one steady state, per the
@@ -136,8 +173,16 @@ function agentActivityText(agent: RuntimeSubagent): string | null {
   );
 }
 
-/** Flat, non-interactive agent status line. No unfold. */
-function AgentRow({ agent }: { agent: RuntimeSubagent }) {
+/** Flat agent status line; click opens the nested omp transcript pane. */
+function AgentRow({
+  agent,
+  selected,
+  onSelect,
+}: {
+  agent: RuntimeSubagent;
+  selected?: boolean;
+  onSelect?: (agent: RuntimeSubagent) => void;
+}) {
   const visuals = STATUS_VISUALS[agent.status];
   const activity = agentActivityText(agent);
   const modelLabel = formatSubagentModelLabel(agent.model, agent.effort);
@@ -152,8 +197,8 @@ function AgentRow({ agent }: { agent: RuntimeSubagent }) {
     agent.activationCount > 1 ? `run ${agent.activationCount}` : null,
   ].filter((value): value is string => value !== null);
 
-  return (
-    <div className="grid h-[3.875rem] grid-cols-[0.375rem_minmax(0,1fr)_auto] grid-rows-[1.25rem_1.125rem_1rem] items-center gap-x-2 rounded-md px-1.5 py-1">
+  const body = (
+    <>
       <span className="col-start-1 row-start-1 flex items-center">
         <StatusDot status={agent.status} />
       </span>
@@ -185,6 +230,156 @@ function AgentRow({ agent }: { agent: RuntimeSubagent }) {
         {metadata.join(" · ")}
       </span>
       <span className="sr-only">{visuals.label}</span>
+    </>
+  );
+
+  const className = cn(
+    "grid h-[3.875rem] w-full grid-cols-[0.375rem_minmax(0,1fr)_auto] grid-rows-[1.25rem_1.125rem_1rem] items-center gap-x-2 rounded-md px-1.5 py-1 text-left",
+    onSelect && "hover:bg-accent/40",
+    selected && "bg-accent/50",
+  );
+
+  if (!onSelect) {
+    return <div className={className}>{body}</div>;
+  }
+
+  return (
+    <button type="button" onClick={() => onSelect(agent)} className={className}>
+      {body}
+    </button>
+  );
+}
+
+function NestedSubagentTranscriptPane({
+  environmentId,
+  threadId,
+  agent,
+  onClose,
+}: {
+  environmentId: EnvironmentId;
+  threadId: ThreadId;
+  agent: RuntimeSubagent;
+  onClose: () => void;
+}) {
+  const [messages, setMessages] = useState<ReadonlyArray<unknown>>([]);
+  const [steerText, setSteerText] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const getMessages = useAtomCommand(serverEnvironment.ompGetSubagentMessages, {
+    reportFailure: false,
+  });
+  const steer = useAtomCommand(serverEnvironment.ompSteer, { reportFailure: false });
+  const setSubscription = useAtomCommand(serverEnvironment.ompSetSubagentSubscription, {
+    reportFailure: false,
+  });
+  const interruptTurn = useAtomCommand(threadEnvironment.interruptTurn, { reportFailure: false });
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      setLoading(true);
+      setError(null);
+      await setSubscription({
+        environmentId,
+        input: { threadId, level: "events" },
+      });
+      const result = await getMessages({
+        environmentId,
+        input: { threadId, subagentId: agent.id },
+      });
+      if (cancelled) {
+        return;
+      }
+      if (result._tag === "Success") {
+        setMessages(result.value.messages);
+      } else {
+        setError("Failed to load transcript");
+      }
+      setLoading(false);
+    })();
+    return () => {
+      cancelled = true;
+      void setSubscription({
+        environmentId,
+        input: { threadId, level: "progress" },
+      });
+    };
+  }, [agent.id, environmentId, getMessages, setSubscription, threadId]);
+
+  const live =
+    agent.status === "running" || agent.status === "pending" || agent.status === "waiting";
+
+  return (
+    <div className="flex min-h-0 flex-1 flex-col border-t border-border/60">
+      <div className="flex items-center gap-2 border-b border-border/50 px-2 py-1.5">
+        <span className="min-w-0 truncate text-xs font-medium">{agent.title}</span>
+        <span className="text-[.65rem] text-muted-foreground">read-only transcript</span>
+        <button
+          type="button"
+          onClick={onClose}
+          aria-label="Close transcript"
+          className="ml-auto text-muted-foreground hover:text-foreground"
+        >
+          <X aria-hidden className="size-3" />
+        </button>
+      </div>
+      <ScrollArea className="min-h-0 flex-1">
+        <div className="flex flex-col gap-2 p-2">
+          {loading ? (
+            <p className="text-xs text-muted-foreground">Loading…</p>
+          ) : error ? (
+            <p className="text-xs text-destructive-foreground">{error}</p>
+          ) : messages.length === 0 ? (
+            <p className="text-xs text-muted-foreground">No messages yet.</p>
+          ) : (
+            messages.map((message, index) => (
+              <pre
+                key={index}
+                className="whitespace-pre-wrap break-words rounded-md border border-border/40 bg-background/50 p-2 font-mono text-[.7rem] leading-relaxed"
+              >
+                {formatOmpTranscriptMessage(message)}
+              </pre>
+            ))
+          )}
+        </div>
+      </ScrollArea>
+      <div className="flex flex-col gap-1.5 border-t border-border/50 p-2">
+        <div className="flex gap-1.5">
+          <input
+            value={steerText}
+            onChange={(event) => setSteerText(event.target.value)}
+            placeholder="Steer session…"
+            className="min-w-0 flex-1 rounded-md border border-border/60 bg-background px-2 py-1 text-xs"
+            disabled={!live}
+          />
+          <button
+            type="button"
+            disabled={!live || steerText.trim().length === 0}
+            className="rounded-md border border-border/60 px-2 text-xs disabled:opacity-40"
+            onClick={() => {
+              const message = steerText.trim();
+              if (!message) {
+                return;
+              }
+              void steer({ environmentId, input: { threadId, message } }).then(() => {
+                setSteerText("");
+              });
+            }}
+          >
+            Steer
+          </button>
+          <button
+            type="button"
+            disabled={!live}
+            className="rounded-md border border-border/60 px-2 text-xs disabled:opacity-40"
+            onClick={() => {
+              void interruptTurn({ environmentId, input: { threadId } });
+            }}
+          >
+            Stop
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
@@ -315,9 +510,13 @@ function WorkflowScriptView({
 function PhaseSection({
   phase,
   defaultOpen = false,
+  selectedAgentId,
+  onSelectAgent,
 }: {
   phase: AgentPanelWorkflowGroup["phases"][number];
   defaultOpen?: boolean;
+  selectedAgentId?: string | null;
+  onSelectAgent?: (agent: RuntimeSubagent) => void;
 }) {
   const [open, setOpen] = useState(defaultOpen || phase.state === "running");
   const previousState = useRef(phase.state);
@@ -366,7 +565,16 @@ function PhaseSection({
           </span>
         ) : null}
       </button>
-      {open ? phase.members.map((member) => <AgentRow key={member.id} agent={member} />) : null}
+      {open
+        ? phase.members.map((member) => (
+            <AgentRow
+              key={member.id}
+              agent={member}
+              selected={selectedAgentId === member.id}
+              {...(onSelectAgent ? { onSelect: onSelectAgent } : {})}
+            />
+          ))
+        : null}
     </div>
   );
 }
@@ -376,11 +584,15 @@ function ExpandedWorkflowSection({
   group,
   environmentId,
   threadId,
+  selectedAgentId,
+  onSelectAgent,
   onCollapse,
 }: {
   group: AgentPanelWorkflowGroup;
   environmentId: EnvironmentId | null;
   threadId: ThreadId | null;
+  selectedAgentId?: string | null;
+  onSelectAgent?: (agent: RuntimeSubagent) => void;
   onCollapse: () => void;
 }) {
   const [scriptOpen, setScriptOpen] = useState(false);
@@ -436,13 +648,28 @@ function ExpandedWorkflowSection({
         />
       ) : null}
       {group.phases.map((phase) => (
-        <PhaseSection key={phase.index} phase={phase} defaultOpen={!workflowIsLive(group)} />
+        <PhaseSection
+          key={phase.index}
+          phase={phase}
+          defaultOpen={!workflowIsLive(group)}
+          {...(selectedAgentId !== undefined ? { selectedAgentId } : {})}
+          {...(onSelectAgent ? { onSelectAgent } : {})}
+        />
       ))}
       {group.unphasedMembers.map((member) => (
-        <AgentRow key={member.id} agent={member} />
+        <AgentRow
+          key={member.id}
+          agent={member}
+          selected={selectedAgentId === member.id}
+          {...(onSelectAgent ? { onSelect: onSelectAgent } : {})}
+        />
       ))}
       {group.phases.length === 0 && group.unphasedMembers.length === 0 ? (
-        <AgentRow agent={group.workflow} />
+        <AgentRow
+          agent={group.workflow}
+          selected={selectedAgentId === group.workflow.id}
+          {...(onSelectAgent ? { onSelect: onSelectAgent } : {})}
+        />
       ) : null}
     </section>
   );
@@ -500,10 +727,14 @@ function WorkflowSection({
   group,
   environmentId,
   threadId,
+  selectedAgentId,
+  onSelectAgent,
 }: {
   group: AgentPanelWorkflowGroup;
   environmentId: EnvironmentId | null;
   threadId: ThreadId | null;
+  selectedAgentId?: string | null;
+  onSelectAgent?: (agent: RuntimeSubagent) => void;
 }) {
   const [open, setOpen] = useState(() => workflowIsLive(group));
   return open ? (
@@ -511,6 +742,8 @@ function WorkflowSection({
       group={group}
       environmentId={environmentId}
       threadId={threadId}
+      {...(selectedAgentId !== undefined ? { selectedAgentId } : {})}
+      {...(onSelectAgent ? { onSelectAgent } : {})}
       onCollapse={() => setOpen(false)}
     />
   ) : (
@@ -527,6 +760,15 @@ export function AgentsPanel({
   environmentId?: EnvironmentId | null;
   threadId?: ThreadId | null;
 }) {
+  const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
+  const selectedAgent =
+    model.directAgents.find((agent) => agent.id === selectedAgentId) ??
+    model.workflows
+      .flatMap((group) => [group.workflow, ...workflowMembers(group)])
+      .find((agent) => agent.id === selectedAgentId) ??
+    null;
+  const canOpenTranscript = environmentId !== null && threadId !== null && selectedAgent !== null;
+
   if (!model.hasAgents) {
     return (
       <div className="flex h-full flex-col items-center justify-center gap-2 p-6 text-center">
@@ -542,7 +784,7 @@ export function AgentsPanel({
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <ScrollArea className="min-h-0 flex-1">
+      <ScrollArea className={cn("min-h-0", canOpenTranscript ? "flex-[0_0_40%]" : "flex-1")}>
         <div className="flex flex-col gap-2 p-2">
           {model.workflows.map((group) => (
             <WorkflowSection
@@ -550,6 +792,8 @@ export function AgentsPanel({
               group={group}
               environmentId={environmentId}
               threadId={threadId}
+              selectedAgentId={selectedAgentId}
+              onSelectAgent={(agent) => setSelectedAgentId(agent.id)}
             />
           ))}
           {model.directAgents.length > 0 ? (
@@ -558,12 +802,25 @@ export function AgentsPanel({
                 Direct spawns
               </div>
               {model.directAgents.map((agent) => (
-                <AgentRow key={agent.id} agent={agent} />
+                <AgentRow
+                  key={agent.id}
+                  agent={agent}
+                  selected={selectedAgentId === agent.id}
+                  onSelect={(next) => setSelectedAgentId(next.id)}
+                />
               ))}
             </section>
           ) : null}
         </div>
       </ScrollArea>
+      {canOpenTranscript ? (
+        <NestedSubagentTranscriptPane
+          environmentId={environmentId}
+          threadId={threadId}
+          agent={selectedAgent}
+          onClose={() => setSelectedAgentId(null)}
+        />
+      ) : null}
       <footer className="flex items-center justify-between border-t border-border/60 px-3 py-1.5 font-mono text-[.7rem] text-muted-foreground">
         <span className="flex items-center gap-2">
           {model.runningCount + model.waitingCount > 0 ? (

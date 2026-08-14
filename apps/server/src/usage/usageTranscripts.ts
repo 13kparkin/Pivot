@@ -35,6 +35,10 @@ function int(value: unknown): number {
 }
 
 function parseTimestampMs(value: unknown): number | null {
+  // omp assistant messages use epoch milliseconds; Claude/Codex use ISO strings.
+  if (typeof value === "number" && Number.isFinite(value) && value > 0) {
+    return Math.trunc(value);
+  }
   if (typeof value !== "string") return null;
   const parsed = Date.parse(value);
   return Number.isNaN(parsed) ? null : parsed;
@@ -68,7 +72,8 @@ export function totalTokens(totals: UsageTokenTotals): number {
  * an order of magnitude.
  */
 export function mightCarryUsage(line: string, provider: UsageProviderKind): boolean {
-  return provider === "claude" ? line.includes('"usage"') : line.includes('"token_count"');
+  if (provider === "claude" || provider === "omp") return line.includes('"usage"');
+  return line.includes('"token_count"');
 }
 
 /* -------------------------------------------------------------------------- */
@@ -294,6 +299,94 @@ export function parseCodexLine(line: string, state: CodexScanState): UsageRecord
     // Events surviving the fork-copy suppression above are unique to this
     // rollout, so they need no global dedup.
     dedupeKey: null,
+  };
+}
+
+/* -------------------------------------------------------------------------- */
+/* omp                                                                        */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Rolling state for one omp session jsonl file.
+ *
+ * Session id comes from the leading `session` entry; assistant `message` rows
+ * carry per-turn usage + optional provider-reported cost.
+ */
+export interface OmpScanState {
+  sessionId: string;
+}
+
+export function initialOmpScanState(): OmpScanState {
+  return { sessionId: "" };
+}
+
+/**
+ * Feeds one line of an omp session transcript into `state`, returning a record
+ * when the line is an assistant message with usage.
+ */
+export function parseOmpLine(line: string, state: OmpScanState): UsageRecord | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(line);
+  } catch {
+    return null;
+  }
+  if (typeof parsed !== "object" || parsed === null) return null;
+
+  const record = parsed as Record<string, unknown>;
+
+  if (record["type"] === "session") {
+    const id = record["id"];
+    if (typeof id === "string" && id.length > 0) state.sessionId = id;
+    return null;
+  }
+
+  if (record["type"] !== "message") return null;
+
+  const message = record["message"];
+  if (typeof message !== "object" || message === null) return null;
+  const messageRecord = message as Record<string, unknown>;
+  if (messageRecord["role"] !== "assistant") return null;
+
+  const usage = messageRecord["usage"];
+  if (typeof usage !== "object" || usage === null) return null;
+  const usageRecord = usage as Record<string, unknown>;
+
+  const timestampMs = parseTimestampMs(messageRecord["timestamp"] ?? record["timestamp"]);
+  if (timestampMs === null) return null;
+
+  const model = typeof messageRecord["model"] === "string" ? messageRecord["model"] : "";
+  if (model.length === 0) return null;
+
+  const outputTokens = int(usageRecord["output"]);
+  const totals: UsageTokenTotals = {
+    uncachedInputTokens: int(usageRecord["input"]),
+    cachedInputTokens: int(usageRecord["cacheRead"]),
+    cacheCreationTokens: int(usageRecord["cacheWrite"]),
+    outputTokens,
+    reasoningTokens: Math.min(outputTokens, int(usageRecord["reasoningTokens"])),
+  };
+  if (totalTokens(totals) === 0) return null;
+
+  let reportedCostUsd: number | null = null;
+  const cost = usageRecord["cost"];
+  if (typeof cost === "object" && cost !== null) {
+    const total = (cost as Record<string, unknown>)["total"];
+    if (typeof total === "number" && Number.isFinite(total)) reportedCostUsd = total;
+  }
+
+  const entryId = typeof record["id"] === "string" ? record["id"] : null;
+  const dedupeKey =
+    entryId === null ? null : `${state.sessionId.length > 0 ? state.sessionId : ""}:${entryId}`;
+
+  return {
+    provider: "omp",
+    timestampMs,
+    model,
+    sessionId: state.sessionId,
+    totals,
+    reportedCostUsd,
+    dedupeKey,
   };
 }
 

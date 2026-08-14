@@ -28,6 +28,7 @@ import {
   ProviderDriverKind,
   ProviderInstanceId,
   ResolvedKeybindingRule,
+  ServerOmpHubError,
   ThreadId,
   WS_METHODS,
   WsRpcGroup,
@@ -113,6 +114,8 @@ import * as ProjectionSnapshotQuery from "./orchestration/Services/ProjectionSna
 import { SqlitePersistenceMemory } from "./persistence/Layers/Sqlite.ts";
 import { PersistenceSqlError } from "./persistence/Errors.ts";
 import * as ProviderRegistry from "./provider/Services/ProviderRegistry.ts";
+import { ProviderValidationError } from "./provider/Errors.ts";
+import * as ProviderService from "./provider/Services/ProviderService.ts";
 import { makeManualOnlyProviderMaintenanceCapabilities } from "./provider/providerMaintenance.ts";
 import * as ServerLifecycleEvents from "./serverLifecycleEvents.ts";
 import * as ServerRuntimeStartup from "./serverRuntimeStartup.ts";
@@ -385,6 +388,7 @@ const buildAppUnderTest = (options?: {
   layers?: {
     keybindings?: Partial<Keybindings.Keybindings["Service"]>;
     providerRegistry?: Partial<ProviderRegistry.ProviderRegistry["Service"]>;
+    providerService?: Partial<ProviderService.ProviderService["Service"]>;
     serverSettings?: Partial<ServerSettings.ServerSettingsService["Service"]>;
     externalLauncher?: Partial<ExternalLauncher.ExternalLauncher["Service"]>;
     vcsDriver?: Partial<VcsDriver.VcsDriver["Service"]>;
@@ -626,20 +630,54 @@ const buildAppUnderTest = (options?: {
         }),
       ),
       Layer.provide(
-        Layer.mock(ProviderRegistry.ProviderRegistry)({
-          getProviders: Effect.succeed([]),
-          refresh: () => Effect.succeed([]),
-          refreshInstance: () => Effect.succeed([]),
-          getProviderMaintenanceCapabilitiesForInstance: (_instanceId, provider) =>
-            Effect.succeed(
-              makeManualOnlyProviderMaintenanceCapabilities({ provider, packageName: null }),
-            ),
-          setProviderMaintenanceActionState: () => Effect.succeed([]),
-          listOmpLoginProviders: () => Effect.succeed([]),
-          ompLogin: ({ providerId }) => Effect.succeed({ providerId }),
-          streamChanges: Stream.empty,
-          ...options?.layers?.providerRegistry,
-        }),
+        Layer.mergeAll(
+          Layer.mock(ProviderRegistry.ProviderRegistry)({
+            getProviders: Effect.succeed([]),
+            refresh: () => Effect.succeed([]),
+            refreshInstance: () => Effect.succeed([]),
+            getProviderMaintenanceCapabilitiesForInstance: (_instanceId, provider) =>
+              Effect.succeed(
+                makeManualOnlyProviderMaintenanceCapabilities({ provider, packageName: null }),
+              ),
+            setProviderMaintenanceActionState: () => Effect.succeed([]),
+            listOmpLoginProviders: () => Effect.succeed([]),
+            ompLogin: ({ providerId }) => Effect.succeed({ providerId }),
+            streamChanges: Stream.empty,
+            ...options?.layers?.providerRegistry,
+          }),
+          Layer.mock(ProviderService.ProviderService)({
+            startSession: () => Effect.die("ProviderService.startSession unsupported in test"),
+            sendTurn: () => Effect.die("ProviderService.sendTurn unsupported in test"),
+            interruptTurn: () => Effect.die("ProviderService.interruptTurn unsupported in test"),
+            respondToRequest: () =>
+              Effect.die("ProviderService.respondToRequest unsupported in test"),
+            respondToUserInput: () =>
+              Effect.die("ProviderService.respondToUserInput unsupported in test"),
+            stopSession: () => Effect.die("ProviderService.stopSession unsupported in test"),
+            listSessions: () => Effect.succeed([]),
+            getCapabilities: () => Effect.succeed({ sessionModelSwitch: "in-session" }),
+            getInstanceInfo: (instanceId) =>
+              Effect.succeed({
+                instanceId,
+                driverKind: ProviderDriverKind.make(String(instanceId)),
+                displayName: undefined,
+                enabled: true,
+                continuationIdentity: {
+                  driverKind: ProviderDriverKind.make(String(instanceId)),
+                  continuationKey: `${String(instanceId)}:instance:${instanceId}`,
+                },
+              }),
+            rollbackConversation: () =>
+              Effect.die("ProviderService.rollbackConversation unsupported in test"),
+            ompGetSubagentMessages: () =>
+              Effect.die("ProviderService.ompGetSubagentMessages unsupported in test"),
+            ompSteer: () => Effect.die("ProviderService.ompSteer unsupported in test"),
+            ompSetSubagentSubscription: () =>
+              Effect.die("ProviderService.ompSetSubagentSubscription unsupported in test"),
+            streamEvents: Stream.empty,
+            ...options?.layers?.providerService,
+          }),
+        ),
       ),
       Layer.provide(
         Layer.mock(ServerSettings.ServerSettingsService)({
@@ -4437,6 +4475,78 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
 
       assert.deepEqual(response.issues, []);
       assert.deepEqual(response.keybindings, [resolved]);
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("routes websocket omp hub RPCs and maps failures to ServerOmpHubError", () =>
+    Effect.gen(function* () {
+      const threadId = ThreadId.make("thread-omp-hub-ws");
+      const hubCalls: string[] = [];
+
+      yield* buildAppUnderTest({
+        layers: {
+          providerService: {
+            ompGetSubagentMessages: (input) =>
+              Effect.sync(() => {
+                hubCalls.push(`get:${input.threadId}:${input.subagentId}`);
+                return {
+                  sessionFile: "/tmp/sub.jsonl",
+                  fromByte: 0,
+                  nextByte: 8,
+                  reset: false,
+                  messages: [{ role: "assistant", content: "nested" }],
+                };
+              }),
+            ompSteer: (input) =>
+              Effect.sync(() => {
+                hubCalls.push(`steer:${input.threadId}:${input.message}`);
+              }),
+            ompSetSubagentSubscription: () =>
+              Effect.fail(
+                new ProviderValidationError({
+                  operation: "ProviderService.ompSetSubagentSubscription",
+                  issue: "requires an omp session",
+                }),
+              ),
+          },
+        },
+      });
+
+      const wsUrl = yield* getWsServerUrl("/ws");
+      const page = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[WS_METHODS.serverOmpGetSubagentMessages]({
+            threadId,
+            subagentId: "agent-1",
+          }),
+        ),
+      );
+      yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[WS_METHODS.serverOmpSteer]({
+            threadId,
+            message: "focus on tests",
+          }),
+        ),
+      );
+      const failure = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[WS_METHODS.serverOmpSetSubagentSubscription]({
+            threadId,
+            level: "events",
+          }).pipe(Effect.result),
+        ),
+      );
+
+      assert.equal(page.nextByte, 8);
+      assert.equal(page.messages.length, 1);
+      assert.deepEqual(hubCalls, [`get:${threadId}:agent-1`, `steer:${threadId}:focus on tests`]);
+      assert.equal(failure._tag, "Failure");
+      if (failure._tag !== "Failure") {
+        return;
+      }
+      assert.instanceOf(failure.failure, ServerOmpHubError);
+      assert.include(failure.failure.reason, "requires an omp session");
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 

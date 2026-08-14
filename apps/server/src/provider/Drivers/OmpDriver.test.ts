@@ -6,7 +6,7 @@ import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 
 import { it } from "@effect/vitest";
-import { ProviderDriverKind, ProviderInstanceId, ThreadId } from "@t3tools/contracts";
+import { OmpSettings, ProviderDriverKind, ProviderInstanceId, ThreadId } from "@t3tools/contracts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
@@ -22,6 +22,8 @@ import { describe } from "vite-plus/test";
 import * as ServerConfig from "../../config.ts";
 import * as ServerSettings from "../../serverSettings.ts";
 import { OmpDriver } from "./OmpDriver.ts";
+
+const decodeOmpSettings = Schema.decodeSync(OmpSettings);
 
 function makeTempOmpBinary(): string {
   const dir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-omp-driver-"));
@@ -156,6 +158,19 @@ function makeFakeOmpSpawner(sessionFile: string) {
                       models: [{ provider: "openai", id: "gpt-5", name: "GPT-5" }],
                     },
                   });
+                } else if (rpcCommand.type === "get_available_commands") {
+                  yield* offer({
+                    id: rpcCommand.id,
+                    type: "response",
+                    command: "get_available_commands",
+                    success: true,
+                    data: {
+                      commands: [
+                        { name: "model", description: "Switch model" },
+                        { name: "review", description: "Review changes" },
+                      ],
+                    },
+                  });
                 } else if (Array.isArray(spawned.args) && spawned.args.includes("--version")) {
                   // Version probes are CLI argv, not RPC — handled below via stdout offer.
                 } else {
@@ -193,7 +208,7 @@ describe("OmpDriver", () => {
         accentColor: undefined,
         environment: [],
         enabled: true,
-        config: { enabled: true, binaryPath },
+        config: decodeOmpSettings({ enabled: true, binaryPath }),
       }).pipe(
         Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, fake.spawner),
         Effect.provide(OmpDriverTestLayer),
@@ -230,7 +245,7 @@ describe("OmpDriver", () => {
         accentColor: undefined,
         environment: [],
         enabled: true,
-        config: { enabled: true, binaryPath },
+        config: decodeOmpSettings({ enabled: true, binaryPath }),
       }).pipe(
         Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, fake.spawner),
         Effect.provide(OmpDriverTestLayer),
@@ -242,6 +257,11 @@ describe("OmpDriver", () => {
         ["openai/gpt-5"],
       );
       NodeAssert.equal(snapshot.models[0]?.name, "GPT-5");
+      NodeAssert.deepEqual(
+        snapshot.slashCommands.map((command) => command.name),
+        ["model", "review"],
+      );
+      NodeAssert.equal(snapshot.showInteractionModeToggle, true);
       NodeAssert.equal(snapshot.installed, true);
       NodeAssert.equal(snapshot.version, "17.3.0");
     }).pipe(Effect.scoped),
@@ -257,7 +277,7 @@ describe("OmpDriver", () => {
         accentColor: undefined,
         environment: [],
         enabled: true,
-        config: { enabled: true, binaryPath },
+        config: decodeOmpSettings({ enabled: true, binaryPath }),
       }).pipe(
         Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, fake.spawner),
         Effect.provide(OmpDriverTestLayer),
@@ -291,7 +311,7 @@ describe("OmpDriver", () => {
           accentColor: undefined,
           environment: [],
           enabled: true,
-          config: { enabled: true, binaryPath: realOmpBinary! },
+          config: decodeOmpSettings({ enabled: true, binaryPath: realOmpBinary! }),
         }).pipe(Effect.provide(OmpDriverTestLayer));
 
         const updated = yield* instance.snapshot.streamChanges.pipe(
