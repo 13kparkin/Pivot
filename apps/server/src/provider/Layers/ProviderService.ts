@@ -10,6 +10,7 @@
  * @module ProviderServiceLive
  */
 import {
+  EventId,
   ModelSelection,
   NonNegativeInt,
   ThreadId,
@@ -524,6 +525,77 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
             }),
       { discard: true },
     );
+  });
+
+  const reconcileStaleSessions = Effect.fn("ProviderService.reconcileStaleSessions")(function* () {
+    // After a server restart every persisted "running"/"starting" binding is
+    // stale: the provider child died with the previous process and no live
+    // adapter session backs the row. Emit one synthetic session.exited per
+    // stale binding so the projection leaves "running" (the thread un-sticks in
+    // the UI), and flip the binding to stopped so recovery routing does not
+    // treat it as an active session.
+    const bindings = yield* directory.listBindings().pipe(Effect.orElseSucceed(() => []));
+    const events: ProviderRuntimeEvent[] = [];
+    for (const binding of bindings) {
+      if (binding.status !== "running" && binding.status !== "starting") {
+        continue;
+      }
+      const instanceIdOption = yield* requireBindingInstanceId(
+        "ProviderService.reconcileStaleSessions",
+        binding,
+      ).pipe(Effect.option);
+      if (Option.isNone(instanceIdOption)) {
+        continue;
+      }
+      const instanceId = instanceIdOption.value;
+      const adapterOption = yield* registry.getByInstance(instanceId).pipe(Effect.option);
+      if (Option.isNone(adapterOption)) {
+        continue;
+      }
+      const adapter = adapterOption.value;
+      const hasLiveSession = yield* adapter.hasSession(binding.threadId);
+      if (hasLiveSession) {
+        continue;
+      }
+      yield* directory
+        .upsert({
+          threadId: binding.threadId,
+          provider: adapter.provider,
+          providerInstanceId: instanceId,
+          status: "stopped",
+          runtimePayload: {
+            activeTurnId: null,
+            lastRuntimeEvent: "provider.boot-reconcile",
+            lastRuntimeEventAt: yield* nowIso,
+          },
+        })
+        .pipe(
+          Effect.catchCause((cause) =>
+            Effect.logWarning("failed to mark stale provider session stopped", {
+              threadId: binding.threadId,
+              provider: adapter.provider,
+              cause: causeErrorTag(cause),
+            }),
+          ),
+        );
+      events.push({
+        type: "session.exited",
+        // Deterministic per binding; the command-receipt dedupe makes a
+        // re-run idempotent, so a plain string id is fine here.
+        eventId: EventId.make(
+          `boot-reconcile:${binding.threadId}:${binding.lastSeenAt ?? "unknown"}`,
+        ),
+        provider: adapter.provider,
+        providerInstanceId: instanceId,
+        threadId: binding.threadId,
+        createdAt: yield* nowIso,
+        payload: {
+          reason: "server restarted; provider session did not survive",
+          exitKind: "error",
+        },
+      });
+    }
+    return events;
   });
 
   const startSession: ProviderServiceMethod<"startSession"> = Effect.fn("startSession")(
@@ -1189,6 +1261,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     ompGetSubagentMessages,
     ompSteer,
     ompSetSubagentSubscription,
+    reconcileStaleSessions,
     // Each access creates a fresh PubSub subscription so that multiple
     // consumers (ProviderRuntimeIngestion, CheckpointReactor, etc.) each
     // independently receive all runtime events.

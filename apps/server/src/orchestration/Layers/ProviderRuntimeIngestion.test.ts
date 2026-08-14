@@ -99,6 +99,8 @@ function isLegacyTurnCompletedEvent(
 function createProviderServiceHarness() {
   const runtimeEventPubSub = Effect.runSync(PubSub.unbounded<ProviderRuntimeEvent>());
   const runtimeSessions: ProviderSession[] = [];
+  let staleSessionEvents: ProviderRuntimeEvent[] = [];
+  let reconcileStaleSessionCalls = 0;
 
   const unsupported = () => Effect.die(new Error("Unsupported provider call in test")) as never;
   const service: ProviderServiceShape = {
@@ -127,6 +129,10 @@ function createProviderServiceHarness() {
     ompGetSubagentMessages: () => unsupported(),
     ompSteer: () => unsupported(),
     ompSetSubagentSubscription: () => unsupported(),
+    reconcileStaleSessions: () => {
+      reconcileStaleSessionCalls += 1;
+      return Effect.succeed([...staleSessionEvents]);
+    },
     get streamEvents() {
       return Stream.fromPubSub(runtimeEventPubSub);
     },
@@ -160,10 +166,16 @@ function createProviderServiceHarness() {
     Effect.runSync(PubSub.publish(runtimeEventPubSub, normalizeLegacyEvent(event)));
   };
 
+  const setStaleSessionEvents = (events: ReadonlyArray<ProviderRuntimeEvent>): void => {
+    staleSessionEvents = [...events];
+  };
+
   return {
     service,
     emit,
     setSession,
+    setStaleSessionEvents,
+    reconcileStaleSessionCalls: () => reconcileStaleSessionCalls,
   };
 }
 
@@ -224,10 +236,16 @@ describe("ProviderRuntimeIngestion", () => {
     }
   });
 
-  async function createHarness(options?: { serverSettings?: Partial<ServerSettings> }) {
+  async function createHarness(options?: {
+    serverSettings?: Partial<ServerSettings>;
+    staleSessionEvents?: ReadonlyArray<ProviderRuntimeEvent>;
+  }) {
     const workspaceRoot = makeTempDir("t3-provider-project-");
     NodeFS.mkdirSync(NodePath.join(workspaceRoot, ".git"));
     const provider = createProviderServiceHarness();
+    if (options?.staleSessionEvents) {
+      provider.setStaleSessionEvents(options.staleSessionEvents);
+    }
     const orchestrationLayer = OrchestrationEngineLive.pipe(
       Layer.provide(OrchestrationProjectionSnapshotQueryLive),
       Layer.provide(OrchestrationProjectionPipelineLive),
@@ -321,6 +339,8 @@ describe("ProviderRuntimeIngestion", () => {
       readModel: () => Effect.runPromise(snapshotQuery.getSnapshot()),
       emit: provider.emit,
       setProviderSession: provider.setSession,
+      setStaleSessionEvents: provider.setStaleSessionEvents,
+      reconcileStaleSessionCalls: provider.reconcileStaleSessionCalls,
       drain,
     };
   }
@@ -365,6 +385,35 @@ describe("ProviderRuntimeIngestion", () => {
     );
     expect(thread.session?.status).toBe("error");
     expect(thread.session?.lastError).toBe("turn failed");
+  });
+
+  it("start() settles stale sessions via reconcileStaleSessions", async () => {
+    const harness = await createHarness();
+    // start() must ask the provider service to settle sessions that did not
+    // survive the previous server process (their provider children died with
+    // it). The reconcile-returned session.exited events flow through the same
+    // worker as live runtime events, so a session.exited lands the projection
+    // on "stopped".
+    expect(harness.reconcileStaleSessionCalls()).toBe(1);
+
+    harness.emit({
+      type: "session.exited",
+      eventId: asEventId("evt-stale-session-exited"),
+      provider: ProviderDriverKind.make("codex"),
+      providerInstanceId: ProviderInstanceId.make("codex"),
+      threadId: asThreadId("thread-1"),
+      createdAt: "2026-01-01T00:00:00.000Z",
+      payload: {
+        reason: "server restarted; provider session did not survive",
+        exitKind: "error",
+      },
+    });
+
+    const thread = await waitForThread(
+      harness.readModel,
+      (entry) => entry.session?.status === "stopped",
+    );
+    expect(thread.session?.status).toBe("stopped");
   });
 
   it("applies provider session.state.changed transitions directly", async () => {

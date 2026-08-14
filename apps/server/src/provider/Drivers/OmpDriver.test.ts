@@ -8,6 +8,7 @@ import * as NodePath from "node:path";
 import { it } from "@effect/vitest";
 import { OmpSettings, ProviderDriverKind, ProviderInstanceId, ThreadId } from "@t3tools/contracts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
@@ -88,6 +89,7 @@ function makeFakeOmpSpawner(sessionFile: string) {
             : {}),
         },
         killed: false,
+        exit: yield* Deferred.make<ChildProcessSpawner.ExitCode, never>(),
       };
       spawns.push(spawn);
 
@@ -116,12 +118,16 @@ function makeFakeOmpSpawner(sessionFile: string) {
       let stdinBuf = "";
       return ChildProcessSpawner.makeHandle({
         pid: ChildProcessSpawner.ProcessId(spawns.length),
-        exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(0)),
+        exitCode: Deferred.await(spawn.exit),
         isRunning: Effect.sync(() => !spawn.killed),
         kill: () =>
           Effect.sync(() => {
             spawn.killed = true;
-          }),
+          }).pipe(
+            Effect.andThen(
+              Deferred.succeed(spawn.exit, ChildProcessSpawner.ExitCode(143)).pipe(Effect.ignore),
+            ),
+          ),
         unref: Effect.succeed(Effect.void),
         stdin: Sink.forEach((chunk: Uint8Array) => {
           stdinBuf += decoder.decode(chunk, { stream: true });

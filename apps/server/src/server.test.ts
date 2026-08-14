@@ -674,6 +674,7 @@ const buildAppUnderTest = (options?: {
             ompSteer: () => Effect.die("ProviderService.ompSteer unsupported in test"),
             ompSetSubagentSubscription: () =>
               Effect.die("ProviderService.ompSetSubagentSubscription unsupported in test"),
+            reconcileStaleSessions: () => Effect.succeed([]),
             streamEvents: Stream.empty,
             ...options?.layers?.providerService,
           }),

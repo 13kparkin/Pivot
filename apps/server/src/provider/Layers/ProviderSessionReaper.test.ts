@@ -187,6 +187,7 @@ describe("ProviderSessionReaper", () => {
       ompGetSubagentMessages: () => unsupported(),
       ompSteer: () => unsupported(),
       ompSetSubagentSubscription: () => unsupported(),
+      reconcileStaleSessions: () => Effect.succeed([]),
       streamEvents: Stream.empty,
     };
 

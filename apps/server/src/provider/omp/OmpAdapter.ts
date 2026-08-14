@@ -126,6 +126,8 @@ interface LiveAdapterSession {
 }
 
 const TOKEN_USAGE_EMIT_MIN_INTERVAL_MS = 1_000;
+/** How long interruptTurn waits for omp to acknowledge `abort` before force-stopping. */
+const OMP_ABORT_ACK_TIMEOUT = "10 seconds";
 
 export type OmpResolveRoleModel = (role: string) => Effect.Effect<string | undefined>;
 
@@ -225,11 +227,19 @@ export class OmpAdapter {
         onOpenUrl: undefined,
       };
       this.#sessions.set(input.threadId, session);
-      yield* this.#runtime.streamFrames(input.threadId).pipe(
-        Stream.mapError((cause) => mapOmpSpawnError(input.threadId, cause)),
-        Stream.runForEach((frame) => this.#onFrame(session, frame)),
-        Effect.forkIn(scope),
-      );
+      // Frame transport runs in the session scope. When it ends (child exit,
+      // stream failure) or when deliberate teardown closes the scope, the fiber
+      // completes; if the child died while the session is still registered,
+      // settle the in-flight turn and the session instead of leaving the thread
+      // permanently "running".
+      yield* Effect.gen({ self: this }, function* () {
+        yield* this.#runtime.streamFrames(input.threadId).pipe(
+          Stream.mapError((cause) => mapOmpSpawnError(input.threadId, cause)),
+          Stream.runForEach((frame) => this.#onFrame(session, frame)),
+          Effect.exit,
+        );
+        yield* this.#onSessionTransportEnded(session);
+      }).pipe(Effect.forkIn(scope));
       yield* this.#runtime
         .send(input.threadId, {
           type: "set_subagent_subscription",
@@ -312,7 +322,16 @@ export class OmpAdapter {
         });
       }
       session.stopRequested = true;
-      yield* this.#send(threadId, { type: "abort" });
+      const abortOutcome = yield* Effect.exit(
+        this.#send(threadId, { type: "abort" }).pipe(Effect.timeout(OMP_ABORT_ACK_TIMEOUT)),
+      );
+      if (Exit.isFailure(abortOutcome)) {
+        // omp did not acknowledge the abort within the timeout (child dead or
+        // wedged, e.g. host restart). No terminal agent_end will arrive, so
+        // settle the turn and session here instead of leaving the thread
+        // permanently "running".
+        yield* this.#onSessionTransportEnded(session);
+      }
     });
   }
 
@@ -1063,11 +1082,15 @@ export class OmpAdapter {
       yield* this.#emitTokenUsageFromState(session).pipe(Effect.ignore);
       const aborted = session.stopRequested;
       session.stopRequested = false;
+      const turnId = session.turnId;
+      // Clear the in-flight marker so a later transport end (child exit while
+      // idle) cannot emit a spurious turn.aborted for an already-finished turn.
+      session.turnId = undefined;
       if (aborted) {
         yield* this.#emit({
           type: "turn.aborted",
           threadId: session.threadId,
-          turnId: session.turnId,
+          turnId,
           payload: { reason: "user_abort" },
         });
         return;
@@ -1075,7 +1098,7 @@ export class OmpAdapter {
       yield* this.#emit({
         type: "turn.completed",
         threadId: session.threadId,
-        turnId: session.turnId,
+        turnId,
         payload: { state: "completed" },
       });
     });
@@ -1316,6 +1339,40 @@ export class OmpAdapter {
     return this.#runtime
       .send(threadId, command)
       .pipe(Effect.mapError((cause) => mapOmpSpawnError(threadId, cause)));
+  }
+
+  #onSessionTransportEnded(session: LiveAdapterSession): Effect.Effect<void> {
+    return Effect.gen({ self: this }, function* () {
+      if (this.#sessions.get(session.threadId) !== session) {
+        // Session was already cleared (deliberate teardown or a racing stop);
+        // do not double-settle.
+        return;
+      }
+      const turnId = session.turnId;
+      session.turnId = undefined;
+      const stopRequested = session.stopRequested;
+      session.stopRequested = false;
+      if (turnId !== undefined) {
+        yield* this.#emit({
+          type: "turn.aborted",
+          threadId: session.threadId,
+          turnId,
+          payload: { reason: stopRequested ? "user_abort" : "provider_exited" },
+        });
+      }
+      yield* this.#emit({
+        type: "session.exited",
+        threadId: session.threadId,
+        ...(turnId === undefined ? {} : { turnId }),
+        payload: {
+          reason: stopRequested
+            ? "omp child exited before confirming the requested stop"
+            : "omp rpc child exited unexpectedly",
+          exitKind: "error",
+        },
+      });
+      yield* this.#clearLiveSession(session.threadId);
+    });
   }
 
   #clearLiveSession(threadId: ThreadId) {

@@ -2066,6 +2066,20 @@ const make = Effect.gen(function* () {
           return worker.enqueue({ source: "domain", event });
         }),
       );
+      // Sessions left "running" by the previous server process (its provider
+      // children died with it) have no live adapter session behind them and
+      // would otherwise show as permanently running with an inert stop button.
+      // Settle them through the same worker so the projection leaves "running".
+      yield* providerService.reconcileStaleSessions().pipe(
+        Effect.flatMap((events) =>
+          Effect.forEach(events, (event) => worker.enqueue({ source: "runtime", event })),
+        ),
+        Effect.catchCause((cause) =>
+          Effect.logWarning("failed to reconcile stale provider sessions", {
+            cause: Cause.pretty(cause),
+          }),
+        ),
+      );
     });
 
   return {

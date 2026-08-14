@@ -4,7 +4,10 @@ import * as NodeChildProcess from "node:child_process";
 
 import { it } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
+import * as Cause from "effect/Cause";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
@@ -26,8 +29,11 @@ import {
   MAX_RPC_REASSEMBLED_BYTES,
   OmpRpcFrameDecoder,
   OmpRpcRuntime,
+  OmpSpawnError,
   RPC_CHUNK_PAYLOAD_BYTES,
 } from "./OmpRpcRuntime.ts";
+
+const isOmpSpawnError = Schema.is(OmpSpawnError);
 
 const UnknownJson = Schema.fromJsonString(Schema.Unknown);
 const decodeUnknownJson = Schema.decodeSync(UnknownJson);
@@ -144,6 +150,8 @@ type SpawnedCommand = {
 type FakeOmpSpawn = SpawnedCommand & {
   readonly commands: Array<Record<string, unknown>>;
   killed: boolean;
+  /** Resolves when the fake child exits; the runtime watcher reacts to it. */
+  readonly exit: Deferred.Deferred<ChildProcessSpawner.ExitCode, never>;
 };
 
 function asSpawnedCommand(command: ChildProcess.Command): SpawnedCommand {
@@ -198,18 +206,23 @@ function makeFakeOmpSpawner(input: { readonly sessionFile: string }) {
         ...spawned,
         commands: [],
         killed: false,
+        exit: yield* Deferred.make<ChildProcessSpawner.ExitCode, never>(),
       };
       spawns.push(spawn);
       let sessionFile = input.sessionFile;
       let stdinBuf = "";
       return ChildProcessSpawner.makeHandle({
         pid: ChildProcessSpawner.ProcessId(spawns.length),
-        exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(0)),
+        exitCode: Deferred.await(spawn.exit),
         isRunning: Effect.sync(() => !spawn.killed),
         kill: () =>
           Effect.sync(() => {
             spawn.killed = true;
-          }),
+          }).pipe(
+            Effect.andThen(
+              Deferred.succeed(spawn.exit, ChildProcessSpawner.ExitCode(143)).pipe(Effect.ignore),
+            ),
+          ),
         unref: Effect.succeed(Effect.void),
         stdin: Sink.forEach((chunk: Uint8Array) => {
           stdinBuf += decoder.decode(chunk, { stream: true });
@@ -268,7 +281,15 @@ function makeFakeOmpSpawner(input: { readonly sessionFile: string }) {
       });
     }),
   );
-  return { spawner, spawns };
+  const exitSpawn = (spawn: FakeOmpSpawn, code = 0) =>
+    Effect.sync(() => {
+      spawn.killed = true;
+    }).pipe(
+      Effect.andThen(
+        Deferred.succeed(spawn.exit, ChildProcessSpawner.ExitCode(code)).pipe(Effect.asVoid),
+      ),
+    );
+  return { spawner, spawns, exitSpawn };
 }
 
 describe("OmpRpcRuntime", () => {
@@ -350,6 +371,49 @@ describe("OmpRpcRuntime", () => {
       NodeAssert.equal(fake.spawns[0]?.options.cwd, "/proj-a");
       NodeAssert.equal(fake.spawns[1]?.options.cwd, "/proj-b");
     }),
+  );
+
+  it.effect("fails in-flight requests and ends streamFrames when the child exits", () =>
+    Effect.gen(function* () {
+      const fake = makeFakeOmpSpawner({ sessionFile: "/tmp/omp-session.jsonl" });
+      const runtime = new OmpRpcRuntime(fake.spawner, "/opt/omp");
+      yield* runtime.ensureSession({
+        sessionKey: "thread-1",
+        cwd: "/proj",
+        resumeCursor: null,
+      });
+      const framesFiber = yield* Stream.runCollect(runtime.streamFrames("thread-1")).pipe(
+        Effect.forkScoped,
+      );
+      // get_available_models gets no correlated response from the fake, so the
+      // request stays pending until the child exits.
+      const sendFiber = yield* runtime
+        .send("thread-1", { type: "get_available_models" })
+        .pipe(Effect.forkScoped);
+      // Wait until the fake child observed the command: by then the request's
+      // pending Deferred is registered and its liveness check passed, so the
+      // exit watcher — not the liveness fast-path — must fail it.
+      let observed = false;
+      for (let i = 0; i < 100 && !observed; i++) {
+        yield* Effect.yieldNow;
+        observed = (fake.spawns[0]?.commands ?? []).length >= 1;
+      }
+      NodeAssert.equal(observed, true);
+      yield* fake.exitSpawn(fake.spawns[0]!, 137);
+      const sendOutcome = yield* Fiber.join(sendFiber).pipe(Effect.exit);
+      NodeAssert.equal(Exit.isFailure(sendOutcome), true);
+      if (Exit.isFailure(sendOutcome)) {
+        const error = Cause.squash(sendOutcome.cause);
+        NodeAssert.ok(isOmpSpawnError(error));
+        NodeAssert.match(error.message, /child exited \(code 137\)/);
+      }
+      // The frames stream ends when the child exits (the queue is shut down;
+      // the pull may surface as success or interrupt — either way it must not
+      // hang and must carry no buffered frames).
+      const framesOutcome = yield* Fiber.join(framesFiber).pipe(Effect.exit);
+      const frames = Exit.isSuccess(framesOutcome) ? framesOutcome.value : [];
+      NodeAssert.equal(frames.length, 0);
+    }).pipe(Effect.scoped),
   );
 
   it.effect("dispose kills the live child so the next ensureSession respawns", () =>

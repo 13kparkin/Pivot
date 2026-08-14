@@ -725,6 +725,93 @@ it.effect("ProviderServiceLive keeps persisted resumable sessions on startup", (
   }).pipe(Effect.provide(NodeServices.layer)),
 );
 
+it.effect("ProviderServiceLive settles stale running sessions via reconcileStaleSessions", () =>
+  Effect.gen(function* () {
+    const tempDir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-provider-reconcile-"));
+    const dbPath = NodePath.join(tempDir, "orchestration.sqlite");
+
+    const codex = makeFakeCodexAdapter();
+    const registry = makeAdapterRegistryMock({
+      [ProviderDriverKind.make("codex")]: codex.adapter,
+    });
+
+    const persistenceLayer = makeSqlitePersistenceLive(dbPath);
+    const runtimeRepositoryLayer = ProviderSessionRuntime.layer.pipe(
+      Layer.provide(persistenceLayer),
+    );
+    const directoryLayer = ProviderSessionDirectoryLive.pipe(Layer.provide(runtimeRepositoryLayer));
+
+    yield* Effect.gen(function* () {
+      const directory = yield* ProviderSessionDirectory.ProviderSessionDirectory;
+      yield* directory.upsert({
+        provider: ProviderDriverKind.make("codex"),
+        providerInstanceId: codexInstanceId,
+        threadId: asThreadId("thread-stale-running"),
+        status: "running",
+        resumeCursor: "/tmp/stale-session.jsonl",
+        runtimePayload: { cwd: "/proj", activeTurnId: "turn-stale" },
+      });
+      // A binding backed by a live adapter session is left alone.
+      yield* directory.upsert({
+        provider: ProviderDriverKind.make("codex"),
+        providerInstanceId: codexInstanceId,
+        threadId: asThreadId("thread-fresh-running"),
+        status: "running",
+        resumeCursor: "/tmp/fresh-session.jsonl",
+        runtimePayload: { cwd: "/proj", activeTurnId: "turn-fresh" },
+      });
+    }).pipe(Effect.provide(directoryLayer));
+
+    codex.hasSession.mockImplementation((threadId: ThreadId) =>
+      Effect.succeed(threadId === asThreadId("thread-fresh-running")),
+    );
+
+    const providerLayer = makeProviderServiceLive().pipe(
+      Layer.provide(Layer.succeed(ProviderAdapterRegistry.ProviderAdapterRegistry, registry)),
+      Layer.provide(directoryLayer),
+      Layer.provide(defaultServerSettingsLayer),
+      Layer.provide(serverConfigTestLayer),
+      Layer.provide(AnalyticsService.layerTest),
+      Layer.provide(
+        Layer.succeed(
+          ProviderEventLoggers.ProviderEventLoggers,
+          ProviderEventLoggers.NoOpProviderEventLoggers,
+        ),
+      ),
+    );
+
+    // Read the bindings inside the provider layer scope: its shutdown
+    // finalizer (runStopAll) marks every persisted binding stopped, which would
+    // otherwise mask the reconcile's skip-live-session behavior.
+    const outcome = yield* Effect.gen(function* () {
+      const provider = yield* ProviderService.ProviderService;
+      const directory = yield* ProviderSessionDirectory.ProviderSessionDirectory;
+      const events = yield* provider.reconcileStaleSessions();
+      const stale = yield* directory.getBinding(asThreadId("thread-stale-running"));
+      const fresh = yield* directory.getBinding(asThreadId("thread-fresh-running"));
+      return {
+        events,
+        staleStatus: Option.isSome(stale) ? stale.value.status : undefined,
+        freshStatus: Option.isSome(fresh) ? fresh.value.status : undefined,
+      };
+    }).pipe(Effect.provide(Layer.mergeAll(providerLayer, directoryLayer)), Effect.scoped);
+
+    assert.equal(outcome.events.length, 1);
+    const event = outcome.events[0];
+    assert.equal(event?.type, "session.exited");
+    assert.equal(event?.threadId, "thread-stale-running");
+    assert.equal(event?.providerInstanceId, codexInstanceId);
+    if (event?.type === "session.exited") {
+      assert.equal(event.payload.exitKind, "error");
+      assert.match(event.payload.reason ?? "", /server restarted/i);
+    }
+    assert.equal(outcome.staleStatus, "stopped");
+    assert.equal(outcome.freshStatus, "running");
+
+    NodeFS.rmSync(tempDir, { recursive: true, force: true });
+  }).pipe(Effect.provide(NodeServices.layer)),
+);
+
 it.effect(
   "ProviderServiceLive restores rollback routing after restart using persisted thread mapping",
   () =>

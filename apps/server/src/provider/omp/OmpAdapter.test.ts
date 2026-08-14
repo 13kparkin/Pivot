@@ -15,6 +15,7 @@ import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
+import * as TestClock from "effect/testing/TestClock";
 import { describe } from "vite-plus/test";
 
 import { ProviderAdapterRequestError, ProviderAdapterSessionNotFoundError } from "../Errors.ts";
@@ -690,6 +691,93 @@ describe("OmpAdapter", () => {
         NodeAssert.ok(isProviderAdapterSessionNotFoundError(Cause.squash(exit.cause)));
       }
     }),
+  );
+
+  it.effect("settles turn + session when the frame transport ends mid-turn", () =>
+    Effect.gen(function* () {
+      const fake = new FakeOmpRpc();
+      const adapter = new OmpAdapter(fake, testRandomUUID);
+      const eventsFiber = yield* Stream.runCollect(
+        adapter.streamEvents.pipe(Stream.takeUntil((event) => event.type === "session.exited")),
+      ).pipe(
+        Effect.map((chunk) => Array.from(chunk)),
+        Effect.forkScoped,
+      );
+      yield* adapter.startSession(startInput);
+      yield* adapter.sendTurn({ threadId: THREAD_ID, input: "hi" });
+      yield* fake.closeFrames(THREAD_ID);
+      const events = yield* Fiber.join(eventsFiber);
+      NodeAssert.equal(
+        events.some(
+          (event) => event.type === "turn.aborted" && event.payload.reason === "provider_exited",
+        ),
+        true,
+      );
+      NodeAssert.equal(
+        events.some(
+          (event) => event.type === "session.exited" && event.payload.exitKind === "error",
+        ),
+        true,
+      );
+      NodeAssert.equal(yield* adapter.hasSession(THREAD_ID), false);
+      NodeAssert.deepEqual(fake.disposed, [THREAD_ID]);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("emits only session.exited when the transport ends while idle", () =>
+    Effect.gen(function* () {
+      const fake = new FakeOmpRpc();
+      const adapter = new OmpAdapter(fake, testRandomUUID);
+      const eventsFiber = yield* Stream.runCollect(
+        adapter.streamEvents.pipe(Stream.takeUntil((event) => event.type === "session.exited")),
+      ).pipe(
+        Effect.map((chunk) => Array.from(chunk)),
+        Effect.forkScoped,
+      );
+      yield* adapter.startSession(startInput);
+      yield* fake.closeFrames(THREAD_ID);
+      const events = yield* Fiber.join(eventsFiber);
+      NodeAssert.equal(
+        events.some((event) => event.type === "turn.aborted"),
+        false,
+      );
+      NodeAssert.equal(
+        events.some((event) => event.type === "session.exited"),
+        true,
+      );
+      NodeAssert.equal(yield* adapter.hasSession(THREAD_ID), false);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("interruptTurn force-stops when abort is never acknowledged", () =>
+    Effect.gen(function* () {
+      const fake = new FakeOmpRpc();
+      fake.respondToAbort = false;
+      const adapter = new OmpAdapter(fake, testRandomUUID);
+      const eventsFiber = yield* Stream.runCollect(
+        adapter.streamEvents.pipe(Stream.takeUntil((event) => event.type === "session.exited")),
+      ).pipe(
+        Effect.map((chunk) => Array.from(chunk)),
+        Effect.forkScoped,
+      );
+      yield* adapter.startSession(startInput);
+      yield* adapter.sendTurn({ threadId: THREAD_ID, input: "hi" });
+      const interruptFiber = yield* adapter.interruptTurn(THREAD_ID).pipe(Effect.forkScoped);
+      yield* TestClock.adjust("10 seconds");
+      yield* Fiber.join(interruptFiber);
+      const events = yield* Fiber.join(eventsFiber);
+      NodeAssert.equal(
+        events.some(
+          (event) => event.type === "turn.aborted" && event.payload.reason === "user_abort",
+        ),
+        true,
+      );
+      NodeAssert.equal(
+        events.some((event) => event.type === "session.exited"),
+        true,
+      );
+      NodeAssert.equal(yield* adapter.hasSession(THREAD_ID), false);
+    }).pipe(Effect.scoped),
   );
 
   it.effect("readThread returns an empty turn list for a live session", () =>
