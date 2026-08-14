@@ -1,13 +1,15 @@
 import { ApprovalRequestId, isToolLifecycleItemType } from "@t3tools/contracts";
 import type {
+  AdvisorNote,
   OrchestrationLatestTurn,
   OrchestrationThread,
   OrchestrationThreadActivity,
   ToolLifecycleItemType,
+  TtsrRule,
   TurnId,
   UserInputQuestion,
 } from "@t3tools/contracts";
-import { formatDuration } from "@t3tools/shared/orchestrationTiming";
+import { formatDuration, formatElapsed } from "@t3tools/shared/orchestrationTiming";
 
 import * as Arr from "effect/Array";
 import * as Order from "effect/Order";
@@ -74,7 +76,10 @@ interface WorkLogEntry {
   itemType?: ToolLifecycleItemType;
   requestKind?: PendingApproval["requestKind"];
   toolLifecycleStatus?: WorkLogToolLifecycleStatus;
+  completedAt?: string;
   toolData?: unknown;
+  advisorNotes?: ReadonlyArray<AdvisorNote>;
+  ttsrRules?: ReadonlyArray<TtsrRule>;
 }
 
 interface DerivedWorkLogEntry extends WorkLogEntry {
@@ -433,6 +438,26 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
   if (toolLifecycleStatus) {
     entry.toolLifecycleStatus = toolLifecycleStatus;
   }
+  if (
+    toolLifecycleStatus === "completed" ||
+    toolLifecycleStatus === "failed" ||
+    toolLifecycleStatus === "declined" ||
+    toolLifecycleStatus === "stopped"
+  ) {
+    entry.completedAt = activity.createdAt;
+  }
+  if (activity.kind === "advisor.comment") {
+    const notes = asRecord(payload)?.notes;
+    if (Array.isArray(notes)) {
+      entry.advisorNotes = notes as ReadonlyArray<AdvisorNote>;
+    }
+  }
+  if (activity.kind === "ttsr.triggered") {
+    const rules = asRecord(payload)?.rules;
+    if (Array.isArray(rules)) {
+      entry.ttsrRules = rules as ReadonlyArray<TtsrRule>;
+    }
+  }
   const collapseKey = deriveToolLifecycleCollapseKey(entry);
   if (collapseKey) {
     entry.collapseKey = collapseKey;
@@ -506,6 +531,10 @@ function mergeDerivedWorkLogEntries(
   return {
     ...previous,
     ...next,
+    // The merged row keeps the START of the lifecycle so per-item duration
+    // (completedAt - createdAt) stays positive; the terminal activity only
+    // supplies the settled timestamp (`...next` carries its completedAt).
+    createdAt: previous.createdAt,
     ...(detail ? { detail } : {}),
     ...(command ? { command } : {}),
     ...(rawCommand ? { rawCommand } : {}),
@@ -629,6 +658,12 @@ function workEntryIcon(entry: DerivedWorkLogEntry): ThreadFeedActivity["icon"] {
     return "message";
   }
   if (entry.activityKind === "runtime.warning") return "warning";
+  if (entry.activityKind === "advisor.comment") {
+    if (entry.tone === "error") return "alert";
+    if (entry.tone === "warning") return "warning";
+    return "message";
+  }
+  if (entry.activityKind === "ttsr.triggered") return "zap";
   if (entry.requestKind === "command") return "command";
   if (entry.requestKind === "file-read") return "eye";
   if (entry.requestKind === "file-change") return "edit";
@@ -658,10 +693,44 @@ function buildWorkEntryExpandedBody(entry: WorkLogEntry): string | null {
   if (entry.itemType === "mcp_tool_call" && entry.toolData !== undefined) {
     appendUniqueBlock(`MCP call\n${JSON.stringify(entry.toolData, null, 2)}`);
   }
+  if ((entry.advisorNotes?.length ?? 0) > 0) {
+    for (const note of entry.advisorNotes ?? []) {
+      const severityLabel =
+        note.severity === "blocker"
+          ? "[blocker] "
+          : note.severity === "concern"
+            ? "[concern] "
+            : note.severity === "nit"
+              ? "[nit] "
+              : "";
+      appendUniqueBlock(`${severityLabel}${note.note}${note.advisor ? ` — ${note.advisor}` : ""}`);
+    }
+  }
+  if ((entry.ttsrRules?.length ?? 0) > 0) {
+    for (const rule of entry.ttsrRules ?? []) {
+      const interruptLabel =
+        rule.interruptMode === "never"
+          ? " (never interrupts)"
+          : rule.interruptMode === "prose-only"
+            ? " (prose only)"
+            : rule.interruptMode === "tool-only"
+              ? " (tool only)"
+              : rule.interruptMode === "always"
+                ? " (always interrupts)"
+                : "";
+      appendUniqueBlock(
+        `${rule.name}${interruptLabel}${rule.description ? `\n${rule.description}` : ""}\n${rule.path}`,
+      );
+    }
+  }
   appendUniqueBlock(entry.rawCommand ?? entry.command);
   appendUniqueBlock(entry.detail);
   if ((entry.changedFiles?.length ?? 0) > 0) {
     appendUniqueBlock(entry.changedFiles!.join("\n"));
+  }
+  const duration = formatElapsed(entry.createdAt, entry.completedAt);
+  if (duration !== null) {
+    appendUniqueBlock(`Duration: ${duration}`);
   }
 
   return blocks.length > 0 ? blocks.join("\n\n") : null;
@@ -670,6 +739,9 @@ function buildWorkEntryExpandedBody(entry: WorkLogEntry): string | null {
 function workEntryHasExpandedBody(entry: WorkLogEntry): boolean {
   return (
     (entry.itemType === "mcp_tool_call" && entry.toolData !== undefined) ||
+    (entry.advisorNotes?.length ?? 0) > 0 ||
+    (entry.ttsrRules?.length ?? 0) > 0 ||
+    formatElapsed(entry.createdAt, entry.completedAt) !== null ||
     Boolean((entry.rawCommand ?? entry.command)?.trim()) ||
     Boolean(entry.detail?.trim()) ||
     (entry.changedFiles?.some((path) => path.trim().length > 0) ?? false)

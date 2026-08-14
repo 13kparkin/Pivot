@@ -259,7 +259,7 @@ describe("buildThreadFeed", () => {
     expect(group.activities).toHaveLength(1);
     expect(group.activities[0]).toMatchObject({
       id: "tool-completed",
-      createdAt: "2026-04-01T00:00:02.000Z",
+      createdAt: "2026-04-01T00:00:01.000Z",
       turnId: "turn-1",
       summary: "Run tests",
       detail: "bun run test",
@@ -268,9 +268,8 @@ describe("buildThreadFeed", () => {
       toolLike: true,
       status: "success",
     });
-    expect(group.activities[0]?.getFullDetail()).toBe("/bin/zsh -lc 'bun run test'");
-    expect(group.activities[0]?.getCopyText()).toBe(
-      "Run tests\nbun run test\n/bin/zsh -lc 'bun run test'",
+    expect(group.activities[0]?.getFullDetail()).toBe(
+      "/bin/zsh -lc 'bun run test'\n\nDuration: 1.0s",
     );
   });
 
@@ -664,7 +663,7 @@ it("includes per-item duration in the expanded body when the row settled", () =>
   const rows = feed.flatMap((entry) => (entry.type === "activity-group" ? entry.activities : []));
 
   expect(rows).toHaveLength(1);
-  expect(rows[0]!.getFullDetail()).toContain("8s");
+  expect(rows[0]!.getFullDetail()).toContain("Duration: 8.0s");
 });
 
 describe("quiet timeline: nested agents", () => {
@@ -773,11 +772,11 @@ describe("advisor and ttsr feed rows", () => {
 
     expect(rows).toHaveLength(1);
     const row = rows[0]!;
-    expect(row.summary).toBe("codegraph");
+    expect(row.summary).toBe("Codegraph");
     expect(row.canExpand).toBe(true);
     expect(row.getFullDetail()).toContain("codegraph");
     expect(row.getFullDetail()).toContain("Query CodeGraph before searching");
-    expect(row.getFullDetail()).toContain("Always interrupts");
+    expect(row.getFullDetail()).toContain("(always interrupts)");
   });
 
   it("keeps settled tool rows visible with completed lifecycle status", () => {
