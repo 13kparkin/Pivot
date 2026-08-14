@@ -17,6 +17,7 @@ import { primaryServerKeybindingsAtom } from "../state/server";
 import { useEnvironmentIdentificationMode, useLegacySidebarEnabled } from "../hooks/useSettings";
 import LegacyThreadSidebar from "./LegacySidebar";
 import ThreadSidebar from "./Sidebar";
+import { CapabilitiesSidebarNav } from "./capabilities/CapabilitiesSidebarNav";
 import { SettingsSidebarNav } from "./settings/SettingsSidebarNav";
 import { SidebarChromeHeader } from "./sidebar/SidebarChrome";
 import {
@@ -136,10 +137,11 @@ function ProjectProjectionRetention() {
 export function AppSidebarLayout({ children }: { children: ReactNode }) {
   const navigate = useNavigate();
   const legacySidebarEnabled = useLegacySidebarEnabled();
-  // Settings routes show the settings nav in place of whichever thread
-  // sidebar is active.
+  // Settings and capabilities routes show their own nav in place of
+  // whichever thread sidebar is active.
   const pathname = useLocation({ select: (location) => location.pathname });
   const isOnSettings = pathname === "/settings" || pathname.startsWith("/settings/");
+  const isOnCapabilities = pathname === "/capabilities" || pathname.startsWith("/capabilities/");
   const isMacosDesktop = isElectron && isMacPlatform(navigator.platform);
   const [sidebarWidth, setSidebarWidth] = useState(readInitialThreadSidebarWidth);
   // Subscribed rather than read once: the clamp must track live window size,
@@ -227,6 +229,11 @@ export function AppSidebarLayout({ children }: { children: ReactNode }) {
           <>
             <SidebarChromeHeader isElectron={isElectron} />
             <SettingsSidebarNav pathname={pathname} />
+          </>
+        ) : isOnCapabilities ? (
+          <>
+            <SidebarChromeHeader isElectron={isElectron} />
+            <CapabilitiesSidebarNav pathname={pathname} />
           </>
         ) : legacySidebarEnabled ? (
           <LegacyThreadSidebar />

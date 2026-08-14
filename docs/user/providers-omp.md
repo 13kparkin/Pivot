@@ -38,3 +38,31 @@ When omp spawns subagents, open the **Agents** panel and click an agent to view 
 While a turn is running, **Send** becomes **Queue**: your follow-up is held until the turn finishes successfully, then sent automatically. **Stop** aborts the active turn and waits until omp confirms the stop (Stopping… → Stopped). Stopping does not auto-send queued follow-ups; they stay until you send again or a later turn completes normally.
 
 Thread rollback uses omp session branching (`get_branch_messages` + `branch`). The context meter updates live from omp `get_state` / `get_session_stats` (including throughput and session duration when omp reports them). The **Usage** page shows live plan limits from `omp usage` (used/remaining per upstream provider such as Codex) and aggregates on-disk omp session history (`~/.omp/agent/sessions`) for token cost.
+
+## Capabilities (omp config surface)
+
+The **Capabilities** page (sidebar entry below the current project) is a
+read-only-at-a-glance + editable view of omp's own configuration — the same
+files and CLI that omp itself manages, surfaced in the app. It is omp-only by
+design: Pivot renders and edits omp's config, never a parallel copy.
+
+- **Overview** lists the discovered capability resources (config, models,
+  skills, commands, rules, prompts, instructions, hooks, tools, extensions,
+  MCP servers, env) with their scope (global vs project) and provenance
+  (global / project / profile). The active agent directory is resolved from
+  the server host via `omp config path`, so profiles, `PI_CODING_AGENT_DIR`,
+  `PI_CONFIG_DIR`, and XDG relocation are honored automatically.
+- **Settings** shows the effective omp settings (`omp config list --json`):
+  key, type, description, current value. Secret-typed keys (tokens, keys,
+  passwords) are masked and write-only — their values are managed through
+  omp's own auth/config commands, never edited here.
+- Edits are scope-aware: **Global** writes run `omp config set` on the server
+  host; **Project** writes merge into the project's `.omp/config.yml`
+  (comments and unknown keys are preserved) after a timestamped `.bak`
+  backup. A precedence ladder (defaults ← global ← project ← overlays ←
+  runtime) is shown so you can see which layer wins.
+- Destructive actions (resetting a setting to its default) ask for
+  confirmation before they run.
+
+Later phases add models & providers, roles, capability-file editing, MCP
+servers, packages/plugins, auth, and themes to the same page.
