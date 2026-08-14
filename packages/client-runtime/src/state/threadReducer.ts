@@ -289,6 +289,7 @@ export function applyThreadDetailEvent(
         ...(event.payload.attachments !== undefined
           ? { attachments: event.payload.attachments }
           : {}),
+        ...(event.payload.statusText !== undefined ? { statusText: event.payload.statusText } : {}),
         turnId: event.payload.turnId,
         streaming: event.payload.streaming,
         createdAt: event.payload.createdAt,
@@ -312,6 +313,13 @@ export function applyThreadDetailEvent(
                   ...(message.streaming ? {} : { updatedAt: message.updatedAt }),
                   ...(message.attachments !== undefined
                     ? { attachments: message.attachments }
+                    : {}),
+                  ...(event.payload.statusText !== undefined
+                    ? {
+                        statusText: message.streaming
+                          ? `${entry.statusText ?? ""}${event.payload.statusText}`
+                          : event.payload.statusText,
+                      }
                     : {}),
                 },
           )
