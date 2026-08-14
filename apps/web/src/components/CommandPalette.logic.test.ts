@@ -261,7 +261,7 @@ describe("buildThreadActionItems", () => {
       snippet: "The relay reconnect is now bounded.",
       query: "reconnect",
     });
-    expect(item?.description).toBe("T3 Code · #feat/search");
+    expect(item?.description).toBe("Pivot · #feat/search");
   });
 
   it("prefers renderDescription when provided", () => {
@@ -275,7 +275,7 @@ describe("buildThreadActionItems", () => {
       runThread: async (_thread) => undefined,
     });
 
-    expect(item?.description).toBe("T3 Code:feat/search:wt");
+    expect(item?.description).toBe("Pivot:feat/search:wt");
   });
 
   it("filters archived threads out of thread search items", () => {
