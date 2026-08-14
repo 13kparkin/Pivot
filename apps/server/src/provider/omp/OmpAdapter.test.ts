@@ -1498,4 +1498,89 @@ describe("OmpAdapter", () => {
       NodeAssert.equal(result?.isError, undefined);
     }),
   );
+
+  describe("capabilities delegation", () => {
+    const snapshot = { settings: { entries: [] }, resources: [] } as const;
+
+    it.effect("capabilitiesSnapshot delegates to the injected service", () =>
+      Effect.gen(function* () {
+        const fake = new FakeOmpRpc();
+        const received: Array<unknown> = [];
+        const service = {
+          getSnapshot: (projectId?: string) => {
+            received.push(projectId);
+            return Effect.succeed(snapshot);
+          },
+          writeSetting: (input: unknown) => {
+            received.push(input);
+            return Effect.succeed(snapshot);
+          },
+          resetSetting: (input: unknown) => {
+            received.push(input);
+            return Effect.succeed(snapshot);
+          },
+        };
+        const adapter = new OmpAdapter(fake, testRandomUUID, { capabilitiesService: service });
+        const result = yield* adapter.capabilitiesSnapshot();
+        NodeAssert.equal(result, snapshot);
+        NodeAssert.equal(received.length, 1);
+        NodeAssert.equal(received[0], undefined);
+      }),
+    );
+
+    it.effect("capabilitiesWriteSetting passes the input through", () =>
+      Effect.gen(function* () {
+        const fake = new FakeOmpRpc();
+        const service = {
+          getSnapshot: () => Effect.succeed(snapshot),
+          writeSetting: (input: unknown) => {
+            NodeAssert.deepEqual(input, {
+              key: "theme.dark",
+              value: "midnight",
+              scope: "global",
+            });
+            return Effect.succeed(snapshot);
+          },
+          resetSetting: () => Effect.succeed(snapshot),
+        };
+        const adapter = new OmpAdapter(fake, testRandomUUID, { capabilitiesService: service });
+        const result = yield* adapter.capabilitiesWriteSetting({
+          key: "theme.dark",
+          value: "midnight",
+          scope: "global",
+        });
+        NodeAssert.equal(result, snapshot);
+      }),
+    );
+
+    it.effect("capabilitiesResetSetting passes the input through", () =>
+      Effect.gen(function* () {
+        const fake = new FakeOmpRpc();
+        const service = {
+          getSnapshot: () => Effect.succeed(snapshot),
+          writeSetting: () => Effect.succeed(snapshot),
+          resetSetting: (input: unknown) => {
+            NodeAssert.deepEqual(input, { key: "autoResume", scope: "global", confirm: true });
+            return Effect.succeed(snapshot);
+          },
+        };
+        const adapter = new OmpAdapter(fake, testRandomUUID, { capabilitiesService: service });
+        const result = yield* adapter.capabilitiesResetSetting({
+          key: "autoResume",
+          scope: "global",
+          confirm: true,
+        });
+        NodeAssert.equal(result, snapshot);
+      }),
+    );
+
+    it.effect("fails with a request error when the service is not configured", () =>
+      Effect.gen(function* () {
+        const fake = new FakeOmpRpc();
+        const adapter = new OmpAdapter(fake, testRandomUUID);
+        const failure = yield* adapter.capabilitiesSnapshot().pipe(Effect.flip);
+        NodeAssert.ok(isProviderAdapterRequestError(failure));
+      }),
+    );
+  });
 });

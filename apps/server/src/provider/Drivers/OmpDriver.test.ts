@@ -20,8 +20,11 @@ import { FetchHttpClient } from "effect/unstable/http";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 import { describe } from "vite-plus/test";
 
+import * as Option from "effect/Option";
+import * as ProcessRunner from "../../processRunner.ts";
 import * as ServerConfig from "../../config.ts";
 import * as ServerSettings from "../../serverSettings.ts";
+import { ProjectionSnapshotQuery } from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { OmpDriver } from "./OmpDriver.ts";
 
 const decodeOmpSettings = Schema.decodeSync(OmpSettings);
@@ -39,6 +42,28 @@ const OmpDriverTestLayer = ServerConfig.layerTest(process.cwd(), {
   Layer.provideMerge(ServerSettings.layerTest()),
   Layer.provideMerge(NodeServices.layer),
   Layer.provideMerge(FetchHttpClient.layer),
+  Layer.provideMerge(
+    Layer.succeed(
+      ProjectionSnapshotQuery,
+      ProjectionSnapshotQuery.of({
+        getCommandReadModel: () => Effect.succeed({ projects: [], threads: [], messages: [] }),
+        getSnapshot: () => Effect.succeed({ projects: [], threads: [], messages: [] }),
+        getShellSnapshot: () => Effect.succeed({ projects: [], threads: [] }),
+        getArchivedShellSnapshot: () => Effect.succeed({ projects: [], threads: [] }),
+        searchThreads: () => Effect.succeed({ threads: [], query: "" }),
+        getSnapshotSequence: () => Effect.succeed(0),
+        getCounts: () => Effect.succeed({ projectCount: 0, threadCount: 0 }),
+        getActiveProjectByWorkspaceRoot: () => Effect.succeed(Option.none()),
+        getProjectShellById: () => Effect.succeed(Option.none()),
+        getFirstActiveThreadIdByProjectId: () => Effect.succeed(Option.none()),
+        getThreadCheckpointContext: () => Effect.succeed(Option.none()),
+        getFullThreadDiffContext: () => Effect.succeed(Option.none()),
+        getThreadShellById: () => Effect.succeed(Option.none()),
+        getThreadDetailById: () => Effect.succeed(Option.none()),
+        getThreadDetailSnapshot: () => Effect.succeed(Option.none()),
+      }),
+    ),
+  ),
 );
 
 const realOmpBinary = (() => {
@@ -64,7 +89,7 @@ function asSpawnedCommand(command: ChildProcess.Command) {
   };
 }
 
-function makeFakeOmpSpawner(sessionFile: string) {
+function makeFakeOmpSpawner(sessionFile: string, agentDir = "/tmp/t3-omp-agent") {
   const spawns: Array<{
     readonly command: string;
     readonly args: ReadonlyArray<string>;
@@ -93,7 +118,7 @@ function makeFakeOmpSpawner(sessionFile: string) {
       };
       spawns.push(spawn);
 
-      // `omp --version` probes are plain CLI, not RPC.
+      // `omp --version` probes and `omp config path` are plain CLI, not RPC.
       if (spawned.args.includes("--version")) {
         return ChildProcessSpawner.makeHandle({
           pid: ChildProcessSpawner.ProcessId(spawns.length),
@@ -103,6 +128,22 @@ function makeFakeOmpSpawner(sessionFile: string) {
           unref: Effect.succeed(Effect.void),
           stdin: Sink.drain,
           stdout: Stream.make(encoder.encode("omp/17.3.0\n")),
+          stderr: Stream.empty,
+          all: Stream.empty,
+          getInputFd: () => Sink.drain,
+          getOutputFd: () => Stream.empty,
+        });
+      }
+
+      if (spawned.args[0] === "config" && spawned.args[1] === "path") {
+        return ChildProcessSpawner.makeHandle({
+          pid: ChildProcessSpawner.ProcessId(spawns.length),
+          exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(0)),
+          isRunning: Effect.succeed(false),
+          kill: () => Effect.void,
+          unref: Effect.succeed(Effect.void),
+          stdin: Sink.drain,
+          stdout: Stream.make(encoder.encode(`${agentDir}\n`)),
           stderr: Stream.empty,
           all: Stream.empty,
           getInputFd: () => Sink.drain,
@@ -207,7 +248,8 @@ describe("OmpDriver", () => {
   it.effect("create wires adapter sessions through the configured omp binary", () =>
     Effect.gen(function* () {
       const binaryPath = makeTempOmpBinary();
-      const fake = makeFakeOmpSpawner("/tmp/omp-session.jsonl");
+      const agentDir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-omp-driver-agent-"));
+      const fake = makeFakeOmpSpawner("/tmp/omp-session.jsonl", agentDir);
       const instance = yield* OmpDriver.create({
         instanceId: ProviderInstanceId.make("omp"),
         displayName: "omp",
@@ -217,6 +259,11 @@ describe("OmpDriver", () => {
         config: decodeOmpSettings({ enabled: true, binaryPath }),
       }).pipe(
         Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, fake.spawner),
+        Effect.provide(
+          ProcessRunner.layer.pipe(
+            Layer.provide(Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, fake.spawner)),
+          ),
+        ),
         Effect.provide(OmpDriverTestLayer),
       );
 
@@ -244,7 +291,8 @@ describe("OmpDriver", () => {
   it.effect("refresh populates models from get_available_models", () =>
     Effect.gen(function* () {
       const binaryPath = makeTempOmpBinary();
-      const fake = makeFakeOmpSpawner("/tmp/omp-models.jsonl");
+      const agentDir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-omp-driver-agent-"));
+      const fake = makeFakeOmpSpawner("/tmp/omp-models.jsonl", agentDir);
       const instance = yield* OmpDriver.create({
         instanceId: ProviderInstanceId.make("omp"),
         displayName: "omp",
@@ -254,6 +302,11 @@ describe("OmpDriver", () => {
         config: decodeOmpSettings({ enabled: true, binaryPath }),
       }).pipe(
         Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, fake.spawner),
+        Effect.provide(
+          ProcessRunner.layer.pipe(
+            Layer.provide(Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, fake.spawner)),
+          ),
+        ),
         Effect.provide(OmpDriverTestLayer),
       );
 
@@ -276,7 +329,8 @@ describe("OmpDriver", () => {
   it.effect("refresh publishes models through streamChanges", () =>
     Effect.gen(function* () {
       const binaryPath = makeTempOmpBinary();
-      const fake = makeFakeOmpSpawner("/tmp/omp-models.jsonl");
+      const agentDir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-omp-driver-agent-"));
+      const fake = makeFakeOmpSpawner("/tmp/omp-models.jsonl", agentDir);
       const instance = yield* OmpDriver.create({
         instanceId: ProviderInstanceId.make("omp"),
         displayName: "omp",
@@ -286,6 +340,11 @@ describe("OmpDriver", () => {
         config: decodeOmpSettings({ enabled: true, binaryPath }),
       }).pipe(
         Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, fake.spawner),
+        Effect.provide(
+          ProcessRunner.layer.pipe(
+            Layer.provide(Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, fake.spawner)),
+          ),
+        ),
         Effect.provide(OmpDriverTestLayer),
       );
 
@@ -318,7 +377,10 @@ describe("OmpDriver", () => {
           environment: [],
           enabled: true,
           config: decodeOmpSettings({ enabled: true, binaryPath: realOmpBinary! }),
-        }).pipe(Effect.provide(OmpDriverTestLayer));
+        }).pipe(
+          Effect.provide(ProcessRunner.layer.pipe(Layer.provide(NodeServices.layer))),
+          Effect.provide(OmpDriverTestLayer),
+        );
 
         const updated = yield* instance.snapshot.streamChanges.pipe(
           Stream.take(1),
