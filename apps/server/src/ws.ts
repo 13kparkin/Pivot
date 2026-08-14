@@ -61,6 +61,7 @@ import {
   ProviderDriverKind,
   ServerOmpLoginError,
   ServerOmpHubError,
+  ServerOmpCapabilitiesError,
   type ProviderInstanceId,
 } from "@t3tools/contracts";
 import { resolveServerBackgroundActivitySettings } from "@t3tools/shared/backgroundActivitySettings";
@@ -1556,6 +1557,71 @@ const makeWsRpcLayer = (
                     }),
                 ),
               ),
+            { "rpc.aggregate": "server" },
+          ),
+        [WS_METHODS.serverOmpCapabilitiesGetSnapshot]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.serverOmpCapabilitiesGetSnapshot,
+            Effect.gen(function* () {
+              const instanceId: ProviderInstanceId =
+                input.instanceId ?? defaultInstanceIdForDriver(ProviderDriverKind.make("omp"));
+              const snapshot = yield* providerRegistry
+                .ompCapabilitiesGetSnapshot({ instanceId, projectId: input.projectId })
+                .pipe(
+                  Effect.mapError(
+                    (cause) =>
+                      new ServerOmpCapabilitiesError({
+                        reason: cause instanceof Error ? cause.message : String(cause),
+                        cause,
+                      }),
+                  ),
+                );
+              return { snapshot };
+            }),
+            { "rpc.aggregate": "server" },
+          ),
+        [WS_METHODS.serverOmpCapabilitiesWriteSetting]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.serverOmpCapabilitiesWriteSetting,
+            Effect.gen(function* () {
+              const instanceId: ProviderInstanceId =
+                input.instanceId ?? defaultInstanceIdForDriver(ProviderDriverKind.make("omp"));
+              const { instanceId: _ignored, ...settingInput } = input;
+              const snapshot = yield* providerRegistry
+                .ompCapabilitiesWriteSetting({ instanceId, ...settingInput })
+                .pipe(
+                  Effect.mapError(
+                    (cause) =>
+                      new ServerOmpCapabilitiesError({
+                        reason: cause instanceof Error ? cause.message : String(cause),
+                        cause,
+                      }),
+                  ),
+                );
+              return { snapshot };
+            }),
+            { "rpc.aggregate": "server" },
+          ),
+        [WS_METHODS.serverOmpCapabilitiesResetSetting]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.serverOmpCapabilitiesResetSetting,
+            Effect.gen(function* () {
+              const instanceId: ProviderInstanceId =
+                input.instanceId ?? defaultInstanceIdForDriver(ProviderDriverKind.make("omp"));
+              const { instanceId: _ignored, ...settingInput } = input;
+              const snapshot = yield* providerRegistry
+                .ompCapabilitiesResetSetting({ instanceId, ...settingInput })
+                .pipe(
+                  Effect.mapError(
+                    (cause) =>
+                      new ServerOmpCapabilitiesError({
+                        reason: cause instanceof Error ? cause.message : String(cause),
+                        cause,
+                      }),
+                  ),
+                );
+              return { snapshot };
+            }),
             { "rpc.aggregate": "server" },
           ),
         [WS_METHODS.serverUpdateProvider]: (input) =>

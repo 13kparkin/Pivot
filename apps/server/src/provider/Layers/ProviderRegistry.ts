@@ -746,6 +746,21 @@ export const ProviderRegistryLive = Layer.effect(
             onOpenUrl: (request) => input.onOpenUrl(request.launchUrl ?? request.url),
           });
         }),
+      ompCapabilitiesGetSnapshot: ({ instanceId, projectId }) =>
+        Effect.gen(function* () {
+          const adapter = yield* resolveOmpAdapter(instanceId);
+          return yield* adapter.capabilitiesSnapshot(projectId);
+        }),
+      ompCapabilitiesWriteSetting: ({ instanceId, ...input }) =>
+        Effect.gen(function* () {
+          const adapter = yield* resolveOmpAdapter(instanceId);
+          return yield* adapter.capabilitiesWriteSetting(input);
+        }),
+      ompCapabilitiesResetSetting: ({ instanceId, ...input }) =>
+        Effect.gen(function* () {
+          const adapter = yield* resolveOmpAdapter(instanceId);
+          return yield* adapter.capabilitiesResetSetting(input);
+        }),
       get streamChanges() {
         return Stream.fromPubSub(changesPubSub);
       },

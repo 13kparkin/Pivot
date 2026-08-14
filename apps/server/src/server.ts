@@ -668,6 +668,7 @@ export const makeServerLayer = Layer.unwrap(
       Layer.provide(ApplicationObservabilityLive),
       Layer.provideMerge(FetchHttpClient.layer),
       Layer.provideMerge(VcsProcess.layer),
+      Layer.provideMerge(ProcessRunner.layer),
       Layer.provideMerge(PlatformServicesLive),
     );
   }),
