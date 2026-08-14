@@ -13,8 +13,10 @@
 import * as NodeOS from "node:os";
 
 import {
+  OmpCapabilitiesError,
   OmpSettings,
   ProviderDriverKind,
+  type ProjectId,
   type ServerProvider,
   type ServerProviderModel,
   ThreadId,
@@ -33,9 +35,12 @@ import { HttpClient } from "effect/unstable/http";
 import { ChildProcessSpawner } from "effect/unstable/process";
 
 import * as ServerConfig from "../../config.ts";
+import * as ProcessRunner from "../../processRunner.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { makeOmpTextGeneration } from "../../textGeneration/OmpTextGeneration.ts";
+import { ProjectionSnapshotQuery } from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { OmpAdapter } from "../omp/OmpAdapter.ts";
+import { OmpCapabilitiesService } from "../omp/OmpCapabilitiesService.ts";
 import { enrichOmpManagedBundleVersionAdvisory } from "../omp/OmpManagedBundleAdvisory.ts";
 import {
   makeOmpManagedBinary,
@@ -51,6 +56,7 @@ import {
   type ProviderDriver,
   type ProviderInstance,
 } from "../ProviderDriver.ts";
+import * as Option from "effect/Option";
 import { buildServerProvider, type ServerProviderDraft } from "../providerSnapshot.ts";
 import { hasPathSeparator, makeProviderMaintenanceCapabilities } from "../providerMaintenance.ts";
 import type { ServerProviderShape } from "../Services/ServerProvider.ts";
@@ -71,6 +77,8 @@ export type OmpDriverEnv =
   | FileSystem.FileSystem
   | HttpClient.HttpClient
   | Path.Path
+  | ProcessRunner.ProcessRunner
+  | ProjectionSnapshotQuery
   | ServerConfig.ServerConfig
   | ServerSettingsService;
 
@@ -389,7 +397,27 @@ export const OmpDriver: ProviderDriver<OmpSettings, OmpDriverEnv> = {
         ompHomeEnv && ompHomeEnv.length > 0
           ? ompHomeEnv
           : pathService.join(NodeOS.homedir(), ".omp");
-      const ompConfigStore = new OmpConfigStore(fs, pathService, ompHome);
+      // `omp config path` is AUTHORITATIVE for the active agent dir (honors
+      // profiles, PI_CODING_AGENT_DIR, PI_CONFIG_DIR, XDG). The store state IS
+      // the agent dir — config.yml sits at <agentDir>/config.yml. The driver
+      // degrades to the legacy OMP_HOME/~/.omp derivation only when the CLI
+      // cannot run (e.g. binary not yet installed); OmpCapabilitiesService
+      // itself re-resolves per call and fails closed with a typed error.
+      const processRunner = yield* ProcessRunner.ProcessRunner;
+      const resolveAgentDir = Effect.gen(function* () {
+        const result = yield* processRunner
+          .run({ command: launchBinary, args: ["config", "path"] })
+          .pipe(Effect.orDie);
+        const stdout = result.stdout.trim();
+        if (result.code !== 0 || result.timedOut || stdout.length === 0) {
+          return yield* Effect.fail("omp config path failed");
+        }
+        return stdout;
+      });
+      const agentDir = yield* resolveAgentDir.pipe(
+        Effect.orElseSucceed(() => pathService.join(ompHome, "agent")),
+      );
+      const ompConfigStore = new OmpConfigStore(fs, pathService, agentDir);
       // Settings updates recreate the instance via ProviderInstanceRegistryMutator,
       // so create() is the sync point for OmpSettings → omp config.yml.
       yield* syncOmpSettingsToConfigStore(effectiveConfig, ompConfigStore).pipe(
@@ -397,7 +425,7 @@ export const OmpDriver: ProviderDriver<OmpSettings, OmpDriverEnv> = {
       );
       const resolveRoleModel = (role: string) =>
         Effect.gen(function* () {
-          const configPath = pathService.join(ompHome, "agent", "config.yml");
+          const configPath = pathService.join(agentDir, "config.yml");
           const exists = yield* fs.exists(configPath);
           if (!exists) {
             return undefined;
@@ -405,7 +433,39 @@ export const OmpDriver: ProviderDriver<OmpSettings, OmpDriverEnv> = {
           const text = yield* fs.readFileString(configPath);
           return parseOmpModelRoleSlug(text, role);
         }).pipe(Effect.orElseSucceed(() => undefined));
-      const adapter = new OmpAdapter(runtime, randomUUID, { resolveRoleModel });
+      // Trusted project cwd from the orchestration read model — capabilities
+      // inputs carry only a ProjectId, never a client-supplied path.
+      const snapshotQuery = yield* ProjectionSnapshotQuery;
+      const resolveProjectCwd = (projectId: ProjectId) =>
+        Effect.gen(function* () {
+          const project = yield* snapshotQuery.getProjectShellById(projectId).pipe(
+            Effect.mapError(
+              (cause) =>
+                new OmpCapabilitiesError({
+                  reason: "failed to resolve the project workspace for capabilities",
+                  cause,
+                }),
+            ),
+          );
+          if (Option.isNone(project)) {
+            return yield* new OmpCapabilitiesError({
+              reason: `no active project bound to id '${projectId}'`,
+            });
+          }
+          return project.value.workspaceRoot;
+        });
+      const capabilitiesService = new OmpCapabilitiesService(
+        fs,
+        pathService,
+        launchBinary,
+        processRunner,
+        ompConfigStore,
+        resolveProjectCwd,
+      );
+      const adapter = new OmpAdapter(runtime, randomUUID, {
+        resolveRoleModel,
+        capabilitiesService,
+      });
       yield* Effect.addFinalizer(() => adapter.stopAll());
 
       // Keep runtime binaryPath aligned after managed install/refresh by

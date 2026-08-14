@@ -1,5 +1,12 @@
 /**
- * Typed read/write for omp `agent/config.yml` under a resolved omp home.
+ * Typed read/write for omp `config.yml` under a RESOLVED agent dir.
+ *
+ * The store state is the agent dir itself — the value `omp config path`
+ * returns (e.g. `~/.omp/agent`); `config.yml` sits directly inside it,
+ * never at `<dir>/agent/config.yml`. Resolve the active agent dir first
+ * (`omp config path` / discovery) and scope reads/writes through
+ * `forAgentDir` so profile / `PI_CODING_AGENT_DIR` / XDG relocation is
+ * honored; there is no `OMP_HOME`/`~/.omp` fallback here.
  *
  * @module provider/omp/OmpConfigStore
  */
@@ -8,7 +15,7 @@ import type { OmpSettings } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
-import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
+import { parse as parseYaml, parseDocument, stringify as stringifyYaml } from "yaml";
 
 import { writeFileStringAtomically } from "../../atomicWrite.ts";
 
@@ -219,16 +226,27 @@ export const syncOmpSettingsToConfigStore = (
 export class OmpConfigStore {
   readonly #fileSystem: FileSystem.FileSystem;
   readonly #path: Path.Path;
-  readonly #ompHome: string;
+  readonly #agentDir: string;
 
-  public constructor(fileSystem: FileSystem.FileSystem, path: Path.Path, ompHome: string) {
+  public constructor(fileSystem: FileSystem.FileSystem, path: Path.Path, agentDir: string) {
     this.#fileSystem = fileSystem;
     this.#path = path;
-    this.#ompHome = ompHome;
+    this.#agentDir = agentDir;
+  }
+
+  /**
+   * Immutable bound view scoped to a RESOLVED agent dir (`omp config path` /
+   * discovery). The store is never constructed from a hardcoded fallback home
+   * for read/write paths: `OmpCapabilitiesService` resolves the active agent
+   * dir first, then scopes here — otherwise profile / `PI_CODING_AGENT_DIR` /
+   * XDG reads and writes diverge.
+   */
+  public forAgentDir(agentDir: string): OmpConfigStore {
+    return new OmpConfigStore(this.#fileSystem, this.#path, agentDir);
   }
 
   private configPath(): string {
-    return this.#path.join(this.#ompHome, "agent", "config.yml");
+    return this.#path.join(this.#agentDir, "config.yml");
   }
 
   public read(): Effect.Effect<OmpConfigStoreSnapshot> {
@@ -274,6 +292,43 @@ export class OmpConfigStore {
       const merged = deepMerge(existing, yamlPatch);
       const contents = stringifyYaml(merged);
       yield* writeFileStringAtomically({ filePath: configPath, contents }).pipe(
+        Effect.provideService(FileSystem.FileSystem, fs),
+        Effect.provideService(Path.Path, pathService),
+      );
+    }).pipe(Effect.orDie);
+  }
+
+  /**
+   * Comment-preserving project-scope write into `<projectCwd>/.omp/config.yml`
+   * (D4). `value === undefined` removes the key (reset). Unknown keys and
+   * comments on untouched parts survive via `yaml` `parseDocument`/`setIn`.
+   * `projectCwd` is always server-resolved — never a client-supplied path.
+   */
+  public writeProjectKey(projectCwd: string, key: string, value: unknown): Effect.Effect<void> {
+    const fs = this.#fileSystem;
+    const pathService = this.#path;
+    const ompDir = pathService.join(projectCwd, ".omp");
+    const configPath = pathService.join(ompDir, "config.yml");
+
+    return Effect.gen(function* () {
+      yield* fs.makeDirectory(ompDir, { recursive: true });
+      let doc = parseDocument("");
+      const exists = yield* fs.exists(configPath);
+      if (exists) {
+        const text = yield* fs.readFileString(configPath);
+        try {
+          doc = parseDocument(text);
+        } catch {
+          doc = parseDocument("");
+        }
+      }
+      const parts = key.split(".");
+      if (value === undefined) {
+        doc.deleteIn(parts);
+      } else {
+        doc.setIn(parts, value);
+      }
+      yield* writeFileStringAtomically({ filePath: configPath, contents: doc.toString() }).pipe(
         Effect.provideService(FileSystem.FileSystem, fs),
         Effect.provideService(Path.Path, pathService),
       );
