@@ -116,6 +116,10 @@ interface LiveAdapterSession {
   stopRequested: boolean;
   /** Wall-clock ms of the last mid-turn token-usage emit (throttle). */
   lastTokenUsageEmitAtMs: number;
+  /** Whether any assistant text delta was emitted for the current turn. */
+  assistantTextEmitted: boolean;
+  /** An assistant message started while prior assistant text already exists. */
+  pendingAssistantMessageBoundary: boolean;
   interactionMode: ProviderInteractionMode;
   prePlanModelSlug: string | undefined;
   onOpenUrl: ((request: OmpOpenUrlRequest) => Effect.Effect<void>) | undefined;
@@ -214,6 +218,8 @@ export class OmpAdapter {
         stopRequested: false,
         // Negative so the first mid-turn emit is not throttled when Clock is 0 (TestClock).
         lastTokenUsageEmitAtMs: -TOKEN_USAGE_EMIT_MIN_INTERVAL_MS,
+        assistantTextEmitted: false,
+        pendingAssistantMessageBoundary: false,
         interactionMode: "default",
         prePlanModelSlug: undefined,
         onOpenUrl: undefined,
@@ -247,6 +253,8 @@ export class OmpAdapter {
       const turnId = yield* this.#randomUUID.pipe(Effect.map(TurnId.make));
       session.turnId = turnId;
       session.stopRequested = false;
+      session.assistantTextEmitted = false;
+      session.pendingAssistantMessageBoundary = false;
       yield* this.#applyInteractionMode(session, input.interactionMode);
       if (session.interactionMode !== "plan") {
         yield* this.#applyModelSelection(input.threadId, input.modelSelection?.model);
@@ -710,6 +718,9 @@ export class OmpAdapter {
     if (frame.type === "command_output") {
       return this.#onCommandOutput(session, frame);
     }
+    if (frame.type === "message_start") {
+      return this.#onMessageStart(session, frame);
+    }
     if (frame.type === "message_update") {
       return this.#onMessageUpdate(session, frame).pipe(
         Effect.tap(() =>
@@ -839,6 +850,20 @@ export class OmpAdapter {
     });
   }
 
+  #onMessageStart(
+    session: LiveAdapterSession,
+    frame: Record<string, unknown>,
+  ): Effect.Effect<void> {
+    const message = frame.message;
+    if (!isRecord(message) || message.role !== "assistant") {
+      return Effect.void;
+    }
+    if (session.assistantTextEmitted) {
+      session.pendingAssistantMessageBoundary = true;
+    }
+    return Effect.void;
+  }
+
   #onCommandOutput(
     session: LiveAdapterSession,
     frame: Record<string, unknown>,
@@ -847,6 +872,7 @@ export class OmpAdapter {
     if (text.length === 0) {
       return Effect.void;
     }
+    session.assistantTextEmitted = true;
     return this.#emit({
       type: "content.delta",
       threadId: session.threadId,
@@ -871,13 +897,22 @@ export class OmpAdapter {
       if (typeof delta !== "string" || delta.length === 0) {
         return Effect.void;
       }
+      // omp streams each assistant message as its own message_start/delta run.
+      // Without a boundary the status lines of consecutive messages concatenate
+      // into one unreadable blob (e.g. "fresh main.24 commits behind."). Insert a
+      // paragraph break before the first text of a message that follows earlier
+      // assistant text; tool-only messages leave the pending flag untouched so
+      // they never introduce a stray blank separator.
+      const boundary = session.pendingAssistantMessageBoundary ? "\n\n" : "";
+      session.pendingAssistantMessageBoundary = false;
+      session.assistantTextEmitted = true;
       return this.#emit({
         type: "content.delta",
         threadId: session.threadId,
         turnId: session.turnId,
         payload: {
           streamKind: "assistant_text",
-          delta,
+          delta: `${boundary}${delta}`,
         },
       });
     }
@@ -1082,7 +1117,7 @@ export class OmpAdapter {
           : undefined;
       const contextUsedPercent =
         typeof contextUsage.percent === "number" && Number.isFinite(contextUsage.percent)
-          ? Math.min(100, Math.max(0, Math.round(contextUsage.percent * 1000) / 10))
+          ? Math.min(100, Math.max(0, Math.round(contextUsage.percent * 10) / 10))
           : undefined;
       const tokensPerSecond =
         typeof state.tokensPerSecond === "number" && Number.isFinite(state.tokensPerSecond)
