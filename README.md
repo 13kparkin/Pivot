@@ -8,7 +8,7 @@ CLI package: [`pivot-cli`](https://www.npmjs.com/package/pivot-cli) (bin: `pivot
 
 ## What changed from T3 Code
 
-- **omp only** — no Codex / Claude / Cursor / Grok / OpenCode adapters
+- **omp only** 
 - Managed omp install and Settings login for omp accounts
 - Published as `pivot-cli` instead of `t3`
 
