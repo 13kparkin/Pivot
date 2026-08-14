@@ -2285,10 +2285,16 @@ const PlainWorkEntryRow = memo(function PlainWorkEntryRow(props: {
       ? "font-medium text-destructive"
       : "font-medium text-foreground";
   const turnSettled = !activity.activeTurnInProgress;
-  const showNeutralIndicator = !turnSettled && workEntryIndicatesToolNeutralStatus(workEntry);
+  const showLiveProgress = !turnSettled && workEntry.toolLifecycleStatus === "inProgress";
+  const showNeutralIndicator =
+    !showLiveProgress && !turnSettled && workEntryIndicatesToolNeutralStatus(workEntry);
   const showSuccessIndicator =
     workEntryIndicatesToolSuccess(workEntry) ||
     (turnSettled && workEntryIndicatesToolNeutralStatus(workEntry));
+  const settledDuration =
+    workEntry.completedAt !== undefined
+      ? formatWorkingTimer(workEntry.createdAt, workEntry.completedAt)
+      : null;
   const rowToggleProps = canExpand
     ? {
         role: "button" as const,
@@ -2344,6 +2350,20 @@ const PlainWorkEntryRow = memo(function PlainWorkEntryRow(props: {
                 />
               ) : null}
             </span>
+            {showLiveProgress ? (
+              <span className="inline-flex shrink-0 items-center gap-[3px] pr-1 text-secondary-label text-[11px]">
+                <span className="inline-flex items-center gap-[3px]">
+                  <span className="h-1 w-1 rounded-full bg-muted-foreground/30 animate-status-pulse" />
+                  <span className="h-1 w-1 rounded-full bg-muted-foreground/30 animate-status-pulse [animation-delay:200ms]" />
+                  <span className="h-1 w-1 rounded-full bg-muted-foreground/30 animate-status-pulse [animation-delay:400ms]" />
+                </span>
+                <WorkingTimer createdAt={workEntry.createdAt} />
+              </span>
+            ) : settledDuration !== null ? (
+              <span className="shrink-0 pr-1 text-secondary-label text-[11px] tabular-nums">
+                {settledDuration}
+              </span>
+            ) : null}
             <span className="flex size-4 shrink-0 items-center justify-center">
               {showFailedIndicator ? (
                 <Tooltip>

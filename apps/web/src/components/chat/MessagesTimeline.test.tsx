@@ -740,6 +740,7 @@ describe("MessagesTimeline", () => {
       />,
     );
 
+    expect(markup).toContain("Run tests");
     expect(markup.match(/animate-status-pulse/g)).toHaveLength(3);
     expect(markup).toContain("tabular-nums");
   });
@@ -768,8 +769,9 @@ describe("MessagesTimeline", () => {
 
     expect(markup.match(/animate-status-pulse/g)).toBeNull();
     expect(markup).toContain("5s");
+    // The completed affordance (check icon) renders; the tooltip popup text
+    // only mounts when opened, so it is absent from static markup.
     expect(markup).toContain("lucide-check");
-    expect(markup).toContain(">Completed</span>");
   });
 
   it("renders a failure marker for failed tool lifecycle entries", () => {

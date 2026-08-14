@@ -698,13 +698,32 @@ describe("workEntryIndicatesToolFailure", () => {
         toolLifecycleStatus: "inProgress",
         detail: "…",
       }),
-    ).toBe(true);
+    ).toBe(false);
     expect(
       workEntryIndicatesToolNeutralStatus({
         ...base,
         tone: "tool",
         toolLifecycleStatus: "completed",
         detail: "ok",
+      }),
+    ).toBe(false);
+  });
+
+  it("keeps in-progress tool rows out of the neutral-hidden set", () => {
+    // AC6: live rows must render (pulse dots + elapsed), so in-progress tool
+    // rows are live, not neutral-hidden like empty/incomplete rows.
+    expect(
+      workEntryIndicatesToolNeutralStatus({
+        ...base,
+        tone: "tool",
+        toolLifecycleStatus: "inProgress",
+      }),
+    ).toBe(false);
+    expect(
+      workEntryIndicatesToolNeutralStatus({
+        ...base,
+        tone: "tool",
+        toolLifecycleStatus: "completed",
       }),
     ).toBe(false);
   });
