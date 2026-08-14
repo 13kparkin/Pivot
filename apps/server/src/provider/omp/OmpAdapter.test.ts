@@ -197,6 +197,88 @@ describe("OmpAdapter", () => {
     }),
   );
 
+  it.effect("separates consecutive assistant messages with a paragraph break", () =>
+    Effect.gen(function* () {
+      const fake = new FakeOmpRpc();
+      const adapter = new OmpAdapter(fake, testRandomUUID);
+      const eventsFiber = yield* collectUntilTurnCompleted(adapter.streamEvents).pipe(
+        Effect.forkChild,
+      );
+      yield* adapter.startSession(startInput);
+      yield* adapter.sendTurn({ threadId: THREAD_ID, input: "hi" });
+      yield* fake.offer(THREAD_ID, {
+        type: "message_start",
+        message: { role: "assistant", content: [] },
+      });
+      yield* fake.offer(THREAD_ID, {
+        type: "message_update",
+        assistantMessageEvent: { type: "text_delta", delta: "Fetching latest upstream." },
+        message: { role: "assistant", content: [] },
+      });
+      yield* fake.offer(THREAD_ID, {
+        type: "message_end",
+        message: { role: "assistant", content: [] },
+      });
+      yield* fake.offer(THREAD_ID, {
+        type: "message_start",
+        message: { role: "assistant", content: [] },
+      });
+      yield* fake.offer(THREAD_ID, {
+        type: "message_update",
+        assistantMessageEvent: { type: "text_delta", delta: "24 commits behind." },
+        message: { role: "assistant", content: [] },
+      });
+      yield* fake.offer(THREAD_ID, { type: "agent_end", messages: [], isTerminal: true });
+      const events = yield* Fiber.join(eventsFiber);
+      const deltas = events
+        .filter(
+          (event) =>
+            event.type === "content.delta" && event.payload.streamKind === "assistant_text",
+        )
+        .map((event) => (event as { payload: { delta: string } }).payload.delta);
+      NodeAssert.deepEqual(deltas, ["Fetching latest upstream.", "\n\n24 commits behind."]);
+    }),
+  );
+
+  it.effect("tool-only assistant messages do not add paragraph breaks", () =>
+    Effect.gen(function* () {
+      const fake = new FakeOmpRpc();
+      const adapter = new OmpAdapter(fake, testRandomUUID);
+      const eventsFiber = yield* collectUntilTurnCompleted(adapter.streamEvents).pipe(
+        Effect.forkChild,
+      );
+      yield* adapter.startSession(startInput);
+      yield* adapter.sendTurn({ threadId: THREAD_ID, input: "hi" });
+      yield* fake.offer(THREAD_ID, {
+        type: "message_start",
+        message: { role: "assistant", content: [] },
+      });
+      yield* fake.offer(THREAD_ID, {
+        type: "message_update",
+        assistantMessageEvent: { type: "toolcall_start" },
+        message: { role: "assistant", content: [] },
+      });
+      yield* fake.offer(THREAD_ID, {
+        type: "message_start",
+        message: { role: "assistant", content: [] },
+      });
+      yield* fake.offer(THREAD_ID, {
+        type: "message_update",
+        assistantMessageEvent: { type: "text_delta", delta: "first text" },
+        message: { role: "assistant", content: [] },
+      });
+      yield* fake.offer(THREAD_ID, { type: "agent_end", messages: [], isTerminal: true });
+      const events = yield* Fiber.join(eventsFiber);
+      const deltas = events
+        .filter(
+          (event) =>
+            event.type === "content.delta" && event.payload.streamKind === "assistant_text",
+        )
+        .map((event) => (event as { payload: { delta: string } }).payload.delta);
+      NodeAssert.deepEqual(deltas, ["first text"]);
+    }),
+  );
+
   it.effect("ignores empty command_output text from local slash prompts", () =>
     Effect.gen(function* () {
       const fake = new FakeOmpRpc();
@@ -418,7 +500,7 @@ describe("OmpAdapter", () => {
   it.effect("emits thread token usage from get_state contextUsage on turn complete", () =>
     Effect.gen(function* () {
       const fake = new FakeOmpRpc();
-      fake.contextUsage = { tokens: 1100, contextWindow: 200_000, percent: 0.55 };
+      fake.contextUsage = { tokens: 1100, contextWindow: 200_000, percent: 55 };
       fake.tokensPerSecond = 42;
       fake.queuedMessageCount = 2;
       const adapter = new OmpAdapter(fake, testRandomUUID);
@@ -451,7 +533,7 @@ describe("OmpAdapter", () => {
   it.effect("emits live thread token usage during message_update", () =>
     Effect.gen(function* () {
       const fake = new FakeOmpRpc();
-      fake.contextUsage = { tokens: 500, contextWindow: 100_000, percent: 0.05 };
+      fake.contextUsage = { tokens: 500, contextWindow: 100_000, percent: 5 };
       fake.tokensPerSecond = 12.5;
       fake.queuedMessageCount = 1;
       const adapter = new OmpAdapter(fake, testRandomUUID);
