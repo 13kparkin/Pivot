@@ -1171,3 +1171,73 @@ describe("computeStableMessagesTimelineRows", () => {
     expect(reordered.result).toEqual([initial.result[1], initial.result[0]]);
   });
 });
+
+describe("AC10 guard: no new collapse behavior", () => {
+  it("keeps advisor and ttsr rows under the existing turn-fold model, not a new fold", () => {
+    const timelineEntries = [
+      {
+        id: "advisor-entry",
+        kind: "work" as const,
+        createdAt: "2026-01-01T00:00:01Z",
+        entry: {
+          id: "advisor-1",
+          createdAt: "2026-01-01T00:00:01Z",
+          turnId: "turn-1" as never,
+          label: "Consider extracting the helper",
+          tone: "warning" as const,
+          sourceActivityKind: "advisor.comment" as const,
+          advisorNotes: [{ note: "Consider extracting the helper", severity: "concern" as const }],
+        },
+      },
+      {
+        id: "ttsr-entry",
+        kind: "work" as const,
+        createdAt: "2026-01-01T00:00:02Z",
+        entry: {
+          id: "ttsr-1",
+          createdAt: "2026-01-01T00:00:02Z",
+          turnId: "turn-1" as never,
+          label: "codegraph",
+          tone: "info" as const,
+          sourceActivityKind: "ttsr.triggered" as const,
+          ttsrRules: [{ name: "codegraph", path: "/rules/codegraph.md" }],
+        },
+      },
+    ];
+
+    // Settled turn with work entries: advisor/TTSR rows fold behind the
+    // EXISTING turn fold exactly like tool rows — no "Explored N tools" fold,
+    // no new collapse kind is introduced.
+    const collapsedRows = deriveMessagesTimelineRows({
+      timelineEntries,
+      isWorking: false,
+      activeTurnStartedAt: null,
+      turnDiffSummaryByAssistantMessageId: new Map(),
+      revertTurnCountByUserMessageId: new Map(),
+    });
+    expect(collapsedRows.map((row) => row.id)).toEqual(["turn-fold:turn-1"]);
+    expect(collapsedRows[0]).toMatchObject({ kind: "turn-fold", turnId: "turn-1" });
+
+    // Expanding the turn reveals the rows under the SAME overflow model as
+    // tool rows: the first row renders directly, the rest behind the existing
+    // "+N previous" work-toggle. No "Explored N tools" fold is introduced.
+    const expandedRows = deriveMessagesTimelineRows({
+      timelineEntries,
+      expandedTurnIds: new Set(["turn-1" as never]),
+      isWorking: false,
+      activeTurnStartedAt: null,
+      turnDiffSummaryByAssistantMessageId: new Map(),
+      revertTurnCountByUserMessageId: new Map(),
+    });
+    expect(expandedRows.map((row) => row.id)).toEqual([
+      "turn-fold:turn-1",
+      "ttsr-1",
+      "work-toggle:advisor-entry",
+    ]);
+    const toggle = expandedRows.find(
+      (row): row is Extract<(typeof expandedRows)[number], { kind: "work-toggle" }> =>
+        row.kind === "work-toggle",
+    );
+    expect(toggle?.hiddenCount).toBe(1);
+  });
+});
