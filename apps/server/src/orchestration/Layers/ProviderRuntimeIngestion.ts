@@ -1654,8 +1654,36 @@ const make = Effect.gen(function* () {
         event.type === "content.delta" && event.payload.streamKind === "assistant_text"
           ? event.payload.delta
           : undefined;
+      const statusDelta =
+        event.type === "content.delta" &&
+        event.payload.streamKind === "status_text" &&
+        event.itemId === undefined
+          ? event.payload.delta
+          : undefined;
       const proposedPlanDelta =
         event.type === "turn.proposed.delta" ? event.payload.delta : undefined;
+
+      if (statusDelta && statusDelta.length > 0) {
+        const turnId = toTurnId(event.turnId);
+        const assistantMessageId = yield* getOrCreateAssistantMessageId({
+          threadId: thread.id,
+          event,
+          ...(turnId ? { turnId } : {}),
+        });
+        if (turnId) {
+          yield* rememberAssistantMessageId(thread.id, turnId, assistantMessageId);
+        }
+        yield* orchestrationEngine.dispatch({
+          type: "thread.message.assistant.delta",
+          commandId: yield* providerCommandId(event, "assistant-status-delta"),
+          threadId: thread.id,
+          messageId: assistantMessageId,
+          delta: "",
+          statusText: statusDelta,
+          ...(turnId ? { turnId } : {}),
+          createdAt: now,
+        });
+      }
 
       if (assistantDelta && assistantDelta.length > 0) {
         const turnId = toTurnId(event.turnId);
