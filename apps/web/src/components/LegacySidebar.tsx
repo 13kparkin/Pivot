@@ -2860,8 +2860,6 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
     <SidebarContent
       className="gap-0"
       fixedHeader={
-        // Lifted above the stage backdrop, whose fade bleeds below the
-        // header and would otherwise paint across the search row's outline.
         <SidebarGroup className="relative z-[1] px-2 pt-2 pb-1">
           <SidebarMenu>
             <SidebarMenuItem>
