@@ -718,6 +718,126 @@ describe("MessagesTimeline", () => {
     expect(markup).not.toContain('data-testid="file-diff"');
   });
 
+  it("renders pulse dots and a self-ticking elapsed label for in-progress tool rows", () => {
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        {...buildProps()}
+        activeTurnInProgress={true}
+        timelineEntries={[
+          {
+            id: "entry-1",
+            kind: "work",
+            createdAt: "2026-03-17T19:12:28.000Z",
+            entry: {
+              id: "work-1",
+              createdAt: "2026-03-17T19:12:28.000Z",
+              label: "Run tests",
+              tone: "tool",
+              toolLifecycleStatus: "inProgress",
+            },
+          },
+        ]}
+      />,
+    );
+
+    expect(markup).toContain("Run tests");
+    expect(markup.match(/animate-status-pulse/g)).toHaveLength(3);
+    expect(markup).toContain("tabular-nums");
+  });
+
+  it("renders the frozen completed duration instead of pulse dots on settled rows", () => {
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        {...buildProps()}
+        timelineEntries={[
+          {
+            id: "entry-1",
+            kind: "work",
+            createdAt: "2026-03-17T19:12:28.000Z",
+            entry: {
+              id: "work-1",
+              createdAt: "2026-03-17T19:12:28.000Z",
+              completedAt: "2026-03-17T19:12:33.000Z",
+              label: "Run tests",
+              tone: "tool",
+              toolLifecycleStatus: "completed",
+            },
+          },
+        ]}
+      />,
+    );
+
+    expect(markup.match(/animate-status-pulse/g)).toBeNull();
+    expect(markup).toContain("5s");
+    // The completed affordance (check icon) renders; the tooltip popup text
+    // only mounts when opened, so it is absent from static markup.
+    expect(markup).toContain("lucide-check");
+  });
+
+  it("renders advisor rows with severity-tinted headings from the top note", () => {
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        {...buildProps()}
+        timelineEntries={[
+          {
+            id: "entry-1",
+            kind: "work",
+            createdAt: "2026-03-17T19:12:28.000Z",
+            entry: {
+              id: "work-1",
+              createdAt: "2026-03-17T19:12:28.000Z",
+              label: "This must be fixed before merge",
+              tone: "error",
+              sourceActivityKind: "advisor.comment",
+              advisorNotes: [
+                { note: "This must be fixed before merge", severity: "blocker" },
+                {
+                  note: "Consider extracting the helper",
+                  severity: "concern",
+                  advisor: "code-review",
+                },
+              ],
+            },
+          },
+        ]}
+      />,
+    );
+
+    expect(markup).toContain("This must be fixed before merge");
+  });
+
+  it("renders ttsr rows with the first rule name as heading", () => {
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        {...buildProps()}
+        timelineEntries={[
+          {
+            id: "entry-1",
+            kind: "work",
+            createdAt: "2026-03-17T19:12:28.000Z",
+            entry: {
+              id: "work-1",
+              createdAt: "2026-03-17T19:12:28.000Z",
+              label: "codegraph",
+              tone: "info",
+              sourceActivityKind: "ttsr.triggered",
+              ttsrRules: [
+                {
+                  name: "codegraph",
+                  path: "/home/kyle/.omp/agent/rules/codegraph.md",
+                  description: "Query CodeGraph before searching",
+                  interruptMode: "always",
+                },
+              ],
+            },
+          },
+        ]}
+      />,
+    );
+
+    expect(markup).toContain("codegraph");
+  });
+
   it("renders a failure marker for failed tool lifecycle entries", () => {
     const markup = renderToStaticMarkup(
       <MessagesTimeline

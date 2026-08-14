@@ -2950,6 +2950,127 @@ describe("ProviderRuntimeIngestion", () => {
     expect(thread.session?.lastError).toBeNull();
   });
 
+  it("maps advisor.comment runtime events into severity-toned activities", async () => {
+    const harness = await createHarness();
+    const now = "2026-01-01T00:00:00.000Z";
+    const turnId = asTurnId("turn-advisor");
+
+    harness.emit({
+      type: "turn.started",
+      eventId: asEventId("evt-advisor-turn-started"),
+      provider: ProviderDriverKind.make("omp"),
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId,
+      payload: {},
+    });
+
+    harness.emit({
+      type: "advisor.comment",
+      eventId: asEventId("evt-advisor-blocker"),
+      provider: ProviderDriverKind.make("omp"),
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId,
+      payload: {
+        notes: [
+          { note: "This must be fixed before merge", severity: "blocker" },
+          { note: "Consider extracting the helper", severity: "concern", advisor: "code-review" },
+        ],
+      },
+    });
+
+    const thread = await waitForThread(harness.readModel, (entry) =>
+      entry.activities.some((activity) => activity.id === "evt-advisor-blocker"),
+    );
+    const activity = thread.activities.find((entry) => entry.id === "evt-advisor-blocker");
+    expect(activity?.kind).toBe("advisor.comment");
+    expect(activity?.tone).toBe("error");
+    expect(activity?.summary).toBe("This must be fixed before merge");
+    const payload = activity?.payload as { notes?: ReadonlyArray<{ severity?: string }> };
+    expect(payload?.notes?.length).toBe(2);
+    expect(payload?.notes?.[1]?.severity).toBe("concern");
+  });
+
+  it("maps advisor.comment with nits and concerns to the coarse info tone", async () => {
+    const harness = await createHarness();
+    const now = "2026-01-01T00:00:00.000Z";
+
+    harness.emit({
+      type: "advisor.comment",
+      eventId: asEventId("evt-advisor-nit"),
+      provider: ProviderDriverKind.make("omp"),
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      payload: {
+        notes: [{ note: "Nit: rename the variable", severity: "nit" }],
+      },
+    });
+
+    harness.emit({
+      type: "advisor.comment",
+      eventId: asEventId("evt-advisor-concern"),
+      provider: ProviderDriverKind.make("omp"),
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      payload: {
+        notes: [{ note: "Consider extracting the helper", severity: "concern" }],
+      },
+    });
+
+    const thread = await waitForThread(harness.readModel, (entry) =>
+      entry.activities.some((activity) => activity.id === "evt-advisor-concern"),
+    );
+    const nit = thread.activities.find((entry) => entry.id === "evt-advisor-nit");
+    expect(nit?.kind).toBe("advisor.comment");
+    expect(nit?.tone).toBe("info");
+    // The persisted activity keeps the coarse tone vocabulary (nit/concern ->
+    // info); the severity rides in the payload notes and drives client tint.
+    const concern = thread.activities.find((entry) => entry.id === "evt-advisor-concern");
+    expect(concern?.tone).toBe("info");
+    expect(
+      (concern?.payload as { notes?: ReadonlyArray<{ severity?: string }> }).notes?.[0]?.severity,
+    ).toBe("concern");
+  });
+
+  it("maps ttsr.triggered runtime events into info rule activities", async () => {
+    const harness = await createHarness();
+    const now = "2026-01-01T00:00:00.000Z";
+    const turnId = asTurnId("turn-ttsr");
+
+    harness.emit({
+      type: "ttsr.triggered",
+      eventId: asEventId("evt-ttsr"),
+      provider: ProviderDriverKind.make("omp"),
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId,
+      payload: {
+        rules: [
+          {
+            name: "codegraph",
+            path: "/home/kyle/.omp/agent/rules/codegraph.md",
+            description: "Query CodeGraph before searching",
+            interruptMode: "always",
+          },
+        ],
+      },
+    });
+
+    const thread = await waitForThread(harness.readModel, (entry) =>
+      entry.activities.some((activity) => activity.id === "evt-ttsr"),
+    );
+    const activity = thread.activities.find((entry) => entry.id === "evt-ttsr");
+    expect(activity?.kind).toBe("ttsr.triggered");
+    expect(activity?.tone).toBe("info");
+    expect(activity?.summary).toBe("codegraph");
+    const payload = activity?.payload as {
+      rules?: ReadonlyArray<{ name?: string; path?: string; description?: string }>;
+    };
+    expect(payload?.rules?.length).toBe(1);
+    expect(payload?.rules?.[0]?.path).toBe("/home/kyle/.omp/agent/rules/codegraph.md");
+  });
+
   it("maps session/thread lifecycle and item.started into session/activity projections", async () => {
     const harness = await createHarness();
     const now = "2026-01-01T00:00:00.000Z";

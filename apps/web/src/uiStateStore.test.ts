@@ -14,6 +14,7 @@ import {
   setDefaultAdvertisedEndpointKey,
   setProjectExpanded,
   setThreadChangedFilesExpanded,
+  setThreadWorkEntryExpanded,
   type UiState,
 } from "./uiStateStore";
 
@@ -23,6 +24,7 @@ function makeUiState(overrides: Partial<UiState> = {}): UiState {
     projectOrder: [],
     threadLastVisitedAtById: {},
     threadChangedFilesExpandedById: {},
+    threadWorkEntryExpandedById: {},
     defaultAdvertisedEndpointKey: null,
     ...overrides,
   };
@@ -135,6 +137,47 @@ describe("uiStateStore pure functions", () => {
     });
   });
 
+  it("stores per-thread work-entry expansion choices", () => {
+    const threadId = ThreadId.make("thread-1");
+    const collapsed = setThreadWorkEntryExpanded(makeUiState(), threadId, "work-1", false);
+
+    expect(collapsed.threadWorkEntryExpandedById).toEqual({
+      [threadId]: {
+        "work-1": false,
+      },
+    });
+    expect(
+      setThreadWorkEntryExpanded(collapsed, threadId, "work-1", true).threadWorkEntryExpandedById,
+    ).toEqual({
+      [threadId]: {
+        "work-1": true,
+      },
+    });
+  });
+
+  it("keeps other threads' work-entry expansion isolated per thread", () => {
+    const threadA = ThreadId.make("thread-a");
+    const threadB = ThreadId.make("thread-b");
+    const withA = setThreadWorkEntryExpanded(makeUiState(), threadA, "work-1", true);
+
+    const withB = setThreadWorkEntryExpanded(withA, threadB, "work-1", true);
+
+    expect(withB.threadWorkEntryExpandedById[threadA]).toEqual({ "work-1": true });
+    expect(withB.threadWorkEntryExpandedById[threadB]).toEqual({ "work-1": true });
+  });
+
+  it("returns the same state for a no-op work-entry expansion toggle", () => {
+    const state = setThreadWorkEntryExpanded(
+      makeUiState(),
+      ThreadId.make("thread-1"),
+      "work-1",
+      true,
+    );
+    expect(setThreadWorkEntryExpanded(state, ThreadId.make("thread-1"), "work-1", true)).toBe(
+      state,
+    );
+  });
+
   it("stores the endpoint preference by stable key", () => {
     const next = setDefaultAdvertisedEndpointKey(makeUiState(), "desktop-core:lan:http");
 
@@ -183,6 +226,7 @@ describe("parsePersistedState", () => {
           "turn-2": true,
         },
       },
+      threadWorkEntryExpandedById: {},
     });
   });
 
@@ -303,6 +347,7 @@ describe("uiStateStore persistence", () => {
           "turn-2": true,
         },
       },
+      threadWorkEntryExpandedById: {},
     });
     expect(parsePersistedState(persisted)).toEqual({
       ...state,

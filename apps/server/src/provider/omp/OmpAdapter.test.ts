@@ -1561,6 +1561,110 @@ describe("OmpAdapter", () => {
     }),
   );
 
+  it.effect("emits advisor.comment for custom advisor message_start", () =>
+    Effect.gen(function* () {
+      const fake = new FakeOmpRpc();
+      const adapter = new OmpAdapter(fake, testRandomUUID);
+      const eventsFiber = yield* collectUntilTurnCompleted(adapter.streamEvents).pipe(
+        Effect.forkChild,
+      );
+      yield* adapter.startSession(startInput);
+      yield* adapter.sendTurn({ threadId: THREAD_ID, input: "hi" });
+      yield* fake.offer(THREAD_ID, {
+        type: "message_start",
+        message: {
+          role: "custom",
+          customType: "advisor",
+          content: [{ type: "text", text: "<advisory>Use Effect.gen.</advisory>" }],
+          details: {
+            notes: [
+              {
+                note: "Consider Effect.gen for this flow",
+                severity: "concern",
+                advisor: "code-review",
+              },
+              { note: "Nit: rename the variable", severity: "nit" },
+            ],
+          },
+        },
+      });
+      yield* fake.offer(THREAD_ID, { type: "agent_end", messages: [], isTerminal: true });
+      const events = yield* Fiber.join(eventsFiber);
+      const advisorEvents = events.filter((event) => event.type === "advisor.comment");
+      NodeAssert.equal(advisorEvents.length, 1);
+      const advisor = advisorEvents[0];
+      if (advisor?.type !== "advisor.comment") {
+        throw new Error("expected advisor.comment event");
+      }
+      NodeAssert.equal(advisor.threadId, THREAD_ID);
+      NodeAssert.equal(advisor.payload.notes.length, 2);
+      NodeAssert.equal(advisor.payload.notes[0]?.note, "Consider Effect.gen for this flow");
+      NodeAssert.equal(advisor.payload.notes[0]?.severity, "concern");
+      NodeAssert.equal(advisor.payload.notes[0]?.advisor, "code-review");
+      NodeAssert.equal(advisor.payload.notes[1]?.severity, "nit");
+      // Advisor text never lands in assistant_text.
+      NodeAssert.equal(
+        events.some(
+          (event) =>
+            event.type === "content.delta" && event.payload.streamKind === "assistant_text",
+        ),
+        false,
+      );
+    }),
+  );
+
+  it.effect("emits bounded ttsr.triggered for ttsr_triggered frames", () =>
+    Effect.gen(function* () {
+      const fake = new FakeOmpRpc();
+      const adapter = new OmpAdapter(fake, testRandomUUID);
+      const eventsFiber = yield* collectUntilTurnCompleted(adapter.streamEvents).pipe(
+        Effect.forkChild,
+      );
+      yield* adapter.startSession(startInput);
+      yield* adapter.sendTurn({ threadId: THREAD_ID, input: "hi" });
+      yield* fake.offer(THREAD_ID, {
+        type: "ttsr_triggered",
+        rules: [
+          {
+            name: "codegraph",
+            path: "/home/kyle/.omp/agent/rules/codegraph.md",
+            content: "# full rule body that must not cross the wire",
+            description: "Query CodeGraph before searching",
+            condition: ["grep-like search"],
+            scope: ["server"],
+            interruptMode: "always",
+            globs: ["**/*.ts"],
+          },
+          {
+            name: "branch-name",
+            path: "/home/kyle/.omp/agent/rules/branch-name.md",
+          },
+        ],
+      });
+      yield* fake.offer(THREAD_ID, { type: "agent_end", messages: [], isTerminal: true });
+      const events = yield* Fiber.join(eventsFiber);
+      const ttsrEvents = events.filter((event) => event.type === "ttsr.triggered");
+      NodeAssert.equal(ttsrEvents.length, 1);
+      const ttsr = ttsrEvents[0];
+      if (ttsr?.type !== "ttsr.triggered") {
+        throw new Error("expected ttsr.triggered event");
+      }
+      NodeAssert.equal(ttsr.threadId, THREAD_ID);
+      NodeAssert.equal(ttsr.payload.rules.length, 2);
+      const first = ttsr.payload.rules[0];
+      NodeAssert.equal(first?.name, "codegraph");
+      NodeAssert.equal(first?.path, "/home/kyle/.omp/agent/rules/codegraph.md");
+      NodeAssert.equal(first?.description, "Query CodeGraph before searching");
+      NodeAssert.deepEqual(first?.condition, ["grep-like search"]);
+      NodeAssert.equal(first?.interruptMode, "always");
+      NodeAssert.equal("content" in (first ?? {}), false);
+      NodeAssert.equal("globs" in (first ?? {}), false);
+      const second = ttsr.payload.rules[1];
+      NodeAssert.equal(second?.name, "branch-name");
+      NodeAssert.equal(second?.description, undefined);
+    }),
+  );
+
   describe("capabilities delegation", () => {
     const snapshot = { settings: { entries: [] }, resources: [] } as const;
 

@@ -90,6 +90,12 @@ import {
 } from "./MessagesTimeline.logic";
 import { TerminalContextInlineChip } from "./TerminalContextInlineChip";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
+import { WorkEntryExpandedDetail } from "./WorkEntryExpandedDetail";
+import {
+  advisorToneFromSeverity,
+  workEntryHasExpandedDetail,
+  ttsrRuleSummary,
+} from "./workEntryPresentation";
 import {
   deriveDisplayedUserMessageState,
   type ParsedTerminalContextEntry,
@@ -144,6 +150,8 @@ interface TimelineRowSharedState {
   onToggleWorkGroup: (groupId: string, anchorKey: string) => void;
   agentPanelModel: AgentPanelModel;
   onOpenAgents: () => void;
+  /** Checkpoint summaries by assistant message id, for file-change rows. */
+  turnDiffSummaryByAssistantMessageId: Map<MessageId, TurnDiffSummary>;
 }
 
 interface TimelineRowActivityState {
@@ -517,6 +525,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       onToggleWorkGroup,
       agentPanelModel,
       onOpenAgents,
+      turnDiffSummaryByAssistantMessageId,
     }),
     [
       timestampFormat,
@@ -533,6 +542,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       onToggleWorkGroup,
       agentPanelModel,
       onOpenAgents,
+      turnDiffSummaryByAssistantMessageId,
     ],
   );
   const activityState = useMemo<TimelineRowActivityState>(
@@ -2046,44 +2056,6 @@ function workEntryPreview(
     : `${displayPath} +${workEntry.changedFiles!.length - 1} more`;
 }
 
-function workEntryRawCommand(
-  workEntry: Pick<TimelineWorkEntry, "command" | "rawCommand">,
-): string | null {
-  const rawCommand = workEntry.rawCommand?.trim();
-  if (!rawCommand || !workEntry.command) {
-    return null;
-  }
-  return rawCommand === workEntry.command.trim() ? null : rawCommand;
-}
-
-function buildToolCallExpandedBody(
-  workEntry: TimelineWorkEntry,
-  workspaceRoot: string | undefined,
-): string | null {
-  const blocks: string[] = [];
-  if (workEntry.itemType === "mcp_tool_call" && workEntry.toolData !== undefined) {
-    blocks.push(`MCP call\n${JSON.stringify(workEntry.toolData, null, 2)}`);
-  }
-  const raw = workEntryRawCommand(workEntry);
-  if (raw?.trim()) {
-    blocks.push(raw.trim());
-  } else if (workEntry.command?.trim()) {
-    blocks.push(workEntry.command.trim());
-  }
-  if (workEntry.detail?.trim()) {
-    blocks.push(workEntry.detail.trim());
-  }
-  const changedFiles = workEntry.changedFiles ?? [];
-  if (changedFiles.length > 0) {
-    blocks.push(
-      changedFiles
-        .map((filePath) => formatWorkspaceRelativePath(filePath, workspaceRoot))
-        .join("\n"),
-    );
-  }
-  return blocks.length > 0 ? blocks.join("\n\n") : null;
-}
-
 function workEntryIconName(workEntry: TimelineWorkEntry): WorkEntryIconName {
   if (
     workEntry.sourceActivityKind === "user-input.requested" ||
@@ -2134,6 +2106,29 @@ function toolWorkEntryHeading(workEntry: TimelineWorkEntry): string {
     return capitalizePhrase(normalizeCompactToolLabel(workEntry.label));
   }
   return capitalizePhrase(normalizeCompactToolLabel(workEntry.toolTitle));
+}
+
+/** Row heading for advisor cards: the highest-severity note, or a fallback. */
+function advisorRowHeading(
+  notes: ReadonlyArray<{ readonly note: string; readonly severity?: string | undefined }>,
+): string {
+  let topNote: string | null = null;
+  let topRank = 0;
+  for (const note of notes) {
+    const rank =
+      note.severity === "blocker"
+        ? 3
+        : note.severity === "concern"
+          ? 2
+          : note.severity === "nit"
+            ? 1
+            : 0;
+    if (rank >= topRank) {
+      topRank = rank;
+      topNote = note.note;
+    }
+  }
+  return topNote ? capitalizePhrase(normalizeCompactToolLabel(topNote)) : "Advisor";
 }
 
 const stopRowToggle = (e: { stopPropagation: () => void }) => e.stopPropagation();
@@ -2250,11 +2245,45 @@ const PlainWorkEntryRow = memo(function PlainWorkEntryRow(props: {
 }) {
   const { workEntry, workspaceRoot } = props;
   const activity = use(TimelineRowActivityCtx);
-  const [expanded, setExpanded] = useState(false);
+  const ctx = use(TimelineRowCtx);
+  const persistedExpanded = useUiStateStore(
+    (store) => store.threadWorkEntryExpandedById[ctx.routeThreadKey]?.[workEntry.id] ?? false,
+  );
+  const setExpanded = useUiStateStore((store) => store.setThreadWorkEntryExpanded);
+  const expanded = persistedExpanded;
+  const turnSummaryForWorkEntry = useMemo(() => {
+    const turnId = workEntry.turnId;
+    if (turnId === undefined || turnId === null) {
+      return undefined;
+    }
+    for (const summary of ctx.turnDiffSummaryByAssistantMessageId.values()) {
+      if (summary.turnId === turnId) {
+        return summary;
+      }
+    }
+    return undefined;
+  }, [ctx.turnDiffSummaryByAssistantMessageId, workEntry.turnId]);
+  const activityOnOpenTurnDiff = useCallback(
+    (turnId: string, filePath?: string) => {
+      ctx.onOpenTurnDiff(turnId as TurnId, filePath);
+    },
+    [ctx.onOpenTurnDiff],
+  );
   const iconConfig = workToneIcon(workEntry.tone);
-  const showWarningIndicator = workEntry.sourceActivityKind === "runtime.warning";
+  const showWarningIndicator =
+    workEntry.sourceActivityKind === "runtime.warning" ||
+    (workEntry.sourceActivityKind === "advisor.comment" &&
+      advisorToneFromSeverity(workEntry.advisorNotes ?? []) === "warning");
   const entryIconName = showWarningIndicator ? "x" : workEntryIconName(workEntry);
-  const heading = toolWorkEntryHeading(workEntry);
+  const advisorHeading =
+    workEntry.sourceActivityKind === "advisor.comment" && (workEntry.advisorNotes?.length ?? 0) > 0
+      ? advisorRowHeading(workEntry.advisorNotes ?? [])
+      : null;
+  const ttsrHeading =
+    workEntry.sourceActivityKind === "ttsr.triggered" && (workEntry.ttsrRules?.length ?? 0) > 0
+      ? ttsrRuleSummary(workEntry.ttsrRules ?? [])
+      : null;
+  const heading = advisorHeading ?? ttsrHeading ?? toolWorkEntryHeading(workEntry);
   const rawPreview = workEntryPreview(workEntry, workspaceRoot);
   const preview =
     rawPreview &&
@@ -2263,8 +2292,7 @@ const PlainWorkEntryRow = memo(function PlainWorkEntryRow(props: {
       ? null
       : rawPreview;
   const displayText = preview ? `${heading} - ${preview}` : heading;
-  const expandedBody = buildToolCallExpandedBody(workEntry, workspaceRoot);
-  const canExpand = expandedBody !== null;
+  const canExpand = workEntryHasExpandedDetail(workEntry);
   const showFailedIndicator = workEntryIndicatesToolFailure(workEntry);
   const showDestructiveRowStyle =
     showFailedIndicator &&
@@ -2285,20 +2313,26 @@ const PlainWorkEntryRow = memo(function PlainWorkEntryRow(props: {
       ? "font-medium text-destructive"
       : "font-medium text-foreground";
   const turnSettled = !activity.activeTurnInProgress;
-  const showNeutralIndicator = !turnSettled && workEntryIndicatesToolNeutralStatus(workEntry);
+  const showLiveProgress = !turnSettled && workEntry.toolLifecycleStatus === "inProgress";
+  const showNeutralIndicator =
+    !showLiveProgress && !turnSettled && workEntryIndicatesToolNeutralStatus(workEntry);
   const showSuccessIndicator =
     workEntryIndicatesToolSuccess(workEntry) ||
     (turnSettled && workEntryIndicatesToolNeutralStatus(workEntry));
+  const settledDuration =
+    workEntry.completedAt !== undefined
+      ? formatWorkingTimer(workEntry.createdAt, workEntry.completedAt)
+      : null;
   const rowToggleProps = canExpand
     ? {
         role: "button" as const,
         tabIndex: 0 as const,
         "aria-label": displayText,
-        onClick: () => setExpanded((v) => !v),
+        onClick: () => setExpanded(ctx.routeThreadKey, workEntry.id, !expanded),
         onKeyDown: (e: KeyboardEvent<HTMLDivElement>) => {
           if (e.key === "Enter" || e.key === " ") {
             e.preventDefault();
-            setExpanded((v) => !v);
+            setExpanded(ctx.routeThreadKey, workEntry.id, !expanded);
           }
         },
       }
@@ -2344,6 +2378,20 @@ const PlainWorkEntryRow = memo(function PlainWorkEntryRow(props: {
                 />
               ) : null}
             </span>
+            {showLiveProgress ? (
+              <span className="inline-flex shrink-0 items-center gap-[3px] pr-1 text-secondary-label text-[11px]">
+                <span className="inline-flex items-center gap-[3px]">
+                  <span className="h-1 w-1 rounded-full bg-muted-foreground/30 animate-status-pulse" />
+                  <span className="h-1 w-1 rounded-full bg-muted-foreground/30 animate-status-pulse [animation-delay:200ms]" />
+                  <span className="h-1 w-1 rounded-full bg-muted-foreground/30 animate-status-pulse [animation-delay:400ms]" />
+                </span>
+                <WorkingTimer createdAt={workEntry.createdAt} />
+              </span>
+            ) : settledDuration !== null ? (
+              <span className="shrink-0 pr-1 text-secondary-label text-[11px] tabular-nums">
+                {settledDuration}
+              </span>
+            ) : null}
             <span className="flex size-4 shrink-0 items-center justify-center">
               {showFailedIndicator ? (
                 <Tooltip>
@@ -2388,15 +2436,20 @@ const PlainWorkEntryRow = memo(function PlainWorkEntryRow(props: {
           </div>
         </div>
       </div>
-      {expanded && canExpand && expandedBody ? (
+      {expanded && canExpand ? (
         <div
           className="mt-1 ms-7 cursor-default border-s border-border/45 ps-3 pt-0.5"
           onClick={stopRowToggle}
           onPointerDown={stopRowToggle}
         >
-          <pre className="max-h-64 cursor-text overflow-auto whitespace-pre-wrap break-words font-mono text-secondary-label text-[11px] leading-relaxed select-text">
-            {expandedBody}
-          </pre>
+          <WorkEntryExpandedDetail
+            workEntry={workEntry}
+            workspaceRoot={workspaceRoot}
+            {...(turnSummaryForWorkEntry === undefined
+              ? {}
+              : { turnSummary: turnSummaryForWorkEntry })}
+            onOpenTurnDiff={activityOnOpenTurnDiff}
+          />
         </div>
       ) : null}
     </div>

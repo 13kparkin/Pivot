@@ -4,11 +4,13 @@ import { isBackgroundTaskActivity } from "@t3tools/client-runtime/state/subagent
 import {
   ApprovalRequestId,
   isToolLifecycleItemType,
+  type AdvisorNote,
   type OrchestrationLatestTurn,
   type OrchestrationThreadActivity,
   type OrchestrationProposedPlanId,
   ProviderDriverKind,
   type ToolLifecycleItemType,
+  type TtsrRule,
   type UserInputQuestion,
   type ThreadId,
   type TurnId,
@@ -56,6 +58,12 @@ export interface WorkLogEntry {
   requestKind?: PendingApproval["requestKind"];
   /** From runtime item / task payload `status` when present (e.g. tool.updated). */
   toolLifecycleStatus?: WorkLogToolLifecycleStatus;
+  /** Settled timestamp of the terminal lifecycle activity (tool.completed / settled tool.updated). */
+  completedAt?: string;
+  /** Advisor notes (omp advisor cards), severity-tinted in the expanded body. */
+  advisorNotes?: ReadonlyArray<AdvisorNote>;
+  /** TTSR rule firings (omp time-traveling stream rules). */
+  ttsrRules?: ReadonlyArray<TtsrRule>;
   /** Originating orchestration activity kind (e.g. `user-input.requested`) for row chrome. */
   sourceActivityKind?: OrchestrationThreadActivity["kind"];
   /** Grouping key for subagent lifecycle rows (one row per agent). */
@@ -252,7 +260,7 @@ export function workEntryIndicatesToolSuccess(entry: WorkLogEntry): boolean {
   return true;
 }
 
-/** Tool-like row with neither clear success nor failure (empty, incomplete, in progress, etc.). */
+/** Tool-like row with neither clear success nor failure (empty, incomplete, etc.). */
 export function workEntryIndicatesToolNeutralStatus(entry: WorkLogEntry): boolean {
   // Spawn CTA rows are never neutral-hidden: mid-run they derive from
   // task.progress (tone "thinking") and the neutral filter was swallowing
@@ -264,6 +272,11 @@ export function workEntryIndicatesToolNeutralStatus(entry: WorkLogEntry): boolea
     return false;
   }
   if (workEntryIndicatesToolFailure(entry)) {
+    return false;
+  }
+  // In-progress tool rows are LIVE, not neutral: they render the pulse-dot +
+  // elapsed affordance while the turn runs (AC6), then settle to check/X.
+  if (entry.toolLifecycleStatus === "inProgress") {
     return false;
   }
   if (workEntryIndicatesToolSuccess(entry)) {
@@ -856,12 +869,32 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
   if (toolCallId) {
     entry.toolCallId = toolCallId;
   }
+  if (activity.kind === "advisor.comment") {
+    const notes = asRecord(payload)?.notes;
+    if (Array.isArray(notes)) {
+      entry.advisorNotes = notes as ReadonlyArray<AdvisorNote>;
+    }
+  }
+  if (activity.kind === "ttsr.triggered") {
+    const rules = asRecord(payload)?.rules;
+    if (Array.isArray(rules)) {
+      entry.ttsrRules = rules as ReadonlyArray<TtsrRule>;
+    }
+  }
   let toolLifecycleStatus = extractWorkLogToolLifecycleStatus(payload);
   if (!toolLifecycleStatus && activity.kind === "tool.completed") {
     toolLifecycleStatus = "completed";
   }
   if (toolLifecycleStatus) {
     entry.toolLifecycleStatus = toolLifecycleStatus;
+  }
+  if (
+    toolLifecycleStatus === "completed" ||
+    toolLifecycleStatus === "failed" ||
+    toolLifecycleStatus === "declined" ||
+    toolLifecycleStatus === "stopped"
+  ) {
+    entry.completedAt = activity.createdAt;
   }
   if (isTaskActivity && typeof payload?.taskId === "string" && payload.taskId.length > 0) {
     entry.taskId = payload.taskId;
@@ -1025,6 +1058,10 @@ function mergeDerivedWorkLogEntries(
   return {
     ...previous,
     ...next,
+    // The merged row keeps the START of the lifecycle so per-item duration
+    // (completedAt - createdAt) stays positive; the terminal activity only
+    // supplies the settled timestamp (`...next` carries its completedAt).
+    createdAt: previous.createdAt,
     ...(detail ? { detail } : {}),
     ...(command ? { command } : {}),
     ...(rawCommand ? { rawCommand } : {}),

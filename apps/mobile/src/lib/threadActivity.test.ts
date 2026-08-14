@@ -259,7 +259,7 @@ describe("buildThreadFeed", () => {
     expect(group.activities).toHaveLength(1);
     expect(group.activities[0]).toMatchObject({
       id: "tool-completed",
-      createdAt: "2026-04-01T00:00:02.000Z",
+      createdAt: "2026-04-01T00:00:01.000Z",
       turnId: "turn-1",
       summary: "Run tests",
       detail: "bun run test",
@@ -268,9 +268,8 @@ describe("buildThreadFeed", () => {
       toolLike: true,
       status: "success",
     });
-    expect(group.activities[0]?.getFullDetail()).toBe("/bin/zsh -lc 'bun run test'");
-    expect(group.activities[0]?.getCopyText()).toBe(
-      "Run tests\nbun run test\n/bin/zsh -lc 'bun run test'",
+    expect(group.activities[0]?.getFullDetail()).toBe(
+      "/bin/zsh -lc 'bun run test'\n\nDuration: 1.0s",
     );
   });
 
@@ -628,6 +627,45 @@ describe("buildThreadFeed", () => {
   });
 });
 
+it("includes per-item duration in the expanded body when the row settled", () => {
+  const thread = makeThread({
+    id: ThreadId.make("thread-duration"),
+    projectId: ProjectId.make("project-1"),
+    title: "Duration",
+    activities: [
+      makeActivity({
+        id: EventId.make("tool-live"),
+        kind: "tool.updated",
+        summary: "Run tests",
+        tone: "tool",
+        createdAt: "2026-04-01T00:00:01.000Z",
+        payload: {
+          itemType: "command_execution",
+          title: "Run tests",
+          status: "inProgress",
+        },
+      }),
+      makeActivity({
+        id: EventId.make("tool-done"),
+        kind: "tool.completed",
+        summary: "Run tests",
+        tone: "tool",
+        createdAt: "2026-04-01T00:00:09.000Z",
+        payload: {
+          itemType: "command_execution",
+          title: "Run tests",
+        },
+      }),
+    ],
+  });
+
+  const feed = buildThreadFeed(thread);
+  const rows = feed.flatMap((entry) => (entry.type === "activity-group" ? entry.activities : []));
+
+  expect(rows).toHaveLength(1);
+  expect(rows[0]!.getFullDetail()).toContain("Duration: 8.0s");
+});
+
 describe("quiet timeline: nested agents", () => {
   it("keeps a nested agent's terminal row but hides its background work", () => {
     const thread = makeThread({
@@ -661,5 +699,125 @@ describe("quiet timeline: nested agents", () => {
     );
     expect(ids).toContain("nested-done");
     expect(ids).not.toContain("shell-done");
+  });
+});
+
+describe("advisor and ttsr feed rows", () => {
+  it("renders advisor rows from advisor.comment activities with severity-toned icons", () => {
+    const thread = makeThread({
+      id: ThreadId.make("thread-advisor"),
+      projectId: ProjectId.make("project-1"),
+      title: "Advisor thread",
+      activities: [
+        makeActivity({
+          id: EventId.make("advisor-concern"),
+          kind: "advisor.comment",
+          summary: "Consider extracting the helper",
+          tone: "info",
+          createdAt: "2026-04-01T00:00:01.000Z",
+          payload: {
+            notes: [
+              {
+                note: "Consider extracting the helper",
+                severity: "concern",
+                advisor: "code-review",
+              },
+              { note: "Nit: rename the variable", severity: "nit" },
+            ],
+          },
+        }),
+      ],
+    });
+
+    const feed = buildThreadFeed(thread);
+    const rows = feed.flatMap((entry) => (entry.type === "activity-group" ? entry.activities : []));
+
+    expect(rows).toHaveLength(1);
+    const row = rows[0]!;
+    expect(row.summary).toBe("Consider extracting the helper");
+    expect(row.canExpand).toBe(true);
+    expect(row.getFullDetail()).toContain("Consider extracting the helper");
+    expect(row.getFullDetail()).toContain("code-review");
+    // Severity drives the icon even though the coarse activity tone is "info".
+    expect(row.icon).toBe("warning");
+  });
+
+  it("renders ttsr rows from ttsr.triggered activities with rule context", () => {
+    const thread = makeThread({
+      id: ThreadId.make("thread-ttsr"),
+      projectId: ProjectId.make("project-1"),
+      title: "TTSR thread",
+      activities: [
+        makeActivity({
+          id: EventId.make("ttsr-fired"),
+          kind: "ttsr.triggered",
+          summary: "codegraph",
+          tone: "info",
+          createdAt: "2026-04-01T00:00:01.000Z",
+          payload: {
+            rules: [
+              {
+                name: "codegraph",
+                path: "/home/kyle/.omp/agent/rules/codegraph.md",
+                description: "Query CodeGraph before searching",
+                condition: ["grep-like search"],
+                interruptMode: "always",
+              },
+            ],
+          },
+        }),
+      ],
+    });
+
+    const feed = buildThreadFeed(thread);
+    const rows = feed.flatMap((entry) => (entry.type === "activity-group" ? entry.activities : []));
+
+    expect(rows).toHaveLength(1);
+    const row = rows[0]!;
+    expect(row.summary).toBe("Codegraph");
+    expect(row.canExpand).toBe(true);
+    expect(row.getFullDetail()).toContain("codegraph");
+    expect(row.getFullDetail()).toContain("Query CodeGraph before searching");
+    expect(row.getFullDetail()).toContain("(always interrupts)");
+  });
+
+  it("keeps settled tool rows visible with completed lifecycle status", () => {
+    const thread = makeThread({
+      id: ThreadId.make("thread-settled"),
+      projectId: ProjectId.make("project-1"),
+      title: "Settled tool",
+      activities: [
+        makeActivity({
+          id: EventId.make("tool-update"),
+          kind: "tool.updated",
+          summary: "Run tests",
+          tone: "tool",
+          createdAt: "2026-04-01T00:00:01.000Z",
+          payload: {
+            itemType: "command_execution",
+            title: "Run tests",
+            status: "inProgress",
+          },
+        }),
+        makeActivity({
+          id: EventId.make("tool-complete"),
+          kind: "tool.completed",
+          summary: "Run tests",
+          tone: "tool",
+          createdAt: "2026-04-01T00:00:05.000Z",
+          payload: {
+            itemType: "command_execution",
+            title: "Run tests",
+          },
+        }),
+      ],
+    });
+
+    const feed = buildThreadFeed(thread);
+    const rows = feed.flatMap((entry) => (entry.type === "activity-group" ? entry.activities : []));
+
+    expect(rows).toHaveLength(1);
+    const row = rows[0]!;
+    expect(row.status).toBe("success");
   });
 });
