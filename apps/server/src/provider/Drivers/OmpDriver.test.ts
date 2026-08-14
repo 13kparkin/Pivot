@@ -241,13 +241,17 @@ describe("OmpDriver", () => {
         enabled: true,
         config: decodeOmpSettings({ enabled: true, binaryPath }),
       }).pipe(
-        Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, fake.spawner),
         Effect.provide(
-          ProcessRunner.layer.pipe(
-            Layer.provide(Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, fake.spawner)),
+          Layer.mergeAll(
+            OmpDriverTestLayer,
+            ProcessRunner.layer.pipe(
+              Layer.provide(Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, fake.spawner)),
+            ),
+            // Keep the fake spawner LAST so it overrides the real NodeServices
+            // spawner that OmpDriverTestLayer merges in.
+            Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, fake.spawner),
           ),
         ),
-        Effect.provide(OmpDriverTestLayer),
       );
 
       NodeAssert.equal(instance.driverKind, ProviderDriverKind.make("omp"));
@@ -284,13 +288,17 @@ describe("OmpDriver", () => {
         enabled: true,
         config: decodeOmpSettings({ enabled: true, binaryPath }),
       }).pipe(
-        Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, fake.spawner),
         Effect.provide(
-          ProcessRunner.layer.pipe(
-            Layer.provide(Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, fake.spawner)),
+          Layer.mergeAll(
+            OmpDriverTestLayer,
+            ProcessRunner.layer.pipe(
+              Layer.provide(Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, fake.spawner)),
+            ),
+            // Keep the fake spawner LAST so it overrides the real NodeServices
+            // spawner that OmpDriverTestLayer merges in.
+            Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, fake.spawner),
           ),
         ),
-        Effect.provide(OmpDriverTestLayer),
       );
 
       const snapshot = yield* instance.snapshot.refresh;
@@ -322,13 +330,17 @@ describe("OmpDriver", () => {
         enabled: true,
         config: decodeOmpSettings({ enabled: true, binaryPath }),
       }).pipe(
-        Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, fake.spawner),
         Effect.provide(
-          ProcessRunner.layer.pipe(
-            Layer.provide(Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, fake.spawner)),
+          Layer.mergeAll(
+            OmpDriverTestLayer,
+            ProcessRunner.layer.pipe(
+              Layer.provide(Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, fake.spawner)),
+            ),
+            // Keep the fake spawner LAST so it overrides the real NodeServices
+            // spawner that OmpDriverTestLayer merges in.
+            Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, fake.spawner),
           ),
         ),
-        Effect.provide(OmpDriverTestLayer),
       );
 
       // Drain the create-time background refresh before subscribing.
@@ -361,8 +373,12 @@ describe("OmpDriver", () => {
           enabled: true,
           config: decodeOmpSettings({ enabled: true, binaryPath: realOmpBinary! }),
         }).pipe(
-          Effect.provide(ProcessRunner.layer.pipe(Layer.provide(NodeServices.layer))),
-          Effect.provide(OmpDriverTestLayer),
+          Effect.provide(
+            Layer.mergeAll(
+              OmpDriverTestLayer,
+              ProcessRunner.layer.pipe(Layer.provide(NodeServices.layer)),
+            ),
+          ),
         );
 
         const updated = yield* instance.snapshot.streamChanges.pipe(
