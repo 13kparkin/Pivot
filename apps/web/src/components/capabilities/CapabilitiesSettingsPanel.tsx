@@ -1,6 +1,7 @@
 "use client";
 
 import { useAtomRefresh, useAtomValue } from "@effect/atom-react";
+
 import type {
   EnvironmentId,
   OmpCapabilityScope,
@@ -9,7 +10,7 @@ import type {
 } from "@t3tools/contracts";
 import * as Option from "effect/Option";
 import { AsyncResult, Atom } from "effect/unstable/reactivity";
-import { LoaderIcon, SaveIcon, SearchIcon, Undo2Icon } from "lucide-react";
+import { LoaderIcon, PencilIcon, SaveIcon, SearchIcon, Undo2Icon } from "lucide-react";
 import { useState } from "react";
 
 import { useActiveEnvironmentId } from "../../state/entities";
@@ -20,14 +21,18 @@ import { SettingsPageContainer, SettingsRow, SettingsSection } from "../settings
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
+import { Switch } from "../ui/switch";
 import { stackedThreadToast, toastManager } from "../ui/toast";
 
+import { CapabilitiesSettingDialog } from "./CapabilitiesSettingDialog";
 import {
   buildPrecedenceLabel,
   buildSettingRows,
   buildWriteSettingInput,
   canEditEntry,
   filterSettingRows,
+  formatSettingValue,
+  parseSettingDraft,
 } from "./CapabilitiesSettingsPanel.logic";
 import { resolveCapabilitiesProjectId } from "./CapabilitiesOverviewPanel.logic";
 
@@ -42,15 +47,25 @@ function CapabilitiesSettingRow({
   scope,
   environmentId,
   projectId,
+  onEdit,
   onMutated,
 }: {
   entry: CapabilitiesSettingsRow;
   scope: OmpCapabilityScope;
   environmentId: EnvironmentId;
   projectId: ProjectId | null;
+  onEdit: () => void;
   onMutated: () => void;
 }) {
-  const [draft, setDraft] = useState(entry.masked ? "" : String(entry.value ?? ""));
+  const isBoolean = entry.type === "boolean";
+  const isStructured = entry.type === "record" || entry.type === "array";
+  const enumValues =
+    entry.type === "enum" && (entry.values?.length ?? 0) > 0 ? entry.values : undefined;
+  const [draft, setDraft] = useState(() => (entry.masked ? "" : formatSettingValue(entry.value)));
+  const [booleanDraft, setBooleanDraft] = useState(() =>
+    entry.masked ? false : Boolean(entry.value ?? false),
+  );
+  const [draftError, setDraftError] = useState<string | null>(null);
   const [busy, setBusy] = useState<"save" | "reset" | null>(null);
   const writeSetting = useAtomCommand(serverEnvironment.capabilitiesWriteSetting, {
     label: "capabilities-write-setting",
@@ -58,12 +73,26 @@ function CapabilitiesSettingRow({
   const resetSetting = useAtomCommand(serverEnvironment.capabilitiesResetSetting, {
     label: "capabilities-reset-setting",
   });
+  // Keep the current enum value selectable even when it is stale relative to
+  // the reported choices (e.g. a value written by an older omp version).
+  const selectValues =
+    enumValues !== undefined && draft.length > 0 && !enumValues.includes(draft)
+      ? [draft, ...enumValues]
+      : enumValues;
 
   const save = async () => {
     setBusy("save");
+    const parsed = isBoolean
+      ? ({ ok: true, value: booleanDraft } as const)
+      : parseSettingDraft(entry.type, draft);
+    if (!parsed.ok) {
+      setDraftError(parsed.error);
+      setBusy(null);
+      return;
+    }
     const result = await writeSetting({
       environmentId,
-      input: buildWriteSettingInput({ key: entry.key, value: draft, scope, projectId }),
+      input: buildWriteSettingInput({ key: entry.key, value: parsed.value, scope, projectId }),
     });
     setBusy(null);
     if (result._tag === "Failure") {
@@ -115,37 +144,82 @@ function CapabilitiesSettingRow({
       <td className="px-4 py-2 font-mono font-medium text-foreground sm:pl-5">{entry.key}</td>
       <td className="px-3 py-2 text-muted-foreground">{entry.type}</td>
       <td className="max-w-56 px-3 py-2 text-muted-foreground">{entry.description}</td>
-      <td className="px-3 py-2">
-        {editable ? (
+      <td className="max-w-64 px-3 py-2">
+        {!editable ? (
+          <span className="font-mono text-muted-foreground">{entry.displayValue}</span>
+        ) : isStructured ? (
+          <span className="block truncate font-mono text-xs text-foreground/90">
+            {entry.displayValue}
+          </span>
+        ) : isBoolean ? (
+          <Switch
+            checked={booleanDraft}
+            onCheckedChange={(checked) => {
+              setBooleanDraft(Boolean(checked));
+              setDraftError(null);
+            }}
+            aria-label={`Value for ${entry.key}`}
+          />
+        ) : enumValues !== undefined ? (
+          <Select
+            value={draft}
+            onValueChange={(value) => {
+              if (typeof value === "string") setDraft(value);
+              setDraftError(null);
+            }}
+          >
+            <SelectTrigger className="h-7 w-44" aria-label={`Value for ${entry.key}`}>
+              <SelectValue placeholder="Unset" />
+            </SelectTrigger>
+            <SelectPopup align="end" alignItemWithTrigger={false}>
+              {(selectValues ?? []).map((value) => (
+                <SelectItem hideIndicator key={value} value={value}>
+                  {value}
+                </SelectItem>
+              ))}
+            </SelectPopup>
+          </Select>
+        ) : (
           <Input
             size="sm"
             className="h-7 min-w-40 font-mono text-xs"
             value={draft}
-            onChange={(event) => setDraft(event.currentTarget.value)}
+            onChange={(event) => {
+              setDraft(event.currentTarget.value);
+              setDraftError(null);
+            }}
             placeholder="Unset"
             aria-label={`Value for ${entry.key}`}
           />
-        ) : (
-          <span className="font-mono text-muted-foreground">{entry.displayValue}</span>
         )}
+        {draftError !== null && !isStructured ? (
+          <span className="mt-0.5 block text-[11px] text-destructive">{draftError}</span>
+        ) : null}
       </td>
       <td className="px-3 py-2 text-right">
         {editable ? (
           <div className="inline-flex items-center gap-1.5">
-            <Button
-              type="button"
-              size="sm"
-              className="h-7 px-2 text-xs"
-              disabled={busy !== null}
-              onClick={() => void save()}
-            >
-              {busy === "save" ? (
-                <LoaderIcon className="size-3.5 animate-spin" />
-              ) : (
-                <SaveIcon className="size-3.5" />
-              )}
-              Save
-            </Button>
+            {isStructured ? (
+              <Button type="button" size="sm" className="h-7 px-2 text-xs" onClick={onEdit}>
+                <PencilIcon className="size-3.5" />
+                Edit
+              </Button>
+            ) : (
+              <Button
+                type="button"
+                size="sm"
+                className="h-7 px-2 text-xs"
+                disabled={busy !== null}
+                onClick={() => void save()}
+              >
+                {busy === "save" ? (
+                  <LoaderIcon className="size-3.5 animate-spin" />
+                ) : (
+                  <SaveIcon className="size-3.5" />
+                )}
+                Save
+              </Button>
+            )}
             {hasValue ? (
               <Button
                 type="button"
@@ -155,7 +229,11 @@ function CapabilitiesSettingRow({
                 disabled={busy !== null}
                 onClick={() => void reset()}
               >
-                <Undo2Icon className="size-3.5" />
+                {busy === "reset" ? (
+                  <LoaderIcon className="size-3.5 animate-spin" />
+                ) : (
+                  <Undo2Icon className="size-3.5" />
+                )}
                 Reset
               </Button>
             ) : null}
@@ -176,6 +254,7 @@ export function CapabilitiesSettingsPanel() {
   const projectId = resolveCapabilitiesProjectId(groups, environmentId);
   const [scope, setScope] = useState<OmpCapabilityScope>("global");
   const [query, setQuery] = useState("");
+  const [editingEntryKey, setEditingEntryKey] = useState<string | null>(null);
 
   // Project scope is only available when the active environment has a project.
   const effectiveScope: OmpCapabilityScope =
@@ -226,6 +305,7 @@ export function CapabilitiesSettingsPanel() {
   }
 
   const rows = filterSettingRows(buildSettingRows(snapshot.settings.entries), query);
+  const editingEntry = rows.find((row) => row.key === editingEntryKey) ?? null;
 
   return (
     <SettingsPageContainer>
@@ -298,6 +378,7 @@ export function CapabilitiesSettingsPanel() {
                     scope={effectiveScope}
                     environmentId={environmentId}
                     projectId={projectId}
+                    onEdit={() => setEditingEntryKey(row.key)}
                     onMutated={refreshSnapshot}
                   />
                 ))}
@@ -306,6 +387,19 @@ export function CapabilitiesSettingsPanel() {
           </div>
         )}
       </SettingsSection>
+      {editingEntry !== null ? (
+        <CapabilitiesSettingDialog
+          key={editingEntry.key}
+          entry={editingEntry}
+          scope={effectiveScope}
+          environmentId={environmentId}
+          projectId={projectId}
+          onOpenChange={(open) => {
+            if (!open) setEditingEntryKey(null);
+          }}
+          onMutated={refreshSnapshot}
+        />
+      ) : null}
     </SettingsPageContainer>
   );
 }

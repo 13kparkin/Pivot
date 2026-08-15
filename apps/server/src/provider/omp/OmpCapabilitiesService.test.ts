@@ -39,9 +39,18 @@ const LIST_JSON = {
   "power.sleepPrevention": { value: "idle", type: "enum", description: "" },
 };
 
+/** Human `omp config list` output; enum entries carry choices in the type column. */
+const HUMAN_LIST = [
+  "  theme.dark = titanium (string)",
+  "  auth.broker.token = ******** (string)",
+  "  advisor.enabled = true (boolean)",
+  "  power.sleepPrevention = idle (off|idle|display|system)",
+].join("\n");
+
 function makeRunner(options: {
   readonly agentDir: string;
   readonly listJson?: Record<string, unknown>;
+  readonly humanList?: string;
 }) {
   const calls: Array<{ readonly command: string; readonly args: ReadonlyArray<string> }> = [];
   const runner = ProcessRunner.ProcessRunner.of({
@@ -54,6 +63,9 @@ function makeRunner(options: {
         }
         if (key === `${OMP} config list --json`) {
           return emptyProcessOutput({ stdout: encodeJsonString(options.listJson ?? LIST_JSON) });
+        }
+        if (key === `${OMP} config list`) {
+          return emptyProcessOutput({ stdout: options.humanList ?? HUMAN_LIST });
         }
         if (input.args[0] === "config") {
           // set/reset succeed by default
@@ -155,6 +167,21 @@ it.layer(NodeServices.layer)("OmpCapabilitiesService", (it) => {
     }),
   );
 
+  it.effect("attaches enum choices parsed from the human config list", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const agentDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-omp-agent-" });
+      const { runner } = makeRunner({ agentDir });
+      const service = yield* makeService({ agentDir, runner });
+
+      const snapshot = yield* service.getSnapshot();
+      const sleep = snapshot.settings.entries.find((e) => e.key === "power.sleepPrevention");
+      expect(sleep?.values).toEqual(["off", "idle", "display", "system"]);
+      const theme = snapshot.settings.entries.find((e) => e.key === "theme.dark");
+      expect(theme?.values).toBeUndefined();
+    }),
+  );
+
   it.effect("exposes the settings surface from omp config list --json with masked secrets", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
@@ -189,6 +216,23 @@ it.layer(NodeServices.layer)("OmpCapabilitiesService", (it) => {
       expect(snapshot.settings.entries.length).toBeGreaterThan(0);
       const setCall = calls.find((c) => c.args[0] === "config" && c.args[1] === "set");
       expect(setCall?.args).toEqual(["config", "set", "theme.dark", "midnight"]);
+    }),
+  );
+
+  it.effect("serializes structured global values as JSON for omp config set", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const agentDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-omp-agent-" });
+      const { runner, calls } = makeRunner({ agentDir });
+      const service = yield* makeService({ agentDir, runner });
+
+      yield* service.writeSetting({
+        key: "modelRoles",
+        value: { default: "openai/gpt-5" },
+        scope: "global",
+      });
+      const setCall = calls.find((c) => c.args[0] === "config" && c.args[1] === "set");
+      expect(setCall?.args).toEqual(["config", "set", "modelRoles", '{"default":"openai/gpt-5"}']);
     }),
   );
 

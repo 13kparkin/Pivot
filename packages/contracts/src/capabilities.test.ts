@@ -51,7 +51,6 @@ const decodeResetSettingTransport = Schema.decodeUnknownSync(
   ServerOmpCapabilitiesResetSettingInput,
 );
 const decodeError = Schema.decodeUnknownSync(OmpCapabilitiesError);
-
 describe("OmpCapabilityScope", () => {
   it("accepts the three scopes", () => {
     expect(OmpCapabilityScope.literals).toEqual(["global", "project", "profile"]);
