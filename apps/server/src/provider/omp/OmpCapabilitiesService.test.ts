@@ -3,7 +3,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
-import { expect } from "vite-plus/test";
+import { afterEach, expect, vi } from "vite-plus/test";
 import * as Schema from "effect/Schema";
 
 import { OmpCapabilitiesError, ProjectId } from "@t3tools/contracts";
@@ -102,6 +102,10 @@ function makeService(options: {
     return service;
   });
 }
+
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
 
 it.layer(NodeServices.layer)("OmpCapabilitiesService", (it) => {
   it.effect("resolves the agent dir from omp config path and inventories resources", () =>
@@ -238,6 +242,46 @@ it.layer(NodeServices.layer)("OmpCapabilitiesService", (it) => {
           true,
         );
       }),
+  );
+
+  it.effect("inventories skills from cursor-compatible roots on the server host", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const agentDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-omp-agent-" });
+      yield* fs.makeDirectory(path.join(agentDir, "skills", "agent-skill"), { recursive: true });
+      yield* fs.writeFileString(
+        path.join(agentDir, "skills", "agent-skill", "SKILL.md"),
+        "# Agent skill\n",
+      );
+      // Cursor-compatible roots, keyed off the stubbed home dir.
+      const home = yield* fs.makeTempDirectoryScoped({ prefix: "t3-omp-home-" });
+      yield* fs.makeDirectory(path.join(home, ".cursor", "skills", "cursor-skill"), {
+        recursive: true,
+      });
+      yield* fs.writeFileString(
+        path.join(home, ".cursor", "skills", "cursor-skill", "SKILL.md"),
+        "---\ndescription: From cursor\n---\n",
+      );
+      yield* fs.makeDirectory(path.join(home, ".cursor", "skills-cursor", "bundled-skill"), {
+        recursive: true,
+      });
+      yield* fs.writeFileString(
+        path.join(home, ".cursor", "skills-cursor", "bundled-skill", "SKILL.md"),
+        "# Bundled\n",
+      );
+      vi.stubEnv("HOME", home);
+
+      const { runner } = makeRunner({ agentDir });
+      const service = yield* makeService({ agentDir, runner });
+      const snapshot = yield* service.getSnapshot();
+      const names = snapshot.skills.map((skill) => skill.name);
+      expect(names).toContain("agent-skill");
+      expect(names).toContain("cursor-skill");
+      expect(names).toContain("bundled-skill");
+      const cursorSkill = snapshot.skills.find((skill) => skill.name === "cursor-skill");
+      expect(cursorSkill?.description).toBe("From cursor");
+    }),
   );
 
   it.effect("exposes the settings surface from omp config list --json with masked secrets", () =>
