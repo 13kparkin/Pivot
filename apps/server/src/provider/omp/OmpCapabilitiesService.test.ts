@@ -387,6 +387,7 @@ it.layer(NodeServices.layer)("OmpCapabilitiesService", (it) => {
         const { runner } = makeRunner({ agentDir });
         const service = yield* makeService({
           agentDir,
+          projectCwd: projectA,
           runner,
           listProjectWorkspaces: [
             { projectId: ProjectId.make("project-a"), cwd: projectA, title: "Project A" },

@@ -1570,6 +1570,7 @@ const makeWsRpcLayer = (
                 .ompCapabilitiesGetSnapshot({
                   instanceId,
                   ...(input.projectId === undefined ? {} : { projectId: input.projectId }),
+                  ...(input.includeAllProjects === true ? { includeAllProjects: true } : {}),
                 })
                 .pipe(
                   Effect.mapError(

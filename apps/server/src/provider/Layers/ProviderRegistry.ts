@@ -757,10 +757,13 @@ export const ProviderRegistryLive = Layer.effect(
             onOpenUrl: (request) => input.onOpenUrl(request.launchUrl ?? request.url),
           });
         }),
-      ompCapabilitiesGetSnapshot: ({ instanceId, projectId }) =>
+      ompCapabilitiesGetSnapshot: ({ instanceId, projectId, includeAllProjects }) =>
         Effect.gen(function* () {
           const adapter = yield* resolveOmpAdapter(instanceId);
-          return yield* adapter.capabilitiesSnapshot(projectId);
+          return yield* adapter.capabilitiesSnapshot(
+            projectId,
+            includeAllProjects === true ? { includeAllProjects: true } : undefined,
+          );
         }).pipe(Effect.mapError(toOmpCapabilitiesError)),
       ompCapabilitiesWriteSetting: ({ instanceId, ...input }) =>
         Effect.gen(function* () {

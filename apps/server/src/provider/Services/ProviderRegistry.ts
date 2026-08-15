@@ -116,6 +116,7 @@ export interface ProviderRegistryShape {
   readonly ompCapabilitiesGetSnapshot: (input: {
     readonly instanceId: ProviderInstanceId;
     readonly projectId?: ProjectId;
+    readonly includeAllProjects?: boolean;
   }) => Effect.Effect<OmpCapabilitiesSnapshot, OmpCapabilitiesError>;
 
   /**

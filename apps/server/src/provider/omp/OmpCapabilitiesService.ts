@@ -82,6 +82,12 @@ const DIR_KINDS = [
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
 
+interface ProjectWorkspace {
+  readonly projectId: ProjectId;
+  readonly cwd: string;
+  readonly title: string;
+}
+
 /**
  * Parse a raw config editor value into a YAML scalar so project-layer
  * writes store `autoResume: false` (boolean) instead of `'false'` (string).
@@ -154,6 +160,10 @@ export class OmpCapabilitiesService {
   readonly #resolveProjectCwd: (
     projectId: ProjectId,
   ) => Effect.Effect<string, OmpCapabilitiesError>;
+  /** Enumerate every project's cwd/title for the all-projects inventory. */
+  readonly #listProjectWorkspaces?:
+    | (() => Effect.Effect<ReadonlyArray<ProjectWorkspace>, OmpCapabilitiesError>)
+    | undefined;
 
   public constructor(
     fileSystem: FileSystem.FileSystem,
@@ -162,6 +172,10 @@ export class OmpCapabilitiesService {
     commandRunner: ProcessRunner.ProcessRunner["Service"],
     configStore: OmpConfigStore,
     resolveProjectCwd: (projectId: ProjectId) => Effect.Effect<string, OmpCapabilitiesError>,
+    listProjectWorkspaces?: () => Effect.Effect<
+      ReadonlyArray<ProjectWorkspace>,
+      OmpCapabilitiesError
+    >,
   ) {
     this.#fileSystem = fileSystem;
     this.#path = path;
@@ -169,10 +183,12 @@ export class OmpCapabilitiesService {
     this.#commandRunner = commandRunner;
     this.#configStore = configStore;
     this.#resolveProjectCwd = resolveProjectCwd;
+    this.#listProjectWorkspaces = listProjectWorkspaces;
   }
 
   public getSnapshot(
     projectId?: ProjectId,
+    options?: { readonly includeAllProjects?: boolean },
   ): Effect.Effect<OmpCapabilitiesSnapshot, OmpCapabilitiesError> {
     return Effect.gen({ self: this }, function* () {
       const agentDir = yield* this.resolveAgentDir();
@@ -180,7 +196,11 @@ export class OmpCapabilitiesService {
         projectId === undefined ? undefined : yield* this.#resolveProjectCwd(projectId);
       const settings = yield* this.readSettingsSurface(projectCwd);
       const resources = yield* this.inventory(agentDir, projectCwd);
-      const items = yield* this.inventoryItems(agentDir, projectCwd);
+      const items = yield* this.inventoryItems(
+        agentDir,
+        projectCwd,
+        options?.includeAllProjects === true,
+      );
       const agentDirLabel = this.tildeLabel(agentDir);
       return {
         ...(agentDirLabel !== undefined ? { agentDirLabel } : {}),
@@ -661,6 +681,7 @@ export class OmpCapabilitiesService {
   private inventoryItems(
     agentDir: string,
     projectCwd: string | undefined,
+    includeAllProjects = false,
   ): Effect.Effect<
     {
       readonly skills: ReadonlyArray<OmpCapabilityItem>;
@@ -683,6 +704,30 @@ export class OmpCapabilitiesService {
       for (const scope of scopes) {
         skills.push(...(yield* this.listItemKind("skills", scope.dir, scope.scope)));
         rules.push(...(yield* this.listItemKind("rules", scope.dir, scope.scope)));
+      }
+      // Global capabilities view: include every project's items, tagged with
+      // the owning project so the client can label and edit them.
+      if (includeAllProjects && this.#listProjectWorkspaces !== undefined) {
+        const workspaces = yield* this.#listProjectWorkspaces();
+        for (const workspace of workspaces) {
+          const projectDir = this.#path.join(workspace.cwd, ".omp");
+          const tag = {
+            projectId: workspace.projectId,
+            projectTitle: workspace.title,
+          } as const;
+          skills.push(
+            ...(yield* this.listItemKind("skills", projectDir, "project")).map((item) => ({
+              ...item,
+              ...tag,
+            })),
+          );
+          rules.push(
+            ...(yield* this.listItemKind("rules", projectDir, "project")).map((item) => ({
+              ...item,
+              ...tag,
+            })),
+          );
+        }
       }
       // omp agents also load skills from cursor-compatible roots on the
       // server host (`~/.cursor/skills`, `~/.cursor/skills-cursor`), so the

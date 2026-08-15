@@ -228,9 +228,12 @@ export class OmpAdapter {
   }
 
   /** omp Capabilities: snapshot of the discovered OMP config surface (non-thread op). */
-  public capabilitiesSnapshot(projectId?: ProjectId) {
+  public capabilitiesSnapshot(
+    projectId?: ProjectId,
+    options?: { readonly includeAllProjects?: boolean },
+  ) {
     return this.requireCapabilitiesService().pipe(
-      Effect.flatMap((service) => service.getSnapshot(projectId)),
+      Effect.flatMap((service) => service.getSnapshot(projectId, options)),
     );
   }
 
