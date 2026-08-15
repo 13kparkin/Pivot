@@ -532,6 +532,68 @@ describe("providerMaintenanceRunner", () => {
     );
   });
 
+  it.effect("completes an update forked into a daemon after the caller scope closes", () => {
+    const release: { resolve: () => void } = { resolve: () => {} };
+    const releasePromise = new Promise<void>((resolve) => {
+      release.resolve = resolve;
+    });
+    return Effect.gen(function* () {
+      const { registry, updateStatesRef } = yield* makeRegistry();
+      const updater = yield* makeTestRunner(registry);
+
+      // The WebSocket RPC layer runs updates detached from the connection
+      // scope (forkDetach). A client disconnect closes that scope mid-update;
+      // the daemon must survive it and still record the terminal state.
+      const fiber = yield* Effect.scoped(Effect.forkDetach(updater.updateProvider(CODEX_DRIVER)));
+
+      // The command is in flight once the runner records "running"; release it
+      // only then, so the scope above closes while the update is mid-flight.
+      let runningStatus: string | undefined;
+      for (let attempt = 0; attempt < 200; attempt += 1) {
+        runningStatus = (yield* registry.getProviders)[0]?.updateState?.status;
+        if (runningStatus === "running") {
+          break;
+        }
+        yield* Effect.yieldNow;
+      }
+      assert.strictEqual(runningStatus, "running");
+      release.resolve();
+
+      let finalStatus: string | undefined;
+      for (let attempt = 0; attempt < 200; attempt += 1) {
+        finalStatus = (yield* registry.getProviders)[0]?.updateState?.status;
+        if (
+          finalStatus === "succeeded" ||
+          finalStatus === "failed" ||
+          finalStatus === "unchanged"
+        ) {
+          break;
+        }
+        yield* Effect.yieldNow;
+      }
+      assert.strictEqual(finalStatus, "succeeded");
+      assert.deepStrictEqual(
+        (yield* Ref.get(updateStatesRef)).map((state) => state.status),
+        ["queued", "running", "succeeded"],
+      );
+      const exit = yield* Fiber.await(fiber);
+      assert.strictEqual(exit._tag, "Success");
+    }).pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          NonWindowsPlatform,
+          latestVersionHttpClient("0.0.0"),
+          mockSpawnerLayer(() => ({
+            stdout: "updated",
+            exitCode: Effect.promise(() => releasePromise).pipe(
+              Effect.as(ChildProcessSpawner.ExitCode(0)),
+            ),
+          })),
+        ),
+      ),
+    );
+  });
+
   it.effect("serializes different providers that share the same update lock key", () => {
     const firstStartedLatch: { resolve: () => void } = { resolve: () => {} };
     const releaseFirstLatch: { resolve: () => void } = { resolve: () => {} };

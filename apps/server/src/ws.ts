@@ -3,6 +3,7 @@ import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
@@ -1696,7 +1697,19 @@ const makeWsRpcLayer = (
         [WS_METHODS.serverUpdateProvider]: (input) =>
           observeRpcEffect(
             WS_METHODS.serverUpdateProvider,
-            providerMaintenanceRunner.updateProvider(input),
+            Effect.gen(function* () {
+              // Run the update detached so a client disconnect (reload,
+              // backgrounding, network blip) cannot interrupt a download or
+              // install that can take minutes, then join so the RPC still
+              // resolves with the terminal provider state — the UI drives its
+              // toast from the RPC result. If the connection drops mid-update
+              // the join is interrupted but the detached update keeps running
+              // server-side, and the registry state survives reconnects.
+              const updateFiber = yield* Effect.forkDetach(
+                providerMaintenanceRunner.updateProvider(input),
+              );
+              return yield* Fiber.join(updateFiber);
+            }),
             {
               "rpc.aggregate": "server",
             },
