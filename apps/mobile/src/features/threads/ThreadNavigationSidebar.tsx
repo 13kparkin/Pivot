@@ -9,9 +9,11 @@ import {
 } from "@t3tools/client-runtime/state/thread-search";
 import { LegendList } from "@legendapp/list/react-native";
 import type { MenuAction } from "@react-native-menu/menu";
-import { useAtomValue } from "@effect/atom-react";
+import { useAtomSet, useAtomValue } from "@effect/atom-react";
+import { AsyncResult } from "effect/unstable/reactivity";
 import type { EnvironmentId } from "@t3tools/contracts";
 import { sortPinnedThreadsByOrderKey } from "@t3tools/client-runtime/state/thread-sort";
+import { buildProjectGroups } from "@t3tools/client-runtime/state/project-grouping";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { LayoutChangeEvent, NativeScrollEvent, NativeSyntheticEvent } from "react-native";
 import { Platform, Pressable, StyleSheet, TextInput, View, useColorScheme } from "react-native";
@@ -32,6 +34,7 @@ import { useProjects, useThreadShells } from "../../state/entities";
 import { useThreadSearch } from "../../state/queries";
 import { useThreadListV2Enabled } from "./use-thread-list-v2-enabled";
 import { environmentServerConfigsAtom } from "../../state/server";
+import { mobilePreferencesAtom, updateMobilePreferencesAtom } from "../../state/preferences";
 import { usePendingNewTasks } from "../../state/use-pending-new-tasks";
 import { useWorkspaceState } from "../../state/workspace";
 import { useSavedRemoteConnections } from "../../state/use-remote-environment-registry";
@@ -72,25 +75,25 @@ import {
 } from "./thread-list-items";
 import {
   ThreadListV2PendingRow,
+  ThreadListV2ProjectRow,
   ThreadListV2Row,
-  ThreadListV2SettledShelfHeader,
+  ThreadListV2SettledDock,
   ThreadListV2SnoozedShelfHeader,
 } from "./thread-list-v2-items";
 import {
-  buildThreadListV2Items,
-  buildThreadListV2ListItems,
+  buildProjectThreadListV2,
+  buildProjectThreadListV2ListItems,
+  resolveSettledDockRows,
   THREAD_LIST_V2_SETTLED_INITIAL_COUNT,
   THREAD_LIST_V2_SETTLED_PAGE_COUNT,
-  type ThreadListV2ListItem,
+  type ThreadListV2Item,
+  type ThreadListV2ProjectListItem,
 } from "./threadListV2";
 
 /** The sidebar list serves both lists: v1 grouped items or, when the Thread
-    List v2 beta is on, flat v2 rows with queued tasks spliced in, and a settled
-    "Show more" pager. */
-type SidebarListItem =
-  | HomeListItem
-  | ThreadListV2ListItem
-  | { readonly type: "v2-show-more"; readonly key: string; readonly hiddenCount: number };
+    List v2 beta is on, per-project rows with nested thread cards and the
+    global snoozed shelf. Settled lives in the fixed dock below the list. */
+type SidebarListItem = HomeListItem | ThreadListV2ProjectListItem;
 
 /**
  * Shared capsule behind the sidebar header buttons — a native liquid-glass
@@ -528,53 +531,130 @@ function ThreadNavigationSidebarPane(
     );
     return pinned.map((thread) => `${thread.environmentId}:${thread.id}`);
   }, [pinReorderEnvironmentIds, threads]);
-  const threadListV2Layout = useMemo(() => {
+  // Logical project groups in group order — the per-project list model (the
+  // web sidebar partitions the same shared buildProjectGroups output).
+  const v2ProjectGroups = useMemo(
+    () =>
+      buildProjectGroups({
+        projects,
+        settings: {
+          sidebarProjectGroupingMode: options.projectGroupingMode,
+          sidebarProjectGroupingOverrides: {},
+        },
+      }),
+    [options.projectGroupingMode, projects],
+  );
+  const v2ScopedProjectGroup = useMemo(
+    () =>
+      selectedProjectKey === null
+        ? null
+        : (v2ProjectGroups.find(
+            (group) =>
+              group.key === selectedProjectKey ||
+              group.memberProjectRefs.some(
+                (projectRef) =>
+                  scopedProjectKey(projectRef.environmentId, projectRef.projectId) ===
+                  selectedProjectKey,
+              ),
+          ) ?? null),
+    [selectedProjectKey, v2ProjectGroups],
+  );
+  const v2ProjectTitleByProjectKey = useMemo(
+    () =>
+      new Map(
+        v2ProjectGroups.flatMap((group) =>
+          group.memberProjectRefs.map(
+            (projectRef) =>
+              [
+                scopedProjectKey(projectRef.environmentId, projectRef.projectId),
+                group.label,
+              ] as const,
+          ),
+        ),
+      ),
+    [v2ProjectGroups],
+  );
+  const preferencesResult = useAtomValue(mobilePreferencesAtom);
+  const savePreferences = useAtomSet(updateMobilePreferencesAtom);
+  // Per-project expansion persists as overrides keyed by logical projectKey
+  // (the web sidebar's `t3code:sidebar-v2:project-expanded` map semantics;
+  // mobile stores the map in the preferences blob). Local toggles layer on
+  // top of whatever the store reported so a toggle never races the async load.
+  const persistedProjectExpansion = useMemo(() => {
+    const stored = AsyncResult.isSuccess(preferencesResult)
+      ? (preferencesResult.value.sidebarProjectExpanded ?? {})
+      : {};
+    return stored;
+  }, [preferencesResult]);
+  const [projectExpansion, setProjectExpansion] = useState<ReadonlyMap<string, boolean>>(
+    () => new Map(),
+  );
+  const effectiveProjectExpansion = useMemo(() => {
+    const combined = new Map<string, boolean>();
+    for (const [key, value] of Object.entries(persistedProjectExpansion)) {
+      combined.set(key, value);
+    }
+    for (const [key, value] of projectExpansion) {
+      combined.set(key, value);
+    }
+    return combined;
+  }, [persistedProjectExpansion, projectExpansion]);
+  const projectThreadList = useMemo(() => {
     if (!threadListV2Enabled)
-      return {
-        items: [],
-        hiddenSettledCount: 0,
-        snoozedCount: 0,
-        snoozedShelfHeaderIndex: null,
-        settledCount: 0,
-        settledShelfHeaderIndex: null,
-        nextSnoozeWakeAt: null,
-      };
-    return buildThreadListV2Items({
+      return { projects: [], snoozed: [], settled: [], nextSnoozeWakeAt: null };
+    return buildProjectThreadListV2({
       threads: threads.filter((thread) => thread.archivedAt === null),
+      groups: v2ProjectGroups,
+      expansion: effectiveProjectExpansion,
       environmentId: options.selectedEnvironmentId,
-      projectRefs: selectedProjectScope === null ? null : selectedProjectScope.projectRefs,
+      projectRefs: v2ScopedProjectGroup === null ? null : v2ScopedProjectGroup.memberProjectRefs,
       searchQuery: props.searchQuery,
       matchedThreadKeys,
       changeRequestStateByKey,
       settlementEnvironmentIds,
       snoozeEnvironmentIds,
-      settledLimit: settledVisibleCount,
       now: `${nowMinute}:00.000Z`,
       snoozeNow: new Date().toISOString(),
-      snoozedShelfExpanded,
-      settledShelfExpanded,
-      selectedThreadKey: props.selectedThreadKey ?? null,
     });
   }, [
     changeRequestStateByKey,
+    effectiveProjectExpansion,
     nowMinute,
     snoozeWakeTick,
-    snoozedShelfExpanded,
-    settledShelfExpanded,
-    props.selectedThreadKey,
     options.selectedEnvironmentId,
     props.searchQuery,
     matchedThreadKeys,
-    settledVisibleCount,
     settlementEnvironmentIds,
     snoozeEnvironmentIds,
     threadListV2Enabled,
     threads,
-    selectedProjectScope,
+    v2ProjectGroups,
+    v2ScopedProjectGroup,
   ]);
+  const toggleProject = useCallback(
+    (projectKey: string) => {
+      const project = projectThreadList.projects.find(
+        (candidate) => candidate.group.key === projectKey,
+      );
+      const nextExpanded = !(project?.expanded ?? false);
+      setProjectExpansion((current) => {
+        const next = new Map(current);
+        next.set(projectKey, nextExpanded);
+        return next;
+      });
+      savePreferences({
+        sidebarProjectExpanded: {
+          ...persistedProjectExpansion,
+          ...Object.fromEntries(projectExpansion),
+          [projectKey]: nextExpanded,
+        },
+      });
+    },
+    [persistedProjectExpansion, projectExpansion, projectThreadList.projects, savePreferences],
+  );
   // Re-partition the moment the earliest snooze expires (clamped to the
   // signed-32-bit setTimeout range; far-future wakes re-arm at the clamp).
-  const nextSnoozeWakeAt = threadListV2Layout.nextSnoozeWakeAt;
+  const nextSnoozeWakeAt = projectThreadList.nextSnoozeWakeAt;
   useEffect(() => {
     if (nextSnoozeWakeAt === null) return;
     const wakeAtMs = Date.parse(nextSnoozeWakeAt);
@@ -589,53 +669,52 @@ function ThreadNavigationSidebarPane(
   const listItems = useMemo<readonly SidebarListItem[]>(() => {
     if (!threadListV2Enabled) return listLayout.items;
     // Queued offline tasks are not thread shells, so the v2 item builder
-    // never sees them; the shared splice puts them below the active block
-    // (mirrors the compact Home v2 list) where they stay visible and
-    // deletable while their environment is offline. Same environment scope
-    // and search filter as the list.
+    // never sees them; they render above PROJECTS (in flow, like the web
+    // drafts) and stay visible and deletable while their environment is
+    // offline. Same environment scope and search filter as the list.
     const v2SearchQuery = props.searchQuery.trim().toLocaleLowerCase();
     const v2PendingTasks = pendingTasks.filter(
       (pendingTask) =>
         (options.selectedEnvironmentId === null ||
           pendingTask.message.environmentId === options.selectedEnvironmentId) &&
-        (selectedProjectRefs === null ||
-          selectedProjectRefs.has(
-            scopedProjectKey(pendingTask.message.environmentId, pendingTask.creation.projectId),
+        (v2ScopedProjectGroup === null ||
+          v2ScopedProjectGroup.memberProjectRefs.some(
+            (projectRef) =>
+              scopedProjectKey(projectRef.environmentId, projectRef.projectId) ===
+              scopedProjectKey(pendingTask.message.environmentId, pendingTask.creation.projectId),
           )) &&
         (v2SearchQuery.length === 0 ||
           pendingTask.title.toLocaleLowerCase().includes(v2SearchQuery)),
     );
-    const items: SidebarListItem[] = buildThreadListV2ListItems({
-      items: threadListV2Layout.items,
+    return buildProjectThreadListV2ListItems({
+      partition: projectThreadList,
       pendingTasks: v2PendingTasks,
-      snoozedCount: threadListV2Layout.snoozedCount,
       snoozedShelfExpanded,
-      snoozedShelfHeaderIndex: threadListV2Layout.snoozedShelfHeaderIndex,
-      settledCount: threadListV2Layout.settledCount,
-      settledShelfExpanded,
-      settledShelfHeaderIndex: threadListV2Layout.settledShelfHeaderIndex,
       snoozeLabelNow: `${nowMinute}:00.000Z`,
     });
-    if (settledShelfExpanded && threadListV2Layout.hiddenSettledCount > 0) {
-      items.push({
-        type: "v2-show-more",
-        key: "v2-show-more",
-        hiddenCount: threadListV2Layout.hiddenSettledCount,
-      });
-    }
-    return items;
   }, [
-    listLayout.items,
     nowMinute,
     options.selectedEnvironmentId,
     pendingTasks,
+    projectThreadList,
     props.searchQuery,
-    selectedProjectRefs,
-    settledShelfExpanded,
     snoozedShelfExpanded,
     threadListV2Enabled,
-    threadListV2Layout,
+    v2ScopedProjectGroup,
   ]);
+  // The settled dock lives below the scroll area and pages its own rows; the
+  // split-view detail's thread stays pinned into the visible rows so it can
+  // never lose its navigation row.
+  const settledDockRows = useMemo(
+    () =>
+      resolveSettledDockRows({
+        settled: projectThreadList.settled,
+        expanded: settledShelfExpanded,
+        visibleCount: settledVisibleCount,
+        selectedThreadKey: props.selectedThreadKey ?? null,
+      }),
+    [projectThreadList.settled, props.selectedThreadKey, settledShelfExpanded, settledVisibleCount],
+  );
   const listMenuActions = useMemo<MenuAction[]>(
     () => [
       {
@@ -842,8 +921,15 @@ function ThreadNavigationSidebarPane(
           previous.snoozeWakeLabelText === item.snoozeWakeLabelText
         );
       }
-      if (previous.type === "v2-show-more" && item.type === "v2-show-more") {
-        return previous.hiddenCount === item.hiddenCount;
+      if (previous.type === "v2-project" && item.type === "v2-project") {
+        return (
+          previous.key === item.key &&
+          previous.expanded === item.expanded &&
+          previous.isFirstProject === item.isFirstProject &&
+          previous.project.group === item.project.group &&
+          previous.project.pinned === item.project.pinned &&
+          previous.project.active === item.project.active
+        );
       }
       if (previous.type === "v2-pending" && item.type === "v2-pending") {
         return (
@@ -854,20 +940,15 @@ function ThreadNavigationSidebarPane(
       if (previous.type === "v2-snoozed-shelf" && item.type === "v2-snoozed-shelf") {
         return previous.count === item.count && previous.expanded === item.expanded;
       }
-      if (previous.type === "v2-settled-shelf" && item.type === "v2-settled-shelf") {
-        return previous.count === item.count && previous.expanded === item.expanded;
-      }
       if (
         previous.type === "v2-thread" ||
-        previous.type === "v2-show-more" ||
+        previous.type === "v2-project" ||
         previous.type === "v2-pending" ||
         previous.type === "v2-snoozed-shelf" ||
-        previous.type === "v2-settled-shelf" ||
         item.type === "v2-thread" ||
-        item.type === "v2-show-more" ||
+        item.type === "v2-project" ||
         item.type === "v2-pending" ||
-        item.type === "v2-snoozed-shelf" ||
-        item.type === "v2-settled-shelf"
+        item.type === "v2-snoozed-shelf"
       ) {
         return false;
       }
@@ -892,6 +973,116 @@ function ThreadNavigationSidebarPane(
     return true;
   }, [props.nativeChrome, props.onRequestVisibility, props.visible]);
   useHardwareKeyboardCommand("focusSearch", focusSearch);
+  // Shared row wiring for list rows and the settled dock: a slim dock row is
+  // just a v2 thread item with variant slim and no trailing hairline.
+  const renderV2ThreadRow = useCallback(
+    (item: ThreadListV2Item, snoozeWakeLabelText?: string) => {
+      const thread = item.thread;
+      const scopeKey = scopedProjectKey(thread.environmentId, thread.projectId);
+      return (
+        <ThreadListV2Row
+          thread={thread}
+          variant={item.variant}
+          snoozed={item.snoozed}
+          pinned={item.pinned}
+          snoozePresetMinute={nowMinute}
+          snoozeWakeLabelText={snoozeWakeLabelText}
+          project={projectByKey.get(scopeKey) ?? null}
+          projectTitle={v2ProjectTitleByProjectKey.get(scopeKey)}
+          providerDriver={
+            serverConfigs
+              .get(thread.environmentId)
+              ?.providers.find(
+                (provider) =>
+                  provider.instanceId ===
+                  (thread.session?.providerInstanceId ?? thread.modelSelection.instanceId),
+              )?.driver ?? null
+          }
+          environmentLabel={
+            Object.keys(savedConnectionsById).length > 1
+              ? (savedConnectionsById[thread.environmentId]?.environmentLabel ?? null)
+              : null
+          }
+          searchMatch={threadSearchMatchByKey.get(
+            threadSearchMatchKey({
+              environmentId: thread.environmentId,
+              threadId: thread.id,
+            }),
+          )}
+          searchQuery={props.searchQuery}
+          pane="sidebar"
+          selected={scopedThreadKey(thread.environmentId, thread.id) === props.selectedThreadKey}
+          fullSwipeWidth={props.width - 20}
+          onSelectThread={handleSelectThread}
+          onDeleteThread={confirmDeleteThread}
+          onArchiveThread={archiveThread}
+          onRegenerateThreadTitle={regenerateThreadTitle}
+          titleRegenerationSupported={titleRegenerationEnvironmentIds.has(thread.environmentId)}
+          settlementSupported={settlementEnvironmentIds.has(thread.environmentId)}
+          onSettleThread={settleThread}
+          snoozeSupported={snoozeEnvironmentIds.has(thread.environmentId)}
+          pinningSupported={pinningEnvironmentIds.has(thread.environmentId)}
+          pinReorderSupported={pinReorderEnvironmentIds.has(thread.environmentId)}
+          canMovePinnedUp={arrangedPinnedKeys.indexOf(`${thread.environmentId}:${thread.id}`) > 0}
+          canMovePinnedDown={(() => {
+            const index = arrangedPinnedKeys.indexOf(`${thread.environmentId}:${thread.id}`);
+            return index !== -1 && index < arrangedPinnedKeys.length - 1;
+          })()}
+          onSnoozeThread={snoozeThread}
+          onUnsnoozeThread={unsnoozeThread}
+          onUnsettleThread={unsettleThread}
+          onPinThread={pinThread}
+          onUnpinThread={unpinThread}
+          onMovePinnedThread={movePinnedThread}
+          onChangeRequestState={handleChangeRequestState}
+          projectCwd={projectCwdByKey.get(scopeKey) ?? null}
+          onSwipeableClose={handleSwipeableClose}
+          onSwipeableWillOpen={handleSwipeableWillOpen}
+          simultaneousSwipeGesture={sidebarScrollGesture}
+        />
+      );
+    },
+    [
+      archiveThread,
+      arrangedPinnedKeys,
+      confirmDeleteThread,
+      handleChangeRequestState,
+      handleSelectThread,
+      handleSwipeableClose,
+      handleSwipeableWillOpen,
+      movePinnedThread,
+      nowMinute,
+      pinReorderEnvironmentIds,
+      pinThread,
+      pinningEnvironmentIds,
+      projectByKey,
+      projectCwdByKey,
+      props.searchQuery,
+      props.selectedThreadKey,
+      props.width,
+      regenerateThreadTitle,
+      savedConnectionsById,
+      serverConfigs,
+      settlementEnvironmentIds,
+      sidebarScrollGesture,
+      snoozeEnvironmentIds,
+      snoozeThread,
+      threadSearchMatchByKey,
+      titleRegenerationEnvironmentIds,
+      settleThread,
+      unpinThread,
+      unsettleThread,
+      unsnoozeThread,
+      v2ProjectTitleByProjectKey,
+    ],
+  );
+  // Settled rows render in the fixed dock below the scroll area; the dock
+  // draws its own chrome and paging, so rows never carry a trailing hairline.
+  const renderSettledRow = useCallback(
+    (thread: EnvironmentThreadShell) =>
+      renderV2ThreadRow({ thread, variant: "slim", snoozed: false, pinned: false, isLast: false }),
+    [renderV2ThreadRow],
+  );
   const renderListItem = useCallback(
     ({ item }: { readonly item: SidebarListItem }) => {
       switch (item.type) {
@@ -904,7 +1095,7 @@ function ThreadNavigationSidebarPane(
             <ThreadListV2PendingRow
               pendingTask={item.pendingTask}
               project={projectByKey.get(pendingScopeKey) ?? null}
-              projectTitle={projectTitleByProjectKey.get(pendingScopeKey)}
+              projectTitle={v2ProjectTitleByProjectKey.get(pendingScopeKey)}
               environmentLabel={
                 Object.keys(savedConnectionsById).length > 1
                   ? (savedConnectionsById[item.pendingTask.message.environmentId]
@@ -918,76 +1109,18 @@ function ThreadNavigationSidebarPane(
             />
           );
         }
-        case "v2-thread": {
-          const thread = item.item.thread;
-          const scopeKey = scopedProjectKey(thread.environmentId, thread.projectId);
+        case "v2-project":
           return (
-            <ThreadListV2Row
-              thread={thread}
-              variant={item.item.variant}
-              snoozed={item.item.snoozed}
-              pinned={item.item.pinned}
-              snoozePresetMinute={nowMinute}
-              snoozeWakeLabelText={item.snoozeWakeLabelText}
-              project={projectByKey.get(scopeKey) ?? null}
-              projectTitle={projectTitleByProjectKey.get(scopeKey)}
-              providerDriver={
-                serverConfigs
-                  .get(thread.environmentId)
-                  ?.providers.find(
-                    (provider) =>
-                      provider.instanceId ===
-                      (thread.session?.providerInstanceId ?? thread.modelSelection.instanceId),
-                  )?.driver ?? null
-              }
-              environmentLabel={
-                Object.keys(savedConnectionsById).length > 1
-                  ? (savedConnectionsById[thread.environmentId]?.environmentLabel ?? null)
-                  : null
-              }
-              searchMatch={threadSearchMatchByKey.get(
-                threadSearchMatchKey({
-                  environmentId: thread.environmentId,
-                  threadId: thread.id,
-                }),
-              )}
-              searchQuery={props.searchQuery}
+            <ThreadListV2ProjectRow
+              project={item.project}
+              expanded={item.expanded}
+              isFirstProject={item.isFirstProject}
+              onToggle={toggleProject}
               pane="sidebar"
-              selected={
-                scopedThreadKey(thread.environmentId, thread.id) === props.selectedThreadKey
-              }
-              fullSwipeWidth={props.width - 20}
-              onSelectThread={handleSelectThread}
-              onDeleteThread={confirmDeleteThread}
-              onArchiveThread={archiveThread}
-              onRegenerateThreadTitle={regenerateThreadTitle}
-              titleRegenerationSupported={titleRegenerationEnvironmentIds.has(thread.environmentId)}
-              settlementSupported={settlementEnvironmentIds.has(thread.environmentId)}
-              onSettleThread={settleThread}
-              snoozeSupported={snoozeEnvironmentIds.has(thread.environmentId)}
-              pinningSupported={pinningEnvironmentIds.has(thread.environmentId)}
-              pinReorderSupported={pinReorderEnvironmentIds.has(thread.environmentId)}
-              canMovePinnedUp={
-                arrangedPinnedKeys.indexOf(`${thread.environmentId}:${thread.id}`) > 0
-              }
-              canMovePinnedDown={(() => {
-                const index = arrangedPinnedKeys.indexOf(`${thread.environmentId}:${thread.id}`);
-                return index !== -1 && index < arrangedPinnedKeys.length - 1;
-              })()}
-              onSnoozeThread={snoozeThread}
-              onUnsnoozeThread={unsnoozeThread}
-              onUnsettleThread={unsettleThread}
-              onPinThread={pinThread}
-              onUnpinThread={unpinThread}
-              onMovePinnedThread={movePinnedThread}
-              onChangeRequestState={handleChangeRequestState}
-              projectCwd={projectCwdByKey.get(scopeKey) ?? null}
-              onSwipeableClose={handleSwipeableClose}
-              onSwipeableWillOpen={handleSwipeableWillOpen}
-              simultaneousSwipeGesture={sidebarScrollGesture}
             />
           );
-        }
+        case "v2-thread":
+          return renderV2ThreadRow(item.item, item.snoozeWakeLabelText);
         case "v2-snoozed-shelf":
           return (
             <ThreadListV2SnoozedShelfHeader
@@ -996,29 +1129,6 @@ function ThreadNavigationSidebarPane(
               onToggle={toggleSnoozedShelf}
               pane="sidebar"
             />
-          );
-        case "v2-settled-shelf":
-          return (
-            <ThreadListV2SettledShelfHeader
-              count={item.count}
-              expanded={item.expanded}
-              onToggle={toggleSettledShelf}
-              pane="sidebar"
-            />
-          );
-        case "v2-show-more":
-          return (
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel={`Show ${Math.min(item.hiddenCount, THREAD_LIST_V2_SETTLED_PAGE_COUNT)} more settled threads`}
-              onPress={showMoreSettled}
-              className="mx-4 mt-2 items-center rounded-lg border border-dashed border-border py-2.5"
-              style={({ pressed }) => ({ opacity: pressed ? 0.6 : 1 })}
-            >
-              <Text className="text-xs font-t3-medium text-foreground-muted">
-                Show more ({item.hiddenCount} settled hidden)
-              </Text>
-            </Pressable>
           );
         case "header":
           return (
@@ -1101,44 +1211,17 @@ function ThreadNavigationSidebarPane(
       }
     },
     [
-      archiveThread,
-      arrangedPinnedKeys,
       confirmDeletePendingTask,
-      confirmDeleteThread,
-      handleChangeRequestState,
-      handleSelectThread,
-      handleSwipeableClose,
-      handleSwipeableWillOpen,
-      movePinnedThread,
       openPendingTask,
-      pinReorderEnvironmentIds,
-      pinThread,
-      pinningEnvironmentIds,
+      props.onNewThreadInProject,
       projectByKey,
       projectCwdByKey,
-      projectTitleByProjectKey,
-      regenerateThreadTitle,
-      props.onNewThreadInProject,
-      props.searchQuery,
-      props.selectedThreadKey,
-      props.width,
+      renderV2ThreadRow,
       savedConnectionsById,
-      serverConfigs,
-      threadSearchMatchByKey,
-      titleRegenerationEnvironmentIds,
-      settleThread,
-      settlementEnvironmentIds,
-      showMoreSettled,
-      sidebarScrollGesture,
-      snoozeEnvironmentIds,
-      snoozeThread,
-      nowMinute,
-      toggleSettledShelf,
+      toggleProject,
       toggleSnoozedShelf,
-      unpinThread,
-      unsettleThread,
-      unsnoozeThread,
       updateGroupDisplay,
+      v2ProjectTitleByProjectKey,
     ],
   );
   // v2 ignores the sort/group options, so only the environment filter can
@@ -1252,7 +1335,7 @@ function ThreadNavigationSidebarPane(
                 contentContainerStyle={[
                   styles.threadListContent,
                   {
-                    paddingBottom: Math.max(insets.bottom, 16) + 16,
+                    paddingBottom: 12,
                     paddingTop: 6,
                   },
                 ]}
@@ -1267,6 +1350,17 @@ function ThreadNavigationSidebarPane(
               />
             </GestureDetector>
           </SwipeableScrollGateProvider>
+          <ThreadListV2SettledDock
+            count={projectThreadList.settled.length}
+            rows={settledDockRows.rows}
+            hiddenCount={settledDockRows.hiddenCount}
+            expanded={settledShelfExpanded}
+            pane="sidebar"
+            onToggle={toggleSettledShelf}
+            onShowMore={showMoreSettled}
+            renderRow={renderSettledRow}
+            bottomPadding={Math.max(insets.bottom, 16) + 16}
+          />
         </View>
       </>
     );
@@ -1283,7 +1377,7 @@ function ThreadNavigationSidebarPane(
         borderRightWidth: StyleSheet.hairlineWidth,
       }}
     >
-      <View className="flex-1" style={{ paddingBottom: insets.bottom }}>
+      <View className="flex-1">
         <SwipeableScrollGateProvider enabled={swipeEnabled}>
           <GestureDetector gesture={sidebarScrollGesture}>
             <LegendList
@@ -1298,7 +1392,7 @@ function ThreadNavigationSidebarPane(
               contentContainerStyle={[
                 styles.threadListContent,
                 {
-                  paddingBottom: 16 + insets.bottom,
+                  paddingBottom: 12,
                   paddingTop: topListInset,
                 },
               ]}
@@ -1313,6 +1407,17 @@ function ThreadNavigationSidebarPane(
             />
           </GestureDetector>
         </SwipeableScrollGateProvider>
+        <ThreadListV2SettledDock
+          count={projectThreadList.settled.length}
+          rows={settledDockRows.rows}
+          hiddenCount={settledDockRows.hiddenCount}
+          expanded={settledShelfExpanded}
+          pane="sidebar"
+          onToggle={toggleSettledShelf}
+          onShowMore={showMoreSettled}
+          renderRow={renderSettledRow}
+          bottomPadding={Math.max(insets.bottom, 16) + 16}
+        />
       </View>
 
       <View

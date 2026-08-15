@@ -27,6 +27,13 @@ export interface Preferences {
   readonly projectGroupingEnabled?: boolean;
   readonly projectGroupingMode?: SidebarProjectGroupingMode;
   /**
+   * Per-project sidebar row expansion overrides, keyed by logical projectKey.
+   * Mirrors the web sidebar's localStorage map under
+   * `t3code:sidebar-v2:project-expanded` (mobile has no client-settings sync
+   * or AsyncStorage, so the preference blob is the device-local store).
+   */
+  readonly sidebarProjectExpanded?: Readonly<Record<string, boolean>>;
+  /**
    * Device-local mirror of the web `legacySidebarEnabled` setting. Mobile has
    * no client-settings sync, so the legacy grouped thread list is opted into
    * per device. Deliberately a fresh key (was `threadListV2Enabled`, an
@@ -85,6 +92,7 @@ function sanitizePreferences(parsed: Preferences): Preferences {
     collapsedProjectGroups?: readonly string[];
     projectGroupingEnabled?: boolean;
     projectGroupingMode?: SidebarProjectGroupingMode;
+    sidebarProjectExpanded?: Readonly<Record<string, boolean>>;
     legacyThreadListEnabled?: boolean;
   } = {};
 
@@ -121,6 +129,17 @@ function sanitizePreferences(parsed: Preferences): Preferences {
     parsed.projectGroupingMode === "separate"
   ) {
     preferences.projectGroupingMode = parsed.projectGroupingMode;
+  }
+  if (
+    parsed.sidebarProjectExpanded !== null &&
+    typeof parsed.sidebarProjectExpanded === "object" &&
+    !Array.isArray(parsed.sidebarProjectExpanded)
+  ) {
+    const expanded: Record<string, boolean> = {};
+    for (const [key, value] of Object.entries(parsed.sidebarProjectExpanded)) {
+      if (typeof value === "boolean") expanded[key] = value;
+    }
+    preferences.sidebarProjectExpanded = expanded;
   }
   if (typeof parsed.legacyThreadListEnabled === "boolean") {
     preferences.legacyThreadListEnabled = parsed.legacyThreadListEnabled;

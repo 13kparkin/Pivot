@@ -5,11 +5,21 @@ import type {
 import type { EnvironmentThreadSearchMatch } from "@t3tools/client-runtime/state/thread-search";
 import { canSnooze, resolveSnoozePresets } from "@t3tools/client-runtime/state/thread-settled";
 import type { MenuAction } from "@react-native-menu/menu";
-import { memo, useCallback, useEffect, useMemo, useState, type ComponentProps } from "react";
+import {
+  memo,
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+  type ComponentProps,
+  type ReactNode,
+} from "react";
 import {
   Alert,
   Platform,
   Pressable,
+  ScrollView,
+  StyleSheet,
   useColorScheme,
   useWindowDimensions,
   View,
@@ -33,6 +43,8 @@ import {
   resolveThreadListV2SnoozeGateExpiryMs,
   resolveThreadListV2Status,
   resolveThreadListV2SwipeActions,
+  THREAD_LIST_V2_SETTLED_PAGE_COUNT,
+  type ThreadListV2ProjectThreads,
   type ThreadListV2Status,
 } from "./threadListV2";
 import { ThreadSearchMatchExcerpt } from "./thread-search-match";
@@ -183,6 +195,172 @@ export const ThreadListV2SettledShelfHeader = memo(function ThreadListV2SettledS
         type="monochrome"
       />
     </Pressable>
+  );
+});
+
+/**
+ * One expandable logical project row: favicon + displayName + chevron. Its
+ * pinned + active thread cards render as the following list rows when
+ * expanded (pinned first). The gear arrives in Phase 7.
+ */
+export const ThreadListV2ProjectRow = memo(function ThreadListV2ProjectRow(props: {
+  readonly project: ThreadListV2ProjectThreads;
+  readonly expanded: boolean;
+  readonly pane?: "screen" | "sidebar";
+  /** Only the leading project row draws the PROJECTS section divider. */
+  readonly isFirstProject?: boolean;
+  readonly onToggle: (projectKey: string) => void;
+}) {
+  const group = props.project.group;
+  const drawerColor = useThemeColor("--color-drawer");
+  const pressedBackgroundColor = useThemeColor("--color-subtle");
+  const mutedColor = useThemeColor("--color-foreground-muted");
+  const sidebarPane = props.pane === "sidebar";
+  const rowContent = (
+    <View className="flex-row items-center gap-2">
+      <SymbolView
+        name={props.expanded ? "chevron.down" : "chevron.right"}
+        size={12}
+        tintColor={mutedColor}
+        type="monochrome"
+      />
+      <ProjectFavicon
+        environmentId={group.representative.environmentId}
+        faviconPath={group.representative.faviconPath}
+        size={16}
+        projectTitle={group.label}
+        workspaceRoot={group.representative.workspaceRoot}
+      />
+      <Text className="flex-1 text-sm font-t3-medium text-foreground" numberOfLines={1}>
+        {group.label}
+      </Text>
+    </View>
+  );
+  return (
+    <>
+      {props.isFirstProject === true ? (
+        <ThreadListV2SectionDivider label="Projects" pane={props.pane} />
+      ) : null}
+      <Pressable
+        accessibilityHint={
+          props.expanded ? "Collapses the project's threads." : "Expands the project's threads."
+        }
+        accessibilityLabel={`${group.label} project`}
+        accessibilityRole="button"
+        accessibilityState={{ expanded: props.expanded }}
+        onPress={() => props.onToggle(group.key)}
+        style={
+          sidebarPane
+            ? ({ pressed }) => ({
+                backgroundColor: pressed ? pressedBackgroundColor : drawerColor,
+                borderRadius: SIDEBAR_V2_ROW_RADIUS,
+                paddingHorizontal: 12,
+                paddingVertical: 10,
+              })
+            : ({ pressed }) => ({ opacity: pressed ? 0.7 : 1 })
+        }
+      >
+        {sidebarPane ? (
+          rowContent
+        ) : (
+          <View className="bg-screen">
+            <View className="px-5 py-2.5">{rowContent}</View>
+            <View className="ml-5 h-px bg-border-subtle" />
+          </View>
+        )}
+      </Pressable>
+    </>
+  );
+});
+
+/** Slim settled rows are 44pt tall; the expanded dock caps at ~10 with internal scroll. */
+const SETTLED_DOCK_ROW_HEIGHT = 44;
+const SETTLED_DOCK_MAX_VISIBLE_ROWS = 10;
+
+/**
+ * Fixed SETTLED dock rendered below the scroll area: collapsed is a header
+ * bar with the count only; expanded grows upward (the list above shrinks)
+ * and pages the recency tail +25 per Show more with internal scroll.
+ */
+export const ThreadListV2SettledDock = memo(function ThreadListV2SettledDock(props: {
+  readonly count: number;
+  /** Paged settled rows to render when expanded. */
+  readonly rows: ReadonlyArray<EnvironmentThreadShell>;
+  readonly hiddenCount: number;
+  readonly expanded: boolean;
+  readonly pane?: "screen" | "sidebar";
+  /** Clearance for bottom toolbars / the Android new-task FAB. */
+  readonly bottomPadding?: number;
+  readonly onToggle: () => void;
+  readonly onShowMore: () => void;
+  readonly renderRow: (thread: EnvironmentThreadShell, index: number) => ReactNode;
+}) {
+  const mutedColor = useThemeColor("--color-foreground-muted");
+  const borderColor = useThemeColor("--color-border");
+  return (
+    <View
+      style={{
+        borderTopColor: borderColor,
+        borderTopWidth: StyleSheet.hairlineWidth,
+        paddingBottom: props.bottomPadding ?? 0,
+      }}
+    >
+      <Pressable
+        accessibilityHint={
+          props.expanded ? "Collapses the settled threads." : "Expands the settled threads."
+        }
+        accessibilityLabel={
+          props.count === 1 ? "1 settled thread" : `${props.count} settled threads`
+        }
+        accessibilityRole="button"
+        accessibilityState={{ expanded: props.expanded }}
+        className={cn(
+          "mb-1.5 mt-2 flex-row items-center gap-2.5",
+          props.pane === "sidebar" ? "px-3" : "px-5",
+        )}
+        onPress={props.onToggle}
+        style={({ pressed }) => ({ opacity: pressed ? 0.6 : 1 })}
+      >
+        <Text className="text-xs font-t3-medium text-foreground-tertiary">
+          {props.expanded ? "Settled" : `Settled (${props.count})`}
+        </Text>
+        <View className="h-px flex-1 bg-border" />
+        <SymbolView
+          name={props.expanded ? "chevron.up" : "chevron.down"}
+          size={10}
+          tintColor={mutedColor}
+          type="monochrome"
+        />
+      </Pressable>
+      {props.expanded ? (
+        <ScrollView
+          keyboardShouldPersistTaps="handled"
+          showsVerticalScrollIndicator={false}
+          style={{ maxHeight: SETTLED_DOCK_ROW_HEIGHT * SETTLED_DOCK_MAX_VISIBLE_ROWS }}
+        >
+          <View className={props.pane === "sidebar" ? "px-3" : "px-5"}>
+            {props.rows.map((thread, index) => (
+              <View key={`${thread.environmentId}:${thread.id}`}>
+                {props.renderRow(thread, index)}
+              </View>
+            ))}
+            {props.hiddenCount > 0 ? (
+              <Pressable
+                accessibilityLabel={`Show ${Math.min(props.hiddenCount, THREAD_LIST_V2_SETTLED_PAGE_COUNT)} more settled threads`}
+                accessibilityRole="button"
+                onPress={props.onShowMore}
+                className="mt-2 items-center rounded-lg border border-dashed border-border py-2.5"
+                style={({ pressed }) => ({ opacity: pressed ? 0.6 : 1 })}
+              >
+                <Text className="text-xs font-t3-medium text-foreground-muted">
+                  Show more ({props.hiddenCount} settled hidden)
+                </Text>
+              </Pressable>
+            ) : null}
+          </View>
+        </ScrollView>
+      ) : null}
+    </View>
   );
 });
 

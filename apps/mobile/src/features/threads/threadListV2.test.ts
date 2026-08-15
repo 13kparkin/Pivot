@@ -1116,9 +1116,10 @@ describe("buildProjectThreadListV2", () => {
       now: NOW,
     });
 
+    // Both match; identical createdAt ties break alphabetically by id.
     expect(partition.projects[0]?.active.map((thread) => thread.id)).toEqual([
-      "match",
       "content-match",
+      "match",
     ]);
   });
 
@@ -1231,7 +1232,8 @@ describe("resolveSettledDockRows", () => {
     });
 
     expect(dock.rows.map((thread) => thread.id)).toEqual(["s1", "s2", "s3"]);
-    expect(dock.hiddenCount).toBe(1);
+    // The pinned row is part of the visible dock, so nothing stays hidden.
+    expect(dock.hiddenCount).toBe(0);
   });
 
   it("keeps the selected thread visible on a collapsed dock", () => {
@@ -1293,7 +1295,12 @@ describe("buildProjectThreadListV2ListItems", () => {
       "v2-thread",
     ]);
     expect(
-      items.map((item) => (item.type === "v2-thread" ? item.item.thread.id : item.type)),
+      items.map((item) => {
+        if (item.type === "v2-thread") return item.item.thread.id;
+        if (item.type === "v2-project") return item.project.group.key;
+        if (item.type === "v2-pending") return item.pendingTask.title;
+        return item.type;
+      }),
     ).toEqual([
       "queued",
       "group-a",
@@ -1301,7 +1308,7 @@ describe("buildProjectThreadListV2ListItems", () => {
       "a-active",
       "group-b",
       "b-active",
-      "snoozed-shelf",
+      "v2-snoozed-shelf",
       "snoozed",
     ]);
   });
@@ -1376,6 +1383,8 @@ describe("buildProjectThreadListV2ListItems", () => {
       pendingTasks: [],
     });
 
-    expect(items.map((item) => item.type)).toEqual(["v2-snoozed-shelf"]);
+    // The snoozed thread left the project bucket, so the project row stays
+    // as a collapsed (threadless) header and the shelf collapses to its own.
+    expect(items.map((item) => item.type)).toEqual(["v2-project", "v2-snoozed-shelf"]);
   });
 });
