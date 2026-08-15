@@ -223,7 +223,7 @@ const makeBinaryPathSetting = (fallback: string) =>
     Schema.withDecodingDefault(Effect.succeed(fallback)),
   );
 
-export type ProviderSettingsFormControl = "text" | "password" | "textarea" | "switch";
+export type ProviderSettingsFormControl = "text" | "password" | "textarea" | "switch" | "model";
 
 export interface ProviderSettingsFormAnnotation {
   readonly control?: ProviderSettingsFormControl | undefined;
@@ -270,7 +270,11 @@ const makeOmpRoleSetting = (title: string, description: string) =>
     Schema.annotateKey({
       title,
       description,
-      providerSettingsForm: { placeholder: "provider/model", clearWhenEmpty: "omit" },
+      providerSettingsForm: {
+        control: "model",
+        placeholder: "provider/model",
+        clearWhenEmpty: "omit",
+      },
     }),
   );
 

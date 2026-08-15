@@ -50,6 +50,21 @@ describe("ProviderSettingsForm helpers", () => {
     });
   });
 
+  it("derives role fields as model controls", () => {
+    const omp = DRIVER_OPTION_BY_VALUE[ProviderDriverKind.make("omp")];
+    expect(omp).toBeDefined();
+
+    const roleDefault = deriveProviderSettingsFields(omp!).find(
+      (field) => field.key === "roleDefault",
+    );
+    const memoryBackend = deriveProviderSettingsFields(omp!).find(
+      (field) => field.key === "memoryBackend",
+    );
+
+    expect(roleDefault).toMatchObject({ control: "model", placeholder: "provider/model" });
+    expect(memoryBackend?.control).toBe("text");
+  });
+
   it("preserves unknown config keys while omitting empty configurable fields", () => {
     const omp = DRIVER_OPTION_BY_VALUE[ProviderDriverKind.make("omp")];
     expect(omp).toBeDefined();
