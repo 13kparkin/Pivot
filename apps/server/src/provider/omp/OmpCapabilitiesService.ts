@@ -20,6 +20,7 @@ import {
   OmpCapabilitiesError,
   OmpCapabilitiesSnapshot,
   OmpCapabilityEditableKind,
+  OmpMoveItemInput,
   OmpCapabilityItem,
   OmpCapabilityItemScope,
   OmpCapabilityKind,
@@ -41,6 +42,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 
+import { parse as parseYaml } from "yaml";
 import type * as ProcessRunner from "../../processRunner.ts";
 import { writeFileStringAtomically } from "../../atomicWrite.ts";
 import { OmpConfigStore } from "./OmpConfigStore.ts";
@@ -80,9 +82,61 @@ const DIR_KINDS = [
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
 
+interface ProjectWorkspace {
+  readonly projectId: ProjectId;
+  readonly cwd: string;
+  readonly title: string;
+}
+
+/**
+ * Parse a raw config editor value into a YAML scalar so project-layer
+ * writes store `autoResume: false` (boolean) instead of `'false'` (string).
+ * Mirrors how `omp config set` treats scalar input; anything unrecognized
+ * stays a string.
+ */
+function parseConfigScalar(value: string): unknown {
+  if (value === "true") return true;
+  if (value === "false") return false;
+  if (value === "null") return null;
+  if (value.trim() !== "" && !Number.isNaN(Number(value))) return Number(value);
+  return value;
+}
+
+/**
+ * Flatten a config doc's scalar leaves into dotted keys (`modelRoles.default`)
+ * so the displayed key matches the write key the server accepts.
+ */
+function flattenScalarConfig(
+  doc: Record<string, unknown>,
+  prefix = "",
+): ReadonlyArray<[string, string | number | boolean]> {
+  const out: Array<[string, string | number | boolean]> = [];
+  for (const [key, value] of Object.entries(doc)) {
+    const dotted = prefix === "" ? key : `${prefix}.${key}`;
+    if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+      out.push([dotted, value]);
+    } else if (isRecord(value)) {
+      out.push(...flattenScalarConfig(value, dotted));
+    }
+  }
+  return out;
+}
+
 const isSecretSetting = (key: string, type: string): boolean =>
   type === "secret" || SECRET_KEY_PATTERN.test(key);
 
+/** Cursor-compatible skill roots omp agents also load from on the server host. */
+const cursorSkillRoots = (home: string): ReadonlyArray<string> => [
+  `${home}/.cursor/skills`,
+  `${home}/.cursor/skills-cursor`,
+];
+
+/**
+ * Extract the `description` from a leading YAML frontmatter block, leniently:
+ * only the first `---`-delimited block is inspected and only the first
+ * `description:` line is used. Missing or malformed frontmatter yields
+ * `undefined` (display-only; never fails the snapshot).
+ */
 function parseFrontmatterDescription(content: string): string | undefined {
   if (!content.startsWith("---")) return undefined;
   const end = content.indexOf("\n---");
@@ -106,6 +160,10 @@ export class OmpCapabilitiesService {
   readonly #resolveProjectCwd: (
     projectId: ProjectId,
   ) => Effect.Effect<string, OmpCapabilitiesError>;
+  /** Enumerate every project's cwd/title for the all-projects inventory. */
+  readonly #listProjectWorkspaces?:
+    | (() => Effect.Effect<ReadonlyArray<ProjectWorkspace>, OmpCapabilitiesError>)
+    | undefined;
 
   public constructor(
     fileSystem: FileSystem.FileSystem,
@@ -114,6 +172,10 @@ export class OmpCapabilitiesService {
     commandRunner: ProcessRunner.ProcessRunner["Service"],
     configStore: OmpConfigStore,
     resolveProjectCwd: (projectId: ProjectId) => Effect.Effect<string, OmpCapabilitiesError>,
+    listProjectWorkspaces?: () => Effect.Effect<
+      ReadonlyArray<ProjectWorkspace>,
+      OmpCapabilitiesError
+    >,
   ) {
     this.#fileSystem = fileSystem;
     this.#path = path;
@@ -121,18 +183,24 @@ export class OmpCapabilitiesService {
     this.#commandRunner = commandRunner;
     this.#configStore = configStore;
     this.#resolveProjectCwd = resolveProjectCwd;
+    this.#listProjectWorkspaces = listProjectWorkspaces;
   }
 
   public getSnapshot(
     projectId?: ProjectId,
+    options?: { readonly includeAllProjects?: boolean },
   ): Effect.Effect<OmpCapabilitiesSnapshot, OmpCapabilitiesError> {
     return Effect.gen({ self: this }, function* () {
       const agentDir = yield* this.resolveAgentDir();
       const projectCwd =
         projectId === undefined ? undefined : yield* this.#resolveProjectCwd(projectId);
-      const settings = yield* this.readSettingsSurface();
+      const settings = yield* this.readSettingsSurface(projectCwd);
       const resources = yield* this.inventory(agentDir, projectCwd);
-      const items = yield* this.inventoryItems(agentDir, projectCwd);
+      const items = yield* this.inventoryItems(
+        agentDir,
+        projectCwd,
+        options?.includeAllProjects === true,
+      );
       const agentDirLabel = this.tildeLabel(agentDir);
       return {
         ...(agentDirLabel !== undefined ? { agentDirLabel } : {}),
@@ -170,7 +238,11 @@ export class OmpCapabilitiesService {
       } else {
         const projectCwd = yield* this.resolveProjectScopeCwd(input.projectId);
         yield* this.backup(projectCwd);
-        yield* this.#configStore.writeProjectKey(projectCwd, input.key, input.value);
+        yield* this.#configStore.writeProjectKey(
+          projectCwd,
+          input.key,
+          typeof input.value === "string" ? parseConfigScalar(input.value) : input.value,
+        );
       }
       return yield* this.getSnapshot(input.projectId);
     });
@@ -305,7 +377,128 @@ export class OmpCapabilitiesService {
     });
   }
 
-  private readSettingsSurface(): Effect.Effect<
+  /**
+   * Move a global skill found in another CLI's root (cursor-compatible dirs)
+   * into the omp agent directory, copying the tree (dereferencing symlinks)
+   * and removing the source entry. Native omp skills and project skills are
+   * already in their `.omp` homes and never need moving.
+   */
+  public moveItemToOmp(
+    input: OmpMoveItemInput,
+  ): Effect.Effect<OmpCapabilitiesSnapshot, OmpCapabilitiesError> {
+    return Effect.gen({ self: this }, function* () {
+      if (input.kind !== "skills") {
+        return yield* new OmpCapabilitiesError({
+          reason: `only skills from other CLI roots can be moved (${input.kind} are already in their .omp home)`,
+        });
+      }
+      const agentDir = yield* this.resolveAgentDir();
+      let sourceEntry: string | undefined;
+      for (const root of cursorSkillRoots(NodeOS.homedir())) {
+        const candidate = this.#path.join(root, input.name);
+        if (yield* this.#fileSystem.exists(candidate)) {
+          sourceEntry = candidate;
+          break;
+        }
+      }
+      if (sourceEntry === undefined) {
+        return yield* new OmpCapabilitiesError({
+          reason: `no skill named ${input.name} in the other CLI skill directories`,
+        });
+      }
+      const target = this.#path.join(agentDir, "skills", input.name);
+      if (yield* this.#fileSystem.exists(target)) {
+        return yield* new OmpCapabilitiesError({
+          reason: `a skill named ${input.name} already exists in the omp agent directory`,
+        });
+      }
+      yield* this.copyItemTree(sourceEntry, target);
+      yield* this.removeItemDir(sourceEntry);
+      return yield* this.getSnapshot();
+    }).pipe(
+      Effect.mapError(
+        (cause) =>
+          new OmpCapabilitiesError({
+            reason: "failed to move the skill into the omp agent directory",
+            cause,
+          }),
+      ),
+    );
+  }
+
+  /** Recursive copy that dereferences symlinked skill entries (cp -rL). */
+  private copyItemTree(source: string, target: string): Effect.Effect<void, OmpCapabilitiesError> {
+    return Effect.gen({ self: this }, function* () {
+      yield* this.#fileSystem.makeDirectory(target, { recursive: true });
+      const entries = yield* this.#fileSystem.readDirectory(source);
+      for (const entry of entries) {
+        const from = this.#path.join(source, entry);
+        const to = this.#path.join(target, entry);
+        const info = yield* this.#fileSystem.stat(from);
+        if (info.type === "Directory") {
+          yield* this.copyItemTree(from, to);
+        } else {
+          yield* this.#fileSystem.copyFile(from, to);
+        }
+      }
+    }).pipe(
+      Effect.mapError(
+        (cause) =>
+          new OmpCapabilitiesError({
+            reason: "failed to move the skill into the omp agent directory",
+            cause,
+          }),
+      ),
+    );
+  }
+
+  /** `~`-relative display label; never an absolute host path on the wire. */
+  private tildePathLabel(dir: string): string {
+    const home = NodeOS.homedir();
+    return dir.startsWith(home) ? `~${dir.slice(home.length)}` : dir;
+  }
+
+  private readSettingsSurface(
+    projectCwd?: string,
+  ): Effect.Effect<
+    { readonly entries: ReadonlyArray<OmpSettingsSurfaceEntry> },
+    OmpCapabilitiesError
+  > {
+    return projectCwd === undefined
+      ? this.readEffectiveSettingsSurface()
+      : this.readMergedSettingsSurface(projectCwd);
+  }
+
+  /**
+   * Project view of the settings surface: the FULL effective catalog (the
+   * global view), with each entry tagged by origin — keys the project's own
+   * `.omp/config.yml` overrides are `scope: "project"`, everything else stays
+   * `scope: "global"` so the client can label them and offer "move into the
+   * project". Unknown project-only keys are appended as project-scoped.
+   */
+  private readMergedSettingsSurface(
+    projectCwd: string,
+  ): Effect.Effect<
+    { readonly entries: ReadonlyArray<OmpSettingsSurfaceEntry> },
+    OmpCapabilitiesError
+  > {
+    return Effect.gen({ self: this }, function* () {
+      const effective = yield* this.readEffectiveSettingsSurface();
+      const project = yield* this.readProjectSettingsSurface(projectCwd);
+      const projectKeys = new Set(project.entries.map((entry) => entry.key));
+      const entries = effective.entries.map((entry) =>
+        projectKeys.has(entry.key) ? { ...entry, scope: "project" as const } : entry,
+      );
+      for (const entry of project.entries) {
+        if (!projectKeys.has(entry.key)) continue;
+        if (!entries.some((candidate) => candidate.key === entry.key)) entries.push(entry);
+      }
+      return { entries };
+    });
+  }
+
+  /** Effective merged settings from `omp config list --json`, tagged global. */
+  private readEffectiveSettingsSurface(): Effect.Effect<
     { readonly entries: ReadonlyArray<OmpSettingsSurfaceEntry> },
     OmpCapabilitiesError
   > {
@@ -379,6 +572,56 @@ export class OmpCapabilitiesService {
     );
   }
 
+  /**
+   * The project layer of omp settings, read directly from the project's
+   * `.omp/config.yml`. `omp config list --json` only reports the EFFECTIVE
+   * merged config, so the project-scoped surface reads the file itself to
+   * show exactly what this project overrides. Scalar leaves flatten to dot
+   * keys so the displayed key matches the write key (writeProjectKey).
+   */
+  private readProjectSettingsSurface(
+    projectCwd: string,
+  ): Effect.Effect<
+    { readonly entries: ReadonlyArray<OmpSettingsSurfaceEntry> },
+    OmpCapabilitiesError
+  > {
+    return Effect.gen({ self: this }, function* () {
+      const configPath = this.#path.join(projectCwd, ".omp", "config.yml");
+      const exists = yield* this.#fileSystem.exists(configPath);
+      if (!exists) return { entries: [] };
+      const text = yield* this.#fileSystem.readFileString(configPath);
+      let doc: unknown;
+      try {
+        doc = parseYaml(text);
+      } catch {
+        return { entries: [] };
+      }
+      if (!isRecord(doc)) return { entries: [] };
+      const entries: OmpSettingsSurfaceEntry[] = [];
+      for (const [key, value] of flattenScalarConfig(doc)) {
+        const type =
+          typeof value === "boolean" ? "boolean" : typeof value === "number" ? "number" : "string";
+        entries.push({
+          key,
+          value,
+          type,
+          description: "",
+          masked: isSecretSetting(key, type),
+          scope: "project",
+        });
+      }
+      return { entries };
+    }).pipe(
+      Effect.mapError(
+        (cause) =>
+          new OmpCapabilitiesError({
+            reason: "failed to read the project settings layer",
+            cause,
+          }),
+      ),
+    );
+  }
+
   private inventory(
     agentDir: string,
     projectCwd: string | undefined,
@@ -441,6 +684,7 @@ export class OmpCapabilitiesService {
   private inventoryItems(
     agentDir: string,
     projectCwd: string | undefined,
+    includeAllProjects = false,
   ): Effect.Effect<
     {
       readonly skills: ReadonlyArray<OmpCapabilityItem>;
@@ -464,6 +708,39 @@ export class OmpCapabilitiesService {
         skills.push(...(yield* this.listItemKind("skills", scope.dir, scope.scope)));
         rules.push(...(yield* this.listItemKind("rules", scope.dir, scope.scope)));
       }
+      // Global capabilities view: include every project's items, tagged with
+      // the owning project so the client can label and edit them.
+      if (includeAllProjects && this.#listProjectWorkspaces !== undefined) {
+        const workspaces = yield* this.#listProjectWorkspaces();
+        for (const workspace of workspaces) {
+          const projectDir = this.#path.join(workspace.cwd, ".omp");
+          const tag = {
+            projectId: workspace.projectId,
+            projectTitle: workspace.title,
+          } as const;
+          skills.push(
+            ...(yield* this.listItemKind("skills", projectDir, "project")).map((item) => ({
+              ...item,
+              ...tag,
+            })),
+          );
+          rules.push(
+            ...(yield* this.listItemKind("rules", projectDir, "project")).map((item) => ({
+              ...item,
+              ...tag,
+            })),
+          );
+        }
+      }
+      // omp agents also load skills from cursor-compatible roots on the
+      // server host (`~/.cursor/skills`, `~/.cursor/skills-cursor`), so the
+      // surface lists what the agent actually sees. The dirs already contain
+      // the skill folders directly (no nested `skills/` subdir).
+      for (const root of cursorSkillRoots(NodeOS.homedir())) {
+        skills.push(
+          ...(yield* this.listItemKindDir("skills", root, "global", this.tildePathLabel(root))),
+        );
+      }
       return { skills, rules };
     }).pipe(
       Effect.mapError(
@@ -481,15 +758,31 @@ export class OmpCapabilitiesService {
     scopeDir: string,
     scope: OmpCapabilityItemScope,
   ): Effect.Effect<ReadonlyArray<OmpCapabilityItem>, OmpCapabilitiesError> {
+    return this.listItemKindDir(kind, this.#path.join(scopeDir, kind), scope);
+  }
+
+  /** List items from a directory that already IS the item kind directory. */
+  private listItemKindDir(
+    kind: OmpCapabilityEditableKind,
+    kindDir: string,
+    scope: OmpCapabilityItemScope,
+    sourceDir?: string,
+  ): Effect.Effect<ReadonlyArray<OmpCapabilityItem>, OmpCapabilitiesError> {
     return Effect.gen({ self: this }, function* () {
-      const kindDir = this.#path.join(scopeDir, kind);
       const dirExists = yield* this.existsPath(kindDir);
       if (!dirExists) return [];
       const entries = yield* this.#fileSystem.readDirectory(kindDir);
       const items: OmpCapabilityItem[] = [];
       for (const entry of entries) {
-        const item = yield* this.itemFromEntry(kind, kindDir, scope, entry);
-        if (item !== undefined) items.push(item);
+        // User-managed roots (cursor-compatible dirs, symlinked installs)
+        // can contain entries that do not resolve to a SKILL.md; those are
+        // skipped per entry rather than failing the whole inventory.
+        const item = Option.getOrUndefined(
+          yield* Effect.option(this.itemFromEntry(kind, kindDir, scope, entry)),
+        );
+        if (item !== undefined) {
+          items.push(sourceDir === undefined ? item : { ...item, sourceDir });
+        }
       }
       return items.sort((a, b) => a.name.localeCompare(b.name));
     }).pipe(

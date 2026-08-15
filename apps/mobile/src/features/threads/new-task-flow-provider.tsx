@@ -25,7 +25,7 @@ import {
 import * as Arr from "effect/Array";
 import { pipe } from "effect/Function";
 
-import { useEnvironmentServerConfig, useProjects, useThreadShells } from "../../state/entities";
+import { useEnvironmentServerConfig, useProjects } from "../../state/entities";
 import type { TurnCommandMetadata } from "../../lib/commandMetadata";
 import type { DraftComposerImageAttachment } from "../../lib/composerImages";
 import type { ModelOption, ProviderGroup } from "../../lib/modelOptions";
@@ -69,10 +69,9 @@ import {
 import { EnvironmentProject } from "@t3tools/client-runtime/state/shell";
 import { type VcsRef } from "@t3tools/client-runtime/state/vcs";
 import {
-  buildHomeProjectScopes,
-  sortHomeProjectScopes,
-  type HomeProjectScope,
-} from "../home/homeThreadList";
+  buildProjectGroups,
+  type ProjectGroup,
+} from "@t3tools/client-runtime/state/project-grouping";
 import { useMobileProjectGroupingSettings } from "../../state/project-grouping";
 
 type WorkspaceMode = "local" | "worktree";
@@ -124,7 +123,7 @@ export function branchBadgeLabel(input: {
 }
 
 type NewTaskFlowContextValue = {
-  readonly projectScopes: ReadonlyArray<HomeProjectScope>;
+  readonly projectScopes: ReadonlyArray<ProjectGroup>;
   readonly selectedEnvironmentId: EnvironmentId | null;
   readonly selectedProjectKey: string | null;
   readonly selectedModelKey: string | null;
@@ -188,22 +187,18 @@ const NewTaskFlowContext = React.createContext<NewTaskFlowContextValue | null>(n
 
 export function NewTaskFlowProvider(props: React.PropsWithChildren) {
   const projects = useProjects();
-  const threads = useThreadShells();
   const { savedConnectionsById } = useSavedRemoteConnections();
   const groupingSettings = useMobileProjectGroupingSettings();
   const projectScopes = useMemo(
     () =>
-      sortHomeProjectScopes({
-        scopes: buildHomeProjectScopes({
-          projects,
-          environmentId: null,
-          projectGroupingMode: groupingSettings.sidebarProjectGroupingMode,
-        }),
-        threads,
-        pendingTasks: [],
-        projectSortOrder: "updated_at",
+      buildProjectGroups({
+        projects,
+        settings: {
+          sidebarProjectGroupingMode: groupingSettings.sidebarProjectGroupingMode,
+          sidebarProjectGroupingOverrides: {},
+        },
       }),
-    [groupingSettings.sidebarProjectGroupingMode, projects, threads],
+    [groupingSettings.sidebarProjectGroupingMode, projects],
   );
 
   const [selectedEnvironmentIdOverride, setSelectedEnvironmentId] = useState<EnvironmentId | null>(

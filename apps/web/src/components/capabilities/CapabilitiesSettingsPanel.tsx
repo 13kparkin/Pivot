@@ -1,7 +1,6 @@
 "use client";
 
 import { useAtomRefresh, useAtomValue } from "@effect/atom-react";
-
 import type {
   EnvironmentId,
   OmpCapabilityScope,
@@ -10,7 +9,7 @@ import type {
 } from "@t3tools/contracts";
 import * as Option from "effect/Option";
 import { AsyncResult, Atom } from "effect/unstable/reactivity";
-import { LoaderIcon, PencilIcon, SaveIcon, SearchIcon, Undo2Icon } from "lucide-react";
+import { LoaderIcon, MoveRightIcon, PlusIcon, SaveIcon, SearchIcon, Undo2Icon } from "lucide-react";
 import { useState } from "react";
 
 import { useActiveEnvironmentId } from "../../state/entities";
@@ -21,10 +20,8 @@ import { SettingsPageContainer, SettingsRow, SettingsSection } from "../settings
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
-import { Switch } from "../ui/switch";
 import { stackedThreadToast, toastManager } from "../ui/toast";
 
-import { CapabilitiesSettingDialog } from "./CapabilitiesSettingDialog";
 import {
   buildPrecedenceLabel,
   buildSettingRows,
@@ -32,9 +29,10 @@ import {
   canEditEntry,
   filterSettingRows,
   formatSettingValue,
+  isValidSettingKey,
   parseSettingDraft,
 } from "./CapabilitiesSettingsPanel.logic";
-import { resolveCapabilitiesProjectId } from "./CapabilitiesOverviewPanel.logic";
+import { resolveCapabilitiesProjectIdForView } from "./CapabilitiesOverviewPanel.logic";
 
 const EMPTY_SETTINGS_SNAPSHOT_ATOM = Atom.make(AsyncResult.initial<never, never>(false)).pipe(
   Atom.withLabel("web-capabilities:snapshot:settings:empty"),
@@ -47,31 +45,26 @@ function CapabilitiesSettingRow({
   scope,
   environmentId,
   projectId,
-  onEdit,
   onMutated,
+  onMoveToProject,
+  moving = false,
 }: {
   entry: CapabilitiesSettingsRow;
   scope: OmpCapabilityScope;
   environmentId: EnvironmentId;
   projectId: ProjectId | null;
-  onEdit: () => void;
   onMutated: () => void;
+  /** Project view: global-origin entries offer moving into the project. */
+  onMoveToProject?: () => void;
+  moving?: boolean;
 }) {
-  const isBoolean = entry.type === "boolean";
-  const isStructured = entry.type === "record" || entry.type === "array";
   const enumValues =
     entry.type === "enum" && (entry.values?.length ?? 0) > 0 ? entry.values : undefined;
   const [draft, setDraft] = useState(() => (entry.masked ? "" : formatSettingValue(entry.value)));
-  const [booleanDraft, setBooleanDraft] = useState(() =>
-    entry.masked ? false : Boolean(entry.value ?? false),
-  );
   const [draftError, setDraftError] = useState<string | null>(null);
   const [busy, setBusy] = useState<"save" | "reset" | null>(null);
   const writeSetting = useAtomCommand(serverEnvironment.capabilitiesWriteSetting, {
     label: "capabilities-write-setting",
-  });
-  const resetSetting = useAtomCommand(serverEnvironment.capabilitiesResetSetting, {
-    label: "capabilities-reset-setting",
   });
   // Keep the current enum value selectable even when it is stale relative to
   // the reported choices (e.g. a value written by an older omp version).
@@ -79,17 +72,17 @@ function CapabilitiesSettingRow({
     enumValues !== undefined && draft.length > 0 && !enumValues.includes(draft)
       ? [draft, ...enumValues]
       : enumValues;
+  const resetSetting = useAtomCommand(serverEnvironment.capabilitiesResetSetting, {
+    label: "capabilities-reset-setting",
+  });
 
   const save = async () => {
-    setBusy("save");
-    const parsed = isBoolean
-      ? ({ ok: true, value: booleanDraft } as const)
-      : parseSettingDraft(entry.type, draft);
+    const parsed = parseSettingDraft(entry.type, draft);
     if (!parsed.ok) {
       setDraftError(parsed.error);
-      setBusy(null);
       return;
     }
+    setBusy("save");
     const result = await writeSetting({
       environmentId,
       input: buildWriteSettingInput({ key: entry.key, value: parsed.value, scope, projectId }),
@@ -136,90 +129,100 @@ function CapabilitiesSettingRow({
     onMutated();
   };
 
-  const editable = canEditEntry(entry);
+  const projectView = onMoveToProject !== undefined;
+  const isProjectEntry = entry.scope === "project";
+  const editable = canEditEntry(entry) && (projectView ? isProjectEntry : true);
   const hasValue = entry.value !== undefined;
 
   return (
     <tr>
-      <td className="px-4 py-2 font-mono font-medium text-foreground sm:pl-5">{entry.key}</td>
+      <td className="px-4 py-2 sm:pl-5">
+        <div className="flex items-center gap-2">
+          <span className="font-mono font-medium text-foreground">{entry.key}</span>
+          {projectView ? (
+            <span
+              className={`rounded-sm px-1.5 py-0.5 text-[10px] font-medium ${isProjectEntry ? "bg-accent/50 text-accent-foreground" : "bg-sidebar-row-hover text-muted-foreground"}`}
+            >
+              {isProjectEntry ? "Project" : "Global"}
+            </span>
+          ) : null}
+        </div>
+      </td>
       <td className="px-3 py-2 text-muted-foreground">{entry.type}</td>
       <td className="max-w-56 px-3 py-2 text-muted-foreground">{entry.description}</td>
-      <td className="max-w-64 px-3 py-2">
-        {!editable ? (
-          <span className="font-mono text-muted-foreground">{entry.displayValue}</span>
-        ) : isStructured ? (
-          <span className="block truncate font-mono text-xs text-foreground/90">
-            {entry.displayValue}
-          </span>
-        ) : isBoolean ? (
-          <Switch
-            checked={booleanDraft}
-            onCheckedChange={(checked) => {
-              setBooleanDraft(Boolean(checked));
-              setDraftError(null);
-            }}
-            aria-label={`Value for ${entry.key}`}
-          />
-        ) : enumValues !== undefined ? (
-          <Select
-            value={draft}
-            onValueChange={(value) => {
-              if (typeof value === "string") setDraft(value);
-              setDraftError(null);
-            }}
-          >
-            <SelectTrigger className="h-7 w-44" aria-label={`Value for ${entry.key}`}>
-              <SelectValue placeholder="Unset" />
-            </SelectTrigger>
-            <SelectPopup align="end" alignItemWithTrigger={false}>
-              {(selectValues ?? []).map((value) => (
-                <SelectItem hideIndicator key={value} value={value}>
-                  {value}
-                </SelectItem>
-              ))}
-            </SelectPopup>
-          </Select>
+      <td className="px-3 py-2">
+        {editable ? (
+          enumValues !== undefined ? (
+            <Select
+              value={draft}
+              onValueChange={(value) => {
+                if (typeof value === "string") setDraft(value);
+                setDraftError(null);
+              }}
+            >
+              <SelectTrigger className="h-7 w-44" aria-label={`Value for ${entry.key}`}>
+                <SelectValue placeholder="Unset" />
+              </SelectTrigger>
+              <SelectPopup align="end" alignItemWithTrigger={false}>
+                {(selectValues ?? []).map((value) => (
+                  <SelectItem hideIndicator key={value} value={value}>
+                    {value}
+                  </SelectItem>
+                ))}
+              </SelectPopup>
+            </Select>
+          ) : (
+            <Input
+              size="sm"
+              className="h-7 min-w-40 font-mono text-xs"
+              value={draft}
+              onChange={(event) => {
+                setDraft(event.currentTarget.value);
+                setDraftError(null);
+              }}
+              placeholder="Unset"
+              aria-label={`Value for ${entry.key}`}
+            />
+          )
         ) : (
-          <Input
-            size="sm"
-            className="h-7 min-w-40 font-mono text-xs"
-            value={draft}
-            onChange={(event) => {
-              setDraft(event.currentTarget.value);
-              setDraftError(null);
-            }}
-            placeholder="Unset"
-            aria-label={`Value for ${entry.key}`}
-          />
+          <span className="font-mono text-muted-foreground">{entry.displayValue}</span>
         )}
-        {draftError !== null && !isStructured ? (
+        {draftError !== null ? (
           <span className="mt-0.5 block text-[11px] text-destructive">{draftError}</span>
         ) : null}
       </td>
-      <td className="px-3 py-2 text-right">
-        {editable ? (
-          <div className="inline-flex items-center gap-1.5">
-            {isStructured ? (
-              <Button type="button" size="sm" className="h-7 px-2 text-xs" onClick={onEdit}>
-                <PencilIcon className="size-3.5" />
-                Edit
-              </Button>
+      <td className="sticky right-0 z-10 bg-background py-2 pe-6 ps-5 text-right">
+        {projectView && !isProjectEntry ? (
+          <Button
+            type="button"
+            size="sm"
+            className="h-7 px-2 text-xs"
+            disabled={moving || !hasValue || !canEditEntry(entry)}
+            onClick={onMoveToProject}
+          >
+            {moving ? (
+              <LoaderIcon className="size-3.5 animate-spin" />
             ) : (
-              <Button
-                type="button"
-                size="sm"
-                className="h-7 px-2 text-xs"
-                disabled={busy !== null}
-                onClick={() => void save()}
-              >
-                {busy === "save" ? (
-                  <LoaderIcon className="size-3.5 animate-spin" />
-                ) : (
-                  <SaveIcon className="size-3.5" />
-                )}
-                Save
-              </Button>
+              <MoveRightIcon className="size-3.5" />
             )}
+            Move to project
+          </Button>
+        ) : editable ? (
+          <div className="inline-flex items-center gap-1.5">
+            <Button
+              type="button"
+              size="sm"
+              className="h-7 px-2 text-xs"
+              disabled={busy !== null}
+              onClick={() => void save()}
+            >
+              {busy === "save" ? (
+                <LoaderIcon className="size-3.5 animate-spin" />
+              ) : (
+                <SaveIcon className="size-3.5" />
+              )}
+              Save
+            </Button>
             {hasValue ? (
               <Button
                 type="button"
@@ -229,11 +232,7 @@ function CapabilitiesSettingRow({
                 disabled={busy !== null}
                 onClick={() => void reset()}
               >
-                {busy === "reset" ? (
-                  <LoaderIcon className="size-3.5 animate-spin" />
-                ) : (
-                  <Undo2Icon className="size-3.5" />
-                )}
+                <Undo2Icon className="size-3.5" />
                 Reset
               </Button>
             ) : null}
@@ -246,19 +245,87 @@ function CapabilitiesSettingRow({
 
 /**
  * omp config settings surface: pick the write scope, see the precedence
- * ladder, and edit or reset individual settings.
+ * ladder, and edit or reset individual settings. With a project targeted
+ * (`projectKey`) the entries are the project's own config layer and writes
+ * are locked to the project scope.
  */
-export function CapabilitiesSettingsPanel() {
+export function CapabilitiesSettingsPanel({ projectKey = null }: { projectKey?: string | null }) {
   const environmentId = useActiveEnvironmentId();
   const groups = useSettingsProjectGroups();
-  const projectId = resolveCapabilitiesProjectId(groups, environmentId);
-  const [scope, setScope] = useState<OmpCapabilityScope>("global");
+  const projectId = resolveCapabilitiesProjectIdForView(groups, environmentId, projectKey);
+  const projectLocked = projectKey !== null;
+  const effectiveScope: OmpCapabilityScope = projectLocked ? "project" : "global";
   const [query, setQuery] = useState("");
-  const [editingEntryKey, setEditingEntryKey] = useState<string | null>(null);
+  // Moving a global-origin setting into the project copies its current value
+  // into the project layer (the existing writeSetting path).
+  const [movingKey, setMovingKey] = useState<string | null>(null);
+  // Project-scoped adds: a new key is written straight into the project
+  // layer — the list only shows keys the project already overrides.
+  const [addingSetting, setAddingSetting] = useState(false);
+  const [newSettingKey, setNewSettingKey] = useState("");
+  const [newSettingValue, setNewSettingValue] = useState("");
+  const [addingBusy, setAddingBusy] = useState(false);
+  const writeSetting = useAtomCommand(serverEnvironment.capabilitiesWriteSetting, {
+    label: "capabilities-write-setting",
+  });
+  const moveSettingToProject = async (row: CapabilitiesSettingsRow) => {
+    if (environmentId === null || projectId === null || row.value === undefined) return;
+    setMovingKey(row.key);
+    const result = await writeSetting({
+      environmentId,
+      input: buildWriteSettingInput({
+        key: row.key,
+        value: row.value,
+        scope: "project",
+        projectId,
+      }),
+    });
+    setMovingKey(null);
+    if (result._tag === "Failure") {
+      toastManager.add(
+        stackedThreadToast({
+          type: "error",
+          title: `Could not move ${row.key}`,
+          description: "Check that omp is installed on the server host and try again.",
+        }),
+      );
+      return;
+    }
+    toastManager.add({ type: "success", title: `Moved ${row.key} to project` });
+    refreshSnapshot();
+  };
 
-  // Project scope is only available when the active environment has a project.
-  const effectiveScope: OmpCapabilityScope =
-    scope === "project" && projectId === null ? "global" : scope;
+  const addSetting = async () => {
+    const key = newSettingKey.trim();
+    if (environmentId === null || !isValidSettingKey(key)) return;
+    if (effectiveScope === "project" && projectId === null) return;
+    setAddingBusy(true);
+    const result = await writeSetting({
+      environmentId,
+      input: buildWriteSettingInput({
+        key,
+        value: newSettingValue,
+        scope: effectiveScope,
+        projectId,
+      }),
+    });
+    setAddingBusy(false);
+    if (result._tag === "Failure") {
+      toastManager.add(
+        stackedThreadToast({
+          type: "error",
+          title: `Could not add ${key}`,
+          description: "Check that omp is installed on the server host and try again.",
+        }),
+      );
+      return;
+    }
+    toastManager.add({ type: "success", title: `Added ${key}` });
+    setNewSettingKey("");
+    setNewSettingValue("");
+    setAddingSetting(false);
+    refreshSnapshot();
+  };
 
   const snapshotAtom =
     environmentId === null
@@ -305,69 +372,134 @@ export function CapabilitiesSettingsPanel() {
   }
 
   const rows = filterSettingRows(buildSettingRows(snapshot.settings.entries), query);
-  const editingEntry = rows.find((row) => row.key === editingEntryKey) ?? null;
 
   return (
-    <SettingsPageContainer>
+    <SettingsPageContainer className="max-w-6xl">
       <SettingsSection title="Settings">
         <SettingsRow
           title="Scope"
-          description="Where writes and resets apply. Project-scoped writes need an active project."
-          control={
-            <Select
-              value={effectiveScope}
-              onValueChange={(value) => {
-                if (value === "global" || value === "project") setScope(value);
-              }}
-            >
-              <SelectTrigger className="w-full sm:w-40" aria-label="Capabilities scope">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectPopup align="end" alignItemWithTrigger={false}>
-                <SelectItem hideIndicator value="global">
-                  Global
-                </SelectItem>
-                <SelectItem hideIndicator value="project" disabled={projectId === null}>
-                  Project
-                </SelectItem>
-              </SelectPopup>
-            </Select>
+          description={
+            projectLocked
+              ? "Writes and resets apply to this project's .omp config."
+              : "Writes and resets apply to the global omp agent directory."
           }
         />
         <SettingsRow title="Precedence" description={buildPrecedenceLabel(effectiveScope)} />
       </SettingsSection>
       <SettingsSection title="Entries">
-        <div className="relative max-w-72">
-          <SearchIcon className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground/70" />
-          <Input
+        <div className="flex items-center justify-between gap-3">
+          <div className="relative max-w-72 flex-1">
+            <SearchIcon className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground/70" />
+            <Input
+              size="sm"
+              type="search"
+              value={query}
+              onChange={(event) => setQuery(event.currentTarget.value)}
+              placeholder="Search settings"
+              aria-label="Search settings"
+              className="h-8 pl-8"
+            />
+          </div>
+          <Button
+            type="button"
             size="sm"
-            type="search"
-            value={query}
-            onChange={(event) => setQuery(event.currentTarget.value)}
-            placeholder="Search settings"
-            aria-label="Search settings"
-            className="h-8 pl-8"
-          />
+            variant="outline"
+            className="h-8 shrink-0 px-2.5 text-xs"
+            onClick={() => setAddingSetting((open) => !open)}
+          >
+            <PlusIcon className="size-3.5" />
+            Add setting
+          </Button>
         </div>
+        {addingSetting ? (
+          <div className="flex flex-wrap items-end gap-2 rounded-lg border border-border/70 p-3">
+            <label className="flex min-w-40 flex-1 flex-col gap-1 text-xs text-muted-foreground">
+              Key
+              <Input
+                size="sm"
+                className="h-8 font-mono"
+                value={newSettingKey}
+                onChange={(event) => setNewSettingKey(event.currentTarget.value)}
+                placeholder="modelRoles.default"
+                aria-label="New setting key"
+                autoFocus
+              />
+            </label>
+            <label className="flex min-w-40 flex-1 flex-col gap-1 text-xs text-muted-foreground">
+              Value
+              <Input
+                size="sm"
+                className="h-8 font-mono"
+                value={newSettingValue}
+                onChange={(event) => setNewSettingValue(event.currentTarget.value)}
+                placeholder="gpt-5.6"
+                aria-label="New setting value"
+              />
+            </label>
+            <Button
+              type="button"
+              size="sm"
+              className="h-8 px-2.5 text-xs"
+              disabled={
+                addingBusy ||
+                !isValidSettingKey(newSettingKey.trim()) ||
+                (effectiveScope === "project" && projectId === null)
+              }
+              onClick={() => void addSetting()}
+            >
+              {addingBusy ? (
+                <LoaderIcon className="size-3.5 animate-spin" />
+              ) : (
+                <PlusIcon className="size-3.5" />
+              )}
+              Add
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              variant="ghost"
+              className="h-8 px-2.5 text-xs text-muted-foreground"
+              disabled={addingBusy}
+              onClick={() => setAddingSetting(false)}
+            >
+              Cancel
+            </Button>
+            <p className="w-full text-xs leading-relaxed text-muted-foreground">
+              Only needed for a setting omp does not list yet (for example{" "}
+              <span className="font-mono">modelRoles.default</span>); every known setting can be
+              moved from the global list instead. Key is a dotted name, value is what to set.
+            </p>
+          </div>
+        ) : null}
         {rows.length === 0 ? (
-          <SettingsRow
-            title={query.trim().length > 0 ? "No matching settings" : "No settings"}
-            description={
-              query.trim().length > 0
-                ? "No settings match the current search."
-                : "omp reported no config settings."
-            }
-          />
+          query.trim().length > 0 ? (
+            <SettingsRow
+              title="No matching settings"
+              description="No settings match the current search."
+            />
+          ) : projectLocked ? (
+            <div className="flex flex-col gap-1 text-sm">
+              <span className="font-medium text-foreground">No project settings yet</span>
+              <span className="text-muted-foreground">
+                Add the first project-level setting — it lands in this project's .omp config. Known
+                setting keys and their types are listed on the global Settings page.
+              </span>
+            </div>
+          ) : (
+            <SettingsRow title="No settings" description="omp reported no config settings." />
+          )
         ) : (
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[760px] text-left text-xs">
+            <table className="w-max min-w-full text-left text-xs">
               <thead className="border-b border-border/60 text-[11px] uppercase tracking-[0.08em] text-muted-foreground/70">
                 <tr>
                   <th className="px-4 py-2 font-semibold sm:pl-5">Key</th>
                   <th className="px-3 py-2 font-semibold">Type</th>
                   <th className="px-3 py-2 font-semibold">Description</th>
                   <th className="px-3 py-2 font-semibold">Value</th>
-                  <th className="px-3 py-2 text-right font-semibold">Actions</th>
+                  <th className="sticky right-0 z-10 bg-background py-2 pe-6 ps-5 text-right font-semibold">
+                    Actions
+                  </th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-border/60">
@@ -378,8 +510,11 @@ export function CapabilitiesSettingsPanel() {
                     scope={effectiveScope}
                     environmentId={environmentId}
                     projectId={projectId}
-                    onEdit={() => setEditingEntryKey(row.key)}
                     onMutated={refreshSnapshot}
+                    {...(projectLocked && row.scope === "global"
+                      ? { onMoveToProject: () => void moveSettingToProject(row) }
+                      : {})}
+                    moving={movingKey === row.key}
                   />
                 ))}
               </tbody>
@@ -387,19 +522,6 @@ export function CapabilitiesSettingsPanel() {
           </div>
         )}
       </SettingsSection>
-      {editingEntry !== null ? (
-        <CapabilitiesSettingDialog
-          key={editingEntry.key}
-          entry={editingEntry}
-          scope={effectiveScope}
-          environmentId={environmentId}
-          projectId={projectId}
-          onOpenChange={(open) => {
-            if (!open) setEditingEntryKey(null);
-          }}
-          onMutated={refreshSnapshot}
-        />
-      ) : null}
     </SettingsPageContainer>
   );
 }

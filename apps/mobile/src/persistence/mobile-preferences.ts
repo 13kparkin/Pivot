@@ -27,13 +27,12 @@ export interface Preferences {
   readonly projectGroupingEnabled?: boolean;
   readonly projectGroupingMode?: SidebarProjectGroupingMode;
   /**
-   * Device-local mirror of the web `legacySidebarEnabled` setting. Mobile has
-   * no client-settings sync, so the legacy grouped thread list is opted into
-   * per device. Deliberately a fresh key (was `threadListV2Enabled`, an
-   * opt-out): sanitizing drops the old key, so every device resets to the
-   * default flat list — see `resolveThreadListV2Enabled`.
+   * Per-project sidebar row expansion overrides, keyed by logical projectKey.
+   * Mirrors the web sidebar's localStorage map under
+   * `t3code:sidebar-v2:project-expanded` (mobile has no client-settings sync
+   * or AsyncStorage, so the preference blob is the device-local store).
    */
-  readonly legacyThreadListEnabled?: boolean;
+  readonly sidebarProjectExpanded?: Readonly<Record<string, boolean>>;
 }
 
 export class MobilePreferencesLoadError extends Schema.TaggedErrorClass<MobilePreferencesLoadError>()(
@@ -73,7 +72,7 @@ export class MobilePreferencesStore extends Context.Service<
   }
 >()("@t3tools/mobile/persistence/MobilePreferencesStore") {}
 
-function sanitizePreferences(parsed: Preferences): Preferences {
+export function sanitizePreferences(parsed: Preferences): Preferences {
   const preferences: {
     liveActivitiesEnabled?: boolean;
     baseFontSize?: number;
@@ -85,7 +84,7 @@ function sanitizePreferences(parsed: Preferences): Preferences {
     collapsedProjectGroups?: readonly string[];
     projectGroupingEnabled?: boolean;
     projectGroupingMode?: SidebarProjectGroupingMode;
-    legacyThreadListEnabled?: boolean;
+    sidebarProjectExpanded?: Readonly<Record<string, boolean>>;
   } = {};
 
   if (typeof parsed.liveActivitiesEnabled === "boolean") {
@@ -122,8 +121,16 @@ function sanitizePreferences(parsed: Preferences): Preferences {
   ) {
     preferences.projectGroupingMode = parsed.projectGroupingMode;
   }
-  if (typeof parsed.legacyThreadListEnabled === "boolean") {
-    preferences.legacyThreadListEnabled = parsed.legacyThreadListEnabled;
+  if (
+    parsed.sidebarProjectExpanded !== null &&
+    typeof parsed.sidebarProjectExpanded === "object" &&
+    !Array.isArray(parsed.sidebarProjectExpanded)
+  ) {
+    const expanded: Record<string, boolean> = {};
+    for (const [key, value] of Object.entries(parsed.sidebarProjectExpanded)) {
+      if (typeof value === "boolean") expanded[key] = value;
+    }
+    preferences.sidebarProjectExpanded = expanded;
   }
   return preferences;
 }

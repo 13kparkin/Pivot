@@ -12,6 +12,7 @@ import { SidebarInset } from "../components/ui/sidebar";
 import {
   CAPABILITIES_SECTION_LABELS,
   type CapabilitiesPath,
+  validateCapabilitiesSearch,
 } from "../components/capabilities/capabilitiesNav";
 import { isElectron } from "../env";
 import { cn } from "~/lib/utils";
@@ -99,6 +100,7 @@ function CapabilitiesRouteLayout() {
 }
 
 export const Route = createFileRoute("/capabilities")({
+  validateSearch: validateCapabilitiesSearch,
   beforeLoad: async ({ context }) => {
     if (
       context.authGateState.status !== "authenticated" &&

@@ -2,7 +2,7 @@ import { EnvironmentId, ProjectId } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import type { EnvironmentProject } from "@t3tools/client-runtime/state/shell";
-import type { HomeProjectScope } from "../home/homeThreadList";
+import type { ProjectGroup } from "@t3tools/client-runtime/state/project-grouping";
 import {
   getOnlySelectableProject,
   resolveDraftProjectSelection,
@@ -22,13 +22,16 @@ function makeProject(id: string): EnvironmentProject {
   };
 }
 
-function makeScope(projects: ReadonlyArray<EnvironmentProject>): HomeProjectScope {
+function makeScope(projects: ReadonlyArray<EnvironmentProject>): ProjectGroup {
   return {
     key: "github.com/t3tools/t3code",
-    title: "Pivot",
+    label: "Pivot",
     representative: projects[0]!,
-    projects,
-    projectRefs: projects.map((project) => ({
+    members: projects.map((project) => ({
+      physicalProjectKey: `${project.environmentId}:${project.id}`,
+      project,
+    })),
+    memberProjectRefs: projects.map((project) => ({
       environmentId: project.environmentId,
       projectId: project.id,
     })),

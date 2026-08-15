@@ -1,6 +1,10 @@
-import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
+import type {
+  EnvironmentProject,
+  EnvironmentThreadShell,
+} from "@t3tools/client-runtime/state/shell";
 import { threadSearchMatchKey } from "@t3tools/client-runtime/state/thread-search";
 import { resolveSnoozePresets } from "@t3tools/client-runtime/state/thread-settled";
+import type { ProjectGroup } from "@t3tools/client-runtime/state/project-grouping";
 import {
   CommandId,
   EnvironmentId,
@@ -14,9 +18,11 @@ import { describe, expect, it } from "vite-plus/test";
 
 import type { PendingNewTask } from "../../state/use-pending-new-tasks";
 import {
+  buildProjectThreadListV2,
+  buildProjectThreadListV2ListItems,
   buildThreadListV2Items,
   buildThreadListV2ListItems,
-  resolveThreadListV2Enabled,
+  resolveSettledDockRows,
   resolveThreadListV2SnoozeMenuSelection,
   resolveThreadListV2SnoozeGateExpiryMs,
   resolveThreadListV2Status,
@@ -99,29 +105,6 @@ describe("resolveThreadListV2SnoozeMenuSelection", () => {
         new Date(selectedAt.getTime() + 60 * 60 * 1_000).toISOString(),
       );
     }
-  });
-});
-
-describe("resolveThreadListV2Enabled", () => {
-  it("defaults on when the device has never chosen", () => {
-    expect(
-      resolveThreadListV2Enabled({ legacyPreference: undefined, preferencesLoaded: true }),
-    ).toBe(true);
-  });
-
-  it("honors an explicit legacy opt-in", () => {
-    expect(resolveThreadListV2Enabled({ legacyPreference: true, preferencesLoaded: true })).toBe(
-      false,
-    );
-    expect(resolveThreadListV2Enabled({ legacyPreference: false, preferencesLoaded: true })).toBe(
-      true,
-    );
-  });
-
-  it("holds the default while preferences are still loading so the list does not remount", () => {
-    expect(
-      resolveThreadListV2Enabled({ legacyPreference: undefined, preferencesLoaded: false }),
-    ).toBe(true);
   });
 });
 
@@ -853,5 +836,531 @@ describe("buildThreadListV2ListItems", () => {
       "v2-settled-shelf",
       "v2-thread",
     ]);
+  });
+});
+
+/* ─── Per-project partition + settled dock (pivot-22 Phase 5) ──────── */
+
+function makeProjectShell(
+  ref: { readonly environmentId: EnvironmentId; readonly projectId: ProjectId },
+  title: string,
+): EnvironmentProject {
+  return {
+    environmentId: ref.environmentId,
+    id: ref.projectId,
+    title,
+    workspaceRoot: `/work/${title}`,
+    repositoryIdentity: null,
+    defaultModelSelection: null,
+    scripts: [],
+    createdAt: "2026-06-01T00:00:00.000Z",
+    updatedAt: "2026-06-01T00:00:00.000Z",
+  };
+}
+
+function makeGroup(
+  key: string,
+  refs: ReadonlyArray<{ readonly environmentId: EnvironmentId; readonly projectId: ProjectId }>,
+): ProjectGroup {
+  return {
+    key,
+    label: key,
+    representative: makeProjectShell(refs[0]!, key),
+    members: refs.map((ref, index) => ({
+      physicalProjectKey: `${ref.environmentId}:${ref.projectId}`,
+      project: makeProjectShell(ref, `${key}-member-${index}`),
+    })),
+    memberProjectRefs: refs,
+  };
+}
+
+const projectRefA = { environmentId, projectId: ProjectId.make("project-1") };
+const projectRefB = { environmentId, projectId: ProjectId.make("project-2") };
+
+describe("buildProjectThreadListV2", () => {
+  it("nests pinned above active under each logical project group", () => {
+    const partition = buildProjectThreadListV2({
+      threads: [
+        makeThread({ id: ThreadId.make("a-active"), title: "A active" }),
+        makeThread({
+          id: ThreadId.make("a-pinned"),
+          title: "A pinned",
+          pinnedAt: "2026-06-01T12:00:00.000Z",
+        }),
+        makeThread({
+          id: ThreadId.make("b-active"),
+          title: "B active",
+          projectId: projectRefB.projectId,
+        }),
+      ],
+      groups: [makeGroup("group-a", [projectRefA]), makeGroup("group-b", [projectRefB])],
+      expansion: new Map(),
+      environmentId: null,
+      searchQuery: "",
+      now: NOW,
+    });
+
+    expect(partition.projects.map((project) => project.group.key)).toEqual(["group-a", "group-b"]);
+    expect(partition.projects[0]?.pinned.map((thread) => thread.id)).toEqual(["a-pinned"]);
+    expect(partition.projects[0]?.active.map((thread) => thread.id)).toEqual(["a-active"]);
+    expect(partition.projects[1]?.active.map((thread) => thread.id)).toEqual(["b-active"]);
+    expect(partition.settled).toEqual([]);
+    expect(partition.snoozed).toEqual([]);
+  });
+
+  it("keeps threadless groups as collapsed rows in group order", () => {
+    const partition = buildProjectThreadListV2({
+      threads: [makeThread({ id: ThreadId.make("a-active"), title: "A active" })],
+      groups: [makeGroup("group-a", [projectRefA]), makeGroup("group-b", [projectRefB])],
+      expansion: new Map(),
+      environmentId: null,
+      searchQuery: "",
+      now: NOW,
+    });
+
+    expect(partition.projects.map((project) => project.group.key)).toEqual(["group-a", "group-b"]);
+    expect(partition.projects[1]?.pinned).toEqual([]);
+    expect(partition.projects[1]?.active).toEqual([]);
+  });
+
+  it("defaults expansion to open for projects with threads and collapses empty ones", () => {
+    const partition = buildProjectThreadListV2({
+      threads: [makeThread({ id: ThreadId.make("a-active"), title: "A active" })],
+      groups: [makeGroup("group-a", [projectRefA]), makeGroup("group-b", [projectRefB])],
+      expansion: new Map(),
+      environmentId: null,
+      searchQuery: "",
+      now: NOW,
+    });
+
+    expect(partition.projects[0]?.expanded).toBe(true);
+    expect(partition.projects[1]?.expanded).toBe(false);
+  });
+
+  it("honors persisted expansion overrides per logical project key", () => {
+    const partition = buildProjectThreadListV2({
+      threads: [makeThread({ id: ThreadId.make("a-active"), title: "A active" })],
+      groups: [makeGroup("group-a", [projectRefA]), makeGroup("group-b", [projectRefB])],
+      expansion: new Map([
+        ["group-a", false],
+        ["group-b", true],
+      ]),
+      environmentId: null,
+      searchQuery: "",
+      now: NOW,
+    });
+
+    expect(partition.projects[0]?.expanded).toBe(false);
+    expect(partition.projects[1]?.expanded).toBe(true);
+  });
+
+  it("snooze outranks a pin and pinned threads never auto-settle — parity with the flat model", () => {
+    const partition = buildProjectThreadListV2({
+      threads: [
+        makeThread({
+          id: ThreadId.make("pinned-snoozed"),
+          title: "Pinned and snoozed",
+          pinnedAt: "2026-06-01T12:00:00.000Z",
+          snoozedUntil: "2026-06-03T09:00:00.000Z",
+          snoozedAt: "2026-06-01T11:00:00.000Z",
+        }),
+        makeThread({
+          id: ThreadId.make("pinned-stale"),
+          title: "Pinned while settled",
+          pinnedAt: "2026-06-01T12:00:00.000Z",
+          settledOverride: "settled",
+          settledAt: "2026-06-01T12:00:00.000Z",
+        }),
+        makeThread({ id: ThreadId.make("active"), title: "Active" }),
+      ],
+      groups: [makeGroup("group-a", [projectRefA])],
+      expansion: new Map(),
+      environmentId: null,
+      searchQuery: "",
+      now: NOW,
+    });
+
+    expect(partition.snoozed.map((thread) => thread.id)).toEqual(["pinned-snoozed"]);
+    expect(partition.projects[0]?.pinned.map((thread) => thread.id)).toEqual(["pinned-stale"]);
+    expect(partition.projects[0]?.active.map((thread) => thread.id)).toEqual(["active"]);
+    expect(partition.settled).toEqual([]);
+  });
+
+  it("gates settlement and snooze by environment capability", () => {
+    const partition = buildProjectThreadListV2({
+      threads: [
+        makeThread({
+          id: ThreadId.make("settled"),
+          title: "Settled",
+          settledOverride: "settled",
+          settledAt: NOW,
+        }),
+        makeThread({
+          id: ThreadId.make("snoozed"),
+          title: "Snoozed",
+          snoozedUntil: "2026-06-03T09:00:00.000Z",
+          snoozedAt: "2026-06-01T12:00:00.000Z",
+        }),
+      ],
+      groups: [makeGroup("group-a", [projectRefA])],
+      expansion: new Map(),
+      environmentId: null,
+      settlementEnvironmentIds: new Set(),
+      snoozeEnvironmentIds: new Set(),
+      searchQuery: "",
+      now: NOW,
+    });
+
+    expect(partition.settled).toEqual([]);
+    expect(partition.snoozed).toEqual([]);
+    expect(partition.projects[0]?.active.map((thread) => thread.id)).toEqual([
+      "settled",
+      "snoozed",
+    ]);
+  });
+
+  it("auto-settles a merged pull request via changeRequestState — parity with the flat model", () => {
+    const partition = buildProjectThreadListV2({
+      threads: [makeThread({ id: ThreadId.make("merged"), title: "Merged PR" })],
+      groups: [makeGroup("group-a", [projectRefA])],
+      expansion: new Map(),
+      environmentId: null,
+      changeRequestStateByKey: new Map([[`${environmentId}:merged`, "merged"]]),
+      searchQuery: "",
+      now: NOW,
+    });
+
+    expect(partition.settled.map((thread) => thread.id)).toEqual(["merged"]);
+    expect(partition.projects[0]?.active).toEqual([]);
+  });
+
+  it("scopes threads by environment and project refs and omits out-of-scope groups", () => {
+    const remoteEnvironmentId = EnvironmentId.make("environment-remote");
+    const partition = buildProjectThreadListV2({
+      threads: [
+        makeThread({ id: ThreadId.make("included"), title: "Included" }),
+        makeThread({
+          environmentId: remoteEnvironmentId,
+          id: ThreadId.make("remote"),
+          title: "Remote",
+        }),
+        makeThread({
+          id: ThreadId.make("excluded"),
+          title: "Excluded",
+          projectId: projectRefB.projectId,
+        }),
+        makeThread({
+          id: ThreadId.make("other-env"),
+          title: "Other environment",
+          environmentId: remoteEnvironmentId,
+          projectId: projectRefA.projectId,
+        }),
+      ],
+      groups: [makeGroup("group-a", [projectRefA])],
+      expansion: new Map(),
+      environmentId: null,
+      projectRefs: [projectRefA],
+      searchQuery: "",
+      now: NOW,
+    });
+
+    expect(partition.projects.map((project) => project.group.key)).toEqual(["group-a"]);
+    expect(partition.projects[0]?.active.map((thread) => thread.id)).toEqual(["included"]);
+  });
+
+  it("filters by search query and message content matches", () => {
+    const contentMatch = makeThread({
+      id: ThreadId.make("content-match"),
+      title: "Unrelated title",
+    });
+    const partition = buildProjectThreadListV2({
+      threads: [
+        makeThread({ id: ThreadId.make("match"), title: "Fix login bug" }),
+        makeThread({ id: ThreadId.make("miss"), title: "Greeting" }),
+        contentMatch,
+      ],
+      groups: [makeGroup("group-a", [projectRefA])],
+      expansion: new Map(),
+      environmentId: null,
+      searchQuery: "login",
+      matchedThreadKeys: new Set([
+        threadSearchMatchKey({
+          environmentId,
+          threadId: contentMatch.id,
+        }),
+      ]),
+      now: NOW,
+    });
+
+    // Both match; identical createdAt ties break alphabetically by id.
+    expect(partition.projects[0]?.active.map((thread) => thread.id)).toEqual([
+      "content-match",
+      "match",
+    ]);
+  });
+
+  it("sorts snoozed by wake time and reports the soonest wake", () => {
+    const partition = buildProjectThreadListV2({
+      threads: [
+        makeThread({
+          id: ThreadId.make("later"),
+          title: "Wakes later",
+          snoozedUntil: "2026-06-03T09:00:00.000Z",
+          snoozedAt: "2026-06-01T12:00:00.000Z",
+        }),
+        makeThread({
+          id: ThreadId.make("sooner"),
+          title: "Wakes sooner",
+          snoozedUntil: "2026-06-02T09:00:00.000Z",
+          snoozedAt: "2026-06-01T12:00:00.000Z",
+        }),
+      ],
+      groups: [makeGroup("group-a", [projectRefA])],
+      expansion: new Map(),
+      environmentId: null,
+      searchQuery: "",
+      now: NOW,
+    });
+
+    expect(partition.snoozed.map((thread) => thread.id)).toEqual(["sooner", "later"]);
+    expect(partition.nextSnoozeWakeAt).toBe("2026-06-02T09:00:00.000Z");
+  });
+
+  it("sorts settled by recency with the newest first", () => {
+    const partition = buildProjectThreadListV2({
+      threads: [
+        makeThread({
+          id: ThreadId.make("old"),
+          title: "Old",
+          settledOverride: "settled",
+          settledAt: NOW,
+          latestUserMessageAt: "2026-06-01T08:00:00.000Z",
+        }),
+        makeThread({
+          id: ThreadId.make("new"),
+          title: "New",
+          settledOverride: "settled",
+          settledAt: NOW,
+          latestUserMessageAt: "2026-06-01T12:00:00.000Z",
+        }),
+      ],
+      groups: [makeGroup("group-a", [projectRefA])],
+      expansion: new Map(),
+      environmentId: null,
+      searchQuery: "",
+      now: NOW,
+    });
+
+    expect(partition.settled.map((thread) => thread.id)).toEqual(["new", "old"]);
+  });
+});
+
+describe("resolveSettledDockRows", () => {
+  const settledThreads = [
+    makeThread({
+      id: ThreadId.make("s1"),
+      title: "S1",
+      settledOverride: "settled",
+      settledAt: NOW,
+    }),
+    makeThread({
+      id: ThreadId.make("s2"),
+      title: "S2",
+      settledOverride: "settled",
+      settledAt: NOW,
+    }),
+    makeThread({
+      id: ThreadId.make("s3"),
+      title: "S3",
+      settledOverride: "settled",
+      settledAt: NOW,
+    }),
+  ];
+
+  it("shows the first page when expanded and reports the hidden count", () => {
+    const dock = resolveSettledDockRows({
+      settled: settledThreads,
+      expanded: true,
+      visibleCount: 2,
+    });
+
+    expect(dock.rows.map((thread) => thread.id)).toEqual(["s1", "s2"]);
+    expect(dock.hiddenCount).toBe(1);
+  });
+
+  it("shows no rows when collapsed, keeping the count in the header", () => {
+    const dock = resolveSettledDockRows({
+      settled: settledThreads,
+      expanded: false,
+      visibleCount: 2,
+    });
+
+    expect(dock.rows).toEqual([]);
+    expect(dock.hiddenCount).toBe(1);
+  });
+
+  it("pins the selected thread into the visible rows beyond the page", () => {
+    const dock = resolveSettledDockRows({
+      settled: settledThreads,
+      expanded: true,
+      visibleCount: 2,
+      selectedThreadKey: `${environmentId}:s3`,
+    });
+
+    expect(dock.rows.map((thread) => thread.id)).toEqual(["s1", "s2", "s3"]);
+    // The pinned row is part of the visible dock, so nothing stays hidden.
+    expect(dock.hiddenCount).toBe(0);
+  });
+
+  it("keeps the selected thread visible on a collapsed dock", () => {
+    const dock = resolveSettledDockRows({
+      settled: settledThreads,
+      expanded: false,
+      visibleCount: 2,
+      selectedThreadKey: `${environmentId}:s2`,
+    });
+
+    expect(dock.rows.map((thread) => thread.id)).toEqual(["s2"]);
+    expect(dock.hiddenCount).toBe(1);
+  });
+});
+
+describe("buildProjectThreadListV2ListItems", () => {
+  it("orders pending rows, then project rows with nested threads, then the snoozed shelf", () => {
+    const partition = buildProjectThreadListV2({
+      threads: [
+        makeThread({ id: ThreadId.make("a-active"), title: "A active" }),
+        makeThread({
+          id: ThreadId.make("a-pinned"),
+          title: "A pinned",
+          pinnedAt: "2026-06-01T12:00:00.000Z",
+        }),
+        makeThread({
+          id: ThreadId.make("b-active"),
+          title: "B active",
+          projectId: projectRefB.projectId,
+        }),
+        makeThread({
+          id: ThreadId.make("snoozed"),
+          title: "Snoozed",
+          snoozedUntil: "2026-06-03T09:00:00.000Z",
+          snoozedAt: "2026-06-01T12:00:00.000Z",
+        }),
+      ],
+      groups: [makeGroup("group-a", [projectRefA]), makeGroup("group-b", [projectRefB])],
+      expansion: new Map(),
+      environmentId: null,
+      searchQuery: "",
+      now: NOW,
+    });
+    const items = buildProjectThreadListV2ListItems({
+      partition,
+      pendingTasks: [makePendingTask("queued")],
+      snoozedShelfExpanded: true,
+      snoozeLabelNow: NOW,
+    });
+
+    expect(items.map((item) => item.type)).toEqual([
+      "v2-pending",
+      "v2-project",
+      "v2-thread",
+      "v2-thread",
+      "v2-project",
+      "v2-thread",
+      "v2-snoozed-shelf",
+      "v2-thread",
+    ]);
+    expect(
+      items.map((item) => {
+        if (item.type === "v2-thread") return item.item.thread.id;
+        if (item.type === "v2-project") return item.project.group.key;
+        if (item.type === "v2-pending") return item.pendingTask.title;
+        return item.type;
+      }),
+    ).toEqual([
+      "queued",
+      "group-a",
+      "a-pinned",
+      "a-active",
+      "group-b",
+      "b-active",
+      "v2-snoozed-shelf",
+      "snoozed",
+    ]);
+  });
+
+  it("emits a collapsed project as its header row only", () => {
+    const partition = buildProjectThreadListV2({
+      threads: [
+        makeThread({ id: ThreadId.make("a-active"), title: "A active" }),
+        makeThread({
+          id: ThreadId.make("b-active"),
+          title: "B active",
+          projectId: projectRefB.projectId,
+        }),
+      ],
+      groups: [makeGroup("group-a", [projectRefA]), makeGroup("group-b", [projectRefB])],
+      expansion: new Map([["group-a", false]]),
+      environmentId: null,
+      searchQuery: "",
+      now: NOW,
+    });
+    const items = buildProjectThreadListV2ListItems({
+      partition,
+      pendingTasks: [],
+    });
+
+    expect(items.map((item) => item.type)).toEqual(["v2-project", "v2-project", "v2-thread"]);
+  });
+
+  it("marks only the leading project row with the Projects divider flag", () => {
+    const partition = buildProjectThreadListV2({
+      threads: [
+        makeThread({ id: ThreadId.make("a-active"), title: "A active" }),
+        makeThread({
+          id: ThreadId.make("b-active"),
+          title: "B active",
+          projectId: projectRefB.projectId,
+        }),
+      ],
+      groups: [makeGroup("group-a", [projectRefA]), makeGroup("group-b", [projectRefB])],
+      expansion: new Map(),
+      environmentId: null,
+      searchQuery: "",
+      now: NOW,
+    });
+    const items = buildProjectThreadListV2ListItems({
+      partition,
+      pendingTasks: [],
+    });
+
+    const projectItems = items.filter((item) => item.type === "v2-project");
+    expect(projectItems.map((item) => item.isFirstProject)).toEqual([true, false]);
+  });
+
+  it("keeps the snoozed shelf collapsed to its header by default", () => {
+    const partition = buildProjectThreadListV2({
+      threads: [
+        makeThread({
+          id: ThreadId.make("snoozed"),
+          title: "Snoozed",
+          snoozedUntil: "2026-06-03T09:00:00.000Z",
+          snoozedAt: "2026-06-01T12:00:00.000Z",
+        }),
+      ],
+      groups: [makeGroup("group-a", [projectRefA])],
+      expansion: new Map(),
+      environmentId: null,
+      searchQuery: "",
+      now: NOW,
+    });
+    const items = buildProjectThreadListV2ListItems({
+      partition,
+      pendingTasks: [],
+    });
+
+    // The snoozed thread left the project bucket, so the project row stays
+    // as a collapsed (threadless) header and the shelf collapses to its own.
+    expect(items.map((item) => item.type)).toEqual(["v2-project", "v2-snoozed-shelf"]);
   });
 });

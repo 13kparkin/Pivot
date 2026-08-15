@@ -191,7 +191,9 @@ import {
 import { UsageReadError, UsageSummary, UsageSummaryInput } from "./usage.ts";
 import {
   ServerOmpCapabilitiesDeleteResourceInput,
+  ServerOmpCapabilitiesMoveItemInput,
   ServerOmpCapabilitiesDeleteResourceResult,
+  ServerOmpCapabilitiesMoveItemResult,
   ServerOmpCapabilitiesError,
   ServerOmpCapabilitiesGetSnapshotInput,
   ServerOmpCapabilitiesGetSnapshotResult,
@@ -290,6 +292,7 @@ export const WS_METHODS = {
   serverOmpCapabilitiesReadResource: "server.ompCapabilitiesReadResource",
   serverOmpCapabilitiesWriteResource: "server.ompCapabilitiesWriteResource",
   serverOmpCapabilitiesDeleteResource: "server.ompCapabilitiesDeleteResource",
+  serverOmpCapabilitiesMoveItem: "server.ompCapabilitiesMoveItem",
   serverUpdateProvider: "server.updateProvider",
   serverUpdateServer: "server.updateServer",
   serverUpdateServerWithProgress: "server.updateServerWithProgress",
@@ -462,6 +465,14 @@ export const WsServerOmpCapabilitiesDeleteResourceRpc = Rpc.make(
   {
     payload: ServerOmpCapabilitiesDeleteResourceInput,
     success: ServerOmpCapabilitiesDeleteResourceResult,
+    error: Schema.Union([ServerOmpCapabilitiesError, EnvironmentAuthorizationError]),
+  },
+);
+export const WsServerOmpCapabilitiesMoveItemRpc = Rpc.make(
+  WS_METHODS.serverOmpCapabilitiesMoveItem,
+  {
+    payload: ServerOmpCapabilitiesMoveItemInput,
+    success: ServerOmpCapabilitiesMoveItemResult,
     error: Schema.Union([ServerOmpCapabilitiesError, EnvironmentAuthorizationError]),
   },
 );
@@ -1102,6 +1113,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsServerOmpCapabilitiesReadResourceRpc,
   WsServerOmpCapabilitiesWriteResourceRpc,
   WsServerOmpCapabilitiesDeleteResourceRpc,
+  WsServerOmpCapabilitiesMoveItemRpc,
   WsServerUpdateProviderRpc,
   WsServerUpdateServerRpc,
   WsServerUpdateServerWithProgressRpc,

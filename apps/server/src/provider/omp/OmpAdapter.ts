@@ -60,6 +60,7 @@ import {
 } from "../Errors.ts";
 import type {
   OmpDeleteResourceInput,
+  OmpMoveItemInput,
   OmpReadResourceInput,
   OmpResetSettingInput,
   OmpWriteResourceInput,
@@ -166,6 +167,7 @@ export interface OmpAdapterOptions {
     | "readResource"
     | "writeResource"
     | "deleteResource"
+    | "moveItemToOmp"
   >;
 }
 
@@ -226,9 +228,12 @@ export class OmpAdapter {
   }
 
   /** omp Capabilities: snapshot of the discovered OMP config surface (non-thread op). */
-  public capabilitiesSnapshot(projectId?: ProjectId) {
+  public capabilitiesSnapshot(
+    projectId?: ProjectId,
+    options?: { readonly includeAllProjects?: boolean },
+  ) {
     return this.requireCapabilitiesService().pipe(
-      Effect.flatMap((service) => service.getSnapshot(projectId)),
+      Effect.flatMap((service) => service.getSnapshot(projectId, options)),
     );
   }
 
@@ -264,6 +269,13 @@ export class OmpAdapter {
   public capabilitiesDeleteResource(input: OmpDeleteResourceInput) {
     return this.requireCapabilitiesService().pipe(
       Effect.flatMap((service) => service.deleteResource(input)),
+    );
+  }
+
+  /** omp Capabilities: move a foreign-root global skill into the omp agent directory. */
+  public capabilitiesMoveItem(input: OmpMoveItemInput) {
+    return this.requireCapabilitiesService().pipe(
+      Effect.flatMap((service) => service.moveItemToOmp(input)),
     );
   }
 

@@ -10,7 +10,15 @@ import type {
 } from "@t3tools/contracts";
 import * as Option from "effect/Option";
 import { AsyncResult, Atom } from "effect/unstable/reactivity";
-import { LoaderIcon, PencilIcon, PlusIcon, SaveIcon, SearchIcon, Trash2Icon } from "lucide-react";
+import {
+  LoaderIcon,
+  MoveRightIcon,
+  PencilIcon,
+  PlusIcon,
+  SaveIcon,
+  SearchIcon,
+  Trash2Icon,
+} from "lucide-react";
 import { useEffect, useState } from "react";
 
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
@@ -45,7 +53,7 @@ import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../
 import { Textarea } from "../ui/textarea";
 import { stackedThreadToast, toastManager } from "../ui/toast";
 
-import { resolveCapabilitiesProjectId } from "./CapabilitiesOverviewPanel.logic";
+import { resolveCapabilitiesProjectIdForView } from "./CapabilitiesOverviewPanel.logic";
 import {
   NEW_RULE_TEMPLATE,
   NEW_SKILL_TEMPLATE,
@@ -67,6 +75,8 @@ interface ItemEditorDialogProps {
   readonly kind: OmpCapabilityEditableKind;
   readonly itemLabel: string;
   readonly editor: EditorState;
+  /** Project view: creates are locked to the project scope (no Global option). */
+  readonly projectLocked: boolean;
   readonly projectId: ProjectId | null;
   readonly environmentId: EnvironmentId;
   readonly onClose: () => void;
@@ -77,14 +87,20 @@ function ItemEditorDialog({
   kind,
   itemLabel,
   editor,
+  projectLocked,
   projectId,
   environmentId,
   onClose,
   onMutated,
 }: ItemEditorDialogProps) {
   const isEdit = editor.mode === "edit";
+  // All-projects snapshots tag each project item with its own project id;
+  // single-project snapshots fall back to the view-resolved id.
+  const itemProjectId = isEdit ? (editor.item.projectId ?? projectId) : projectId;
   const [name, setName] = useState(isEdit ? editor.item.name : "");
-  const [scope, setScope] = useState<OmpCapabilityItemScope>(isEdit ? editor.item.scope : "global");
+  const [scope, setScope] = useState<OmpCapabilityItemScope>(
+    projectLocked ? "project" : isEdit ? editor.item.scope : "global",
+  );
   const [content, setContent] = useState(
     isEdit ? "" : kind === "rules" ? NEW_RULE_TEMPLATE : withTemplateName(NEW_SKILL_TEMPLATE, ""),
   );
@@ -108,7 +124,9 @@ function ItemEditorDialog({
         kind,
         name: editor.item.name,
         scope: editor.item.scope,
-        ...(editor.item.scope === "project" && projectId !== null ? { projectId } : {}),
+        ...(editor.item.scope === "project" && itemProjectId !== null
+          ? { projectId: itemProjectId }
+          : {}),
       },
     }).then((result) => {
       if (cancelled) return;
@@ -143,10 +161,16 @@ function ItemEditorDialog({
       cancelled = true;
     };
     // The dialog is keyed by editor state; load exactly once per open.
-  }, [editor, environmentId, isEdit, itemLabel, kind, projectId, readResource]);
+  }, [editor, environmentId, isEdit, itemLabel, itemProjectId, kind, readResource]);
 
   const nameError = name.trim().length === 0 || !isValidItemName(name.trim());
-  const canSave = !loading && !saving && !nameError && content.trim().length > 0;
+  const canSave =
+    !loading &&
+    !saving &&
+    !nameError &&
+    content.trim().length > 0 &&
+    // A project-scoped save needs the project id it writes into.
+    (!projectLocked || itemProjectId !== null);
 
   const save = async () => {
     const trimmedName = name.trim();
@@ -160,7 +184,7 @@ function ItemEditorDialog({
         content: kind === "skills" ? withTemplateName(content, trimmedName) : content,
         scope,
         overwrite: isEdit,
-        ...(scope === "project" && projectId !== null ? { projectId } : {}),
+        ...(scope === "project" && itemProjectId !== null ? { projectId: itemProjectId } : {}),
       },
     });
     setSaving(false);
@@ -222,7 +246,7 @@ function ItemEditorDialog({
               <span className="mb-1.5 block text-xs font-medium text-foreground">Scope</span>
               <Select
                 value={scope}
-                disabled={isEdit}
+                disabled={isEdit || projectLocked}
                 onValueChange={(value) => {
                   if (value === "global" || value === "project") setScope(value);
                 }}
@@ -231,10 +255,12 @@ function ItemEditorDialog({
                   <SelectValue />
                 </SelectTrigger>
                 <SelectPopup align="start" alignItemWithTrigger={false}>
-                  <SelectItem hideIndicator value="global">
-                    Global
-                  </SelectItem>
-                  <SelectItem hideIndicator value="project" disabled={projectId === null}>
+                  {projectLocked ? null : (
+                    <SelectItem hideIndicator value="global">
+                      Global
+                    </SelectItem>
+                  )}
+                  <SelectItem hideIndicator value="project" disabled={itemProjectId === null}>
                     Project
                   </SelectItem>
                 </SelectPopup>
@@ -279,14 +305,40 @@ function ItemEditorDialog({
 function ItemRowActions({
   item,
   itemLabel,
+  moving,
+  onMove,
   onEdit,
   onDelete,
 }: {
   readonly item: OmpCapabilityItem;
   readonly itemLabel: string;
+  readonly moving: boolean;
+  readonly onMove: () => void;
   readonly onEdit: () => void;
   readonly onDelete: () => void;
 }) {
+  // Foreign-root items (skills discovered in another CLI's skill directory)
+  // cannot be edited in place; moving them into the omp agent directory is
+  // the only mutation, so it replaces Edit/Delete.
+  if (item.scope === "global" && item.sourceDir !== undefined) {
+    return (
+      <Button
+        type="button"
+        size="sm"
+        variant="outline"
+        disabled={moving}
+        aria-label={`Move ${itemLabel} ${item.name} to omp`}
+        onClick={onMove}
+      >
+        {moving ? (
+          <LoaderIcon className="size-3.5 animate-spin" />
+        ) : (
+          <MoveRightIcon className="size-3.5" />
+        )}
+        Move to omp
+      </Button>
+    );
+  }
   return (
     <div className="inline-flex items-center gap-1">
       <Button
@@ -323,6 +375,9 @@ const PANEL_COPY: Readonly<
       readonly itemLabel: string;
       readonly scopeHint: string;
       readonly shadowHint: string;
+      /** Project-scoped view: the info box describes the project's own items. */
+      readonly projectScopeHint: string;
+      readonly projectShadowHint: string;
     }
   >
 > = {
@@ -333,6 +388,9 @@ const PANEL_COPY: Readonly<
     scopeHint:
       "Global rules live in the omp agent directory; project rules live under the project's .omp folder.",
     shadowHint: "A project rule with the same name shadows the global rule for that project.",
+    projectScopeHint: "Rules live in this project's .omp folder and load into every session.",
+    projectShadowHint:
+      "A project rule with the same name shadows the rule in the omp agent directory.",
   },
   skills: {
     title: "Skills",
@@ -342,6 +400,10 @@ const PANEL_COPY: Readonly<
       "Global skills live in the omp agent directory; project skills live under the project's .omp folder.",
     shadowHint:
       "Project and global skills coexist — a project skill is available in addition to the same-named global one.",
+    projectScopeHint:
+      "Skills live in this project's .omp folder and run when a task matches their description.",
+    projectShadowHint:
+      "A project skill with the same name is available in addition to the one in the omp agent directory.",
   },
 };
 
@@ -349,35 +411,60 @@ const PANEL_COPY: Readonly<
  * Rules/skills editor for the active omp environment: one list for every
  * global and project item, with search, create, edit and delete. Global items
  * live in the omp agent directory; project items under the project's `.omp`
- * folder.
+ * folder. With a project targeted (`projectKey`), only that project's items
+ * are listed and creates are locked to the project scope.
  */
-export function CapabilityItemsPanel({ kind }: { readonly kind: OmpCapabilityEditableKind }) {
-  const { title, description, itemLabel, scopeHint, shadowHint } = PANEL_COPY[kind];
+export function CapabilityItemsPanel({
+  kind,
+  projectKey = null,
+}: {
+  readonly kind: OmpCapabilityEditableKind;
+  readonly projectKey?: string | null;
+}) {
+  const {
+    title,
+    description,
+    itemLabel,
+    scopeHint,
+    shadowHint,
+    projectScopeHint,
+    projectShadowHint,
+  } = PANEL_COPY[kind];
   const environmentId = useActiveEnvironmentId();
   const groups = useSettingsProjectGroups();
-  const projectId = resolveCapabilitiesProjectId(groups, environmentId);
+  const projectId = resolveCapabilitiesProjectIdForView(groups, environmentId, projectKey);
+  const projectLocked = projectKey !== null;
+  const projectGroup =
+    projectKey === null ? null : (groups.find((group) => group.projectKey === projectKey) ?? null);
+  const effectiveScopeHint = projectLocked ? projectScopeHint : scopeHint;
+  const effectiveShadowHint = projectLocked ? projectShadowHint : shadowHint;
   const [query, setQuery] = useState("");
   const [editor, setEditor] = useState<EditorState | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<OmpCapabilityItem | null>(null);
   const [deleting, setDeleting] = useState(false);
+  const [movingName, setMovingName] = useState<string | null>(null);
 
+  // The global view inventories every project's skills/rules, each tagged
+  // with its project; a project view keeps its own snapshot.
+  const snapshotInput =
+    projectKey === null ? { includeAllProjects: true } : projectId !== null ? { projectId } : {};
   const snapshotAtom =
     environmentId === null
       ? EMPTY_ITEMS_SNAPSHOT_ATOM
-      : serverEnvironment.capabilitiesSnapshot({
-          environmentId,
-          input: projectId === null ? {} : { projectId },
-        });
+      : serverEnvironment.capabilitiesSnapshot({ environmentId, input: snapshotInput });
   const result = useAtomValue(snapshotAtom);
   const refreshSnapshot = useAtomRefresh(snapshotAtom);
   const snapshot = Option.getOrNull(AsyncResult.value(result))?.snapshot ?? null;
   const deleteResource = useAtomCommand(serverEnvironment.capabilitiesDeleteResource, {
     label: "capabilities-delete-resource",
   });
+  const moveItem = useAtomCommand(serverEnvironment.capabilitiesMoveItem, {
+    label: "capabilities-move-item",
+  });
 
   if (environmentId === null) {
     return (
-      <SettingsPageContainer>
+      <SettingsPageContainer className="max-w-6xl">
         <p className="text-sm text-muted-foreground">
           Connect an environment to manage its {itemLabel}s.
         </p>
@@ -388,7 +475,7 @@ export function CapabilityItemsPanel({ kind }: { readonly kind: OmpCapabilityEdi
   if (snapshot === null) {
     if (result.waiting) {
       return (
-        <SettingsPageContainer>
+        <SettingsPageContainer className="max-w-6xl">
           <div className="flex items-center gap-2 text-sm text-muted-foreground">
             <LoaderIcon className="size-4 animate-spin" />
             Loading {itemLabel}s…
@@ -397,7 +484,7 @@ export function CapabilityItemsPanel({ kind }: { readonly kind: OmpCapabilityEdi
       );
     }
     return (
-      <SettingsPageContainer>
+      <SettingsPageContainer className="max-w-6xl">
         <div className="flex flex-col gap-1 text-sm">
           <span className="font-medium text-foreground">Could not load omp {itemLabel}s</span>
           <span className="text-muted-foreground">
@@ -408,15 +495,20 @@ export function CapabilityItemsPanel({ kind }: { readonly kind: OmpCapabilityEdi
     );
   }
 
-  const rows = filterItemRows(
-    buildItemRows(kind === "rules" ? snapshot.rules : snapshot.skills),
-    query,
-  );
+  // Project snapshots still carry global items; project views surface only
+  // the project's own rules/skills.
+  const items = kind === "rules" ? snapshot.rules : snapshot.skills;
+  const sourceItems = projectLocked ? items.filter((item) => item.scope === "project") : items;
+  const rows = filterItemRows(buildItemRows(sourceItems), query);
   const searching = query.trim().length > 0;
 
   const confirmDelete = async () => {
     if (deleteTarget === null) return;
     setDeleting(true);
+    // All-projects snapshots tag each item with its own project id; fall back
+    // to the view-resolved id for single-project snapshots.
+    const deleteProjectId =
+      deleteTarget.scope === "project" ? (deleteTarget.projectId ?? projectId) : null;
     const result = await deleteResource({
       environmentId,
       input: {
@@ -424,7 +516,7 @@ export function CapabilityItemsPanel({ kind }: { readonly kind: OmpCapabilityEdi
         name: deleteTarget.name,
         scope: deleteTarget.scope,
         confirm: true,
-        ...(deleteTarget.scope === "project" && projectId !== null ? { projectId } : {}),
+        ...(deleteProjectId !== null ? { projectId: deleteProjectId } : {}),
       },
     });
     setDeleting(false);
@@ -447,8 +539,33 @@ export function CapabilityItemsPanel({ kind }: { readonly kind: OmpCapabilityEdi
     refreshSnapshot();
   };
 
+  const confirmMove = async (name: string) => {
+    setMovingName(name);
+    const result = await moveItem({
+      environmentId,
+      input: { kind, name },
+    });
+    setMovingName(null);
+    if (result._tag === "Failure") {
+      const error = squashAtomCommandFailure(result);
+      toastManager.add(
+        stackedThreadToast({
+          type: "error",
+          title: `Could not move ${itemLabel} ${name} to omp`,
+          description:
+            error instanceof Error
+              ? error.message
+              : "Check that omp is installed on the server host.",
+        }),
+      );
+      return;
+    }
+    toastManager.add({ type: "success", title: `Moved ${itemLabel} ${name} into omp` });
+    refreshSnapshot();
+  };
+
   return (
-    <SettingsPageContainer>
+    <SettingsPageContainer className="max-w-6xl">
       <SettingsSection
         title={title}
         headerAction={
@@ -458,9 +575,12 @@ export function CapabilityItemsPanel({ kind }: { readonly kind: OmpCapabilityEdi
           </Button>
         }
       >
+        {projectGroup !== null ? (
+          <SettingsRow title="Project" description={projectGroup.displayName} />
+        ) : null}
         <SettingsRow title="How it works" description={description} />
-        <SettingsRow title="Where items live" description={scopeHint} />
-        <SettingsRow title="Project overrides" description={shadowHint} />
+        <SettingsRow title="Where items live" description={effectiveScopeHint} />
+        <SettingsRow title="Project overrides" description={effectiveShadowHint} />
       </SettingsSection>
       <SettingsSection title={`All ${itemLabel}s`}>
         <div className="relative max-w-72">
@@ -486,42 +606,54 @@ export function CapabilityItemsPanel({ kind }: { readonly kind: OmpCapabilityEdi
           />
         ) : (
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[640px] text-left text-xs">
+            <table className="w-max min-w-full text-left text-xs">
               <thead className="border-b border-border/60 text-[11px] uppercase tracking-[0.08em] text-muted-foreground/70">
                 <tr>
                   <th className="px-4 py-2 font-semibold sm:pl-5">Name</th>
                   <th className="px-3 py-2 font-semibold">Description</th>
                   <th className="px-3 py-2 font-semibold">Scope</th>
-                  <th className="px-3 py-2 text-right font-semibold">Actions</th>
+                  <th className="sticky right-0 z-10 bg-background py-2 pe-6 ps-5 text-right font-semibold">
+                    Actions
+                  </th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-border/60">
-                {rows.map((row) => (
-                  <tr key={`${row.scope}:${row.name}`}>
-                    <td className="px-4 py-2 sm:pl-5">
-                      <span className="inline-flex items-center gap-2">
-                        <span className="font-mono font-medium text-foreground">{row.name}</span>
-                        {row.shadowed ? (
-                          <Badge size="sm" variant="warning">
-                            Overrides global
-                          </Badge>
+                {rows.map((row) => {
+                  const foreignRoot = row.scope === "global" && row.sourceDir !== undefined;
+                  return (
+                    <tr key={`${row.scope}:${row.projectId ?? ""}:${row.name}`}>
+                      <td className="px-4 py-2 sm:pl-5">
+                        <span className="inline-flex items-center gap-2">
+                          <span className="font-mono font-medium text-foreground">{row.name}</span>
+                          {row.shadowed ? (
+                            <Badge size="sm" variant="warning">
+                              Overrides global
+                            </Badge>
+                          ) : null}
+                        </span>
+                        {foreignRoot ? (
+                          <span className="mt-0.5 block text-[11px] text-muted-foreground">
+                            Lives in {row.sourceDir}
+                          </span>
                         ) : null}
-                      </span>
-                    </td>
-                    <td className="max-w-96 px-3 py-2 text-muted-foreground">
-                      <span className="line-clamp-2">{row.description}</span>
-                    </td>
-                    <td className="px-3 py-2 text-muted-foreground">{row.scopeLabel}</td>
-                    <td className="px-3 py-2 text-right">
-                      <ItemRowActions
-                        item={row}
-                        itemLabel={itemLabel}
-                        onEdit={() => setEditor({ mode: "edit", item: row })}
-                        onDelete={() => setDeleteTarget(row)}
-                      />
-                    </td>
-                  </tr>
-                ))}
+                      </td>
+                      <td className="max-w-96 px-3 py-2 text-muted-foreground">
+                        <span className="line-clamp-2">{row.description}</span>
+                      </td>
+                      <td className="px-3 py-2 text-muted-foreground">{row.scopeLabel}</td>
+                      <td className="sticky right-0 z-10 bg-background py-2 pe-6 ps-5 text-right">
+                        <ItemRowActions
+                          item={row}
+                          itemLabel={itemLabel}
+                          moving={foreignRoot && movingName === row.name}
+                          onMove={() => void confirmMove(row.name)}
+                          onEdit={() => setEditor({ mode: "edit", item: row })}
+                          onDelete={() => setDeleteTarget(row)}
+                        />
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
@@ -530,10 +662,15 @@ export function CapabilityItemsPanel({ kind }: { readonly kind: OmpCapabilityEdi
 
       {editor !== null ? (
         <ItemEditorDialog
-          key={editor.mode === "edit" ? `edit:${editor.item.scope}:${editor.item.name}` : "create"}
+          key={
+            editor.mode === "edit"
+              ? `edit:${editor.item.scope}:${editor.item.projectId ?? ""}:${editor.item.name}`
+              : "create"
+          }
           kind={kind}
           itemLabel={itemLabel}
           editor={editor}
+          projectLocked={projectLocked}
           projectId={projectId}
           environmentId={environmentId}
           onClose={() => setEditor(null)}

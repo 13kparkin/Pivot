@@ -1570,6 +1570,7 @@ const makeWsRpcLayer = (
                 .ompCapabilitiesGetSnapshot({
                   instanceId,
                   ...(input.projectId === undefined ? {} : { projectId: input.projectId }),
+                  ...(input.includeAllProjects === true ? { includeAllProjects: true } : {}),
                 })
                 .pipe(
                   Effect.mapError(
@@ -1681,6 +1682,28 @@ const makeWsRpcLayer = (
               const { instanceId: _ignored, ...resourceInput } = input;
               const snapshot = yield* providerRegistry
                 .ompCapabilitiesDeleteResource({ instanceId, ...resourceInput })
+                .pipe(
+                  Effect.mapError(
+                    (cause) =>
+                      new ServerOmpCapabilitiesError({
+                        reason: cause instanceof Error ? cause.message : String(cause),
+                        cause,
+                      }),
+                  ),
+                );
+              return { snapshot };
+            }),
+            { "rpc.aggregate": "server" },
+          ),
+        [WS_METHODS.serverOmpCapabilitiesMoveItem]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.serverOmpCapabilitiesMoveItem,
+            Effect.gen(function* () {
+              const instanceId: ProviderInstanceId =
+                input.instanceId ?? defaultInstanceIdForDriver(ProviderDriverKind.make("omp"));
+              const { instanceId: _ignored, ...moveInput } = input;
+              const snapshot = yield* providerRegistry
+                .ompCapabilitiesMoveItem({ instanceId, ...moveInput })
                 .pipe(
                   Effect.mapError(
                     (cause) =>

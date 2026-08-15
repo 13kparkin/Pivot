@@ -3,7 +3,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
-import { expect } from "vite-plus/test";
+import { afterEach, expect, vi } from "vite-plus/test";
 import * as Schema from "effect/Schema";
 
 import { OmpCapabilitiesError, ProjectId } from "@t3tools/contracts";
@@ -86,22 +86,48 @@ function makeService(options: {
   readonly runner: ProcessRunner.ProcessRunner["Service"];
   readonly listJson?: Record<string, unknown>;
   readonly configStore?: OmpConfigStore;
+  readonly listProjectWorkspaces?: ReadonlyArray<{
+    readonly projectId: ProjectId;
+    readonly cwd: string;
+    readonly title: string;
+  }>;
 }) {
   return Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
     const store = options.configStore ?? new OmpConfigStore(fs, path, options.agentDir);
-    const service = new OmpCapabilitiesService(fs, path, OMP, options.runner, store, (projectId) =>
-      Effect.sync(() => {
-        if (options.projectCwd === undefined) {
-          throw new Error(`unexpected projectId ${projectId}`);
-        }
-        return options.projectCwd;
-      }),
+    const workspaces = options.listProjectWorkspaces;
+    const service = new OmpCapabilitiesService(
+      fs,
+      path,
+      OMP,
+      options.runner,
+      store,
+      (projectId) =>
+        Effect.sync(() => {
+          if (options.projectCwd === undefined) {
+            throw new Error(`unexpected projectId ${projectId}`);
+          }
+          return options.projectCwd;
+        }),
+      workspaces === undefined
+        ? undefined
+        : () =>
+            Effect.sync(() =>
+              workspaces.map((workspace) => ({
+                projectId: workspace.projectId,
+                cwd: workspace.cwd,
+                title: workspace.title,
+              })),
+            ),
     );
     return service;
   });
 }
+
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
 
 it.layer(NodeServices.layer)("OmpCapabilitiesService", (it) => {
   it.effect("resolves the agent dir from omp config path and inventories resources", () =>
@@ -182,6 +208,223 @@ it.layer(NodeServices.layer)("OmpCapabilitiesService", (it) => {
     }),
   );
 
+  it.effect(
+    "project snapshots surface the project's own config layer as project-scoped settings",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const agentDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-omp-agent-" });
+        const projectCwd = yield* fs.makeTempDirectoryScoped({ prefix: "t3-omp-project-" });
+        yield* fs.makeDirectory(path.join(projectCwd, ".omp"), { recursive: true });
+        yield* fs.writeFileString(
+          path.join(projectCwd, ".omp", "config.yml"),
+          "autoResume: false\nmodelRoles:\n  default: gpt-5.6\nthreadCount: 4\ncustom.unknownKey: hello\n",
+        );
+
+        const { runner } = makeRunner({ agentDir });
+        const service = yield* makeService({ agentDir, projectCwd, runner });
+
+        const snapshot = yield* service.getSnapshot(ProjectId.make("project-1"));
+        const byKey = new Map(snapshot.settings.entries.map((entry) => [entry.key, entry]));
+        expect(byKey.get("autoResume")).toMatchObject({
+          value: false,
+          type: "boolean",
+          scope: "project",
+        });
+        expect(byKey.get("modelRoles.default")).toMatchObject({
+          value: "gpt-5.6",
+          type: "string",
+          scope: "project",
+        });
+        expect(byKey.get("threadCount")).toMatchObject({
+          value: 4,
+          type: "number",
+          scope: "project",
+        });
+        // Effective/global settings stay visible, tagged by their origin:
+        // the project layer tags the keys it overrides, everything else is
+        // tagged global so the project view can label + move them.
+        expect(byKey.get("theme.dark")).toMatchObject({ scope: "global" });
+        // Project-only unknown keys still surface as project-scoped.
+        expect(byKey.get("custom.unknownKey")).toMatchObject({ scope: "project" });
+
+        // A project write lands in the layer and shows up in the next snapshot.
+        yield* service.writeSetting({
+          key: "retry.enabled",
+          value: true,
+          scope: "project",
+          projectId: ProjectId.make("project-1"),
+        });
+        const after = yield* service.getSnapshot(ProjectId.make("project-1"));
+        expect(
+          new Map(after.settings.entries.map((e) => [e.key, e])).get("retry.enabled"),
+        ).toMatchObject({ value: true, scope: "project" });
+
+        // The global snapshot still returns the effective CLI list.
+        const globalSnapshot = yield* service.getSnapshot();
+        expect(globalSnapshot.settings.entries.some((entry) => entry.key === "theme.dark")).toBe(
+          true,
+        );
+        expect(globalSnapshot.settings.entries.every((entry) => entry.scope === "global")).toBe(
+          true,
+        );
+      }),
+  );
+
+  it.effect("inventories skills from cursor-compatible roots on the server host", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const agentDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-omp-agent-" });
+      yield* fs.makeDirectory(path.join(agentDir, "skills", "agent-skill"), { recursive: true });
+      yield* fs.writeFileString(
+        path.join(agentDir, "skills", "agent-skill", "SKILL.md"),
+        "# Agent skill\n",
+      );
+      // Cursor-compatible roots, keyed off the stubbed home dir.
+      const home = yield* fs.makeTempDirectoryScoped({ prefix: "t3-omp-home-" });
+      yield* fs.makeDirectory(path.join(home, ".cursor", "skills", "cursor-skill"), {
+        recursive: true,
+      });
+      yield* fs.writeFileString(
+        path.join(home, ".cursor", "skills", "cursor-skill", "SKILL.md"),
+        "---\ndescription: From cursor\n---\n",
+      );
+      yield* fs.makeDirectory(path.join(home, ".cursor", "skills-cursor", "bundled-skill"), {
+        recursive: true,
+      });
+      yield* fs.writeFileString(
+        path.join(home, ".cursor", "skills-cursor", "bundled-skill", "SKILL.md"),
+        "# Bundled\n",
+      );
+      vi.stubEnv("HOME", home);
+
+      const { runner } = makeRunner({ agentDir });
+      const service = yield* makeService({ agentDir, runner });
+      const snapshot = yield* service.getSnapshot();
+      const names = snapshot.skills.map((skill) => skill.name);
+      expect(names).toContain("agent-skill");
+      expect(names).toContain("cursor-skill");
+      expect(names).toContain("bundled-skill");
+      const cursorSkill = snapshot.skills.find((skill) => skill.name === "cursor-skill");
+      expect(cursorSkill?.description).toBe("From cursor");
+    }),
+  );
+
+  it.effect(
+    "tags foreign-root skills with their source and moves them into the omp agent dir",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const agentDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-omp-agent-" });
+        yield* fs.makeDirectory(path.join(agentDir, "skills"), { recursive: true });
+        const home = yield* fs.makeTempDirectoryScoped({ prefix: "t3-omp-home-" });
+        const cursorRoot = path.join(home, ".cursor", "skills");
+        yield* fs.makeDirectory(path.join(cursorRoot, "import-me", "agents"), { recursive: true });
+        yield* fs.writeFileString(path.join(cursorRoot, "import-me", "SKILL.md"), "# Import me\n");
+        yield* fs.writeFileString(
+          path.join(cursorRoot, "import-me", "agents", "helper.md"),
+          "# Helper\n",
+        );
+        vi.stubEnv("HOME", home);
+
+        const { runner } = makeRunner({ agentDir });
+        const service = yield* makeService({ agentDir, runner });
+
+        const before = yield* service.getSnapshot();
+        const foreign = before.skills.find((skill) => skill.name === "import-me");
+        expect(foreign?.scope).toBe("global");
+        expect(foreign?.sourceDir).toBe("~/.cursor/skills");
+
+        const after = yield* service.moveItemToOmp({ kind: "skills", name: "import-me" });
+        const moved = after.skills.find((skill) => skill.name === "import-me");
+        expect(moved?.sourceDir).toBeUndefined();
+
+        // Files physically moved: present in the agent dir, gone from cursor.
+        const movedSkill = yield* fs.readFileString(
+          path.join(agentDir, "skills", "import-me", "SKILL.md"),
+        );
+        expect(movedSkill).toContain("Import me");
+        const helper = yield* fs.readFileString(
+          path.join(agentDir, "skills", "import-me", "agents", "helper.md"),
+        );
+        expect(helper).toContain("Helper");
+        expect(yield* fs.exists(path.join(cursorRoot, "import-me"))).toBe(false);
+      }),
+  );
+
+  it.effect(
+    "inventories skills and rules across every project when includeAllProjects is set",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const agentDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-omp-agent-" });
+        yield* fs.makeDirectory(path.join(agentDir, "skills", "global-skill"), { recursive: true });
+        yield* fs.writeFileString(
+          path.join(agentDir, "skills", "global-skill", "SKILL.md"),
+          "# Global\n",
+        );
+        const projectA = yield* fs.makeTempDirectoryScoped({ prefix: "t3-omp-proj-a-" });
+        yield* fs.makeDirectory(path.join(projectA, ".omp", "skills", "proj-a-skill"), {
+          recursive: true,
+        });
+        yield* fs.writeFileString(
+          path.join(projectA, ".omp", "skills", "proj-a-skill", "SKILL.md"),
+          "# A\n",
+        );
+        yield* fs.makeDirectory(path.join(projectA, ".omp", "rules"), { recursive: true });
+        yield* fs.writeFileString(path.join(projectA, ".omp", "rules", "proj-a-rule.md"), "# AR\n");
+        const projectB = yield* fs.makeTempDirectoryScoped({ prefix: "t3-omp-proj-b-" });
+        yield* fs.makeDirectory(path.join(projectB, ".omp", "skills", "proj-b-skill"), {
+          recursive: true,
+        });
+        yield* fs.writeFileString(
+          path.join(projectB, ".omp", "skills", "proj-b-skill", "SKILL.md"),
+          "# B\n",
+        );
+
+        const { runner } = makeRunner({ agentDir });
+        const service = yield* makeService({
+          agentDir,
+          projectCwd: projectA,
+          runner,
+          listProjectWorkspaces: [
+            { projectId: ProjectId.make("project-a"), cwd: projectA, title: "Project A" },
+            { projectId: ProjectId.make("project-b"), cwd: projectB, title: "Project B" },
+          ],
+        });
+
+        const snapshot = yield* service.getSnapshot(undefined, { includeAllProjects: true });
+        const skillNames = new Map(snapshot.skills.map((skill) => [skill.name, skill]));
+        expect(skillNames.has("global-skill")).toBe(true);
+        expect(skillNames.get("proj-a-skill")).toMatchObject({
+          scope: "project",
+          projectId: ProjectId.make("project-a"),
+          projectTitle: "Project A",
+        });
+        expect(skillNames.get("proj-b-skill")).toMatchObject({
+          scope: "project",
+          projectId: ProjectId.make("project-b"),
+          projectTitle: "Project B",
+        });
+        const rule = snapshot.rules.find((item) => item.name === "proj-a-rule");
+        expect(rule).toMatchObject({
+          scope: "project",
+          projectId: ProjectId.make("project-a"),
+          projectTitle: "Project A",
+        });
+
+        // A single-project snapshot stays scoped to that project.
+        const single = yield* service.getSnapshot(ProjectId.make("project-a"));
+        const singleSkills = single.skills.map((skill) => skill.name);
+        expect(singleSkills).toContain("proj-a-skill");
+        expect(singleSkills).not.toContain("proj-b-skill");
+      }),
+  );
+
   it.effect("exposes the settings surface from omp config list --json with masked secrets", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
@@ -233,6 +476,50 @@ it.layer(NodeServices.layer)("OmpCapabilitiesService", (it) => {
       });
       const setCall = calls.find((c) => c.args[0] === "config" && c.args[1] === "set");
       expect(setCall?.args).toEqual(["config", "set", "modelRoles", '{"default":"openai/gpt-5"}']);
+    }),
+  );
+
+  it.effect("parses raw string values into typed scalars for project-scope writes", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const agentDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-omp-agent-" });
+      const projectCwd = yield* fs.makeTempDirectoryScoped({ prefix: "t3-omp-project-" });
+      yield* fs.makeDirectory(path.join(projectCwd, ".omp"), { recursive: true });
+
+      const { runner } = makeRunner({ agentDir });
+      const service = yield* makeService({ agentDir, projectCwd, runner });
+
+      yield* service.writeSetting({
+        key: "autoResume",
+        value: "false",
+        scope: "project",
+        projectId: ProjectId.make("project-1"),
+      });
+      yield* service.writeSetting({
+        key: "threadCount",
+        value: "4",
+        scope: "project",
+        projectId: ProjectId.make("project-1"),
+      });
+      yield* service.writeSetting({
+        key: "theme.dark",
+        value: "titanium",
+        scope: "project",
+        projectId: ProjectId.make("project-1"),
+      });
+
+      const snapshot = yield* service.getSnapshot(ProjectId.make("project-1"));
+      const byKey = new Map(snapshot.settings.entries.map((entry) => [entry.key, entry]));
+      expect(byKey.get("autoResume")?.value).toBe(false);
+      expect(byKey.get("threadCount")?.value).toBe(4);
+      expect(byKey.get("theme.dark")?.value).toBe("titanium");
+
+      // The file stores typed scalars, not quoted strings.
+      const text = yield* fs.readFileString(path.join(projectCwd, ".omp", "config.yml"));
+      expect(text).toContain("autoResume: false");
+      expect(text).toContain("threadCount: 4");
+      expect(text).toContain("dark: titanium");
     }),
   );
 
@@ -406,6 +693,11 @@ it.layer(NodeServices.layer)("OmpCapabilitiesService", (it) => {
       );
       // Skill dirs without SKILL.md are not skills.
       yield* fs.makeDirectory(path.join(agentDir, "skills", "draft"), { recursive: true });
+
+      // Isolate from the real home's cursor-compatible skill roots so the
+      // exact-list assertions below are deterministic.
+      const isolatedHome = yield* fs.makeTempDirectoryScoped({ prefix: "t3-omp-isolated-home-" });
+      vi.stubEnv("HOME", isolatedHome);
 
       const { runner } = makeRunner({ agentDir });
       const service = yield* makeService({ agentDir, runner });

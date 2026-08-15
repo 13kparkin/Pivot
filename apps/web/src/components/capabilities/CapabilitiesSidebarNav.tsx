@@ -10,13 +10,14 @@ import {
 import {
   ArrowLeftIcon,
   BookOpenIcon,
+  FolderIcon,
   LayoutDashboardIcon,
   ScrollTextIcon,
   SearchIcon,
   Settings2Icon,
   XIcon,
 } from "lucide-react";
-import { useCanGoBack, useNavigate } from "@tanstack/react-router";
+import { useCanGoBack, useNavigate, useSearch } from "@tanstack/react-router";
 
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
@@ -30,6 +31,7 @@ import {
   SidebarMenuItem,
   useSidebar,
 } from "../ui/sidebar";
+import { useSettingsProjectGroups } from "../settings/ProjectSettingsPanel";
 import {
   CAPABILITIES_SECTION_LABELS,
   searchCapabilities,
@@ -65,6 +67,12 @@ export function CapabilitiesSidebarNav({ pathname }: { pathname: string }) {
   const navigate = useNavigate();
   const canGoBack = useCanGoBack();
   const { isMobile, setOpenMobile, open, setOpen } = useSidebar();
+  const { projectKey } = useSearch({ from: "/capabilities" });
+  const groups = useSettingsProjectGroups();
+  const projectGroup =
+    projectKey === undefined
+      ? null
+      : (groups.find((group) => group.projectKey === projectKey) ?? null);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const [query, setQuery] = useState("");
   const [activeResultIndex, setActiveResultIndex] = useState(0);
@@ -117,9 +125,17 @@ export function CapabilitiesSidebarNav({ pathname }: { pathname: string }) {
       if (isMobile) {
         setOpenMobile(false);
       }
-      void navigate({ to, hash: "", replace: true });
+      // A project-scoped view must stay scoped: section navigations carry
+      // the projectKey search param so the sidebar never silently falls
+      // back to the global surface.
+      void navigate({
+        to,
+        hash: "",
+        replace: true,
+        ...(projectKey !== undefined ? { search: { projectKey } } : {}),
+      });
     },
-    [isMobile, navigate, setOpenMobile],
+    [isMobile, navigate, projectKey, setOpenMobile],
   );
   const clearSearch = useCallback(() => {
     setQuery("");
@@ -131,9 +147,13 @@ export function CapabilitiesSidebarNav({ pathname }: { pathname: string }) {
       if (isMobile) {
         setOpenMobile(false);
       }
-      void navigate({ to: item.to, replace: true });
+      void navigate({
+        to: item.to,
+        replace: true,
+        ...(projectKey !== undefined ? { search: { projectKey } } : {}),
+      });
     },
-    [clearSearch, isMobile, navigate, setOpenMobile],
+    [clearSearch, isMobile, navigate, projectKey, setOpenMobile],
   );
   const handleBackClick = useCallback(() => {
     if (isMobile) {
@@ -280,6 +300,15 @@ export function CapabilitiesSidebarNav({ pathname }: { pathname: string }) {
         </SidebarGroup>
       </SidebarContent>
       <SidebarFooter className="p-[var(--sidebar-content-inset)]">
+        {projectGroup !== null ? (
+          <div
+            data-testid="capabilities-project-context"
+            className="mb-1 flex min-w-0 items-center gap-2 rounded-md px-2 py-1.5 text-xs text-sidebar-muted-foreground"
+          >
+            <FolderIcon className="size-3.5 shrink-0" />
+            <span className="min-w-0 flex-1 truncate">{projectGroup.displayName}</span>
+          </div>
+        ) : null}
         <SidebarMenu className="min-w-0 flex-1">
           <SidebarMenuItem>
             <SidebarMenuButton onClick={handleBackClick}>

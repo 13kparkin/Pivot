@@ -1,3 +1,4 @@
+import { ProjectId } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import { buildItemRows, filterItemRows, isValidItemName } from "./CapabilityItemsPanel.logic";
@@ -30,6 +31,33 @@ describe("buildItemRows", () => {
     expect(shadow?.shadowed).toBe(true);
     const onlyProject = rows.find((row) => row.name === "only-project");
     expect(onlyProject?.shadowed).toBe(false);
+  });
+
+  it("labels project items with their project title when present", () => {
+    const rows = buildItemRows([
+      {
+        name: "tidy",
+        scope: "project",
+        projectId: ProjectId.make("proj-a"),
+        projectTitle: "Pivot",
+      },
+      { name: "plain", scope: "project" },
+    ]);
+    const titled = rows.find((row) => row.name === "tidy");
+    expect(titled?.scopeLabel).toBe("Project · Pivot");
+    const untitled = rows.find((row) => row.name === "plain");
+    expect(untitled?.scopeLabel).toBe("Project");
+  });
+
+  it("orders same-named project items deterministically by project id", () => {
+    const rows = buildItemRows([
+      { name: "codegraph", scope: "project", projectId: ProjectId.make("proj-b") },
+      { name: "codegraph", scope: "project", projectId: ProjectId.make("proj-a") },
+    ]);
+    expect(rows.map((row) => row.projectId)).toEqual([
+      ProjectId.make("proj-a"),
+      ProjectId.make("proj-b"),
+    ]);
   });
 });
 

@@ -12,6 +12,16 @@ import type { ThreadRouteTarget } from "../threadRoutes";
 import { cn } from "../lib/utils";
 import { isLatestTurnSettled } from "../session-logic";
 import { resolveServerBackedAppStageLabel } from "../branding.logic";
+import { scopedThreadKey, scopeThreadRef } from "@t3tools/client-runtime/environment";
+import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/models";
+import {
+  effectiveSettled,
+  effectiveSnoozed,
+  type ChangeRequestStateLike,
+} from "@t3tools/client-runtime/state/thread-settled";
+import type { EnvironmentId } from "@t3tools/contracts";
+import type { SidebarProjectSnapshot } from "../sidebarProjectGrouping";
+import { sortPinnedThreadsByOrderKey } from "@t3tools/client-runtime/state/thread-sort";
 
 export const THREAD_SELECTION_SAFE_SELECTOR = "[data-thread-item], [data-thread-selection-safe]";
 export const THREAD_JUMP_HINT_SHOW_DELAY_MS = 100;
@@ -951,4 +961,141 @@ export function sortScopedProjectsForSidebar<
       left.environmentId.localeCompare(right.environmentId) ||
       left.id.localeCompare(right.id),
   );
+}
+
+// ── Per-project partition + project expansion (pivot-22) ─────────────
+// The sidebar organizes pinned + active threads under their project rows;
+// snoozed and settled stay global shelves. Keyed per logical project so the
+// expansion map survives physical project renames and grouping changes.
+export const PROJECT_EXPANSION_KEY = "t3code:sidebar-v2:project-expanded";
+
+/**
+ * Default project-row expansion: projects with threads open (the cards are
+ * the point of the row), empty projects collapse to their header row.
+ */
+export function resolveProjectExpansionState(projectKey: string, hasThreads: boolean): boolean {
+  void projectKey;
+  return hasThreads;
+}
+
+export interface SidebarProjectThreadPartition {
+  projects: ReadonlyArray<{
+    group: SidebarProjectSnapshot;
+    pinned: EnvironmentThreadShell[];
+    active: EnvironmentThreadShell[];
+  }>;
+  snoozed: EnvironmentThreadShell[];
+  settled: EnvironmentThreadShell[];
+}
+
+const scopedProjectKeyOf = (environmentId: string, projectId: string) =>
+  `${environmentId}:${projectId}`;
+
+/**
+ * Classifies threads exactly like the old flat partition (snooze outranks a
+ * pin, pinned never auto-settle, settlement capability gates the settled
+ * shelf) and then nests the pinned + active buckets under their logical
+ * project group, pinned first. Threadless groups stay as collapsed entries
+ * in group order; an active scope filter omits out-of-scope groups entirely.
+ * Snoozed/settled are returned unsorted — callers keep their existing sorts.
+ */
+export function partitionThreadsByProjectGroup(input: {
+  threads: ReadonlyArray<EnvironmentThreadShell>;
+  groups: ReadonlyArray<SidebarProjectSnapshot>;
+  scopedProjectKeys: Set<string> | null;
+  /** Minute-quantized UTC "now" for settlement classification. */
+  now: string;
+  /** Precise clock for snooze wake classification. */
+  snoozeNow: string;
+  /** Null disables auto-settle-by-inactivity (matches the settings type). */
+  autoSettleAfterDays: number | null;
+  changeRequestStateByKey: ReadonlyMap<string, ChangeRequestStateLike | null>;
+  supportsSettlement: (environmentId: EnvironmentId) => boolean;
+  supportsSnooze: (environmentId: EnvironmentId) => boolean;
+}): SidebarProjectThreadPartition {
+  const { threads, groups, scopedProjectKeys } = input;
+  const pinned: EnvironmentThreadShell[] = [];
+  const active: EnvironmentThreadShell[] = [];
+  const snoozed: EnvironmentThreadShell[] = [];
+  const settled: EnvironmentThreadShell[] = [];
+  for (const thread of threads) {
+    const supportsSettlement = input.supportsSettlement(thread.environmentId);
+    const supportsSnooze = input.supportsSnooze(thread.environmentId);
+    const threadKey = scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
+    const changeRequestState = input.changeRequestStateByKey.get(threadKey) ?? null;
+    // Snooze outranks everything, including a pin: "hide until Tuesday"
+    // temporarily suspends "keep on top". The pin survives underneath.
+    if (supportsSnooze && effectiveSnoozed(thread, { now: input.snoozeNow })) {
+      snoozed.push(thread);
+      // A pin otherwise overrides the lifecycle: pinned threads never
+      // auto-settle out of sight.
+    } else if (thread.pinnedAt != null) {
+      pinned.push(thread);
+    } else if (
+      supportsSettlement &&
+      effectiveSettled(thread, {
+        now: input.now,
+        autoSettleAfterDays: input.autoSettleAfterDays,
+        changeRequestState,
+      })
+    ) {
+      settled.push(thread);
+    } else {
+      active.push(thread);
+    }
+  }
+
+  const projects = groups
+    .filter(
+      (group) =>
+        scopedProjectKeys === null ||
+        group.memberProjectRefs.some((ref) =>
+          scopedProjectKeys.has(scopedProjectKeyOf(ref.environmentId, ref.projectId)),
+        ),
+    )
+    .map((group) => {
+      const groupKeys = new Set(
+        group.memberProjectRefs.map((ref) => scopedProjectKeyOf(ref.environmentId, ref.projectId)),
+      );
+      const belongs = (thread: EnvironmentThreadShell) =>
+        groupKeys.has(scopedProjectKeyOf(thread.environmentId, thread.projectId));
+      return {
+        group,
+        pinned: sortPinnedThreadsByOrderKey(pinned.filter(belongs)),
+        active: sortThreadsForSidebar(active.filter(belongs)),
+      };
+    });
+
+  return { projects, snoozed, settled };
+}
+
+// ── Settled dock (pivot-22) ─────────────────────────────────────────
+// Settled lives in a fixed dock below the scroll area. The tail renders in
+// pages: history shouldn't dominate the sidebar, and the common lookups are
+// recent. Expansion resets the page when the filter context changes.
+export const SETTLED_DOCK_INITIAL_COUNT = 10;
+export const SETTLED_DOCK_PAGE_COUNT = 25;
+
+/**
+ * First `visibleCount` settled rows. The open thread must never hide under
+ * "Show more": navigating into a deep settled thread (search, deep link)
+ * pulls its row into the visible tail so the highlight and the un-settle
+ * affordance stay reachable.
+ */
+export function resolveSettledDockRows<T extends { readonly id: string }>(input: {
+  settled: readonly T[];
+  visibleCount: number;
+  routeThreadKey: string | null;
+  threadKeyOf: (thread: T) => string;
+}): T[] {
+  const { settled, visibleCount, routeThreadKey, threadKeyOf } = input;
+  if (settled.length <= visibleCount) return [...settled];
+  const visible = settled.slice(0, visibleCount);
+  if (routeThreadKey !== null) {
+    const routeThread = settled
+      .slice(visibleCount)
+      .find((thread) => threadKeyOf(thread) === routeThreadKey);
+    if (routeThread !== undefined) visible.push(routeThread);
+  }
+  return visible;
 }

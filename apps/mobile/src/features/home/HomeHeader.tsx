@@ -1,4 +1,4 @@
-import type { EnvironmentId, SidebarThreadSortOrder } from "@t3tools/contracts";
+import type { EnvironmentId } from "@t3tools/contracts";
 import type { MenuAction } from "@react-native-menu/menu";
 import Constants from "expo-constants";
 import { NativeHeaderToolbar, NativeStackScreenOptions } from "../../native/StackHeader";
@@ -13,25 +13,18 @@ import { PiMark } from "../../components/PiMark";
 import { HOME_HORIZONTAL_INSET } from "../../lib/layoutMetrics";
 import { resolveMobileStageLabel } from "../../lib/mobileBranding";
 import { useThemeColor } from "../../lib/useThemeColor";
-import { useThreadListV2Enabled } from "../threads/use-thread-list-v2-enabled";
 import { useHardwareKeyboardCommand } from "../keyboard/hardwareKeyboardCommands";
 import { withNativeGlassHeaderItem } from "../layout/native-glass-header-items";
 import {
   createNativeMailSearchToolbarItem,
   NATIVE_MAIL_SEARCH_TOOLBAR_SUPPORTED,
 } from "../layout/native-mail-search-toolbar";
-import type { HomeProjectSortOrder } from "./homeThreadList";
 import { WorkspaceConnectionTitle } from "./WorkspaceConnectionTitle";
 import {
   buildHomeListFilterMenu,
   type HomeListFilterMenuEnvironment,
   type HomeListFilterMenuProject,
 } from "./home-list-filter-menu";
-import {
-  hasCustomHomeListOptions,
-  PROJECT_SORT_OPTIONS,
-  THREAD_SORT_OPTIONS,
-} from "./home-list-options";
 
 export type HomeHeaderEnvironment = HomeListFilterMenuEnvironment;
 
@@ -41,13 +34,9 @@ export function HomeHeader(props: {
   readonly searchQuery: string;
   readonly selectedEnvironmentId: EnvironmentId | null;
   readonly selectedProjectKey: string | null;
-  readonly projectSortOrder: HomeProjectSortOrder;
-  readonly threadSortOrder: SidebarThreadSortOrder;
   readonly onSearchQueryChange: (query: string) => void;
   readonly onEnvironmentChange: (environmentId: EnvironmentId | null) => void;
   readonly onProjectChange: (projectKey: string | null) => void;
-  readonly onProjectSortOrderChange: (sortOrder: HomeProjectSortOrder) => void;
-  readonly onThreadSortOrderChange: (sortOrder: SidebarThreadSortOrder) => void;
   readonly onOpenEnvironments: () => void;
   readonly onOpenSettings: () => void;
   readonly onStartNewTask: () => void;
@@ -70,13 +59,8 @@ function AndroidHomeHeader(props: HomeHeaderProps) {
   const iconColor = useThemeColor("--color-icon");
   const mutedColor = useThemeColor("--color-foreground-muted");
   const stageLabel = resolveMobileStageLabel(Constants.expoConfig?.extra?.appVariant);
-  // Thread List v2 lays the list out in fixed creation order, so the
-  // sort/group filter controls would be silently ignored — hide them and
-  // key the "customized" icon state off the environment filter alone.
-  const threadListV2Enabled = useThreadListV2Enabled();
-  const hasCustomListOptions = threadListV2Enabled
-    ? props.selectedEnvironmentId !== null || props.selectedProjectKey !== null
-    : hasCustomHomeListOptions(props);
+  const hasCustomListOptions =
+    props.selectedEnvironmentId !== null || props.selectedProjectKey !== null;
   const menuActions = useMemo<MenuAction[]>(
     () => [
       {
@@ -115,38 +99,8 @@ function AndroidHomeHeader(props: HomeHeaderProps) {
               ],
             },
           ] satisfies MenuAction[])),
-      ...(threadListV2Enabled
-        ? []
-        : ([
-            {
-              id: "project-sort",
-              title: "Sort projects",
-              subactions: PROJECT_SORT_OPTIONS.map((option) => ({
-                id: `project-sort:${option.value}`,
-                title: option.label,
-                state: checkedMenuState(props.projectSortOrder === option.value),
-              })),
-            },
-            {
-              id: "thread-sort",
-              title: "Sort threads",
-              subactions: THREAD_SORT_OPTIONS.map((option) => ({
-                id: `thread-sort:${option.value}`,
-                title: option.label,
-                state: checkedMenuState(props.threadSortOrder === option.value),
-              })),
-            },
-          ] satisfies MenuAction[])),
     ],
-    [
-      props.environments,
-      props.projectSortOrder,
-      props.projects,
-      props.selectedEnvironmentId,
-      props.selectedProjectKey,
-      props.threadSortOrder,
-      threadListV2Enabled,
-    ],
+    [props.environments, props.projects, props.selectedEnvironmentId, props.selectedProjectKey],
   );
   const handleMenuAction = useCallback(
     (event: { nativeEvent: { event: string } }) => {
@@ -177,20 +131,6 @@ function AndroidHomeHeader(props: HomeHeaderProps) {
         if (props.projects.some((project) => project.key === projectKey)) {
           props.onProjectChange(projectKey);
         }
-        return;
-      }
-
-      const projectSort = PROJECT_SORT_OPTIONS.find(
-        (option) => id === `project-sort:${option.value}`,
-      );
-      if (projectSort) {
-        props.onProjectSortOrderChange(projectSort.value);
-        return;
-      }
-
-      const threadSort = THREAD_SORT_OPTIONS.find((option) => id === `thread-sort:${option.value}`);
-      if (threadSort) {
-        props.onThreadSortOrderChange(threadSort.value);
         return;
       }
     },
@@ -301,22 +241,14 @@ function AndroidHomeHeader(props: HomeHeaderProps) {
 function IosHomeHeader(props: HomeHeaderProps) {
   const searchBarRef = useRef<SearchBarCommands>(null);
   const iconColor = useThemeColor("--color-icon");
-  // Thread List v2 lays the list out in fixed creation order, so the
-  // sort/group filter controls would be silently ignored — hide them and
-  // key the "customized" icon state off the environment filter alone.
-  const threadListV2Enabled = useThreadListV2Enabled();
-  const hasCustomListOptions = threadListV2Enabled
-    ? props.selectedEnvironmentId !== null || props.selectedProjectKey !== null
-    : hasCustomHomeListOptions(props);
+  const hasCustomListOptions =
+    props.selectedEnvironmentId !== null || props.selectedProjectKey !== null;
   const focusSearch = useCallback(() => {
     searchBarRef.current?.focus();
     return searchBarRef.current !== null;
   }, []);
   useHardwareKeyboardCommand("focusSearch", focusSearch);
-  const filterMenu = buildHomeListFilterMenu({
-    ...props,
-    listOrganization: !threadListV2Enabled,
-  });
+  const filterMenu = buildHomeListFilterMenu(props);
 
   return (
     <>
@@ -431,36 +363,6 @@ function IosHomeHeader(props: HomeHeaderProps) {
                 ))}
               </NativeHeaderToolbar.Menu>
             ) : null}
-
-            {threadListV2Enabled ? null : (
-              <NativeHeaderToolbar.Menu title="Sort projects">
-                <NativeHeaderToolbar.Label>Sort projects</NativeHeaderToolbar.Label>
-                {PROJECT_SORT_OPTIONS.map((option) => (
-                  <NativeHeaderToolbar.MenuAction
-                    key={option.value}
-                    isOn={props.projectSortOrder === option.value}
-                    onPress={() => props.onProjectSortOrderChange(option.value)}
-                  >
-                    <NativeHeaderToolbar.Label>{option.label}</NativeHeaderToolbar.Label>
-                  </NativeHeaderToolbar.MenuAction>
-                ))}
-              </NativeHeaderToolbar.Menu>
-            )}
-
-            {threadListV2Enabled ? null : (
-              <NativeHeaderToolbar.Menu title="Sort threads">
-                <NativeHeaderToolbar.Label>Sort threads</NativeHeaderToolbar.Label>
-                {THREAD_SORT_OPTIONS.map((option) => (
-                  <NativeHeaderToolbar.MenuAction
-                    key={option.value}
-                    isOn={props.threadSortOrder === option.value}
-                    onPress={() => props.onThreadSortOrderChange(option.value)}
-                  >
-                    <NativeHeaderToolbar.Label>{option.label}</NativeHeaderToolbar.Label>
-                  </NativeHeaderToolbar.MenuAction>
-                ))}
-              </NativeHeaderToolbar.Menu>
-            )}
           </NativeHeaderToolbar.Menu>
           <NativeHeaderToolbar.Spacer flexible />
           <NativeHeaderToolbar.Button

@@ -34,6 +34,9 @@ import {
   sortProjectsForSidebar,
   sortScopedProjectsForSidebar,
   shouldCreateNewThreadInCurrentProject,
+  partitionThreadsByProjectGroup,
+  resolveProjectExpansionState,
+  resolveSettledDockRows,
   THREAD_JUMP_HINT_SHOW_DELAY_MS,
 } from "./Sidebar.logic";
 import {
@@ -50,6 +53,8 @@ import {
   type Project,
   type Thread,
 } from "../types";
+import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/models";
+import type { SidebarProjectSnapshot } from "../sidebarProjectGrouping";
 
 const localEnvironmentId = EnvironmentId.make("environment-local");
 
@@ -1653,5 +1658,319 @@ describe("sortLogicalProjectsForSidebar", () => {
         (project) => project.projectKey,
       ),
     ).toEqual(["logical-newer", "logical-older"]);
+  });
+});
+
+const NOW = "2026-04-10T00:00:00.000Z";
+const STALE = "2026-04-06T23:59:59.999Z";
+
+function makePartitionShell(
+  overrides: Partial<EnvironmentThreadShell> = {},
+): EnvironmentThreadShell {
+  return {
+    id: ThreadId.make("thread-1"),
+    environmentId: localEnvironmentId,
+    projectId: ProjectId.make("project-1"),
+    title: "Thread",
+    modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.4" },
+    runtimeMode: "full-access",
+    interactionMode: "default",
+    branch: null,
+    worktreePath: null,
+    latestTurn: null,
+    createdAt: "2026-04-01T00:00:00.000Z",
+    updatedAt: NOW,
+    archivedAt: null,
+    settledOverride: null,
+    settledAt: null,
+    snoozedUntil: null,
+    snoozedAt: null,
+    pinnedAt: null,
+    pinOrderKey: null,
+    titleRegeneration: null,
+    session: null,
+    latestUserMessageAt: null,
+    hasPendingApprovals: false,
+    hasPendingUserInput: false,
+    hasActionableProposedPlan: false,
+    ...overrides,
+  };
+}
+
+function makeProjectSnapshot(
+  overrides: Partial<SidebarProjectSnapshot> = {},
+): SidebarProjectSnapshot {
+  return {
+    id: ProjectId.make("project-1"),
+    environmentId: localEnvironmentId,
+    title: "Project",
+    workspaceRoot: "/tmp/project",
+    repositoryIdentity: null,
+    defaultModelSelection: {
+      instanceId: ProviderInstanceId.make("codex"),
+      model: "gpt-5.4",
+    },
+    createdAt: "2026-03-09T10:00:00.000Z",
+    updatedAt: "2026-03-09T10:00:00.000Z",
+    scripts: [],
+    projectKey: "project-1",
+    displayName: "Project",
+    groupedProjectCount: 1,
+    environmentPresence: "local-only",
+    allRemoteMembersAreDesktopLocal: false,
+    memberProjects: [],
+    memberProjectRefs: [
+      { environmentId: localEnvironmentId, projectId: ProjectId.make("project-1") },
+    ],
+    remoteEnvironmentLabels: [],
+    ...overrides,
+  };
+}
+
+describe("partitionThreadsByProjectGroup", () => {
+  const alwaysSupports = () => true;
+  const runPartition = (input: {
+    threads: ReadonlyArray<EnvironmentThreadShell>;
+    groups: ReadonlyArray<SidebarProjectSnapshot>;
+    scopedProjectKeys?: Set<string> | null;
+  }) =>
+    partitionThreadsByProjectGroup({
+      threads: input.threads,
+      groups: input.groups,
+      scopedProjectKeys: input.scopedProjectKeys ?? null,
+      now: NOW,
+      snoozeNow: NOW,
+      autoSettleAfterDays: 3,
+      changeRequestStateByKey: new Map(),
+      supportsSettlement: alwaysSupports,
+      supportsSnooze: alwaysSupports,
+    });
+
+  const groupA = makeProjectSnapshot({
+    id: ProjectId.make("project-a"),
+    title: "Project A",
+    projectKey: "project-a",
+    displayName: "Project A",
+    memberProjectRefs: [
+      { environmentId: localEnvironmentId, projectId: ProjectId.make("project-a") },
+    ],
+  });
+  const groupB = makeProjectSnapshot({
+    id: ProjectId.make("project-b"),
+    title: "Project B",
+    projectKey: "project-b",
+    displayName: "Project B",
+    memberProjectRefs: [
+      { environmentId: localEnvironmentId, projectId: ProjectId.make("project-b") },
+    ],
+  });
+
+  it("nests pinned threads before active threads inside each project group", () => {
+    const active = makePartitionShell({
+      id: ThreadId.make("t-active"),
+      projectId: ProjectId.make("project-a"),
+      createdAt: "2026-04-02T00:00:00.000Z",
+    });
+    const pinned = makePartitionShell({
+      id: ThreadId.make("t-pinned"),
+      projectId: ProjectId.make("project-a"),
+      createdAt: "2026-04-01T00:00:00.000Z",
+      pinnedAt: "2026-04-03T00:00:00.000Z",
+      pinOrderKey: "aaaa",
+    });
+
+    const result = runPartition({ threads: [active, pinned], groups: [groupA] });
+
+    expect(result.projects).toHaveLength(1);
+    expect(result.projects[0]!.group.projectKey).toBe("project-a");
+    expect(result.projects[0]!.pinned.map((thread) => thread.id)).toEqual([
+      ThreadId.make("t-pinned"),
+    ]);
+    expect(result.projects[0]!.active.map((thread) => thread.id)).toEqual([
+      ThreadId.make("t-active"),
+    ]);
+  });
+
+  it("omits projects outside the active scope filter", () => {
+    const aThread = makePartitionShell({
+      id: ThreadId.make("t-a"),
+      projectId: ProjectId.make("project-a"),
+    });
+    const bThread = makePartitionShell({
+      id: ThreadId.make("t-b"),
+      projectId: ProjectId.make("project-b"),
+    });
+
+    const result = runPartition({
+      threads: [aThread, bThread],
+      groups: [groupA, groupB],
+      scopedProjectKeys: new Set([`${localEnvironmentId}:project-a`]),
+    });
+
+    expect(result.projects.map((project) => project.group.projectKey)).toEqual(["project-a"]);
+  });
+
+  it("keeps threadless groups as collapsed entries in group order", () => {
+    const aThread = makePartitionShell({
+      id: ThreadId.make("t-a"),
+      projectId: ProjectId.make("project-a"),
+    });
+
+    const result = runPartition({ threads: [aThread], groups: [groupA, groupB] });
+
+    expect(result.projects.map((project) => project.group.projectKey)).toEqual([
+      "project-a",
+      "project-b",
+    ]);
+    expect(result.projects[1]!.pinned).toEqual([]);
+    expect(result.projects[1]!.active).toEqual([]);
+  });
+
+  it("classifies snoozed and settled threads into the global shelves", () => {
+    const snoozed = makePartitionShell({
+      id: ThreadId.make("t-snoozed"),
+      projectId: ProjectId.make("project-a"),
+      snoozedAt: NOW,
+      snoozedUntil: "2026-04-20T00:00:00.000Z",
+    });
+    const settled = makePartitionShell({
+      id: ThreadId.make("t-settled"),
+      projectId: ProjectId.make("project-a"),
+      settledOverride: "settled",
+      settledAt: NOW,
+      latestUserMessageAt: STALE,
+    });
+    const active = makePartitionShell({
+      id: ThreadId.make("t-active"),
+      projectId: ProjectId.make("project-a"),
+    });
+
+    const result = runPartition({ threads: [active, snoozed, settled], groups: [groupA] });
+
+    expect(result.snoozed.map((thread) => thread.id)).toEqual([ThreadId.make("t-snoozed")]);
+    expect(result.settled.map((thread) => thread.id)).toEqual([ThreadId.make("t-settled")]);
+    expect(result.projects[0]!.pinned).toEqual([]);
+    expect(result.projects[0]!.active.map((thread) => thread.id)).toEqual([
+      ThreadId.make("t-active"),
+    ]);
+  });
+
+  it("sends a snoozed pin to the shelf, not the pinned block", () => {
+    const snoozedPinned = makePartitionShell({
+      id: ThreadId.make("t-snoozed-pinned"),
+      projectId: ProjectId.make("project-a"),
+      pinnedAt: NOW,
+      pinOrderKey: "aaaa",
+      snoozedAt: NOW,
+      snoozedUntil: "2026-04-20T00:00:00.000Z",
+    });
+
+    const result = runPartition({ threads: [snoozedPinned], groups: [groupA] });
+
+    expect(result.snoozed.map((thread) => thread.id)).toEqual([ThreadId.make("t-snoozed-pinned")]);
+    expect(result.projects[0]!.pinned).toEqual([]);
+  });
+
+  it("sorts active threads newest-first within the project", () => {
+    const older = makePartitionShell({
+      id: ThreadId.make("t-older"),
+      projectId: ProjectId.make("project-a"),
+      createdAt: "2026-04-01T00:00:00.000Z",
+    });
+    const newer = makePartitionShell({
+      id: ThreadId.make("t-newer"),
+      projectId: ProjectId.make("project-a"),
+      createdAt: "2026-04-05T00:00:00.000Z",
+    });
+
+    const result = runPartition({ threads: [older, newer], groups: [groupA] });
+
+    expect(result.projects[0]!.active.map((thread) => thread.id)).toEqual([
+      ThreadId.make("t-newer"),
+      ThreadId.make("t-older"),
+    ]);
+  });
+});
+
+describe("resolveProjectExpansionState", () => {
+  it("defaults projects with threads to expanded", () => {
+    expect(resolveProjectExpansionState("project-a", true)).toBe(true);
+  });
+
+  it("defaults empty projects to collapsed", () => {
+    expect(resolveProjectExpansionState("project-a", false)).toBe(false);
+  });
+});
+
+describe("resolveSettledDockRows", () => {
+  const threadKeyOf = (thread: EnvironmentThreadShell) => `${thread.environmentId}:${thread.id}`;
+  const makeSettledRows = (count: number) =>
+    Array.from({ length: count }, (_, index) =>
+      makePartitionShell({
+        id: ThreadId.make(`t-${index + 1}`),
+        settledOverride: "settled",
+        settledAt: NOW,
+      }),
+    );
+
+  it("returns every settled row within the visible count", () => {
+    const rows = makeSettledRows(2);
+
+    const visible = resolveSettledDockRows({
+      settled: rows,
+      visibleCount: 10,
+      routeThreadKey: null,
+      threadKeyOf,
+    });
+
+    expect(visible.map((thread) => thread.id)).toEqual([
+      ThreadId.make("t-1"),
+      ThreadId.make("t-2"),
+    ]);
+  });
+
+  it("caps the rows at the visible count", () => {
+    const rows = makeSettledRows(12);
+
+    const visible = resolveSettledDockRows({
+      settled: rows,
+      visibleCount: 10,
+      routeThreadKey: null,
+      threadKeyOf,
+    });
+
+    expect(visible.map((thread) => thread.id)).toEqual(
+      Array.from({ length: 10 }, (_, index) => ThreadId.make(`t-${index + 1}`)),
+    );
+  });
+
+  it("keeps the routed thread's row visible past the cap", () => {
+    const rows = makeSettledRows(12);
+
+    const visible = resolveSettledDockRows({
+      settled: rows,
+      visibleCount: 10,
+      routeThreadKey: "environment-local:t-12",
+      threadKeyOf,
+    });
+
+    expect(visible.map((thread) => thread.id)).toEqual([
+      ...Array.from({ length: 10 }, (_, index) => ThreadId.make(`t-${index + 1}`)),
+      ThreadId.make("t-12"),
+    ]);
+  });
+
+  it("does not duplicate the routed thread when it is already inside the cap", () => {
+    const rows = makeSettledRows(12);
+
+    const visible = resolveSettledDockRows({
+      settled: rows,
+      visibleCount: 10,
+      routeThreadKey: "environment-local:t-5",
+      threadKeyOf,
+    });
+
+    expect(visible).toHaveLength(10);
+    expect(visible.some((thread) => thread.id === ThreadId.make("t-5"))).toBe(true);
   });
 });

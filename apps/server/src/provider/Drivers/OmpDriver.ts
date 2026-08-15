@@ -454,6 +454,23 @@ export const OmpDriver: ProviderDriver<OmpSettings, OmpDriverEnv> = {
           }
           return project.value.workspaceRoot;
         });
+      const listProjectWorkspaces = () =>
+        snapshotQuery.getSnapshot().pipe(
+          Effect.mapError(
+            (cause) =>
+              new OmpCapabilitiesError({
+                reason: "failed to enumerate project workspaces for capabilities",
+                cause,
+              }),
+          ),
+          Effect.map((readModel) =>
+            readModel.projects.map((project) => ({
+              projectId: project.id,
+              cwd: project.workspaceRoot,
+              title: project.title,
+            })),
+          ),
+        );
       const capabilitiesService = new OmpCapabilitiesService(
         fs,
         pathService,
@@ -461,6 +478,7 @@ export const OmpDriver: ProviderDriver<OmpSettings, OmpDriverEnv> = {
         processRunner,
         ompConfigStore,
         resolveProjectCwd,
+        listProjectWorkspaces,
       );
       const adapter = new OmpAdapter(runtime, randomUUID, {
         resolveRoleModel,

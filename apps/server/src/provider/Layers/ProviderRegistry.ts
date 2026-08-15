@@ -757,10 +757,13 @@ export const ProviderRegistryLive = Layer.effect(
             onOpenUrl: (request) => input.onOpenUrl(request.launchUrl ?? request.url),
           });
         }),
-      ompCapabilitiesGetSnapshot: ({ instanceId, projectId }) =>
+      ompCapabilitiesGetSnapshot: ({ instanceId, projectId, includeAllProjects }) =>
         Effect.gen(function* () {
           const adapter = yield* resolveOmpAdapter(instanceId);
-          return yield* adapter.capabilitiesSnapshot(projectId);
+          return yield* adapter.capabilitiesSnapshot(
+            projectId,
+            includeAllProjects === true ? { includeAllProjects: true } : undefined,
+          );
         }).pipe(Effect.mapError(toOmpCapabilitiesError)),
       ompCapabilitiesWriteSetting: ({ instanceId, ...input }) =>
         Effect.gen(function* () {
@@ -786,6 +789,11 @@ export const ProviderRegistryLive = Layer.effect(
         Effect.gen(function* () {
           const adapter = yield* resolveOmpAdapter(instanceId);
           return yield* adapter.capabilitiesDeleteResource(input);
+        }).pipe(Effect.mapError(toOmpCapabilitiesError)),
+      ompCapabilitiesMoveItem: ({ instanceId, ...input }) =>
+        Effect.gen(function* () {
+          const adapter = yield* resolveOmpAdapter(instanceId);
+          return yield* adapter.capabilitiesMoveItem(input);
         }).pipe(Effect.mapError(toOmpCapabilitiesError)),
       get streamChanges() {
         return Stream.fromPubSub(changesPubSub);

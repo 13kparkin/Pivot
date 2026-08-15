@@ -43,6 +43,7 @@ export const RPC_REQUIRED_SCOPES = {
   [WS_METHODS.serverOmpCapabilitiesReadResource]: AuthOrchestrationReadScope,
   [WS_METHODS.serverOmpCapabilitiesWriteResource]: AuthOrchestrationOperateScope,
   [WS_METHODS.serverOmpCapabilitiesDeleteResource]: AuthOrchestrationOperateScope,
+  [WS_METHODS.serverOmpCapabilitiesMoveItem]: AuthOrchestrationOperateScope,
   [WS_METHODS.serverUpdateProvider]: AuthOrchestrationOperateScope,
   [WS_METHODS.serverUpdateServer]: AuthOrchestrationOperateScope,
   [WS_METHODS.serverUpdateServerWithProgress]: AuthOrchestrationOperateScope,
