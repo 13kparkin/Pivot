@@ -291,6 +291,47 @@ it.layer(NodeServices.layer)("OmpCapabilitiesService", (it) => {
       });
       const setCall = calls.find((c) => c.args[0] === "config" && c.args[1] === "set");
       expect(setCall?.args).toEqual(["config", "set", "modelRoles", '{"default":"openai/gpt-5"}']);
+  it.effect("parses raw string values into typed scalars for project-scope writes", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const agentDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-omp-agent-" });
+      const projectCwd = yield* fs.makeTempDirectoryScoped({ prefix: "t3-omp-project-" });
+      yield* fs.makeDirectory(path.join(projectCwd, ".omp"), { recursive: true });
+
+      const { runner } = makeRunner({ agentDir });
+      const service = yield* makeService({ agentDir, projectCwd, runner });
+
+      yield* service.writeSetting({
+        key: "autoResume",
+        value: "false",
+        scope: "project",
+        projectId: ProjectId.make("project-1"),
+      });
+      yield* service.writeSetting({
+        key: "threadCount",
+        value: "4",
+        scope: "project",
+        projectId: ProjectId.make("project-1"),
+      });
+      yield* service.writeSetting({
+        key: "theme.dark",
+        value: "titanium",
+        scope: "project",
+        projectId: ProjectId.make("project-1"),
+      });
+
+      const snapshot = yield* service.getSnapshot(ProjectId.make("project-1"));
+      const byKey = new Map(snapshot.settings.entries.map((entry) => [entry.key, entry]));
+      expect(byKey.get("autoResume")?.value).toBe(false);
+      expect(byKey.get("threadCount")?.value).toBe(4);
+      expect(byKey.get("theme.dark")?.value).toBe("titanium");
+
+      // The file stores typed scalars, not quoted strings.
+      const text = yield* fs.readFileString(path.join(projectCwd, ".omp", "config.yml"));
+      expect(text).toContain("autoResume: false");
+      expect(text).toContain("threadCount: 4");
+      expect(text).toContain("dark: titanium");
     }),
   );
 
