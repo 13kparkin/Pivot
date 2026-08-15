@@ -67,6 +67,27 @@ describe("resolveCapabilitiesProjectId", () => {
   it("returns null for no groups", () => {
     expect(resolveCapabilitiesProjectId([], ENV_LOCAL)).toBeNull();
   });
+
+  it("prefers an explicit projectKey over the first-project fallback", () => {
+    const groups = [
+      makeGroup("group-a", [makeMember(ENV_LOCAL, PROJECT_A)]),
+      makeGroup("group-b", [makeMember(ENV_LOCAL, PROJECT_B)]),
+    ];
+    expect(resolveCapabilitiesProjectId(groups, ENV_LOCAL, "group-b")).toBe(PROJECT_B);
+    expect(resolveCapabilitiesProjectId(groups, ENV_LOCAL, "group-a")).toBe(PROJECT_A);
+  });
+
+  it("returns null for an unknown projectKey", () => {
+    const groups = [makeGroup("group-a", [makeMember(ENV_LOCAL, PROJECT_A)])];
+    expect(resolveCapabilitiesProjectId(groups, ENV_LOCAL, "missing-group")).toBeNull();
+  });
+
+  it("resolves the explicit projectKey against the active environment's member", () => {
+    const groups = [
+      makeGroup("group-a", [makeMember(ENV_LOCAL, PROJECT_A), makeMember(ENV_REMOTE, PROJECT_B)]),
+    ];
+    expect(resolveCapabilitiesProjectId(groups, ENV_REMOTE, "group-a")).toBe(PROJECT_B);
+  });
 });
 
 const BASE_RESOURCE: OmpCapabilityResource = {
