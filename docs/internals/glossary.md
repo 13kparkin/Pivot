@@ -1,8 +1,8 @@
 # Glossary
 
-> For maintainers. Using T3 Code? See [docs/user](../user/).
+> For maintainers. Using Pivot? See [docs/user](../user/).
 
-This is a living glossary for T3 Code. It explains what common terms mean in this codebase.
+This is a living glossary for Pivot. It explains what common terms mean in this codebase.
 
 ## Table of contents
 

@@ -20,26 +20,10 @@ This starts the Pivot server on your machine and opens the local web app. Use
 ## Desktop App
 
 Download the latest release from
-[GitHub Releases](https://github.com/pingdotgg/t3code/releases), or install from a package
-registry.
+[GitHub Releases](https://github.com/13kparkin/Pivot/releases).
 
-Windows:
-
-```bash
-winget install T3Tools.T3Code
-```
-
-macOS:
-
-```bash
-brew install --cask t3-code
-```
-
-Arch Linux:
-
-```bash
-yay -S t3code-bin
-```
+Pivot is not published to winget, Homebrew, or the AUR yet — GitHub Releases is the
+desktop distribution channel.
 
 ## Providers
 

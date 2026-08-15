@@ -1,6 +1,6 @@
 # Environment Authentication Profile
 
-> For maintainers. Using T3 Code? See [docs/user](../user/).
+> For maintainers. Using Pivot? See [docs/user](../user/).
 
 The environment server and the relay use separate credentials, issuers, and trust
 boundaries. They intentionally use a similar OAuth-shaped model so that permission

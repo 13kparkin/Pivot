@@ -1,6 +1,6 @@
 # Provider architecture
 
-> For maintainers. Using T3 Code? See [docs/user](../user/).
+> For maintainers. Using Pivot? See [docs/user](../user/).
 
 A provider is the agent runtime that does the actual work. Pivot ships one built-in driver: omp.
 The orchestration layer does not know which driver is behind a thread; it consumes normalized
