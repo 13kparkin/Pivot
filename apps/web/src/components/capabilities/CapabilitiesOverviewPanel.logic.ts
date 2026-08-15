@@ -3,14 +3,24 @@ import type { EnvironmentId, OmpCapabilityResource, ProjectId } from "@t3tools/c
 import type { SidebarProjectSnapshot } from "../../sidebarProjectGrouping";
 
 /**
- * Resolve the project omp should operate on for the active environment:
- * the first group member whose project lives in that environment.
+ * Resolve the project omp should operate on for the active environment.
+ * An explicit `projectKey` (from the ?projectKey= capabilities search param)
+ * picks that group's member in the active environment; without one the first
+ * group member whose project lives in that environment wins, so the global
+ * entry (/capabilities without ?projectKey=) behaves exactly as before.
  */
 export function resolveCapabilitiesProjectId(
   groups: ReadonlyArray<SidebarProjectSnapshot>,
   environmentId: EnvironmentId | null,
+  projectKey?: string | null,
 ): ProjectId | null {
   if (environmentId === null) return null;
+  if (projectKey) {
+    const group = groups.find((candidate) => candidate.projectKey === projectKey) ?? null;
+    return (
+      group?.memberProjects.find((member) => member.environmentId === environmentId)?.id ?? null
+    );
+  }
   for (const group of groups) {
     for (const member of group.memberProjects) {
       if (member.environmentId === environmentId) return member.id;

@@ -248,10 +248,10 @@ function CapabilitiesSettingRow({
  * omp config settings surface: pick the write scope, see the precedence
  * ladder, and edit or reset individual settings.
  */
-export function CapabilitiesSettingsPanel() {
+export function CapabilitiesSettingsPanel({ projectKey = null }: { projectKey?: string | null }) {
   const environmentId = useActiveEnvironmentId();
   const groups = useSettingsProjectGroups();
-  const projectId = resolveCapabilitiesProjectId(groups, environmentId);
+  const projectId = resolveCapabilitiesProjectId(groups, environmentId, projectKey);
   const [scope, setScope] = useState<OmpCapabilityScope>("global");
   const [query, setQuery] = useState("");
   const [editingEntryKey, setEditingEntryKey] = useState<string | null>(null);

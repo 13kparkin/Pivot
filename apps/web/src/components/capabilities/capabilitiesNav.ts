@@ -70,3 +70,18 @@ export function searchCapabilities(
       normalizeSearchText(item.to).includes(normalizedQuery),
   );
 }
+
+/**
+ * Search params shared by every /capabilities route: `projectKey` scopes
+ * the surface to one logical project (the sidebar gear links here). Absent
+ * means the global entry — first project in the active environment.
+ */
+export interface CapabilitiesSearch {
+  readonly projectKey?: string;
+}
+
+export function validateCapabilitiesSearch(raw: Record<string, unknown>): CapabilitiesSearch {
+  return typeof raw.projectKey === "string" && raw.projectKey
+    ? { projectKey: raw.projectKey.slice(0, 200) }
+    : {};
+}

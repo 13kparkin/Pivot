@@ -1870,8 +1870,8 @@ export default function Sidebar() {
         setOpenMobile(false);
       }
       void router.navigate({
-        to: "/projects/$projectKey",
-        params: { projectKey: projectGroup.projectKey },
+        to: "/capabilities",
+        search: { projectKey: projectGroup.projectKey },
       });
     },
     [isMobile, router, setOpenMobile],

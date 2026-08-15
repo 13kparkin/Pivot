@@ -24,10 +24,10 @@ const EMPTY_OVERVIEW_SNAPSHOT_ATOM = Atom.make(AsyncResult.initial<never, never>
  * settings count, and the discovered capability resources with their
  * scope/provenance/status.
  */
-export function CapabilitiesOverviewPanel() {
+export function CapabilitiesOverviewPanel({ projectKey = null }: { projectKey?: string | null }) {
   const environmentId = useActiveEnvironmentId();
   const groups = useSettingsProjectGroups();
-  const projectId = resolveCapabilitiesProjectId(groups, environmentId);
+  const projectId = resolveCapabilitiesProjectId(groups, environmentId, projectKey);
   const result = useAtomValue(
     environmentId === null
       ? EMPTY_OVERVIEW_SNAPSHOT_ATOM

@@ -351,11 +351,17 @@ const PANEL_COPY: Readonly<
  * live in the omp agent directory; project items under the project's `.omp`
  * folder.
  */
-export function CapabilityItemsPanel({ kind }: { readonly kind: OmpCapabilityEditableKind }) {
+export function CapabilityItemsPanel({
+  kind,
+  projectKey = null,
+}: {
+  readonly kind: OmpCapabilityEditableKind;
+  readonly projectKey?: string | null;
+}) {
   const { title, description, itemLabel, scopeHint, shadowHint } = PANEL_COPY[kind];
   const environmentId = useActiveEnvironmentId();
   const groups = useSettingsProjectGroups();
-  const projectId = resolveCapabilitiesProjectId(groups, environmentId);
+  const projectId = resolveCapabilitiesProjectId(groups, environmentId, projectKey);
   const [query, setQuery] = useState("");
   const [editor, setEditor] = useState<EditorState | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<OmpCapabilityItem | null>(null);
