@@ -330,7 +330,7 @@ describe("MessagesTimeline", () => {
     expect(markup).not.toContain("(empty response)");
   });
 
-  it("expands the status chip for status-only assistant messages and skips empty-response", () => {
+  it("keeps the status chip collapsed by default for status-only messages and skips empty-response", () => {
     const markup = renderToStaticMarkup(
       <MessagesTimeline
         {...buildProps()}
@@ -355,9 +355,40 @@ describe("MessagesTimeline", () => {
     );
 
     expect(markup).toContain("Status");
-    expect(markup).toContain('aria-expanded="true"');
-    expect(markup).toContain("No background jobs running.");
+    expect(markup).toContain('aria-expanded="false"');
+    expect(markup).not.toContain("No background jobs running.");
     expect(markup).not.toContain("(empty response)");
+  });
+
+  it("keeps every status point hidden while the status chip is collapsed", () => {
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        {...buildProps()}
+        timelineEntries={[
+          {
+            id: "entry-assistant-multi-status",
+            kind: "message",
+            createdAt: MESSAGE_CREATED_AT,
+            message: {
+              id: MessageId.make("message-assistant-multi-status"),
+              role: "assistant",
+              text: "Done.",
+              statusText: "Fetching latest upstream.\nNo background jobs running.",
+              turnId: TurnId.make("turn-multi-status"),
+              createdAt: MESSAGE_CREATED_AT,
+              updatedAt: MESSAGE_CREATED_AT,
+              streaming: false,
+            },
+          },
+        ]}
+      />,
+    );
+
+    expect(markup).toContain("Done.");
+    expect(markup).toContain("Status");
+    expect(markup).toContain('aria-expanded="false"');
+    expect(markup).not.toContain("Fetching latest upstream.");
+    expect(markup).not.toContain("No background jobs running.");
   });
 
   it("treats only the strict list end as the live edge", async () => {

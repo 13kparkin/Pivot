@@ -4,6 +4,7 @@ import { type LegendListRef } from "@legendapp/list/react-native";
 import type { EnvironmentId, MessageId, ThreadId, TurnId } from "@t3tools/contracts";
 import { CHAT_LIST_ANCHOR_OFFSET, resolveChatListAnchoredEndSpace } from "@t3tools/shared/chatList";
 import { formatElapsed } from "@t3tools/shared/orchestrationTiming";
+import { splitStatusPoints } from "@t3tools/client-runtime/state/status-points";
 import { SymbolView } from "../../components/AppSymbol";
 import { HeaderHeightContext } from "@react-navigation/elements";
 import { useNavigation } from "@react-navigation/native";
@@ -976,7 +977,6 @@ function renderFeedEntry(
         {message.statusText ? (
           <AssistantStatusSection
             statusText={message.statusText}
-            initiallyExpanded={message.text.trim().length === 0}
             iconSubtleColor={iconSubtleColor}
             markdownStyles={styles}
             skills={props.skills}
@@ -1071,15 +1071,32 @@ const WorkingTimelineRow = memo(function WorkingTimelineRow(props: { readonly st
 
 function AssistantStatusSection(props: {
   readonly statusText: string;
-  readonly initiallyExpanded: boolean;
   readonly iconSubtleColor: ColorValue;
   readonly markdownStyles: MarkdownStyleSet;
   readonly skills?: ReadonlyArray<SelectableMarkdownSkill>;
   readonly onLinkPress: (href: string) => void;
 }) {
-  const [expanded, setExpanded] = useState(props.initiallyExpanded);
+  const points = splitStatusPoints(props.statusText);
+  const [expanded, setExpanded] = useState(false);
+  const [expandedPoints, setExpandedPoints] = useState<ReadonlySet<number>>(new Set());
   const colorScheme = useColorScheme();
   const pressedBackground = colorScheme === "dark" ? "rgba(255,255,255,0.05)" : "rgba(0,0,0,0.035)";
+
+  if (points.length === 0) {
+    return null;
+  }
+
+  const togglePoint = (index: number) => {
+    setExpandedPoints((previous) => {
+      const next = new Set(previous);
+      if (next.has(index)) {
+        next.delete(index);
+      } else {
+        next.add(index);
+      }
+      return next;
+    });
+  };
 
   return (
     <View className="-mx-1 mb-1 px-1 py-0">
@@ -1112,23 +1129,92 @@ function AssistantStatusSection(props: {
         <Text className="font-t3-medium text-xs text-foreground opacity-80">Status</Text>
       </Pressable>
       {expanded ? (
-        hasNativeSelectableMarkdownText() ? (
-          <SelectableMarkdownText
-            markdown={props.statusText}
-            skills={props.skills}
-            textStyle={props.markdownStyles.nativeTextStyle}
-            onLinkPress={props.onLinkPress}
+        <View className="flex-col">
+          {points.map((point, index) => (
+            <StatusPointRow
+              key={index}
+              point={point}
+              expanded={expandedPoints.has(index)}
+              iconSubtleColor={props.iconSubtleColor}
+              markdownStyles={props.markdownStyles}
+              skills={props.skills}
+              onLinkPress={props.onLinkPress}
+              onToggle={() => togglePoint(index)}
+            />
+          ))}
+        </View>
+      ) : null}
+    </View>
+  );
+}
+
+function StatusPointRow(props: {
+  readonly point: string;
+  readonly expanded: boolean;
+  readonly iconSubtleColor: ColorValue;
+  readonly markdownStyles: MarkdownStyleSet;
+  readonly skills?: ReadonlyArray<SelectableMarkdownSkill>;
+  readonly onLinkPress: (href: string) => void;
+  readonly onToggle: () => void;
+}) {
+  const colorScheme = useColorScheme();
+  const pressedBackground = colorScheme === "dark" ? "rgba(255,255,255,0.05)" : "rgba(0,0,0,0.035)";
+
+  return (
+    <View className="flex-col">
+      <Pressable
+        accessibilityRole="button"
+        accessibilityState={{ expanded: props.expanded }}
+        hitSlop={4}
+        onPress={() => {
+          void Haptics.selectionAsync();
+          props.onToggle();
+        }}
+        style={({ pressed }) => ({
+          backgroundColor: pressed ? pressedBackground : "transparent",
+        })}
+        className="min-h-8 flex-row items-center gap-1.5 rounded-md px-0.5 py-0"
+      >
+        <View className="h-[18px] w-5 items-center justify-center">
+          <SymbolView
+            name={
+              props.expanded
+                ? { ios: "chevron.up", android: "keyboard_arrow_up" }
+                : { ios: "chevron.down", android: "keyboard_arrow_down" }
+            }
+            size={12}
+            tintColor={props.iconSubtleColor}
+            type="monochrome"
           />
-        ) : (
-          <Markdown
-            options={{ gfm: true }}
-            renderers={props.markdownStyles.renderers}
-            styles={props.markdownStyles.styles}
-            theme={props.markdownStyles.theme}
-          >
-            {props.statusText}
-          </Markdown>
-        )
+        </View>
+        <Text
+          className="min-w-0 flex-1 text-xs text-foreground opacity-70"
+          numberOfLines={1}
+          ellipsizeMode="tail"
+        >
+          {props.point}
+        </Text>
+      </Pressable>
+      {props.expanded ? (
+        <View className="pl-5">
+          {hasNativeSelectableMarkdownText() ? (
+            <SelectableMarkdownText
+              markdown={props.point}
+              skills={props.skills}
+              textStyle={props.markdownStyles.nativeTextStyle}
+              onLinkPress={props.onLinkPress}
+            />
+          ) : (
+            <Markdown
+              options={{ gfm: true }}
+              renderers={props.markdownStyles.renderers}
+              styles={props.markdownStyles.styles}
+              theme={props.markdownStyles.theme}
+            >
+              {props.point}
+            </Markdown>
+          )}
+        </View>
       ) : null}
     </View>
   );
