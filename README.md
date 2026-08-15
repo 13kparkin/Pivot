@@ -11,6 +11,7 @@ CLI package: [`pivot-cli`](https://www.npmjs.com/package/pivot-cli) (bin: `pivot
 - **omp only**
 - Managed omp install and Settings login for omp accounts
 - Published as `pivot-cli` instead of `t3`
+- Heavily modified to work with omp and its plugins and functionality. The goal of being a wrapper around it surfacing its functionality into UI
 
 Credit for the architecture, clients, and product taste goes to the T3 Code maintainers. Pivot is an independent fork.
 
