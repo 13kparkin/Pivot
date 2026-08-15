@@ -95,6 +95,13 @@ export const OmpCapabilityItem = Schema.Struct({
   name: OmpCapabilityItemName,
   scope: OmpCapabilityItemScope,
   description: Schema.optionalKey(Schema.String),
+  /**
+   * Where the item was found, `~`-relative for display (never an absolute
+   * host path). Present only for global items living outside the omp agent
+   * directory (e.g. another CLI's skill roots); absent means the item is a
+   * native omp one and the app can edit/delete it in place.
+   */
+  sourceDir: Schema.optionalKey(TrimmedNonEmptyString),
 });
 export type OmpCapabilityItem = typeof OmpCapabilityItem.Type;
 
@@ -284,6 +291,33 @@ export const OmpDeleteResourceResult = Schema.Struct({
   snapshot: OmpCapabilitiesSnapshot,
 });
 export type OmpDeleteResourceResult = typeof OmpDeleteResourceResult.Type;
+
+/**
+ * Move a global item found in another CLI's root (e.g. `~/.cursor/skills`)
+ * into the omp agent directory so the app can manage it in place. Global
+ * only: project items already live in the project's `.omp` folder.
+ */
+export const OmpMoveItemInput = Schema.Struct({
+  kind: OmpCapabilityEditableKind,
+  name: OmpCapabilityItemName,
+});
+export type OmpMoveItemInput = typeof OmpMoveItemInput.Type;
+
+export const OmpMoveItemResult = Schema.Struct({
+  snapshot: OmpCapabilitiesSnapshot,
+});
+export type OmpMoveItemResult = typeof OmpMoveItemResult.Type;
+
+export const ServerOmpCapabilitiesMoveItemInput = Schema.Struct({
+  instanceId: Schema.optionalKey(ProviderInstanceId),
+  ...OmpMoveItemInput.fields,
+});
+export type ServerOmpCapabilitiesMoveItemInput = typeof ServerOmpCapabilitiesMoveItemInput.Type;
+
+export const ServerOmpCapabilitiesMoveItemResult = Schema.Struct({
+  snapshot: OmpCapabilitiesSnapshot,
+});
+export type ServerOmpCapabilitiesMoveItemResult = typeof ServerOmpCapabilitiesMoveItemResult.Type;
 
 // Transport (WS) schemas for rule/skill item I/O. `instanceId` is optional —
 // the server falls back to the default omp instance like the other omp RPCs.

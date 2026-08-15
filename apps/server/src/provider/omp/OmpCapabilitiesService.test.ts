@@ -284,6 +284,49 @@ it.layer(NodeServices.layer)("OmpCapabilitiesService", (it) => {
     }),
   );
 
+  it.effect(
+    "tags foreign-root skills with their source and moves them into the omp agent dir",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const agentDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-omp-agent-" });
+        yield* fs.makeDirectory(path.join(agentDir, "skills"), { recursive: true });
+        const home = yield* fs.makeTempDirectoryScoped({ prefix: "t3-omp-home-" });
+        const cursorRoot = path.join(home, ".cursor", "skills");
+        yield* fs.makeDirectory(path.join(cursorRoot, "import-me", "agents"), { recursive: true });
+        yield* fs.writeFileString(path.join(cursorRoot, "import-me", "SKILL.md"), "# Import me\n");
+        yield* fs.writeFileString(
+          path.join(cursorRoot, "import-me", "agents", "helper.md"),
+          "# Helper\n",
+        );
+        vi.stubEnv("HOME", home);
+
+        const { runner } = makeRunner({ agentDir });
+        const service = yield* makeService({ agentDir, runner });
+
+        const before = yield* service.getSnapshot();
+        const foreign = before.skills.find((skill) => skill.name === "import-me");
+        expect(foreign?.scope).toBe("global");
+        expect(foreign?.sourceDir).toBe("~/.cursor/skills");
+
+        const after = yield* service.moveItemToOmp({ kind: "skills", name: "import-me" });
+        const moved = after.skills.find((skill) => skill.name === "import-me");
+        expect(moved?.sourceDir).toBeUndefined();
+
+        // Files physically moved: present in the agent dir, gone from cursor.
+        const movedSkill = yield* fs.readFileString(
+          path.join(agentDir, "skills", "import-me", "SKILL.md"),
+        );
+        expect(movedSkill).toContain("Import me");
+        const helper = yield* fs.readFileString(
+          path.join(agentDir, "skills", "import-me", "agents", "helper.md"),
+        );
+        expect(helper).toContain("Helper");
+        expect(yield* fs.exists(path.join(cursorRoot, "import-me"))).toBe(false);
+      }),
+  );
+
   it.effect("exposes the settings surface from omp config list --json with masked secrets", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
