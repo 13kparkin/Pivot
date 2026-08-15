@@ -102,6 +102,13 @@ export const OmpCapabilityItem = Schema.Struct({
    * native omp one and the app can edit/delete it in place.
    */
   sourceDir: Schema.optionalKey(TrimmedNonEmptyString),
+  /**
+   * The owning project for project-scoped items surfaced by an
+   * all-projects snapshot (global capabilities view). The physical id the
+   * write/delete RPCs accept; `projectTitle` is the display label.
+   */
+  projectId: Schema.optionalKey(ProjectId),
+  projectTitle: Schema.optionalKey(TrimmedNonEmptyString),
 });
 export type OmpCapabilityItem = typeof OmpCapabilityItem.Type;
 
@@ -199,6 +206,12 @@ export class ServerOmpCapabilitiesError extends Schema.TaggedErrorClass<ServerOm
 export const ServerOmpCapabilitiesGetSnapshotInput = Schema.Struct({
   instanceId: Schema.optionalKey(ProviderInstanceId),
   projectId: Schema.optionalKey(ProjectId),
+  /**
+   * Include every project's items (tagged with their project), not just the
+   * global agent dir / a single project. Used by the global capabilities
+   * view so project-specific skills and rules stay visible, labeled.
+   */
+  includeAllProjects: Schema.optionalKey(Schema.Boolean),
 });
 export type ServerOmpCapabilitiesGetSnapshotInput =
   typeof ServerOmpCapabilitiesGetSnapshotInput.Type;

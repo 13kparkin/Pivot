@@ -86,18 +86,40 @@ function makeService(options: {
   readonly runner: ProcessRunner.ProcessRunner["Service"];
   readonly listJson?: Record<string, unknown>;
   readonly configStore?: OmpConfigStore;
+  readonly listProjectWorkspaces?: ReadonlyArray<{
+    readonly projectId: ProjectId;
+    readonly cwd: string;
+    readonly title: string;
+  }>;
 }) {
   return Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
     const store = options.configStore ?? new OmpConfigStore(fs, path, options.agentDir);
-    const service = new OmpCapabilitiesService(fs, path, OMP, options.runner, store, (projectId) =>
-      Effect.sync(() => {
-        if (options.projectCwd === undefined) {
-          throw new Error(`unexpected projectId ${projectId}`);
-        }
-        return options.projectCwd;
-      }),
+    const workspaces = options.listProjectWorkspaces;
+    const service = new OmpCapabilitiesService(
+      fs,
+      path,
+      OMP,
+      options.runner,
+      store,
+      (projectId) =>
+        Effect.sync(() => {
+          if (options.projectCwd === undefined) {
+            throw new Error(`unexpected projectId ${projectId}`);
+          }
+          return options.projectCwd;
+        }),
+      workspaces === undefined
+        ? undefined
+        : () =>
+            Effect.sync(() =>
+              workspaces.map((workspace) => ({
+                projectId: workspace.projectId,
+                cwd: workspace.cwd,
+                title: workspace.title,
+              })),
+            ),
     );
     return service;
   });
@@ -328,6 +350,75 @@ it.layer(NodeServices.layer)("OmpCapabilitiesService", (it) => {
         );
         expect(helper).toContain("Helper");
         expect(yield* fs.exists(path.join(cursorRoot, "import-me"))).toBe(false);
+      }),
+  );
+
+  it.effect(
+    "inventories skills and rules across every project when includeAllProjects is set",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const agentDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-omp-agent-" });
+        yield* fs.makeDirectory(path.join(agentDir, "skills", "global-skill"), { recursive: true });
+        yield* fs.writeFileString(
+          path.join(agentDir, "skills", "global-skill", "SKILL.md"),
+          "# Global\n",
+        );
+        const projectA = yield* fs.makeTempDirectoryScoped({ prefix: "t3-omp-proj-a-" });
+        yield* fs.makeDirectory(path.join(projectA, ".omp", "skills", "proj-a-skill"), {
+          recursive: true,
+        });
+        yield* fs.writeFileString(
+          path.join(projectA, ".omp", "skills", "proj-a-skill", "SKILL.md"),
+          "# A\n",
+        );
+        yield* fs.makeDirectory(path.join(projectA, ".omp", "rules"), { recursive: true });
+        yield* fs.writeFileString(path.join(projectA, ".omp", "rules", "proj-a-rule.md"), "# AR\n");
+        const projectB = yield* fs.makeTempDirectoryScoped({ prefix: "t3-omp-proj-b-" });
+        yield* fs.makeDirectory(path.join(projectB, ".omp", "skills", "proj-b-skill"), {
+          recursive: true,
+        });
+        yield* fs.writeFileString(
+          path.join(projectB, ".omp", "skills", "proj-b-skill", "SKILL.md"),
+          "# B\n",
+        );
+
+        const { runner } = makeRunner({ agentDir });
+        const service = yield* makeService({
+          agentDir,
+          runner,
+          listProjectWorkspaces: [
+            { projectId: ProjectId.make("project-a"), cwd: projectA, title: "Project A" },
+            { projectId: ProjectId.make("project-b"), cwd: projectB, title: "Project B" },
+          ],
+        });
+
+        const snapshot = yield* service.getSnapshot(undefined, { includeAllProjects: true });
+        const skillNames = new Map(snapshot.skills.map((skill) => [skill.name, skill]));
+        expect(skillNames.has("global-skill")).toBe(true);
+        expect(skillNames.get("proj-a-skill")).toMatchObject({
+          scope: "project",
+          projectId: ProjectId.make("project-a"),
+          projectTitle: "Project A",
+        });
+        expect(skillNames.get("proj-b-skill")).toMatchObject({
+          scope: "project",
+          projectId: ProjectId.make("project-b"),
+          projectTitle: "Project B",
+        });
+        const rule = snapshot.rules.find((item) => item.name === "proj-a-rule");
+        expect(rule).toMatchObject({
+          scope: "project",
+          projectId: ProjectId.make("project-a"),
+          projectTitle: "Project A",
+        });
+
+        // A single-project snapshot stays scoped to that project.
+        const single = yield* service.getSnapshot(ProjectId.make("project-a"));
+        const singleSkills = single.skills.map((skill) => skill.name);
+        expect(singleSkills).toContain("proj-a-skill");
+        expect(singleSkills).not.toContain("proj-b-skill");
       }),
   );
 
