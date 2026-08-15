@@ -246,19 +246,26 @@ function CapabilitiesSettingRow({
 
 /**
  * omp config settings surface: pick the write scope, see the precedence
- * ladder, and edit or reset individual settings.
+ * ladder, and edit or reset individual settings. With a project targeted
+ * (`projectKey`) the entries are the project's own config layer and writes
+ * are locked to the project scope.
  */
 export function CapabilitiesSettingsPanel({ projectKey = null }: { projectKey?: string | null }) {
   const environmentId = useActiveEnvironmentId();
   const groups = useSettingsProjectGroups();
   const projectId = resolveCapabilitiesProjectId(groups, environmentId, projectKey);
-  const [scope, setScope] = useState<OmpCapabilityScope>("global");
+  const projectLocked = projectKey !== null;
+  const [scope, setScope] = useState<OmpCapabilityScope>(projectLocked ? "project" : "global");
   const [query, setQuery] = useState("");
   const [editingEntryKey, setEditingEntryKey] = useState<string | null>(null);
 
-  // Project scope is only available when the active environment has a project.
-  const effectiveScope: OmpCapabilityScope =
-    scope === "project" && projectId === null ? "global" : scope;
+  // Project scope is only available when the active environment has a project;
+  // a targeted project view is always locked to the project scope.
+  const effectiveScope: OmpCapabilityScope = projectLocked
+    ? "project"
+    : scope === "project" && projectId === null
+      ? "global"
+      : scope;
 
   const snapshotAtom =
     environmentId === null
@@ -316,7 +323,9 @@ export function CapabilitiesSettingsPanel({ projectKey = null }: { projectKey?: 
           control={
             <Select
               value={effectiveScope}
+              disabled={projectLocked}
               onValueChange={(value) => {
+                if (projectLocked) return;
                 if (value === "global" || value === "project") setScope(value);
               }}
             >
@@ -324,9 +333,11 @@ export function CapabilitiesSettingsPanel({ projectKey = null }: { projectKey?: 
                 <SelectValue />
               </SelectTrigger>
               <SelectPopup align="end" alignItemWithTrigger={false}>
-                <SelectItem hideIndicator value="global">
-                  Global
-                </SelectItem>
+                {projectLocked ? null : (
+                  <SelectItem hideIndicator value="global">
+                    Global
+                  </SelectItem>
+                )}
                 <SelectItem hideIndicator value="project" disabled={projectId === null}>
                   Project
                 </SelectItem>

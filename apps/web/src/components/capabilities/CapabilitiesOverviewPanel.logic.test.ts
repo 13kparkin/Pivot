@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vite-plus/test";
 import {
   EnvironmentId,
+  type OmpCapabilitiesSnapshot,
+  type OmpCapabilityItem,
   type OmpCapabilityResource,
   ProjectId,
   type ProjectId as ProjectIdType,
@@ -13,6 +15,7 @@ import type {
 
 import {
   buildCapabilityRows,
+  buildProjectCapabilitiesOverviewCards,
   resolveCapabilitiesProjectId,
 } from "./CapabilitiesOverviewPanel.logic";
 
@@ -155,6 +158,74 @@ describe("buildCapabilityRows", () => {
       "global-skills",
       "project-config",
       "profile-hooks",
+    ]);
+  });
+});
+
+function item(name: string, scope: OmpCapabilityItem["scope"]): OmpCapabilityItem {
+  return { name, scope };
+}
+
+function snapshot(overrides: {
+  readonly settings?: number;
+  readonly skills?: ReadonlyArray<OmpCapabilityItem>;
+  readonly rules?: ReadonlyArray<OmpCapabilityItem>;
+}): OmpCapabilitiesSnapshot {
+  return {
+    agentDirLabel: "~/.omp/agent",
+    settings: {
+      entries: Array.from({ length: overrides.settings ?? 0 }, (_, index) => ({
+        key: `key-${index}`,
+        value: "value",
+        type: "string",
+        description: "",
+        masked: false,
+        scope: "project",
+      })),
+    },
+    resources: [],
+    skills: overrides.skills ?? [],
+    rules: overrides.rules ?? [],
+  };
+}
+
+describe("buildProjectCapabilitiesOverviewCards", () => {
+  it("counts only project-scoped skills and rules; settings count is the entries array as-is", () => {
+    const cards = buildProjectCapabilitiesOverviewCards(
+      snapshot({
+        settings: 2,
+        skills: [item("project-skill", "project"), item("global-skill", "global")],
+        rules: [item("project-rule", "project"), item("global-rule", "global")],
+      }),
+    );
+    expect(cards).toEqual([
+      {
+        to: "/capabilities/settings",
+        label: "Settings",
+        description: expect.any(String),
+        count: 2,
+      },
+      { to: "/capabilities/skills", label: "Skills", description: expect.any(String), count: 1 },
+      { to: "/capabilities/rules", label: "Rules", description: expect.any(String), count: 1 },
+    ]);
+  });
+
+  it("counts zero for every card when the snapshot holds only global items", () => {
+    const cards = buildProjectCapabilitiesOverviewCards(
+      snapshot({
+        skills: [item("global-skill", "global")],
+        rules: [item("global-rule", "global")],
+      }),
+    );
+    expect(cards.map((card) => card.count)).toEqual([0, 0, 0]);
+  });
+
+  it("keeps the launcher targets in settings/skills/rules order", () => {
+    const cards = buildProjectCapabilitiesOverviewCards(snapshot({}));
+    expect(cards.map((card) => card.to)).toEqual([
+      "/capabilities/settings",
+      "/capabilities/skills",
+      "/capabilities/rules",
     ]);
   });
 });

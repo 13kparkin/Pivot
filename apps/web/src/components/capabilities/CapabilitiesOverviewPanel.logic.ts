@@ -1,4 +1,9 @@
-import type { EnvironmentId, OmpCapabilityResource, ProjectId } from "@t3tools/contracts";
+import type {
+  EnvironmentId,
+  OmpCapabilitiesSnapshot,
+  OmpCapabilityResource,
+  ProjectId,
+} from "@t3tools/contracts";
 
 import type { SidebarProjectSnapshot } from "../../sidebarProjectGrouping";
 
@@ -74,4 +79,48 @@ export function buildCapabilityRows(
         SCOPE_ORDER[a.resource.scope] - SCOPE_ORDER[b.resource.scope] ||
         a.resource.kind.localeCompare(b.resource.kind),
     );
+}
+
+/** Sections the project-scoped overview launches into. */
+export type CapabilitiesOverviewCardTarget =
+  | "/capabilities/settings"
+  | "/capabilities/skills"
+  | "/capabilities/rules";
+
+export interface CapabilitiesOverviewCard {
+  readonly to: CapabilitiesOverviewCardTarget;
+  readonly label: string;
+  readonly description: string;
+  readonly count: number;
+}
+
+/**
+ * Launcher cards for the project-scoped overview. Counts are project-only:
+ * settings entries arrive pre-scoped from the server (the project's own
+ * config layer), while skills/rules still carry global items — only
+ * `scope === "project"` items count toward those cards.
+ */
+export function buildProjectCapabilitiesOverviewCards(
+  snapshot: OmpCapabilitiesSnapshot,
+): ReadonlyArray<CapabilitiesOverviewCard> {
+  return [
+    {
+      to: "/capabilities/settings",
+      label: "Settings",
+      description: "Edit the omp settings this project overrides.",
+      count: snapshot.settings.entries.length,
+    },
+    {
+      to: "/capabilities/skills",
+      label: "Skills",
+      description: "Manage the skills this project can use.",
+      count: snapshot.skills.filter((item) => item.scope === "project").length,
+    },
+    {
+      to: "/capabilities/rules",
+      label: "Rules",
+      description: "Manage the rules loaded for this project.",
+      count: snapshot.rules.filter((item) => item.scope === "project").length,
+    },
+  ];
 }

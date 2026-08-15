@@ -132,6 +132,17 @@ const SCOPE_ORDER: Readonly<Record<OmpCapabilityItem["scope"], number>> = {
   project: 1,
 };
 
+/**
+ * Keep only project-scoped items. The snapshot's skills/rules arrays still
+ * carry global items; the project capabilities screen surfaces just the
+ * project's own.
+ */
+export function projectScopeOnly(
+  items: ReadonlyArray<OmpCapabilityItem>,
+): ReadonlyArray<OmpCapabilityItem> {
+  return items.filter((item) => item.scope === "project");
+}
+
 export interface ProjectCapabilityItemRow extends OmpCapabilityItem {
   readonly scopeLabel: string;
   /** Project item overriding a same-named global item (rules shadow, skills coexist). */

@@ -36,6 +36,7 @@ import {
   isValidItemName,
   NEW_RULE_TEMPLATE,
   NEW_SKILL_TEMPLATE,
+  projectScopeOnly,
   withTemplateName,
 } from "./ProjectCapabilitiesRouteScreen.logic";
 
@@ -78,8 +79,9 @@ function failureMessage(cause: Cause.Cause<unknown>): string {
  * Project-scoped omp capabilities (settings, skills, rules). Opened by the
  * sidebar project-row gear with the active environment's member projectId;
  * every mutation carries that projectId so writes land in the project's
- * `.omp` (the server resolves the trusted cwd). Global items render as
- * read-only context; project-scope items are editable.
+ * `.omp` (the server resolves the trusted cwd). The snapshot's settings are
+ * the project's own config layer and skills/rules are filtered to the
+ * project's items — global items never appear on this screen.
  */
 export function ProjectCapabilitiesRouteScreen(props: ProjectCapabilitiesRouteProps) {
   const navigation = useNavigation();
@@ -102,11 +104,11 @@ export function ProjectCapabilitiesRouteScreen(props: ProjectCapabilitiesRoutePr
     [snapshot],
   );
   const skillRows = useMemo(
-    () => (snapshot === null ? [] : buildCapabilityItemRows(snapshot.skills)),
+    () => (snapshot === null ? [] : buildCapabilityItemRows(projectScopeOnly(snapshot.skills))),
     [snapshot],
   );
   const ruleRows = useMemo(
-    () => (snapshot === null ? [] : buildCapabilityItemRows(snapshot.rules)),
+    () => (snapshot === null ? [] : buildCapabilityItemRows(projectScopeOnly(snapshot.rules))),
     [snapshot],
   );
 

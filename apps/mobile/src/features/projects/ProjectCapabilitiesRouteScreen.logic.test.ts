@@ -14,6 +14,7 @@ import {
   buildWriteSettingInput,
   canEditEntry,
   isValidItemName,
+  projectScopeOnly,
   resolveProjectCapabilitiesTarget,
   withTemplateName,
 } from "./ProjectCapabilitiesRouteScreen.logic";
@@ -205,6 +206,25 @@ describe("item name + template helpers", () => {
     expect(isValidItemName("has space")).toBe(false);
     expect(isValidItemName("")).toBe(false);
     expect(withTemplateName("name: {{name}}", "fix-login")).toBe("name: fix-login");
+  });
+});
+
+describe("projectScopeOnly", () => {
+  it("keeps project items and drops global ones", () => {
+    expect(
+      projectScopeOnly([
+        { name: "global-rule", scope: "global" },
+        { name: "project-rule", scope: "project" },
+        { name: "another-project", scope: "project" },
+      ] as OmpCapabilityItem[]),
+    ).toEqual([
+      { name: "project-rule", scope: "project" },
+      { name: "another-project", scope: "project" },
+    ]);
+  });
+
+  it("returns an empty array for a global-only snapshot", () => {
+    expect(projectScopeOnly([{ name: "global-rule", scope: "global" }])).toEqual([]);
   });
 });
 

@@ -67,6 +67,8 @@ interface ItemEditorDialogProps {
   readonly kind: OmpCapabilityEditableKind;
   readonly itemLabel: string;
   readonly editor: EditorState;
+  /** Project view: creates are locked to the project scope (no Global option). */
+  readonly projectLocked: boolean;
   readonly projectId: ProjectId | null;
   readonly environmentId: EnvironmentId;
   readonly onClose: () => void;
@@ -77,6 +79,7 @@ function ItemEditorDialog({
   kind,
   itemLabel,
   editor,
+  projectLocked,
   projectId,
   environmentId,
   onClose,
@@ -84,7 +87,9 @@ function ItemEditorDialog({
 }: ItemEditorDialogProps) {
   const isEdit = editor.mode === "edit";
   const [name, setName] = useState(isEdit ? editor.item.name : "");
-  const [scope, setScope] = useState<OmpCapabilityItemScope>(isEdit ? editor.item.scope : "global");
+  const [scope, setScope] = useState<OmpCapabilityItemScope>(
+    projectLocked ? "project" : isEdit ? editor.item.scope : "global",
+  );
   const [content, setContent] = useState(
     isEdit ? "" : kind === "rules" ? NEW_RULE_TEMPLATE : withTemplateName(NEW_SKILL_TEMPLATE, ""),
   );
@@ -146,7 +151,13 @@ function ItemEditorDialog({
   }, [editor, environmentId, isEdit, itemLabel, kind, projectId, readResource]);
 
   const nameError = name.trim().length === 0 || !isValidItemName(name.trim());
-  const canSave = !loading && !saving && !nameError && content.trim().length > 0;
+  const canSave =
+    !loading &&
+    !saving &&
+    !nameError &&
+    content.trim().length > 0 &&
+    // A project-scoped create needs the resolved project to write into.
+    (!projectLocked || projectId !== null);
 
   const save = async () => {
     const trimmedName = name.trim();
@@ -222,7 +233,7 @@ function ItemEditorDialog({
               <span className="mb-1.5 block text-xs font-medium text-foreground">Scope</span>
               <Select
                 value={scope}
-                disabled={isEdit}
+                disabled={isEdit || projectLocked}
                 onValueChange={(value) => {
                   if (value === "global" || value === "project") setScope(value);
                 }}
@@ -231,9 +242,11 @@ function ItemEditorDialog({
                   <SelectValue />
                 </SelectTrigger>
                 <SelectPopup align="start" alignItemWithTrigger={false}>
-                  <SelectItem hideIndicator value="global">
-                    Global
-                  </SelectItem>
+                  {projectLocked ? null : (
+                    <SelectItem hideIndicator value="global">
+                      Global
+                    </SelectItem>
+                  )}
                   <SelectItem hideIndicator value="project" disabled={projectId === null}>
                     Project
                   </SelectItem>
@@ -349,7 +362,8 @@ const PANEL_COPY: Readonly<
  * Rules/skills editor for the active omp environment: one list for every
  * global and project item, with search, create, edit and delete. Global items
  * live in the omp agent directory; project items under the project's `.omp`
- * folder.
+ * folder. With a project targeted (`projectKey`), only that project's items
+ * are listed and creates are locked to the project scope.
  */
 export function CapabilityItemsPanel({
   kind,
@@ -362,6 +376,7 @@ export function CapabilityItemsPanel({
   const environmentId = useActiveEnvironmentId();
   const groups = useSettingsProjectGroups();
   const projectId = resolveCapabilitiesProjectId(groups, environmentId, projectKey);
+  const projectLocked = projectKey !== null;
   const [query, setQuery] = useState("");
   const [editor, setEditor] = useState<EditorState | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<OmpCapabilityItem | null>(null);
@@ -414,10 +429,11 @@ export function CapabilityItemsPanel({
     );
   }
 
-  const rows = filterItemRows(
-    buildItemRows(kind === "rules" ? snapshot.rules : snapshot.skills),
-    query,
-  );
+  // Project snapshots still carry global items; project views surface only
+  // the project's own rules/skills.
+  const items = kind === "rules" ? snapshot.rules : snapshot.skills;
+  const sourceItems = projectLocked ? items.filter((item) => item.scope === "project") : items;
+  const rows = filterItemRows(buildItemRows(sourceItems), query);
   const searching = query.trim().length > 0;
 
   const confirmDelete = async () => {
@@ -540,6 +556,7 @@ export function CapabilityItemsPanel({
           kind={kind}
           itemLabel={itemLabel}
           editor={editor}
+          projectLocked={projectLocked}
           projectId={projectId}
           environmentId={environmentId}
           onClose={() => setEditor(null)}
