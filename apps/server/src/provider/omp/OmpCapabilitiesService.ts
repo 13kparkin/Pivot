@@ -20,6 +20,7 @@ import {
   OmpCapabilitiesError,
   OmpCapabilitiesSnapshot,
   OmpCapabilityEditableKind,
+  OmpMoveItemInput,
   OmpCapabilityItem,
   OmpCapabilityItemScope,
   OmpCapabilityKind,
@@ -356,6 +357,87 @@ export class OmpCapabilitiesService {
     });
   }
 
+  /**
+   * Move a global skill found in another CLI's root (cursor-compatible dirs)
+   * into the omp agent directory, copying the tree (dereferencing symlinks)
+   * and removing the source entry. Native omp skills and project skills are
+   * already in their `.omp` homes and never need moving.
+   */
+  public moveItemToOmp(
+    input: OmpMoveItemInput,
+  ): Effect.Effect<OmpCapabilitiesSnapshot, OmpCapabilitiesError> {
+    return Effect.gen({ self: this }, function* () {
+      if (input.kind !== "skills") {
+        return yield* new OmpCapabilitiesError({
+          reason: `only skills from other CLI roots can be moved (${input.kind} are already in their .omp home)`,
+        });
+      }
+      const agentDir = yield* this.resolveAgentDir();
+      let sourceEntry: string | undefined;
+      for (const root of cursorSkillRoots(NodeOS.homedir())) {
+        const candidate = this.#path.join(root, input.name);
+        if (yield* this.#fileSystem.exists(candidate)) {
+          sourceEntry = candidate;
+          break;
+        }
+      }
+      if (sourceEntry === undefined) {
+        return yield* new OmpCapabilitiesError({
+          reason: `no skill named ${input.name} in the other CLI skill directories`,
+        });
+      }
+      const target = this.#path.join(agentDir, "skills", input.name);
+      if (yield* this.#fileSystem.exists(target)) {
+        return yield* new OmpCapabilitiesError({
+          reason: `a skill named ${input.name} already exists in the omp agent directory`,
+        });
+      }
+      yield* this.copyItemTree(sourceEntry, target);
+      yield* this.removeItemDir(sourceEntry);
+      return yield* this.getSnapshot();
+    }).pipe(
+      Effect.mapError(
+        (cause) =>
+          new OmpCapabilitiesError({
+            reason: "failed to move the skill into the omp agent directory",
+            cause,
+          }),
+      ),
+    );
+  }
+
+  /** Recursive copy that dereferences symlinked skill entries (cp -rL). */
+  private copyItemTree(source: string, target: string): Effect.Effect<void, OmpCapabilitiesError> {
+    return Effect.gen({ self: this }, function* () {
+      yield* this.#fileSystem.makeDirectory(target, { recursive: true });
+      const entries = yield* this.#fileSystem.readDirectory(source);
+      for (const entry of entries) {
+        const from = this.#path.join(source, entry);
+        const to = this.#path.join(target, entry);
+        const info = yield* this.#fileSystem.stat(from);
+        if (info.type === "Directory") {
+          yield* this.copyItemTree(from, to);
+        } else {
+          yield* this.#fileSystem.copyFile(from, to);
+        }
+      }
+    }).pipe(
+      Effect.mapError(
+        (cause) =>
+          new OmpCapabilitiesError({
+            reason: "failed to move the skill into the omp agent directory",
+            cause,
+          }),
+      ),
+    );
+  }
+
+  /** `~`-relative display label; never an absolute host path on the wire. */
+  private tildePathLabel(dir: string): string {
+    const home = NodeOS.homedir();
+    return dir.startsWith(home) ? `~${dir.slice(home.length)}` : dir;
+  }
+
   private readSettingsSurface(
     projectCwd?: string,
   ): Effect.Effect<
@@ -579,7 +661,9 @@ export class OmpCapabilitiesService {
       // surface lists what the agent actually sees. The dirs already contain
       // the skill folders directly (no nested `skills/` subdir).
       for (const root of cursorSkillRoots(NodeOS.homedir())) {
-        skills.push(...(yield* this.listItemKindDir("skills", root, "global")));
+        skills.push(
+          ...(yield* this.listItemKindDir("skills", root, "global", this.tildePathLabel(root))),
+        );
       }
       return { skills, rules };
     }).pipe(
@@ -606,6 +690,7 @@ export class OmpCapabilitiesService {
     kind: OmpCapabilityEditableKind,
     kindDir: string,
     scope: OmpCapabilityItemScope,
+    sourceDir?: string,
   ): Effect.Effect<ReadonlyArray<OmpCapabilityItem>, OmpCapabilitiesError> {
     return Effect.gen({ self: this }, function* () {
       const dirExists = yield* this.existsPath(kindDir);
@@ -619,7 +704,9 @@ export class OmpCapabilitiesService {
         const item = Option.getOrUndefined(
           yield* Effect.option(this.itemFromEntry(kind, kindDir, scope, entry)),
         );
-        if (item !== undefined) items.push(item);
+        if (item !== undefined) {
+          items.push(sourceDir === undefined ? item : { ...item, sourceDir });
+        }
       }
       return items.sort((a, b) => a.name.localeCompare(b.name));
     }).pipe(
