@@ -147,7 +147,7 @@ function CapabilitiesSettingRow({
           <span className="font-mono text-muted-foreground">{entry.displayValue}</span>
         )}
       </td>
-      <td className="px-3 py-2 text-right">
+      <td className="px-3 py-2 pe-6 text-right">
         {projectView && !isProjectEntry ? (
           <Button
             type="button"
@@ -446,14 +446,14 @@ export function CapabilitiesSettingsPanel({ projectKey = null }: { projectKey?: 
           )
         ) : (
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[760px] text-left text-xs">
+            <table className="w-max min-w-full text-left text-xs">
               <thead className="border-b border-border/60 text-[11px] uppercase tracking-[0.08em] text-muted-foreground/70">
                 <tr>
                   <th className="px-4 py-2 font-semibold sm:pl-5">Key</th>
                   <th className="px-3 py-2 font-semibold">Type</th>
                   <th className="px-3 py-2 font-semibold">Description</th>
                   <th className="px-3 py-2 font-semibold">Value</th>
-                  <th className="px-3 py-2 text-right font-semibold">Actions</th>
+                  <th className="px-3 py-2 pe-6 text-right font-semibold">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-border/60">

@@ -596,13 +596,13 @@ export function CapabilityItemsPanel({
           />
         ) : (
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[640px] text-left text-xs">
+            <table className="w-max min-w-full text-left text-xs">
               <thead className="border-b border-border/60 text-[11px] uppercase tracking-[0.08em] text-muted-foreground/70">
                 <tr>
                   <th className="px-4 py-2 font-semibold sm:pl-5">Name</th>
                   <th className="px-3 py-2 font-semibold">Description</th>
                   <th className="px-3 py-2 font-semibold">Scope</th>
-                  <th className="px-3 py-2 text-right font-semibold">Actions</th>
+                  <th className="px-3 py-2 pe-6 text-right font-semibold">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-border/60">
@@ -629,7 +629,7 @@ export function CapabilityItemsPanel({
                         <span className="line-clamp-2">{row.description}</span>
                       </td>
                       <td className="px-3 py-2 text-muted-foreground">{row.scopeLabel}</td>
-                      <td className="px-3 py-2 text-right">
+                      <td className="px-3 py-2 pe-6 text-right">
                         <ItemRowActions
                           item={row}
                           itemLabel={itemLabel}
