@@ -345,7 +345,8 @@ const make = Effect.gen(function* () {
       | "provider.turn.interrupt.failed"
       | "provider.approval.respond.failed"
       | "provider.user-input.respond.failed"
-      | "provider.session.stop.failed";
+      | "provider.session.stop.failed"
+      | "provider.text-generation.failed";
     readonly summary: string;
     readonly detail: string;
     readonly turnId: TurnId | null;
@@ -800,6 +801,7 @@ const make = Effect.gen(function* () {
     readonly worktreePath: string | null;
     readonly messageText: string;
     readonly attachments?: ReadonlyArray<ChatAttachment>;
+    readonly createdAt: string;
   }) {
     if (!input.branch || !input.worktreePath) {
       return;
@@ -843,12 +845,27 @@ const make = Effect.gen(function* () {
       yield* vcsStatusBroadcaster.refreshStatus(cwd).pipe(Effect.ignoreCause({ log: true }));
     }).pipe(
       Effect.catchCause((cause) =>
-        Effect.logWarning("provider command reactor failed to generate or rename worktree branch", {
+        appendProviderFailureActivity({
           threadId: input.threadId,
-          cwd,
-          oldBranch,
-          cause: Cause.pretty(cause),
-        }),
+          kind: "provider.text-generation.failed",
+          summary: "Could not name this branch",
+          detail: formatFailureDetail(cause),
+          turnId: null,
+          createdAt: input.createdAt,
+        }).pipe(
+          Effect.catch(() => Effect.void),
+          Effect.andThen(
+            Effect.logWarning(
+              "provider command reactor failed to generate or rename worktree branch",
+              {
+                threadId: input.threadId,
+                cwd,
+                oldBranch,
+                cause: Cause.pretty(cause),
+              },
+            ),
+          ),
+        ),
       ),
     );
   });
@@ -860,6 +877,7 @@ const make = Effect.gen(function* () {
       readonly messageText: string;
       readonly attachments?: ReadonlyArray<ChatAttachment>;
       readonly titleSeed?: string;
+      readonly createdAt: string;
     }) {
       const attachments = input.attachments ?? [];
       yield* Effect.gen(function* () {
@@ -888,11 +906,26 @@ const make = Effect.gen(function* () {
         });
       }).pipe(
         Effect.catchCause((cause) =>
-          Effect.logWarning("provider command reactor failed to generate or rename thread title", {
+          appendProviderFailureActivity({
             threadId: input.threadId,
-            cwd: input.cwd,
-            cause: Cause.pretty(cause),
-          }),
+            kind: "provider.text-generation.failed",
+            summary: "Could not name this thread",
+            detail: formatFailureDetail(cause),
+            turnId: null,
+            createdAt: input.createdAt,
+          }).pipe(
+            Effect.catch(() => Effect.void),
+            Effect.andThen(
+              Effect.logWarning(
+                "provider command reactor failed to generate or rename thread title",
+                {
+                  threadId: input.threadId,
+                  cwd: input.cwd,
+                  cause: Cause.pretty(cause),
+                },
+              ),
+            ),
+          ),
         ),
       );
     },
@@ -1018,10 +1051,23 @@ const make = Effect.gen(function* () {
           if (Cause.hasInterruptsOnly(cause)) {
             return Effect.failCause(cause);
           }
-          return Effect.logWarning("provider command reactor failed to regenerate thread title", {
+          return appendProviderFailureActivity({
             threadId: event.payload.threadId,
-            cause: Cause.pretty(cause),
-          }).pipe(Effect.as({ _tag: "Completed", title: undefined } as const));
+            kind: "provider.text-generation.failed",
+            summary: "Could not rename this thread",
+            detail: formatFailureDetail(cause),
+            turnId: null,
+            createdAt: event.occurredAt,
+          }).pipe(
+            Effect.catch(() => Effect.void),
+            Effect.andThen(
+              Effect.logWarning("provider command reactor failed to regenerate thread title", {
+                threadId: event.payload.threadId,
+                cause: Cause.pretty(cause),
+              }),
+            ),
+            Effect.as({ _tag: "Completed", title: undefined } as const),
+          );
         }),
       );
       if (result._tag === "Superseded") {
@@ -1113,6 +1159,7 @@ const make = Effect.gen(function* () {
         threadId: event.payload.threadId,
         branch: thread.branch,
         worktreePath: thread.worktreePath,
+        createdAt: event.payload.createdAt,
         ...generationInput,
       }).pipe(Effect.forkScoped);
 
@@ -1120,6 +1167,7 @@ const make = Effect.gen(function* () {
         yield* maybeGenerateThreadTitleForFirstTurn({
           threadId: event.payload.threadId,
           cwd: generationCwd,
+          createdAt: event.payload.createdAt,
           ...generationInput,
         }).pipe(Effect.forkScoped);
       }
