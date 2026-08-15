@@ -189,13 +189,19 @@ export function CapabilitiesSettingsPanel({ projectKey = null }: { projectKey?: 
   const writeSetting = useAtomCommand(serverEnvironment.capabilitiesWriteSetting, {
     label: "capabilities-write-setting",
   });
-  const addProjectSetting = async () => {
+  const addSetting = async () => {
     const key = newSettingKey.trim();
-    if (environmentId === null || !isValidSettingKey(key) || projectId === null) return;
+    if (environmentId === null || !isValidSettingKey(key)) return;
+    if (effectiveScope === "project" && projectId === null) return;
     setAddingBusy(true);
     const result = await writeSetting({
       environmentId,
-      input: buildWriteSettingInput({ key, value: newSettingValue, scope: "project", projectId }),
+      input: buildWriteSettingInput({
+        key,
+        value: newSettingValue,
+        scope: effectiveScope,
+        projectId,
+      }),
     });
     setAddingBusy(false);
     if (result._tag === "Failure") {
@@ -316,20 +322,18 @@ export function CapabilitiesSettingsPanel({ projectKey = null }: { projectKey?: 
               className="h-8 pl-8"
             />
           </div>
-          {projectLocked ? (
-            <Button
-              type="button"
-              size="sm"
-              variant="outline"
-              className="h-8 shrink-0 px-2.5 text-xs"
-              onClick={() => setAddingSetting((open) => !open)}
-            >
-              <PlusIcon className="size-3.5" />
-              Add setting
-            </Button>
-          ) : null}
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            className="h-8 shrink-0 px-2.5 text-xs"
+            onClick={() => setAddingSetting((open) => !open)}
+          >
+            <PlusIcon className="size-3.5" />
+            Add setting
+          </Button>
         </div>
-        {addingSetting && projectLocked ? (
+        {addingSetting ? (
           <div className="flex flex-wrap items-end gap-2 rounded-lg border border-border/70 p-3">
             <label className="flex min-w-40 flex-1 flex-col gap-1 text-xs text-muted-foreground">
               Key
@@ -359,9 +363,11 @@ export function CapabilitiesSettingsPanel({ projectKey = null }: { projectKey?: 
               size="sm"
               className="h-8 px-2.5 text-xs"
               disabled={
-                addingBusy || !isValidSettingKey(newSettingKey.trim()) || projectId === null
+                addingBusy ||
+                !isValidSettingKey(newSettingKey.trim()) ||
+                (effectiveScope === "project" && projectId === null)
               }
-              onClick={() => void addProjectSetting()}
+              onClick={() => void addSetting()}
             >
               {addingBusy ? (
                 <LoaderIcon className="size-3.5 animate-spin" />
@@ -380,6 +386,11 @@ export function CapabilitiesSettingsPanel({ projectKey = null }: { projectKey?: 
             >
               Cancel
             </Button>
+            <p className="w-full text-xs leading-relaxed text-muted-foreground">
+              Key is a dotted omp setting name (for example{" "}
+              <span className="font-mono">modelRoles.default</span>); value is the value to set. The
+              global Settings list shows the known settings and their types.
+            </p>
           </div>
         ) : null}
         {rows.length === 0 ? (
@@ -392,7 +403,8 @@ export function CapabilitiesSettingsPanel({ projectKey = null }: { projectKey?: 
             <div className="flex flex-col gap-1 text-sm">
               <span className="font-medium text-foreground">No project settings yet</span>
               <span className="text-muted-foreground">
-                Add the first project-level setting — it lands in this project's .omp config.
+                Add the first project-level setting — it lands in this project's .omp config. Known
+                setting keys and their types are listed on the global Settings page.
               </span>
             </div>
           ) : (
