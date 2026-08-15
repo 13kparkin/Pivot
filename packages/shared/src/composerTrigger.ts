@@ -52,6 +52,10 @@ function isWhitespace(char: string): boolean {
 /**
  * Detect an active trigger (@path, $skill, /command) at the cursor position.
  *
+ * Slash commands, like $skills and @paths, trigger at the start of a
+ * whitespace-delimited token — not only at the start of the line — so
+ * "/plan" typed after other text still opens the command menu.
+ *
  * Accepts an optional `isWhitespaceChar` override so callers with inline
  * placeholder characters (e.g. terminal context chips on web) can treat
  * those as token boundaries.
@@ -62,48 +66,48 @@ export function detectComposerTrigger(
   isWhitespaceChar?: (char: string) => boolean,
 ): ComposerTrigger | null {
   const cursor = clampCursor(text, cursorInput);
-  const lineStart = text.lastIndexOf("\n", Math.max(0, cursor - 1)) + 1;
-  const linePrefix = text.slice(lineStart, cursor);
-
-  if (linePrefix.startsWith("/")) {
-    const commandMatch = /^\/(\S*)$/.exec(linePrefix);
-    if (commandMatch) {
-      const commandQuery = commandMatch[1] ?? "";
-      if (commandQuery.toLowerCase() === "model") {
-        return {
-          kind: "slash-model",
-          query: "",
-          rangeStart: lineStart,
-          rangeEnd: cursor,
-        };
-      }
-      return {
-        kind: "slash-command",
-        query: commandQuery,
-        rangeStart: lineStart,
-        rangeEnd: cursor,
-      };
-    }
-
-    const modelMatch = /^\/model(?:\s+(.*))?$/.exec(linePrefix);
-    if (modelMatch) {
-      return {
-        kind: "slash-model",
-        query: (modelMatch[1] ?? "").trim(),
-        rangeStart: lineStart,
-        rangeEnd: cursor,
-      };
-    }
-  }
-
   const wsCheck = isWhitespaceChar ?? isWhitespace;
+
   let tokenIdx = cursor - 1;
   while (tokenIdx >= 0 && !wsCheck(text[tokenIdx] ?? "")) {
     tokenIdx -= 1;
   }
   const tokenStart = tokenIdx + 1;
-
   const token = text.slice(tokenStart, cursor);
+
+  if (token.startsWith("/")) {
+    const commandQuery = token.slice(1);
+    if (commandQuery.toLowerCase() === "model") {
+      return {
+        kind: "slash-model",
+        query: "",
+        rangeStart: tokenStart,
+        rangeEnd: cursor,
+      };
+    }
+    return {
+      kind: "slash-command",
+      query: commandQuery,
+      rangeStart: tokenStart,
+      rangeEnd: cursor,
+    };
+  }
+
+  // Keep /model active while its argument is being typed ("/model spark"),
+  // wherever on the line it appears.
+  const lineStart = text.lastIndexOf("\n", Math.max(0, cursor - 1)) + 1;
+  const linePrefix = text.slice(lineStart, cursor);
+  const modelMatch = /(?:^|\s)\/model(?:\s+(.*))?$/i.exec(linePrefix);
+  if (modelMatch) {
+    const slashIndex = modelMatch.index + modelMatch[0].search(/\/model/i);
+    return {
+      kind: "slash-model",
+      query: (modelMatch[1] ?? "").trim(),
+      rangeStart: lineStart + slashIndex,
+      rangeEnd: cursor,
+    };
+  }
+
   if (token.startsWith("$")) {
     return {
       kind: "skill",

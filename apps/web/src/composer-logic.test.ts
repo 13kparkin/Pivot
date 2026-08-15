@@ -94,6 +94,44 @@ describe("detectComposerTrigger", () => {
     });
   });
 
+  it("detects slash command after other text on the line", () => {
+    const text = "fix this /pl";
+    const trigger = detectComposerTrigger(text, text.length);
+
+    expect(trigger).toEqual({
+      kind: "slash-command",
+      query: "pl",
+      rangeStart: "fix this ".length,
+      rangeEnd: text.length,
+    });
+  });
+
+  it("detects bare slash after other text", () => {
+    const text = "fix this /";
+    const trigger = detectComposerTrigger(text, text.length);
+
+    expect(trigger).toEqual({
+      kind: "slash-command",
+      query: "",
+      rangeStart: "fix this ".length,
+      rangeEnd: text.length,
+    });
+  });
+
+  it("does not trigger on a slash inside a word", () => {
+    const text = "see https://example.com/foo";
+    const trigger = detectComposerTrigger(text, text.length);
+
+    expect(trigger).toBeNull();
+  });
+
+  it("closes slash trigger when /model gains arguments after other text", () => {
+    const text = "fix this /model spark";
+    const trigger = detectComposerTrigger(text, text.length);
+
+    expect(trigger).toBeNull();
+  });
+
   it("detects $skill trigger at cursor", () => {
     const text = "Use $gh-fi";
     const trigger = detectComposerTrigger(text, text.length);
