@@ -137,6 +137,8 @@ interface LiveAdapterSession {
   readonly scope: Scope.Scope;
   readonly toolCalls: Map<string, TrackedOmpToolCall>;
   readonly pendingUiRequests: Map<string, PendingExtensionUiRequest>;
+  /** Subagent ids seen via `subagent_lifecycle started` and not yet terminal. */
+  readonly liveSubagents: Set<string>;
   turnId: TurnId | undefined;
   /** Set by interruptTurn; cleared when the terminal agent_end confirms stop. */
   stopRequested: boolean;
@@ -322,6 +324,7 @@ export class OmpAdapter {
         scope,
         toolCalls: new Map(),
         pendingUiRequests: new Map(),
+        liveSubagents: new Set<string>(),
         turnId: undefined,
         stopRequested: false,
         // Negative so the first mid-turn emit is not throttled when Clock is 0 (TestClock).
@@ -901,6 +904,7 @@ export class OmpAdapter {
       ...(agentIndex === undefined ? {} : { agentIndex }),
     };
     if (payload.status === "started") {
+      session.liveSubagents.add(payload.id);
       return this.#emit({
         type: "task.started",
         threadId: session.threadId,
@@ -923,6 +927,7 @@ export class OmpAdapter {
     if (status === undefined) {
       return Effect.void;
     }
+    session.liveSubagents.delete(payload.id);
     return this.#emit({
       type: "task.completed",
       threadId: session.threadId,
@@ -1337,14 +1342,48 @@ export class OmpAdapter {
           turnId,
           payload: { reason: "user_abort" },
         });
-        return;
+      } else {
+        yield* this.#emit({
+          type: "turn.completed",
+          threadId: session.threadId,
+          turnId,
+          payload: { state: "completed" },
+        });
       }
-      yield* this.#emit({
-        type: "turn.completed",
-        threadId: session.threadId,
-        turnId,
-        payload: { state: "completed" },
-      });
+      // A user stop only settles the parent turn; background subagents (async
+      // jobs) keep running on their own decoupled run signal, so Stop must
+      // cancel them explicitly. Fall back to terminating the child when the
+      // running omp predates `cancel_subagent`.
+      if (aborted && session.liveSubagents.size > 0) {
+        yield* this.#cancelLiveSubagents(session);
+      }
+    });
+  }
+
+  #cancelLiveSubagents(session: LiveAdapterSession): Effect.Effect<void> {
+    const ids = Array.from(session.liveSubagents);
+    if (ids.length === 0) {
+      return Effect.void;
+    }
+    return Effect.gen({ self: this }, function* () {
+      for (const subagentId of ids) {
+        const outcome = yield* Effect.exit(
+          this.#send(session.threadId, { type: "cancel_subagent", subagentId }).pipe(
+            Effect.timeout(OMP_ABORT_ACK_TIMEOUT),
+          ),
+        );
+        // `cancel_subagent` acknowledges with a response; a `success: false`
+        // response means the command is unknown (pre-`cancel_subagent` omp) or
+        // the cancel failed. An effect-level failure means the child died. In
+        // every non-success case the only way to actually stop the subagents
+        // is to terminate the child.
+        const cancelled =
+          Exit.isSuccess(outcome) && isRecord(outcome.value) && outcome.value.success === true;
+        if (!cancelled) {
+          yield* this.#onSessionTransportEnded(session);
+          return;
+        }
+      }
     });
   }
 

@@ -15,6 +15,8 @@ export class FakeOmpRpc {
   failSetModel = false;
   /** When false, `send` never answers `abort` (simulates a wedged child). */
   respondToAbort = true;
+  /** When true, `cancel_subagent` responds as an unknown command (pre-`cancel_subagent` omp). */
+  cancelSubagentUnknown = false;
   /** When set, `get_state` responses are held until this resolves (throttle-race tests). */
   getStateGate: Deferred.Deferred<void> | undefined = undefined;
   sessionFile = "/tmp/omp-session.jsonl";
@@ -172,6 +174,17 @@ export class FakeOmpRpc {
     if (command.type === "abort") {
       if (!this.respondToAbort) {
         return Effect.never;
+      }
+      return Effect.succeed({ type: "response", success: true, data: {} });
+    }
+    if (command.type === "cancel_subagent") {
+      if (this.cancelSubagentUnknown) {
+        return Effect.succeed({
+          type: "response",
+          command: "cancel_subagent",
+          success: false,
+          error: "Unknown command",
+        });
       }
       return Effect.succeed({ type: "response", success: true, data: {} });
     }
