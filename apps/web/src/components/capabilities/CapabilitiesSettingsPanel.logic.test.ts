@@ -10,6 +10,7 @@ import {
   formatSettingValue,
   parseSettingDraft,
   PRECEDENCE_LADDER,
+  isValidSettingKey,
 } from "./CapabilitiesSettingsPanel.logic";
 
 describe("PRECEDENCE_LADDER", () => {
@@ -219,5 +220,22 @@ describe("filterSettingRows", () => {
 
   it("returns no rows when nothing matches", () => {
     expect(filterSettingRows(rows, "xyzzy")).toEqual([]);
+  });
+});
+
+describe("isValidSettingKey", () => {
+  it("accepts plain and dotted setting keys", () => {
+    expect(isValidSettingKey("autoResume")).toBe(true);
+    expect(isValidSettingKey("modelRoles.default")).toBe(true);
+    expect(isValidSettingKey("theme.dark")).toBe(true);
+    expect(isValidSettingKey("security_scan.auto_fix.enabled")).toBe(true);
+  });
+
+  it("rejects empty, whitespace, and malformed keys", () => {
+    expect(isValidSettingKey("")).toBe(false);
+    expect(isValidSettingKey("   ")).toBe(false);
+    expect(isValidSettingKey("a b")).toBe(false);
+    expect(isValidSettingKey(".leading")).toBe(false);
+    expect(isValidSettingKey("trailing.")).toBe(false);
   });
 });

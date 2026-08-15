@@ -82,6 +82,20 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
 
 /**
+ * Parse a raw config editor value into a YAML scalar so project-layer
+ * writes store `autoResume: false` (boolean) instead of `'false'` (string).
+ * Mirrors how `omp config set` treats scalar input; anything unrecognized
+ * stays a string.
+ */
+function parseConfigScalar(value: string): unknown {
+  if (value === "true") return true;
+  if (value === "false") return false;
+  if (value === "null") return null;
+  if (value.trim() !== "" && !Number.isNaN(Number(value))) return Number(value);
+  return value;
+}
+
+/**
  * Flatten a config doc's scalar leaves into dotted keys (`modelRoles.default`)
  * so the displayed key matches the write key the server accepts.
  */
@@ -191,7 +205,11 @@ export class OmpCapabilitiesService {
       } else {
         const projectCwd = yield* this.resolveProjectScopeCwd(input.projectId);
         yield* this.backup(projectCwd);
-        yield* this.#configStore.writeProjectKey(projectCwd, input.key, input.value);
+        yield* this.#configStore.writeProjectKey(
+          projectCwd,
+          input.key,
+          typeof input.value === "string" ? parseConfigScalar(input.value) : input.value,
+        );
       }
       return yield* this.getSnapshot(input.projectId);
     });
