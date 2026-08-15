@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { serializeComposerFileLink, serializeComposerMentionPath } from "./composerTrigger.ts";
+import {
+  detectComposerTrigger,
+  serializeComposerFileLink,
+  serializeComposerMentionPath,
+} from "./composerTrigger.ts";
 
 describe("serializeComposerMentionPath", () => {
   it("keeps simple mention paths unquoted", () => {
@@ -39,5 +43,98 @@ describe("serializeComposerFileLink", () => {
     expect(serializeComposerFileLink("@scope/package.json")).toBe(
       "[package.json](@scope/package.json)",
     );
+  });
+});
+
+describe("detectComposerTrigger", () => {
+  it("detects slash command at the start of the prompt", () => {
+    const text = "/pl";
+    const trigger = detectComposerTrigger(text, text.length);
+
+    expect(trigger).toEqual({
+      kind: "slash-command",
+      query: "pl",
+      rangeStart: 0,
+      rangeEnd: text.length,
+    });
+  });
+
+  it("detects slash command after other text on the line", () => {
+    const text = "fix this /pl";
+    const trigger = detectComposerTrigger(text, text.length);
+
+    expect(trigger).toEqual({
+      kind: "slash-command",
+      query: "pl",
+      rangeStart: "fix this ".length,
+      rangeEnd: text.length,
+    });
+  });
+
+  it("keeps /model as slash-model with no query", () => {
+    const text = "/model";
+    const trigger = detectComposerTrigger(text, text.length);
+
+    expect(trigger).toEqual({
+      kind: "slash-model",
+      query: "",
+      rangeStart: 0,
+      rangeEnd: text.length,
+    });
+  });
+
+  it("keeps /model active while its argument is typed", () => {
+    const text = "/model spark";
+    const trigger = detectComposerTrigger(text, text.length);
+
+    expect(trigger).toEqual({
+      kind: "slash-model",
+      query: "spark",
+      rangeStart: 0,
+      rangeEnd: text.length,
+    });
+  });
+
+  it("keeps /model active mid-line while its argument is typed", () => {
+    const text = "switch /model spark";
+    const trigger = detectComposerTrigger(text, text.length);
+
+    expect(trigger).toEqual({
+      kind: "slash-model",
+      query: "spark",
+      rangeStart: "switch ".length,
+      rangeEnd: text.length,
+    });
+  });
+
+  it("detects $skill trigger after other text", () => {
+    const text = "run $gh-fi";
+    const trigger = detectComposerTrigger(text, text.length);
+
+    expect(trigger).toEqual({
+      kind: "skill",
+      query: "gh-fi",
+      rangeStart: "run ".length,
+      rangeEnd: text.length,
+    });
+  });
+
+  it("detects @path trigger after other text", () => {
+    const text = "check @src/com";
+    const trigger = detectComposerTrigger(text, text.length);
+
+    expect(trigger).toEqual({
+      kind: "path",
+      query: "src/com",
+      rangeStart: "check ".length,
+      rangeEnd: text.length,
+    });
+  });
+
+  it("does not trigger on a slash inside a word", () => {
+    const text = "see https://example.com/foo";
+    const trigger = detectComposerTrigger(text, text.length);
+
+    expect(trigger).toBeNull();
   });
 });
