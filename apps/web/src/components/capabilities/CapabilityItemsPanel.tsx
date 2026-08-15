@@ -464,7 +464,7 @@ export function CapabilityItemsPanel({
 
   if (environmentId === null) {
     return (
-      <SettingsPageContainer>
+      <SettingsPageContainer className="max-w-6xl">
         <p className="text-sm text-muted-foreground">
           Connect an environment to manage its {itemLabel}s.
         </p>
@@ -475,7 +475,7 @@ export function CapabilityItemsPanel({
   if (snapshot === null) {
     if (result.waiting) {
       return (
-        <SettingsPageContainer>
+        <SettingsPageContainer className="max-w-6xl">
           <div className="flex items-center gap-2 text-sm text-muted-foreground">
             <LoaderIcon className="size-4 animate-spin" />
             Loading {itemLabel}s…
@@ -484,7 +484,7 @@ export function CapabilityItemsPanel({
       );
     }
     return (
-      <SettingsPageContainer>
+      <SettingsPageContainer className="max-w-6xl">
         <div className="flex flex-col gap-1 text-sm">
           <span className="font-medium text-foreground">Could not load omp {itemLabel}s</span>
           <span className="text-muted-foreground">
@@ -565,7 +565,7 @@ export function CapabilityItemsPanel({
   };
 
   return (
-    <SettingsPageContainer>
+    <SettingsPageContainer className="max-w-6xl">
       <SettingsSection
         title={title}
         headerAction={
@@ -612,7 +612,7 @@ export function CapabilityItemsPanel({
                   <th className="px-4 py-2 font-semibold sm:pl-5">Name</th>
                   <th className="px-3 py-2 font-semibold">Description</th>
                   <th className="px-3 py-2 font-semibold">Scope</th>
-                  <th className="sticky right-0 z-10 border-l border-border/60 bg-background px-3 py-2 pe-6 text-right font-semibold">
+                  <th className="sticky right-0 z-10 border-l border-border/60 bg-background py-2 pe-6 ps-5 text-right font-semibold">
                     Actions
                   </th>
                 </tr>
@@ -641,7 +641,7 @@ export function CapabilityItemsPanel({
                         <span className="line-clamp-2">{row.description}</span>
                       </td>
                       <td className="px-3 py-2 text-muted-foreground">{row.scopeLabel}</td>
-                      <td className="sticky right-0 z-10 border-l border-border/60 bg-background px-3 py-2 pe-6 text-right">
+                      <td className="sticky right-0 z-10 border-l border-border/60 bg-background py-2 pe-6 ps-5 text-right">
                         <ItemRowActions
                           item={row}
                           itemLabel={itemLabel}

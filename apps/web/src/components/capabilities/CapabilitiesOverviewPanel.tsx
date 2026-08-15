@@ -96,7 +96,7 @@ export function CapabilitiesOverviewPanel({ projectKey = null }: { projectKey?: 
   if (projectKey !== null) {
     const cards = buildProjectCapabilitiesOverviewCards(snapshot);
     return (
-      <SettingsPageContainer>
+      <SettingsPageContainer className="max-w-6xl">
         <SettingsSection title="Capabilities">
           <div className="grid gap-3 sm:grid-cols-3">
             {cards.map((card) => {
@@ -126,7 +126,7 @@ export function CapabilitiesOverviewPanel({ projectKey = null }: { projectKey?: 
   }
 
   return (
-    <SettingsPageContainer>
+    <SettingsPageContainer className="max-w-6xl">
       <SettingsSection title="Capabilities">
         {snapshot.agentDirLabel !== undefined ? (
           <SettingsRow title="Agent directory" description={snapshot.agentDirLabel} />
