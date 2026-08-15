@@ -122,7 +122,7 @@ Bypass for a single command: `VP_GIT_HOOKS=0 git commit` / `VP_GIT_HOOKS=0 git p
 
 - Never make a PR unless the developer explicitly asks you to do so.
 - Conventional commit titles, plain language: `fix(web): new threads no longer spike CPU`.
-- Body: the problem in a sentence or two, then how you fixed it. End with the model and harness that did the work.
+- Body: the problem in a sentence or two, then how you fixed it.
 - **Rebase onto latest main before opening.** Stale branches conflict and burn a review round.
 - Motion or timing needs a short video.
 - One concern per PR. If the description says "also", split it.
