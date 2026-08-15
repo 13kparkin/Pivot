@@ -570,6 +570,9 @@ export class OmpCapabilitiesService {
         ),
       ),
     );
+  }
+
+  /**
    * The project layer of omp settings, read directly from the project's
    * `.omp/config.yml`. `omp config list --json` only reports the EFFECTIVE
    * merged config, so the project-scoped surface reads the file itself to

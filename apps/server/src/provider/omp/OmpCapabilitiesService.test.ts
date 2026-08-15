@@ -206,6 +206,8 @@ it.layer(NodeServices.layer)("OmpCapabilitiesService", (it) => {
       const theme = snapshot.settings.entries.find((e) => e.key === "theme.dark");
       expect(theme?.values).toBeUndefined();
     }),
+  );
+
   it.effect(
     "project snapshots surface the project's own config layer as project-scoped settings",
     () =>
@@ -474,6 +476,9 @@ it.layer(NodeServices.layer)("OmpCapabilitiesService", (it) => {
       });
       const setCall = calls.find((c) => c.args[0] === "config" && c.args[1] === "set");
       expect(setCall?.args).toEqual(["config", "set", "modelRoles", '{"default":"openai/gpt-5"}']);
+    }),
+  );
+
   it.effect("parses raw string values into typed scalars for project-scope writes", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;

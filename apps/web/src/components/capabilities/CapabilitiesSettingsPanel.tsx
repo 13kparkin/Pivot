@@ -19,6 +19,7 @@ import { useSettingsProjectGroups } from "../settings/ProjectSettingsPanel";
 import { SettingsPageContainer, SettingsRow, SettingsSection } from "../settings/settingsLayout";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
+import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { stackedThreadToast, toastManager } from "../ui/toast";
 
 import {
@@ -27,7 +28,9 @@ import {
   buildWriteSettingInput,
   canEditEntry,
   filterSettingRows,
+  formatSettingValue,
   isValidSettingKey,
+  parseSettingDraft,
 } from "./CapabilitiesSettingsPanel.logic";
 import { resolveCapabilitiesProjectIdForView } from "./CapabilitiesOverviewPanel.logic";
 
@@ -55,20 +58,34 @@ function CapabilitiesSettingRow({
   onMoveToProject?: () => void;
   moving?: boolean;
 }) {
-  const [draft, setDraft] = useState(entry.masked ? "" : String(entry.value ?? ""));
+  const enumValues =
+    entry.type === "enum" && (entry.values?.length ?? 0) > 0 ? entry.values : undefined;
+  const [draft, setDraft] = useState(() => (entry.masked ? "" : formatSettingValue(entry.value)));
+  const [draftError, setDraftError] = useState<string | null>(null);
   const [busy, setBusy] = useState<"save" | "reset" | null>(null);
   const writeSetting = useAtomCommand(serverEnvironment.capabilitiesWriteSetting, {
     label: "capabilities-write-setting",
   });
+  // Keep the current enum value selectable even when it is stale relative to
+  // the reported choices (e.g. a value written by an older omp version).
+  const selectValues =
+    enumValues !== undefined && draft.length > 0 && !enumValues.includes(draft)
+      ? [draft, ...enumValues]
+      : enumValues;
   const resetSetting = useAtomCommand(serverEnvironment.capabilitiesResetSetting, {
     label: "capabilities-reset-setting",
   });
 
   const save = async () => {
+    const parsed = parseSettingDraft(entry.type, draft);
+    if (!parsed.ok) {
+      setDraftError(parsed.error);
+      return;
+    }
     setBusy("save");
     const result = await writeSetting({
       environmentId,
-      input: buildWriteSettingInput({ key: entry.key, value: draft, scope, projectId }),
+      input: buildWriteSettingInput({ key: entry.key, value: parsed.value, scope, projectId }),
     });
     setBusy(null);
     if (result._tag === "Failure") {
@@ -135,17 +152,44 @@ function CapabilitiesSettingRow({
       <td className="max-w-56 px-3 py-2 text-muted-foreground">{entry.description}</td>
       <td className="px-3 py-2">
         {editable ? (
-          <Input
-            size="sm"
-            className="h-7 min-w-40 font-mono text-xs"
-            value={draft}
-            onChange={(event) => setDraft(event.currentTarget.value)}
-            placeholder="Unset"
-            aria-label={`Value for ${entry.key}`}
-          />
+          enumValues !== undefined ? (
+            <Select
+              value={draft}
+              onValueChange={(value) => {
+                if (typeof value === "string") setDraft(value);
+                setDraftError(null);
+              }}
+            >
+              <SelectTrigger className="h-7 w-44" aria-label={`Value for ${entry.key}`}>
+                <SelectValue placeholder="Unset" />
+              </SelectTrigger>
+              <SelectPopup align="end" alignItemWithTrigger={false}>
+                {(selectValues ?? []).map((value) => (
+                  <SelectItem hideIndicator key={value} value={value}>
+                    {value}
+                  </SelectItem>
+                ))}
+              </SelectPopup>
+            </Select>
+          ) : (
+            <Input
+              size="sm"
+              className="h-7 min-w-40 font-mono text-xs"
+              value={draft}
+              onChange={(event) => {
+                setDraft(event.currentTarget.value);
+                setDraftError(null);
+              }}
+              placeholder="Unset"
+              aria-label={`Value for ${entry.key}`}
+            />
+          )
         ) : (
           <span className="font-mono text-muted-foreground">{entry.displayValue}</span>
         )}
+        {draftError !== null ? (
+          <span className="mt-0.5 block text-[11px] text-destructive">{draftError}</span>
+        ) : null}
       </td>
       <td className="sticky right-0 z-10 bg-background py-2 pe-6 ps-5 text-right">
         {projectView && !isProjectEntry ? (
