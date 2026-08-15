@@ -200,6 +200,33 @@ export const makeOmpManagedBinary = Effect.fn("ompManagedBinary.make")(function*
   const currentPath = path.join(options.baseDir, "tools", "omp", "current", exeName);
   const toolsRoot = path.join(options.baseDir, "tools", "omp");
 
+  /**
+   * Publish a freshly validated binary to `current`, which live sessions run
+   * from. Overwriting it in place with copyFile fails with ETXTBSY ("Text file
+   * busy") while any session is active, so copy to a sibling temp and rename
+   * it over `current`: rename replaces the directory entry atomically and
+   * running processes keep the old inode.
+   */
+  const publishToCurrent = Effect.fn("ompManagedBinary.publishToCurrent")(function* (
+    versionedPath: string,
+  ) {
+    const publishTemp = `${currentPath}.${yield* crypto.randomUUIDv4.pipe(Effect.orDie)}.tmp`;
+    yield* fileSystem
+      .copyFile(versionedPath, publishTemp)
+      .pipe(wrapInstallFailure("write_failed", "Could not stage the managed omp binary."));
+    yield* fileSystem
+      .rename(publishTemp, currentPath)
+      .pipe(
+        wrapInstallFailure("write_failed", "Could not publish omp to the current path."),
+        Effect.ensuring(fileSystem.remove(publishTemp, { force: true }).pipe(Effect.ignore)),
+      );
+    if (platform !== "win32") {
+      yield* fileSystem
+        .chmod(currentPath, 0o755)
+        .pipe(wrapInstallFailure("write_failed", "Could not chmod the current omp binary."));
+    }
+  });
+
   const isExecutableFile = Effect.fn("ompManagedBinary.isExecutableFile")(function* (
     executablePath: string,
   ) {
@@ -433,14 +460,7 @@ export const makeOmpManagedBinary = Effect.fn("ompManagedBinary.make")(function*
       if (yield* isExecutableFile(versionedPath)) {
         const existingVersion = yield* probeVersion(versionedPath);
         if (existingVersion === version) {
-          yield* fileSystem
-            .copyFile(versionedPath, currentPath)
-            .pipe(wrapInstallFailure("write_failed", "Could not activate the managed omp binary."));
-          if (platform !== "win32") {
-            yield* fileSystem
-              .chmod(currentPath, 0o755)
-              .pipe(wrapInstallFailure("write_failed", "Could not chmod the managed omp binary."));
-          }
+          yield* publishToCurrent(versionedPath);
           return {
             status: "available",
             executablePath: currentPath,
@@ -534,14 +554,7 @@ export const makeOmpManagedBinary = Effect.fn("ompManagedBinary.make")(function*
           wrapInstallFailure("write_failed", "Could not activate the versioned omp binary."),
           Effect.ensuring(fileSystem.remove(stagedPath, { force: true }).pipe(Effect.ignore)),
         );
-      yield* fileSystem
-        .copyFile(versionedPath, currentPath)
-        .pipe(wrapInstallFailure("write_failed", "Could not publish omp to the current path."));
-      if (platform !== "win32") {
-        yield* fileSystem
-          .chmod(currentPath, 0o755)
-          .pipe(wrapInstallFailure("write_failed", "Could not chmod the current omp binary."));
-      }
+      yield* publishToCurrent(versionedPath);
 
       return {
         status: "available",

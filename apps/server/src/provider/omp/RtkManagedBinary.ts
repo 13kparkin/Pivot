@@ -412,9 +412,20 @@ export const makeRtkManagedBinary = Effect.fn("rtkManagedBinary.make")(function*
   const activateBinary = Effect.fn("rtkManagedBinary.activateBinary")(function* (
     versionedPath: string,
   ) {
+    // `currentPath` is the binary live rtk sessions run from; overwriting it
+    // in place with copyFile fails with ETXTBSY while any session is active.
+    // Copy to a sibling temp and rename it over `currentPath`: rename replaces
+    // the directory entry atomically and running processes keep the old inode.
+    const publishTemp = `${currentPath}.${yield* crypto.randomUUIDv4.pipe(Effect.orDie)}.tmp`;
     yield* fileSystem
-      .copyFile(versionedPath, currentPath)
-      .pipe(wrapInstallFailure("write_failed", "Could not activate the managed rtk binary."));
+      .copyFile(versionedPath, publishTemp)
+      .pipe(wrapInstallFailure("write_failed", "Could not stage the managed rtk binary."));
+    yield* fileSystem
+      .rename(publishTemp, currentPath)
+      .pipe(
+        wrapInstallFailure("write_failed", "Could not activate the managed rtk binary."),
+        Effect.ensuring(fileSystem.remove(publishTemp, { force: true }).pipe(Effect.ignore)),
+      );
     if (platform !== "win32") {
       yield* fileSystem
         .chmod(currentPath, 0o755)
