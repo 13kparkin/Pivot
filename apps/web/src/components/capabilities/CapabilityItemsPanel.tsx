@@ -10,7 +10,15 @@ import type {
 } from "@t3tools/contracts";
 import * as Option from "effect/Option";
 import { AsyncResult, Atom } from "effect/unstable/reactivity";
-import { LoaderIcon, PencilIcon, PlusIcon, SaveIcon, SearchIcon, Trash2Icon } from "lucide-react";
+import {
+  LoaderIcon,
+  MoveRightIcon,
+  PencilIcon,
+  PlusIcon,
+  SaveIcon,
+  SearchIcon,
+  Trash2Icon,
+} from "lucide-react";
 import { useEffect, useState } from "react";
 
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
@@ -292,14 +300,40 @@ function ItemEditorDialog({
 function ItemRowActions({
   item,
   itemLabel,
+  moving,
+  onMove,
   onEdit,
   onDelete,
 }: {
   readonly item: OmpCapabilityItem;
   readonly itemLabel: string;
+  readonly moving: boolean;
+  readonly onMove: () => void;
   readonly onEdit: () => void;
   readonly onDelete: () => void;
 }) {
+  // Foreign-root items (skills discovered in another CLI's skill directory)
+  // cannot be edited in place; moving them into the omp agent directory is
+  // the only mutation, so it replaces Edit/Delete.
+  if (item.scope === "global" && item.sourceDir !== undefined) {
+    return (
+      <Button
+        type="button"
+        size="sm"
+        variant="outline"
+        disabled={moving}
+        aria-label={`Move ${itemLabel} ${item.name} to omp`}
+        onClick={onMove}
+      >
+        {moving ? (
+          <LoaderIcon className="size-3.5 animate-spin" />
+        ) : (
+          <MoveRightIcon className="size-3.5" />
+        )}
+        Move to omp
+      </Button>
+    );
+  }
   return (
     <div className="inline-flex items-center gap-1">
       <Button
@@ -401,6 +435,7 @@ export function CapabilityItemsPanel({
   const [editor, setEditor] = useState<EditorState | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<OmpCapabilityItem | null>(null);
   const [deleting, setDeleting] = useState(false);
+  const [movingName, setMovingName] = useState<string | null>(null);
 
   const snapshotAtom =
     environmentId === null
@@ -414,6 +449,9 @@ export function CapabilityItemsPanel({
   const snapshot = Option.getOrNull(AsyncResult.value(result))?.snapshot ?? null;
   const deleteResource = useAtomCommand(serverEnvironment.capabilitiesDeleteResource, {
     label: "capabilities-delete-resource",
+  });
+  const moveItem = useAtomCommand(serverEnvironment.capabilitiesMoveItem, {
+    label: "capabilities-move-item",
   });
 
   if (environmentId === null) {
@@ -489,6 +527,31 @@ export function CapabilityItemsPanel({
     refreshSnapshot();
   };
 
+  const confirmMove = async (name: string) => {
+    setMovingName(name);
+    const result = await moveItem({
+      environmentId,
+      input: { kind, name },
+    });
+    setMovingName(null);
+    if (result._tag === "Failure") {
+      const error = squashAtomCommandFailure(result);
+      toastManager.add(
+        stackedThreadToast({
+          type: "error",
+          title: `Could not move ${itemLabel} ${name} to omp`,
+          description:
+            error instanceof Error
+              ? error.message
+              : "Check that omp is installed on the server host.",
+        }),
+      );
+      return;
+    }
+    toastManager.add({ type: "success", title: `Moved ${itemLabel} ${name} into omp` });
+    refreshSnapshot();
+  };
+
   return (
     <SettingsPageContainer>
       <SettingsSection
@@ -538,32 +601,42 @@ export function CapabilityItemsPanel({
                 </tr>
               </thead>
               <tbody className="divide-y divide-border/60">
-                {rows.map((row) => (
-                  <tr key={`${row.scope}:${row.name}`}>
-                    <td className="px-4 py-2 sm:pl-5">
-                      <span className="inline-flex items-center gap-2">
-                        <span className="font-mono font-medium text-foreground">{row.name}</span>
-                        {row.shadowed ? (
-                          <Badge size="sm" variant="warning">
-                            Overrides global
-                          </Badge>
+                {rows.map((row) => {
+                  const foreignRoot = row.scope === "global" && row.sourceDir !== undefined;
+                  return (
+                    <tr key={`${row.scope}:${row.name}`}>
+                      <td className="px-4 py-2 sm:pl-5">
+                        <span className="inline-flex items-center gap-2">
+                          <span className="font-mono font-medium text-foreground">{row.name}</span>
+                          {row.shadowed ? (
+                            <Badge size="sm" variant="warning">
+                              Overrides global
+                            </Badge>
+                          ) : null}
+                        </span>
+                        {foreignRoot ? (
+                          <span className="mt-0.5 block text-[11px] text-muted-foreground">
+                            Lives in {row.sourceDir}
+                          </span>
                         ) : null}
-                      </span>
-                    </td>
-                    <td className="max-w-96 px-3 py-2 text-muted-foreground">
-                      <span className="line-clamp-2">{row.description}</span>
-                    </td>
-                    <td className="px-3 py-2 text-muted-foreground">{row.scopeLabel}</td>
-                    <td className="px-3 py-2 text-right">
-                      <ItemRowActions
-                        item={row}
-                        itemLabel={itemLabel}
-                        onEdit={() => setEditor({ mode: "edit", item: row })}
-                        onDelete={() => setDeleteTarget(row)}
-                      />
-                    </td>
-                  </tr>
-                ))}
+                      </td>
+                      <td className="max-w-96 px-3 py-2 text-muted-foreground">
+                        <span className="line-clamp-2">{row.description}</span>
+                      </td>
+                      <td className="px-3 py-2 text-muted-foreground">{row.scopeLabel}</td>
+                      <td className="px-3 py-2 text-right">
+                        <ItemRowActions
+                          item={row}
+                          itemLabel={itemLabel}
+                          moving={foreignRoot && movingName === row.name}
+                          onMove={() => void confirmMove(row.name)}
+                          onEdit={() => setEditor({ mode: "edit", item: row })}
+                          onDelete={() => setDeleteTarget(row)}
+                        />
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>

@@ -1689,6 +1689,7 @@ describe("OmpAdapter", () => {
             Effect.succeed({ name: "x", scope: "global" as const, content: "", exists: false }),
           writeResource: () => Effect.succeed(snapshot),
           deleteResource: () => Effect.succeed(snapshot),
+          moveItemToOmp: () => Effect.succeed(snapshot),
         };
         const adapter = new OmpAdapter(fake, testRandomUUID, { capabilitiesService: service });
         const result = yield* adapter.capabilitiesSnapshot();
@@ -1716,6 +1717,7 @@ describe("OmpAdapter", () => {
             Effect.succeed({ name: "x", scope: "global" as const, content: "", exists: false }),
           writeResource: () => Effect.succeed(snapshot),
           deleteResource: () => Effect.succeed(snapshot),
+          moveItemToOmp: () => Effect.succeed(snapshot),
         };
         const adapter = new OmpAdapter(fake, testRandomUUID, { capabilitiesService: service });
         const result = yield* adapter.capabilitiesWriteSetting({
@@ -1741,6 +1743,7 @@ describe("OmpAdapter", () => {
             Effect.succeed({ name: "x", scope: "global" as const, content: "", exists: false }),
           writeResource: () => Effect.succeed(snapshot),
           deleteResource: () => Effect.succeed(snapshot),
+          moveItemToOmp: () => Effect.succeed(snapshot),
         };
         const adapter = new OmpAdapter(fake, testRandomUUID, { capabilitiesService: service });
         const result = yield* adapter.capabilitiesResetSetting({
@@ -1770,6 +1773,7 @@ describe("OmpAdapter", () => {
           },
           writeResource: () => Effect.succeed(snapshot),
           deleteResource: () => Effect.succeed(snapshot),
+          moveItemToOmp: () => Effect.succeed(snapshot),
         };
         const adapter = new OmpAdapter(fake, testRandomUUID, { capabilitiesService: service });
         const result = yield* adapter.capabilitiesReadResource({
@@ -1802,6 +1806,7 @@ describe("OmpAdapter", () => {
             return Effect.succeed(snapshot);
           },
           deleteResource: () => Effect.succeed(snapshot),
+          moveItemToOmp: () => Effect.succeed(snapshot),
         };
         const adapter = new OmpAdapter(fake, testRandomUUID, { capabilitiesService: service });
         const result = yield* adapter.capabilitiesWriteResource({
@@ -1834,6 +1839,7 @@ describe("OmpAdapter", () => {
             });
             return Effect.succeed(snapshot);
           },
+          moveItemToOmp: () => Effect.succeed(snapshot),
         };
         const adapter = new OmpAdapter(fake, testRandomUUID, { capabilitiesService: service });
         const result = yield* adapter.capabilitiesDeleteResource({

@@ -825,6 +825,15 @@ export function createServerEnvironmentAtoms<R, E>(
           `${environmentId}:${input.instanceId ?? "omp"}:delete-resource:${input.kind}:${input.name}:${input.scope}`,
       },
     }),
+    capabilitiesMoveItem: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:omp-capabilities-move-item",
+      tag: WS_METHODS.serverOmpCapabilitiesMoveItem,
+      concurrency: {
+        mode: "singleFlight",
+        key: ({ environmentId, input }) =>
+          `${environmentId}:${input.instanceId ?? "omp"}:move-item:${input.kind}:${input.name}`,
+      },
+    }),
     updateProvider: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:server:update-provider",
       tag: WS_METHODS.serverUpdateProvider,

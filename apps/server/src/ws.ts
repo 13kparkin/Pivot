@@ -1694,6 +1694,28 @@ const makeWsRpcLayer = (
             }),
             { "rpc.aggregate": "server" },
           ),
+        [WS_METHODS.serverOmpCapabilitiesMoveItem]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.serverOmpCapabilitiesMoveItem,
+            Effect.gen(function* () {
+              const instanceId: ProviderInstanceId =
+                input.instanceId ?? defaultInstanceIdForDriver(ProviderDriverKind.make("omp"));
+              const { instanceId: _ignored, ...moveInput } = input;
+              const snapshot = yield* providerRegistry
+                .ompCapabilitiesMoveItem({ instanceId, ...moveInput })
+                .pipe(
+                  Effect.mapError(
+                    (cause) =>
+                      new ServerOmpCapabilitiesError({
+                        reason: cause instanceof Error ? cause.message : String(cause),
+                        cause,
+                      }),
+                  ),
+                );
+              return { snapshot };
+            }),
+            { "rpc.aggregate": "server" },
+          ),
         [WS_METHODS.serverUpdateProvider]: (input) =>
           observeRpcEffect(
             WS_METHODS.serverUpdateProvider,

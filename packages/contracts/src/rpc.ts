@@ -1113,6 +1113,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsServerOmpCapabilitiesReadResourceRpc,
   WsServerOmpCapabilitiesWriteResourceRpc,
   WsServerOmpCapabilitiesDeleteResourceRpc,
+  WsServerOmpCapabilitiesMoveItemRpc,
   WsServerUpdateProviderRpc,
   WsServerUpdateServerRpc,
   WsServerUpdateServerWithProgressRpc,

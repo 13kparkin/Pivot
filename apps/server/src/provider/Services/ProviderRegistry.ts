@@ -10,6 +10,7 @@ import type {
   OmpCapabilitiesError,
   OmpCapabilitiesSnapshot,
   OmpDeleteResourceInput,
+  OmpMoveItemInput,
   OmpReadResourceInput,
   OmpReadResourceResult,
   OmpResetSettingInput,
@@ -160,6 +161,16 @@ export interface ProviderRegistryShape {
     input: {
       readonly instanceId: ProviderInstanceId;
     } & OmpDeleteResourceInput,
+  ) => Effect.Effect<OmpCapabilitiesSnapshot, OmpCapabilitiesError>;
+
+  /**
+   * omp Capabilities: move a foreign-root global skill into the omp agent
+   * directory (non-thread op).
+   */
+  readonly ompCapabilitiesMoveItem: (
+    input: {
+      readonly instanceId: ProviderInstanceId;
+    } & OmpMoveItemInput,
   ) => Effect.Effect<OmpCapabilitiesSnapshot, OmpCapabilitiesError>;
 }
 

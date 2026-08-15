@@ -224,6 +224,8 @@ function makeRegistry(
         Effect.succeed({ settings: { entries: [] }, resources: [], skills: [], rules: [] }),
       ompCapabilitiesDeleteResource: () =>
         Effect.succeed({ settings: { entries: [] }, resources: [], skills: [], rules: [] }),
+      ompCapabilitiesMoveItem: () =>
+        Effect.succeed({ settings: { entries: [] }, resources: [], skills: [], rules: [] }),
       streamChanges: Stream.empty,
     };
 

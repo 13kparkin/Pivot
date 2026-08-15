@@ -656,6 +656,8 @@ const buildAppUnderTest = (options?: {
               Effect.die("ProviderRegistry.ompCapabilitiesWriteResource unsupported in test"),
             ompCapabilitiesDeleteResource: () =>
               Effect.die("ProviderRegistry.ompCapabilitiesDeleteResource unsupported in test"),
+            ompCapabilitiesMoveItem: () =>
+              Effect.die("ProviderRegistry.ompCapabilitiesMoveItem unsupported in test"),
             streamChanges: Stream.empty,
             ...options?.layers?.providerRegistry,
           }),
@@ -4618,6 +4620,11 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
                   capabilitiesCalls.push(`delete-resource:${instanceId}:${kind}:${name}:${scope}`);
                   return { settings: { entries: [] }, resources: [], skills: [], rules: [] };
                 }),
+              ompCapabilitiesMoveItem: ({ instanceId, kind, name }) =>
+                Effect.sync(() => {
+                  capabilitiesCalls.push(`move-item:${instanceId}:${kind}:${name}`);
+                  return { settings: { entries: [] }, resources: [], skills: [], rules: [] };
+                }),
             },
           },
         });
@@ -4686,6 +4693,15 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
             }),
           ),
         );
+        yield* Effect.scoped(
+          withWsRpcClient(wsUrl, (client) =>
+            client[WS_METHODS.serverOmpCapabilitiesMoveItem]({
+              instanceId: ProviderInstanceId.make("omp"),
+              kind: "skills",
+              name: "create-ticket",
+            }),
+          ),
+        );
 
         assert.equal(snapshot.snapshot.settings.entries[0]?.value, "titanium");
         assert.equal(readResource.resource.content, "# rule");
@@ -4696,6 +4712,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
           "read:omp:rules:codegraph:global",
           "write-resource:omp:skills:create-ticket:project",
           "delete-resource:omp:rules:codegraph:global",
+          "move-item:omp:skills:create-ticket",
         ]);
         assert.equal(failure._tag, "Failure");
         if (failure._tag !== "Failure") {

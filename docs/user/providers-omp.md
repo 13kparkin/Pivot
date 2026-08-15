@@ -70,7 +70,9 @@ still behaves as before.
   files invoked on demand; rules are `<name>.md` files loaded into every
   session. A project rule with the same name as a global rule shadows it
   (marked "Overrides global" in the list). New files start from a
-  frontmatter template.
+  frontmatter template. Skills discovered from other CLI skill directories
+  (e.g. `~/.cursor/skills`) are shown with their origin and can be moved into
+  the omp agent directory where Pivot manages them.
 - Edits are scope-aware: **Global** writes run `omp config set` on the server
   host; **Project** writes merge into the project's `.omp/config.yml`
   (comments and unknown keys are preserved) after a timestamped `.bak`

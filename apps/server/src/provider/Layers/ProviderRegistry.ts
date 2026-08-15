@@ -787,6 +787,11 @@ export const ProviderRegistryLive = Layer.effect(
           const adapter = yield* resolveOmpAdapter(instanceId);
           return yield* adapter.capabilitiesDeleteResource(input);
         }).pipe(Effect.mapError(toOmpCapabilitiesError)),
+      ompCapabilitiesMoveItem: ({ instanceId, ...input }) =>
+        Effect.gen(function* () {
+          const adapter = yield* resolveOmpAdapter(instanceId);
+          return yield* adapter.capabilitiesMoveItem(input);
+        }).pipe(Effect.mapError(toOmpCapabilitiesError)),
       get streamChanges() {
         return Stream.fromPubSub(changesPubSub);
       },
