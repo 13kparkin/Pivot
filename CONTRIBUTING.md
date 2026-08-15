@@ -42,6 +42,8 @@ Explain exactly what changed.
 
 Explain exactly why the change should exist.
 
+The PR body must include at least one sentence written by you, in your own words, explaining what changed and why. A generated summary, pasted agent transcript, or checklist alone does not satisfy this — if an agent produced the change, review every changed file yourself and write the explanation.
+
 Do not mix unrelated fixes together.
 
 If the PR makes anything resembling a UI change, include clear before/after images.
