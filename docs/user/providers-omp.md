@@ -69,8 +69,9 @@ by project. The global entry without a project shows the global surface.
   write-only — their values are managed through omp's own auth/config
   commands, never edited here.
 - **Skills** and **Rules**: the global view lists the omp agent-directory
-  items; a project's view lists that project's own items, labeled with the
-  project name. You can create, edit, and delete them directly: skills are
+  items alongside every project's own items, each project item labeled with
+  its project name; a project's view lists only that project's own items. You
+  can create, edit, and delete them directly: skills are
   `<name>/SKILL.md` files invoked on demand; rules are `<name>.md` files
   loaded into every session. A project rule with the same name as a global
   rule shadows it. New files start from a frontmatter template. Skills

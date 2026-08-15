@@ -94,6 +94,9 @@ function ItemEditorDialog({
   onMutated,
 }: ItemEditorDialogProps) {
   const isEdit = editor.mode === "edit";
+  // All-projects snapshots tag each project item with its own project id;
+  // single-project snapshots fall back to the view-resolved id.
+  const itemProjectId = isEdit ? (editor.item.projectId ?? projectId) : projectId;
   const [name, setName] = useState(isEdit ? editor.item.name : "");
   const [scope, setScope] = useState<OmpCapabilityItemScope>(
     projectLocked ? "project" : isEdit ? editor.item.scope : "global",
@@ -121,7 +124,9 @@ function ItemEditorDialog({
         kind,
         name: editor.item.name,
         scope: editor.item.scope,
-        ...(editor.item.scope === "project" && projectId !== null ? { projectId } : {}),
+        ...(editor.item.scope === "project" && itemProjectId !== null
+          ? { projectId: itemProjectId }
+          : {}),
       },
     }).then((result) => {
       if (cancelled) return;
@@ -156,7 +161,7 @@ function ItemEditorDialog({
       cancelled = true;
     };
     // The dialog is keyed by editor state; load exactly once per open.
-  }, [editor, environmentId, isEdit, itemLabel, kind, projectId, readResource]);
+  }, [editor, environmentId, isEdit, itemLabel, itemProjectId, kind, readResource]);
 
   const nameError = name.trim().length === 0 || !isValidItemName(name.trim());
   const canSave =
@@ -164,8 +169,8 @@ function ItemEditorDialog({
     !saving &&
     !nameError &&
     content.trim().length > 0 &&
-    // A project-scoped create needs the resolved project to write into.
-    (!projectLocked || projectId !== null);
+    // A project-scoped save needs the project id it writes into.
+    (!projectLocked || itemProjectId !== null);
 
   const save = async () => {
     const trimmedName = name.trim();
@@ -179,7 +184,7 @@ function ItemEditorDialog({
         content: kind === "skills" ? withTemplateName(content, trimmedName) : content,
         scope,
         overwrite: isEdit,
-        ...(scope === "project" && projectId !== null ? { projectId } : {}),
+        ...(scope === "project" && itemProjectId !== null ? { projectId: itemProjectId } : {}),
       },
     });
     setSaving(false);
@@ -255,7 +260,7 @@ function ItemEditorDialog({
                       Global
                     </SelectItem>
                   )}
-                  <SelectItem hideIndicator value="project" disabled={projectId === null}>
+                  <SelectItem hideIndicator value="project" disabled={itemProjectId === null}>
                     Project
                   </SelectItem>
                 </SelectPopup>
@@ -439,13 +444,14 @@ export function CapabilityItemsPanel({
   const [deleting, setDeleting] = useState(false);
   const [movingName, setMovingName] = useState<string | null>(null);
 
+  // The global view inventories every project's skills/rules, each tagged
+  // with its project; a project view keeps its own snapshot.
+  const snapshotInput =
+    projectKey === null ? { includeAllProjects: true } : projectId !== null ? { projectId } : {};
   const snapshotAtom =
     environmentId === null
       ? EMPTY_ITEMS_SNAPSHOT_ATOM
-      : serverEnvironment.capabilitiesSnapshot({
-          environmentId,
-          input: projectId === null ? {} : { projectId },
-        });
+      : serverEnvironment.capabilitiesSnapshot({ environmentId, input: snapshotInput });
   const result = useAtomValue(snapshotAtom);
   const refreshSnapshot = useAtomRefresh(snapshotAtom);
   const snapshot = Option.getOrNull(AsyncResult.value(result))?.snapshot ?? null;
@@ -499,6 +505,10 @@ export function CapabilityItemsPanel({
   const confirmDelete = async () => {
     if (deleteTarget === null) return;
     setDeleting(true);
+    // All-projects snapshots tag each item with its own project id; fall back
+    // to the view-resolved id for single-project snapshots.
+    const deleteProjectId =
+      deleteTarget.scope === "project" ? (deleteTarget.projectId ?? projectId) : null;
     const result = await deleteResource({
       environmentId,
       input: {
@@ -506,7 +516,7 @@ export function CapabilityItemsPanel({
         name: deleteTarget.name,
         scope: deleteTarget.scope,
         confirm: true,
-        ...(deleteTarget.scope === "project" && projectId !== null ? { projectId } : {}),
+        ...(deleteProjectId !== null ? { projectId: deleteProjectId } : {}),
       },
     });
     setDeleting(false);
@@ -609,7 +619,7 @@ export function CapabilityItemsPanel({
                 {rows.map((row) => {
                   const foreignRoot = row.scope === "global" && row.sourceDir !== undefined;
                   return (
-                    <tr key={`${row.scope}:${row.name}`}>
+                    <tr key={`${row.scope}:${row.projectId ?? ""}:${row.name}`}>
                       <td className="px-4 py-2 sm:pl-5">
                         <span className="inline-flex items-center gap-2">
                           <span className="font-mono font-medium text-foreground">{row.name}</span>
@@ -650,7 +660,11 @@ export function CapabilityItemsPanel({
 
       {editor !== null ? (
         <ItemEditorDialog
-          key={editor.mode === "edit" ? `edit:${editor.item.scope}:${editor.item.name}` : "create"}
+          key={
+            editor.mode === "edit"
+              ? `edit:${editor.item.scope}:${editor.item.projectId ?? ""}:${editor.item.name}`
+              : "create"
+          }
           kind={kind}
           itemLabel={itemLabel}
           editor={editor}

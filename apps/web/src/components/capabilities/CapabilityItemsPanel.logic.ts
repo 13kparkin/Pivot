@@ -37,10 +37,22 @@ export function buildItemRows(
   return items
     .map((item) => ({
       ...item,
-      scopeLabel: item.scope === "global" ? "Global" : "Project",
+      scopeLabel:
+        item.scope === "global"
+          ? "Global"
+          : item.projectTitle !== undefined
+            ? `Project · ${item.projectTitle}`
+            : "Project",
       shadowed: item.scope === "project" && globalNames.has(item.name),
     }))
-    .sort((a, b) => SCOPE_ORDER[a.scope] - SCOPE_ORDER[b.scope] || a.name.localeCompare(b.name));
+    .sort(
+      (a, b) =>
+        SCOPE_ORDER[a.scope] - SCOPE_ORDER[b.scope] ||
+        a.name.localeCompare(b.name) ||
+        // All-projects snapshots can carry same-named items from different
+        // projects; keep their order deterministic.
+        (a.projectId ?? "").localeCompare(b.projectId ?? ""),
+    );
 }
 
 /**
