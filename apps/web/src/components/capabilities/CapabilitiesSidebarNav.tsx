@@ -125,9 +125,17 @@ export function CapabilitiesSidebarNav({ pathname }: { pathname: string }) {
       if (isMobile) {
         setOpenMobile(false);
       }
-      void navigate({ to, hash: "", replace: true });
+      // A project-scoped view must stay scoped: section navigations carry
+      // the projectKey search param so the sidebar never silently falls
+      // back to the global surface.
+      void navigate({
+        to,
+        hash: "",
+        replace: true,
+        ...(projectKey !== undefined ? { search: { projectKey } } : {}),
+      });
     },
-    [isMobile, navigate, setOpenMobile],
+    [isMobile, navigate, projectKey, setOpenMobile],
   );
   const clearSearch = useCallback(() => {
     setQuery("");
@@ -139,9 +147,13 @@ export function CapabilitiesSidebarNav({ pathname }: { pathname: string }) {
       if (isMobile) {
         setOpenMobile(false);
       }
-      void navigate({ to: item.to, replace: true });
+      void navigate({
+        to: item.to,
+        replace: true,
+        ...(projectKey !== undefined ? { search: { projectKey } } : {}),
+      });
     },
-    [clearSearch, isMobile, navigate, setOpenMobile],
+    [clearSearch, isMobile, navigate, projectKey, setOpenMobile],
   );
   const handleBackClick = useCallback(() => {
     if (isMobile) {
