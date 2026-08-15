@@ -336,6 +336,9 @@ const PANEL_COPY: Readonly<
       readonly itemLabel: string;
       readonly scopeHint: string;
       readonly shadowHint: string;
+      /** Project-scoped view: the info box describes the project's own items. */
+      readonly projectScopeHint: string;
+      readonly projectShadowHint: string;
     }
   >
 > = {
@@ -346,6 +349,9 @@ const PANEL_COPY: Readonly<
     scopeHint:
       "Global rules live in the omp agent directory; project rules live under the project's .omp folder.",
     shadowHint: "A project rule with the same name shadows the global rule for that project.",
+    projectScopeHint: "Rules live in this project's .omp folder and load into every session.",
+    projectShadowHint:
+      "A project rule with the same name shadows the rule in the omp agent directory.",
   },
   skills: {
     title: "Skills",
@@ -355,6 +361,10 @@ const PANEL_COPY: Readonly<
       "Global skills live in the omp agent directory; project skills live under the project's .omp folder.",
     shadowHint:
       "Project and global skills coexist — a project skill is available in addition to the same-named global one.",
+    projectScopeHint:
+      "Skills live in this project's .omp folder and run when a task matches their description.",
+    projectShadowHint:
+      "A project skill with the same name is available in addition to the one in the omp agent directory.",
   },
 };
 
@@ -372,11 +382,21 @@ export function CapabilityItemsPanel({
   readonly kind: OmpCapabilityEditableKind;
   readonly projectKey?: string | null;
 }) {
-  const { title, description, itemLabel, scopeHint, shadowHint } = PANEL_COPY[kind];
+  const {
+    title,
+    description,
+    itemLabel,
+    scopeHint,
+    shadowHint,
+    projectScopeHint,
+    projectShadowHint,
+  } = PANEL_COPY[kind];
   const environmentId = useActiveEnvironmentId();
   const groups = useSettingsProjectGroups();
   const projectId = resolveCapabilitiesProjectId(groups, environmentId, projectKey);
   const projectLocked = projectKey !== null;
+  const effectiveScopeHint = projectLocked ? projectScopeHint : scopeHint;
+  const effectiveShadowHint = projectLocked ? projectShadowHint : shadowHint;
   const [query, setQuery] = useState("");
   const [editor, setEditor] = useState<EditorState | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<OmpCapabilityItem | null>(null);
@@ -481,8 +501,8 @@ export function CapabilityItemsPanel({
         }
       >
         <SettingsRow title="How it works" description={description} />
-        <SettingsRow title="Where items live" description={scopeHint} />
-        <SettingsRow title="Project overrides" description={shadowHint} />
+        <SettingsRow title="Where items live" description={effectiveScopeHint} />
+        <SettingsRow title="Project overrides" description={effectiveShadowHint} />
       </SettingsSection>
       <SettingsSection title={`All ${itemLabel}s`}>
         <div className="relative max-w-72">
