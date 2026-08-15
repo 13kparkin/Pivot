@@ -105,6 +105,12 @@ export const OmpSettingsSurfaceEntry = Schema.Struct({
   description: Schema.String,
   masked: Schema.Boolean,
   scope: OmpCapabilityScope,
+  /**
+   * Allowed values for `enum` entries, when the server can discover them
+   * from the omp binary. Absent for every other type (and for enums on
+   * binaries that do not report them) — clients fall back to a text input.
+   */
+  values: Schema.optionalKey(Schema.Array(TrimmedNonEmptyString)),
 });
 export type OmpSettingsSurfaceEntry = typeof OmpSettingsSurfaceEntry.Type;
 

@@ -47,6 +47,13 @@ import { OmpConfigStore } from "./OmpConfigStore.ts";
 
 const MASKED_VALUE = "********";
 
+/**
+ * Schema-based JSON encoder (the repo lint forbids bare JSON.stringify).
+ * Used to serialize structured setting values for `omp config set`, whose
+ * CLI parses records/arrays back out of JSON.
+ */
+const encodeUnknownJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
+
 /** Setting keys whose values are credentials → masked on the surface (D6). */
 const SECRET_KEY_PATTERN = /(token|secret|password|api)/i;
 
@@ -76,12 +83,6 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
 const isSecretSetting = (key: string, type: string): boolean =>
   type === "secret" || SECRET_KEY_PATTERN.test(key);
 
-/**
- * Extract the `description` from a leading YAML frontmatter block, leniently:
- * only the first `---`-delimited block is inspected and only the first
- * `description:` line is used. Missing or malformed frontmatter yields
- * `undefined` (display-only; never fails the snapshot).
- */
 function parseFrontmatterDescription(content: string): string | undefined {
   if (!content.startsWith("---")) return undefined;
   const end = content.indexOf("\n---");
@@ -159,7 +160,13 @@ export class OmpCapabilitiesService {
         });
       }
       if (input.scope === "global") {
-        yield* this.runOmpConfig(["set", input.key, String(input.value)]);
+        // `omp config set` parses values schema-driven (booleans, numbers,
+        // JSON arrays/records) from a single string argument. String()
+        // alone would serialize records/arrays as "[object Object]" and
+        // corrupt the config, so only primitives pass through verbatim.
+        const serialized =
+          typeof input.value === "string" ? input.value : encodeUnknownJson(input.value);
+        yield* this.runOmpConfig(["set", input.key, serialized]);
       } else {
         const projectCwd = yield* this.resolveProjectScopeCwd(input.projectId);
         yield* this.backup(projectCwd);
@@ -320,16 +327,19 @@ export class OmpCapabilitiesService {
           reason: "omp config list --json returned an unexpected shape",
         });
       }
+      const enumValues = yield* this.readEnumValues();
       const entries: OmpSettingsSurfaceEntry[] = [];
       for (const [key, info] of Object.entries(raw)) {
         if (!isRecord(info) || typeof info.type !== "string") {
           continue;
         }
         const masked = isSecretSetting(key, info.type);
+        const values = info.type === "enum" ? enumValues.get(key) : undefined;
         entries.push({
           key,
           ...(info.value !== undefined ? { value: info.value } : {}),
           ...(masked ? { value: MASKED_VALUE } : {}),
+          ...(values !== undefined ? { values } : {}),
           type: info.type,
           description: typeof info.description === "string" ? info.description : "",
           masked,
@@ -338,6 +348,35 @@ export class OmpCapabilitiesService {
       }
       return { entries };
     });
+  }
+
+  /**
+   * Enum choices come from the human `omp config list` type column, which
+   * prints them as `(off|idle|display|system)`; `--json` omits them. Any
+   * failure degrades to an empty map so an older binary only loses the
+   * dropdowns, never the settings surface.
+   */
+  private readEnumValues(): Effect.Effect<ReadonlyMap<string, readonly string[]>> {
+    return this.runOmpConfig(["list"]).pipe(
+      Effect.map((result) => {
+        const valuesByKey = new Map<string, readonly string[]>();
+        for (const line of result.stdout.split("\n")) {
+          const match = /^ {2}([^ =]+) = .* \(([^()]*)\)$/.exec(line);
+          if (match === null) continue;
+          const values = match[2]!
+            .split("|")
+            .map((value) => value.trim())
+            .filter((value) => value.length > 0);
+          if (values.length > 0) valuesByKey.set(match[1]!, values);
+        }
+        return valuesByKey;
+      }),
+      Effect.catch(() =>
+        Effect.succeed(
+          new Map<string, readonly string[]>() as ReadonlyMap<string, readonly string[]>,
+        ),
+      ),
+    );
   }
 
   private inventory(

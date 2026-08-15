@@ -1,17 +1,15 @@
 import { describe, expect, it } from "vite-plus/test";
-import {
-  ProjectId,
-  type OmpCapabilityScope,
-  type OmpSettingsSurfaceEntry,
-} from "@t3tools/contracts";
+import { ProjectId, type OmpSettingsSurfaceEntry } from "@t3tools/contracts";
 
 import {
   buildPrecedenceLabel,
   buildSettingRows,
   buildWriteSettingInput,
   canEditEntry,
-  PRECEDENCE_LADDER,
   filterSettingRows,
+  formatSettingValue,
+  parseSettingDraft,
+  PRECEDENCE_LADDER,
 } from "./CapabilitiesSettingsPanel.logic";
 
 describe("PRECEDENCE_LADDER", () => {
@@ -63,6 +61,17 @@ describe("buildSettingRows", () => {
     expect(rows.map((row) => row.displayValue)).toEqual(["3", "true"]);
   });
 
+  it("serializes records and arrays as JSON instead of [object Object]", () => {
+    const rows = buildSettingRows([
+      entry({ key: "modelRoles", type: "record", value: { default: "openai/gpt-5" } }),
+      entry({ key: "cycleOrder", type: "array", value: ["smol", "default", "slow"] }),
+    ]);
+    expect(rows.map((row) => row.displayValue)).toEqual([
+      '{"default":"openai/gpt-5"}',
+      '["smol","default","slow"]',
+    ]);
+  });
+
   it("renders unset values as an empty string", () => {
     const rows = buildSettingRows([entry({ key: "retries", value: undefined })]);
     expect(rows[0]!.displayValue).toBe("");
@@ -72,6 +81,56 @@ describe("buildSettingRows", () => {
     const source = entry({ key: "theme.dark", type: "boolean", scope: "project" });
     const [row] = buildSettingRows([source]);
     expect(row).toMatchObject({ key: "theme.dark", type: "boolean", scope: "project" });
+  });
+
+  it("carries enum choices through to the row", () => {
+    const source = entry({
+      key: "symbolPreset",
+      type: "enum",
+      values: ["unicode", "nerd", "ascii"],
+    });
+    const [row] = buildSettingRows([source]);
+    expect(row?.values).toEqual(["unicode", "nerd", "ascii"]);
+  });
+});
+
+describe("formatSettingValue", () => {
+  it("stringifies primitives and JSON-encodes structured values", () => {
+    expect(formatSettingValue("titanium")).toBe("titanium");
+    expect(formatSettingValue(true)).toBe("true");
+    expect(formatSettingValue(3)).toBe("3");
+    expect(formatSettingValue({ default: "x" })).toBe('{"default":"x"}');
+    expect(formatSettingValue(["a", "b"])).toBe('["a","b"]');
+    expect(formatSettingValue(undefined)).toBe("");
+    expect(formatSettingValue(null)).toBe("");
+  });
+});
+
+describe("parseSettingDraft", () => {
+  it("parses finite numbers", () => {
+    expect(parseSettingDraft("number", " 5 ")).toEqual({ ok: true, value: 5 });
+    expect(parseSettingDraft("number", "abc").ok).toBe(false);
+    expect(parseSettingDraft("number", "").ok).toBe(false);
+  });
+
+  it("parses JSON arrays", () => {
+    expect(parseSettingDraft("array", '["a","b"]')).toEqual({ ok: true, value: ["a", "b"] });
+    expect(parseSettingDraft("array", '"nope"').ok).toBe(false);
+    expect(parseSettingDraft("array", "{").ok).toBe(false);
+  });
+
+  it("parses JSON records", () => {
+    expect(parseSettingDraft("record", '{"default":"openai/gpt-5"}')).toEqual({
+      ok: true,
+      value: { default: "openai/gpt-5" },
+    });
+    expect(parseSettingDraft("record", "[]").ok).toBe(false);
+    expect(parseSettingDraft("record", "not json").ok).toBe(false);
+  });
+
+  it("passes strings and enums through verbatim", () => {
+    expect(parseSettingDraft("enum", "  auto ")).toEqual({ ok: true, value: "auto" });
+    expect(parseSettingDraft("string", "titanium")).toEqual({ ok: true, value: "titanium" });
   });
 });
 
