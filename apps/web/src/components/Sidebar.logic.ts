@@ -1068,3 +1068,39 @@ export function partitionThreadsByProjectGroup(input: {
 
   return { projects, snoozed, settled };
 }
+
+// ── Settled dock (pivot-22) ─────────────────────────────────────────
+// Settled lives in a fixed dock below the scroll area. The tail renders in
+// pages: history shouldn't dominate the sidebar, and the common lookups are
+// recent. Expansion resets the page when the filter context changes.
+export const SETTLED_DOCK_INITIAL_COUNT = 10;
+export const SETTLED_DOCK_PAGE_COUNT = 25;
+
+/** Collapsed dock shows only the header bar; expanded shows up to `count` rows. */
+export function resolveSettledDockVisibleCount(count: number, expanded: boolean): number {
+  return expanded ? count : 0;
+}
+
+/**
+ * First `visibleCount` settled rows. The open thread must never hide under
+ * "Show more": navigating into a deep settled thread (search, deep link)
+ * pulls its row into the visible tail so the highlight and the un-settle
+ * affordance stay reachable.
+ */
+export function resolveSettledDockRows<T extends { readonly id: string }>(input: {
+  settled: readonly T[];
+  visibleCount: number;
+  routeThreadKey: string | null;
+  threadKeyOf: (thread: T) => string;
+}): T[] {
+  const { settled, visibleCount, routeThreadKey, threadKeyOf } = input;
+  if (settled.length <= visibleCount) return [...settled];
+  const visible = settled.slice(0, visibleCount);
+  if (routeThreadKey !== null) {
+    const routeThread = settled
+      .slice(visibleCount)
+      .find((thread) => threadKeyOf(thread) === routeThreadKey);
+    if (routeThread !== undefined) visible.push(routeThread);
+  }
+  return visible;
+}
