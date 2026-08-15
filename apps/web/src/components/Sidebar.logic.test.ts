@@ -36,6 +36,8 @@ import {
   shouldCreateNewThreadInCurrentProject,
   partitionThreadsByProjectGroup,
   resolveProjectExpansionState,
+  resolveSettledDockRows,
+  resolveSettledDockVisibleCount,
   THREAD_JUMP_HINT_SHOW_DELAY_MS,
 } from "./Sidebar.logic";
 import {
@@ -1898,5 +1900,92 @@ describe("resolveProjectExpansionState", () => {
 
   it("defaults empty projects to collapsed", () => {
     expect(resolveProjectExpansionState("project-a", false)).toBe(false);
+  });
+});
+
+describe("resolveSettledDockVisibleCount", () => {
+  it("renders no rows when the dock is collapsed", () => {
+    expect(resolveSettledDockVisibleCount(10, false)).toBe(0);
+  });
+
+  it("caps expanded rows at the paged count", () => {
+    expect(resolveSettledDockVisibleCount(10, true)).toBe(10);
+  });
+
+  it("grows by a page after Show more", () => {
+    expect(resolveSettledDockVisibleCount(35, true)).toBe(35);
+  });
+});
+
+describe("resolveSettledDockRows", () => {
+  const threadKeyOf = (thread: EnvironmentThreadShell) => `${thread.environmentId}:${thread.id}`;
+  const makeSettledRows = (count: number) =>
+    Array.from({ length: count }, (_, index) =>
+      makePartitionShell({
+        id: ThreadId.make(`t-${index + 1}`),
+        settledOverride: "settled",
+        settledAt: NOW,
+      }),
+    );
+
+  it("returns every settled row within the visible count", () => {
+    const rows = makeSettledRows(2);
+
+    const visible = resolveSettledDockRows({
+      settled: rows,
+      visibleCount: 10,
+      routeThreadKey: null,
+      threadKeyOf,
+    });
+
+    expect(visible.map((thread) => thread.id)).toEqual([
+      ThreadId.make("t-1"),
+      ThreadId.make("t-2"),
+    ]);
+  });
+
+  it("caps the rows at the visible count", () => {
+    const rows = makeSettledRows(12);
+
+    const visible = resolveSettledDockRows({
+      settled: rows,
+      visibleCount: 10,
+      routeThreadKey: null,
+      threadKeyOf,
+    });
+
+    expect(visible.map((thread) => thread.id)).toEqual(
+      Array.from({ length: 10 }, (_, index) => ThreadId.make(`t-${index + 1}`)),
+    );
+  });
+
+  it("keeps the routed thread's row visible past the cap", () => {
+    const rows = makeSettledRows(12);
+
+    const visible = resolveSettledDockRows({
+      settled: rows,
+      visibleCount: 10,
+      routeThreadKey: "environment-local:t-12",
+      threadKeyOf,
+    });
+
+    expect(visible.map((thread) => thread.id)).toEqual([
+      ...Array.from({ length: 10 }, (_, index) => ThreadId.make(`t-${index + 1}`)),
+      ThreadId.make("t-12"),
+    ]);
+  });
+
+  it("does not duplicate the routed thread when it is already inside the cap", () => {
+    const rows = makeSettledRows(12);
+
+    const visible = resolveSettledDockRows({
+      settled: rows,
+      visibleCount: 10,
+      routeThreadKey: "environment-local:t-5",
+      threadKeyOf,
+    });
+
+    expect(visible).toHaveLength(10);
+    expect(visible.some((thread) => thread.id === ThreadId.make("t-5"))).toBe(true);
   });
 });
