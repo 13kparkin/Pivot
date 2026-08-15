@@ -781,6 +781,7 @@ export function ProviderInstanceCard({
                 idPrefix={`provider-instance-${instanceId}`}
                 variant="card"
                 onChange={updateConfig}
+                modelSlugs={modelsForDisplay.map((model) => model.slug)}
               />
             ) : null}
 

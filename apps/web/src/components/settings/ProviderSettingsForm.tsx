@@ -11,6 +11,7 @@ import type {
 
 import { cn } from "../../lib/utils";
 import { DraftInput } from "../ui/draft-input";
+import { ModelSlugPicker } from "./ModelSlugPicker";
 import { Input } from "../ui/input";
 import { Switch } from "../ui/switch";
 import { Textarea } from "../ui/textarea";
@@ -160,6 +161,11 @@ interface ProviderSettingsFormProps {
   readonly idPrefix: string;
   readonly variant: "card" | "dialog";
   readonly onChange: (nextConfig: Record<string, unknown> | undefined) => void;
+  /**
+   * Model slugs for the instance, offered as choices by `model`-control
+   * fields. Absent (e.g. before the first provider probe) → plain text input.
+   */
+  readonly modelSlugs?: readonly string[] | undefined;
 }
 
 function FieldFrame(props: {
@@ -178,6 +184,7 @@ interface ProviderSettingsFieldRowProps {
   readonly idPrefix: string;
   readonly variant: ProviderSettingsFormProps["variant"];
   readonly onChange: ProviderSettingsFormProps["onChange"];
+  readonly modelSlugs: ProviderSettingsFormProps["modelSlugs"];
 }
 
 function ProviderSettingsFieldRow({
@@ -186,6 +193,7 @@ function ProviderSettingsFieldRow({
   idPrefix,
   variant,
   onChange,
+  modelSlugs,
 }: ProviderSettingsFieldRowProps) {
   const inputId = `${idPrefix}-${field.key}`;
   const descriptionClassName =
@@ -238,6 +246,26 @@ function ProviderSettingsFieldRow({
     );
   }
 
+  if (field.control === "model" && (modelSlugs?.length ?? 0) > 0) {
+    return (
+      <FieldFrame variant={variant}>
+        <span className={cn("text-xs font-medium text-foreground", variant === "card" && "block")}>
+          {field.label}
+        </span>
+        <div className={cn(variant === "card" && "mt-1.5")}>
+          <ModelSlugPicker
+            ariaLabel={field.label}
+            value={readProviderConfigString(value, field.key)}
+            slugs={modelSlugs ?? []}
+            placeholder={field.placeholder}
+            onCommit={(next) => onChange(nextProviderConfigWithFieldValue(value, field, next))}
+          />
+        </div>
+        {description}
+      </FieldFrame>
+    );
+  }
+
   const type = field.control === "password" ? "password" : undefined;
   return (
     <FieldFrame variant={variant}>
@@ -280,6 +308,7 @@ export function ProviderSettingsForm({
   idPrefix,
   variant,
   onChange,
+  modelSlugs,
 }: ProviderSettingsFormProps) {
   const fields = useMemo(() => deriveProviderSettingsFields(definition), [definition]);
 
@@ -297,6 +326,7 @@ export function ProviderSettingsForm({
           idPrefix={idPrefix}
           variant={variant}
           onChange={onChange}
+          modelSlugs={modelSlugs}
         />
       ))}
     </>
