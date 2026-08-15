@@ -85,10 +85,13 @@ describe("ClientSettings sidebar", () => {
     expect(decoded).not.toHaveProperty("sidebarV2ConfiguredByUser");
   });
 
-  it("preserves an explicit legacy sidebar opt-in", () => {
+  it("decodes a stored legacy sidebar opt-in but drops it from patches", () => {
+    // Old stored values still decode (decode-side default retained) so an
+    // existing opt-in never breaks the app; the patch schema no longer
+    // carries the key, so new writes are impossible.
     expect(decodeClientSettings({ legacySidebarEnabled: true }).legacySidebarEnabled).toBe(true);
-    expect(decodeClientSettingsPatch({ legacySidebarEnabled: true }).legacySidebarEnabled).toBe(
-      true,
+    expect(decodeClientSettingsPatch({ legacySidebarEnabled: true })).not.toHaveProperty(
+      "legacySidebarEnabled",
     );
   });
 
