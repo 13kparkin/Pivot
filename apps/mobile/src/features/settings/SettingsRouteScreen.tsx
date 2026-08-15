@@ -35,7 +35,6 @@ import { WorkspaceSidebarToolbar } from "../layout/workspace-sidebar-toolbar";
 import { runtime } from "../../lib/runtime";
 import { useThemeColor } from "../../lib/useThemeColor";
 import { mobilePreferencesAtom, updateMobilePreferencesAtom } from "../../state/preferences";
-import { useThreadListV2Enabled } from "../threads/use-thread-list-v2-enabled";
 import {
   type AppUpdateCheckState,
   isAppUpdateCheckAvailable,
@@ -129,8 +128,6 @@ function LocalSettingsRouteScreen() {
         <SettingsSection title="Appearance">
           <SettingsRow icon="paintbrush" label="Appearance" target="SettingsAppearance" />
         </SettingsSection>
-
-        <LegacySettingsSection />
 
         <ArchivedThreadsSettingsSection />
 
@@ -511,8 +508,6 @@ function ConfiguredSettingsRouteScreen() {
           <SettingsRow icon="paintbrush" label="Appearance" target="SettingsAppearance" />
         </SettingsSection>
 
-        <LegacySettingsSection />
-
         <ArchivedThreadsSettingsSection />
 
         <AppSettingsSection />
@@ -527,33 +522,6 @@ function GeneralSettingsSection() {
       <SettingsRow icon="folder" label="Project Grouping" target="SettingsProjectGrouping" />
       <SettingsRow icon="chart.bar.xaxis" label="Usage" target="SettingsUsage" />
     </SettingsSection>
-  );
-}
-
-/**
- * Device-local legacy toggles. Mobile has no client-settings sync, so this is
- * the counterpart of web's Settings → General → Legacy features backed by
- * mobile preferences.
- */
-function LegacySettingsSection() {
-  const savePreferences = useAtomSet(updateMobilePreferencesAtom);
-  const threadListV2Enabled = useThreadListV2Enabled();
-
-  return (
-    <View className="gap-3">
-      <SettingsSection title="Legacy">
-        <SettingsSwitchRow
-          icon="sidebar.left"
-          label="Legacy Thread List"
-          value={!threadListV2Enabled}
-          onValueChange={(value) => savePreferences({ legacyThreadListEnabled: value })}
-        />
-      </SettingsSection>
-      <Text className="px-2 text-sm text-foreground-muted">
-        Brings back the original grouped thread list. The default list is flat, in creation order:
-        active work renders as cards; settled threads collapse to compact rows.
-      </Text>
-    </View>
   );
 }
 

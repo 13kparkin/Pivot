@@ -12,15 +12,17 @@ vi.mock("expo-secure-store", () => ({
   deleteItemAsync: vi.fn(),
 }));
 
-import { sanitizePreferences } from "./mobile-preferences";
+import { sanitizePreferences, type Preferences } from "./mobile-preferences";
 
 describe("mobile preferences sanitize", () => {
   it("drops the legacy thread list opt-in key", () => {
+    // Older OTA bundles may still store the removed key; sanitizing must
+    // drop it instead of letting it survive in the preferences blob.
     expect(
       sanitizePreferences({
         legacyThreadListEnabled: true,
         liveActivitiesEnabled: false,
-      }),
+      } as Preferences),
     ).toEqual({ liveActivitiesEnabled: false });
   });
 

@@ -33,14 +33,6 @@ export interface Preferences {
    * or AsyncStorage, so the preference blob is the device-local store).
    */
   readonly sidebarProjectExpanded?: Readonly<Record<string, boolean>>;
-  /**
-   * Device-local mirror of the web `legacySidebarEnabled` setting. Mobile has
-   * no client-settings sync, so the legacy grouped thread list is opted into
-   * per device. Deliberately a fresh key (was `threadListV2Enabled`, an
-   * opt-out): sanitizing drops the old key, so every device resets to the
-   * default flat list — see `resolveThreadListV2Enabled`.
-   */
-  readonly legacyThreadListEnabled?: boolean;
 }
 
 export class MobilePreferencesLoadError extends Schema.TaggedErrorClass<MobilePreferencesLoadError>()(
@@ -93,7 +85,6 @@ export function sanitizePreferences(parsed: Preferences): Preferences {
     projectGroupingEnabled?: boolean;
     projectGroupingMode?: SidebarProjectGroupingMode;
     sidebarProjectExpanded?: Readonly<Record<string, boolean>>;
-    legacyThreadListEnabled?: boolean;
   } = {};
 
   if (typeof parsed.liveActivitiesEnabled === "boolean") {
@@ -140,9 +131,6 @@ export function sanitizePreferences(parsed: Preferences): Preferences {
       if (typeof value === "boolean") expanded[key] = value;
     }
     preferences.sidebarProjectExpanded = expanded;
-  }
-  if (typeof parsed.legacyThreadListEnabled === "boolean") {
-    preferences.legacyThreadListEnabled = parsed.legacyThreadListEnabled;
   }
   return preferences;
 }

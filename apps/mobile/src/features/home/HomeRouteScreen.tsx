@@ -15,8 +15,8 @@ import { checkForAppUpdateOnLaunch } from "../updates/app-updates";
 import { AndroidHomeFabLayout } from "./AndroidHomeFab";
 import { HomeScreen } from "./HomeScreen";
 import { HomeHeader } from "./HomeHeader";
+import { buildProjectGroups } from "@t3tools/client-runtime/state/project-grouping";
 import { useHomeListOptions } from "./home-list-options";
-import { buildHomeProjectScopes } from "./homeThreadList";
 import { usePendingTaskListActions } from "./usePendingTaskListActions";
 import { useThreadListActions } from "./useThreadListActions";
 import { getConnectionAwareBrandHeaderOptions } from "./WorkspaceConnectionTitle";
@@ -70,24 +70,28 @@ export function HomeRouteScreen() {
     () => new Set(environments.map((environment) => environment.environmentId)),
     [environments],
   );
-  const {
-    options: listOptions,
-    setSelectedEnvironmentId,
-    setProjectSortOrder,
-    setThreadSortOrder,
-  } = useHomeListOptions(availableEnvironmentIds);
+  const { options: listOptions, setSelectedEnvironmentId } =
+    useHomeListOptions(availableEnvironmentIds);
   const selectedEnvironmentId = listOptions.selectedEnvironmentId;
   const [selectedProjectKey, setSelectedProjectKey] = useState<string | null>(null);
   const projectFilterOptions = useMemo(
     () =>
-      buildHomeProjectScopes({
+      buildProjectGroups({
         projects,
-        environmentId: selectedEnvironmentId,
-        projectGroupingMode: listOptions.projectGroupingMode,
-      }).map((scope) => ({
-        key: scope.key,
-        label: scope.title,
-      })),
+        settings: {
+          sidebarProjectGroupingMode: listOptions.projectGroupingMode,
+          sidebarProjectGroupingOverrides: {},
+        },
+      })
+        .filter(
+          (group) =>
+            selectedEnvironmentId === null ||
+            group.memberProjectRefs.some((ref) => ref.environmentId === selectedEnvironmentId),
+        )
+        .map((group) => ({
+          key: group.key,
+          label: group.label,
+        })),
     [listOptions.projectGroupingMode, projects, selectedEnvironmentId],
   );
   useEffect(() => {
@@ -147,8 +151,6 @@ export function HomeRouteScreen() {
           searchQuery={searchQuery}
           selectedEnvironmentId={selectedEnvironmentId}
           selectedProjectKey={selectedProjectKey}
-          projectSortOrder={listOptions.projectSortOrder}
-          threadSortOrder={listOptions.threadSortOrder}
           onEnvironmentChange={setSelectedEnvironmentId}
           onProjectChange={setSelectedProjectKey}
           onOpenEnvironments={() =>
@@ -163,10 +165,8 @@ export function HomeRouteScreen() {
               params: { screen: "Settings" },
             })
           }
-          onProjectSortOrderChange={setProjectSortOrder}
           onSearchQueryChange={setSearchQuery}
           onStartNewTask={() => navigation.navigate("NewTaskSheet", { screen: "NewTask" })}
-          onThreadSortOrderChange={setThreadSortOrder}
         />
 
         <HomeScreen
@@ -196,7 +196,6 @@ export function HomeRouteScreen() {
               params: { screen: "Settings" },
             })
           }
-          onProjectSortOrderChange={setProjectSortOrder}
           onSearchQueryChange={setSearchQuery}
           onSelectThread={(thread) => {
             // Settled threads are live shells: opening one is plain
@@ -219,17 +218,14 @@ export function HomeRouteScreen() {
             });
           }}
           onStartNewTask={() => navigation.navigate("NewTaskSheet", { screen: "NewTask" })}
-          onThreadSortOrderChange={setThreadSortOrder}
           pendingTasks={pendingTasks}
           projectGroupingMode={listOptions.projectGroupingMode}
           projects={projects}
-          projectSortOrder={listOptions.projectSortOrder}
           savedConnectionsById={savedConnectionsById}
           searchQuery={searchQuery}
           selectedEnvironmentId={selectedEnvironmentId}
           selectedProjectKey={selectedProjectKey}
           threads={threads}
-          threadSortOrder={listOptions.threadSortOrder}
         />
       </>
     </AndroidHomeFabLayout>

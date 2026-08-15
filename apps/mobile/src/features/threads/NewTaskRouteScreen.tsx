@@ -274,9 +274,10 @@ export function NewTaskRouteScreen({ route }: StaticScreenProps<NewTaskRoutePara
         ) : (
           <View collapsable={false} className="overflow-hidden rounded-[24px] bg-card">
             {projectScopes.map((scope, scopeIndex) => {
-              const hasMultipleProjects = scope.projects.length > 1;
+              const scopeProjects = scope.members.map((member) => member.project);
+              const hasMultipleProjects = scopeProjects.length > 1;
               const expanded = expandedGroupKeys.has(scope.key);
-              const singleProject = hasMultipleProjects ? null : scope.projects[0];
+              const singleProject = hasMultipleProjects ? null : scopeProjects[0];
               return (
                 <View
                   key={scope.key}
@@ -298,19 +299,19 @@ export function NewTaskRouteScreen({ route }: StaticScreenProps<NewTaskRoutePara
                         environmentId={scope.representative.environmentId}
                         faviconPath={scope.representative.faviconPath}
                         size={20}
-                        projectTitle={scope.title}
+                        projectTitle={scope.label}
                         workspaceRoot={scope.representative.workspaceRoot}
                       />
                     </View>
                     <View className="min-w-0 flex-1">
-                      <Text className="text-base leading-snug font-t3-bold">{scope.title}</Text>
+                      <Text className="text-base leading-snug font-t3-bold">{scope.label}</Text>
                       <Text
                         className="text-xs leading-snug text-foreground-muted"
                         ellipsizeMode="middle"
                         numberOfLines={1}
                       >
                         {hasMultipleProjects
-                          ? `${scope.projects.length} workspaces`
+                          ? `${scopeProjects.length} workspaces`
                           : singleProject?.workspaceRoot}
                       </Text>
                     </View>
@@ -322,7 +323,7 @@ export function NewTaskRouteScreen({ route }: StaticScreenProps<NewTaskRoutePara
                     />
                   </Pressable>
                   {hasMultipleProjects && expanded
-                    ? scope.projects.map((project) => (
+                    ? scopeProjects.map((project) => (
                         <Pressable
                           key={scopedProjectKey(project.environmentId, project.id)}
                           disabled={reservedDestinationProject !== null}

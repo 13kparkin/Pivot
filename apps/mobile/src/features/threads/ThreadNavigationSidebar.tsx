@@ -32,30 +32,14 @@ import { scopedProjectKey, scopedThreadKey } from "../../lib/scopedEntities";
 import { useThemeColor } from "../../lib/useThemeColor";
 import { useProjects, useThreadShells } from "../../state/entities";
 import { useThreadSearch } from "../../state/queries";
-import { useThreadListV2Enabled } from "./use-thread-list-v2-enabled";
 import { environmentServerConfigsAtom } from "../../state/server";
 import { mobilePreferencesAtom, updateMobilePreferencesAtom } from "../../state/preferences";
 import { usePendingNewTasks } from "../../state/use-pending-new-tasks";
 import { useWorkspaceState } from "../../state/workspace";
 import { useSavedRemoteConnections } from "../../state/use-remote-environment-registry";
 import { useHardwareKeyboardCommand } from "../keyboard/hardwareKeyboardCommands";
-import {
-  hasCustomHomeListOptions,
-  PROJECT_SORT_OPTIONS,
-  THREAD_SORT_OPTIONS,
-  useHomeListOptions,
-} from "../home/home-list-options";
+import { useHomeListOptions } from "../home/home-list-options";
 import { buildHomeListFilterMenu } from "../home/home-list-filter-menu";
-import {
-  buildHomeListLayout,
-  DEFAULT_GROUP_DISPLAY_STATE,
-  homeListItemsAreEqual,
-  nextGroupDisplayState,
-  type HomeGroupDisplayAction,
-  type HomeGroupDisplayState,
-  type HomeListItem,
-} from "../home/homeListItems";
-import { buildHomeProjectScopes, buildHomeThreadGroups } from "../home/homeThreadList";
 import { SwipeableScrollGateProvider, useSwipeableScrollGate } from "../home/thread-swipe-actions";
 import { usePendingTaskListActions } from "../home/usePendingTaskListActions";
 import { useThreadListActions } from "../home/useThreadListActions";
@@ -67,12 +51,6 @@ import { SidebarHeaderActions } from "./sidebar-header-actions";
 import { SidebarFilterButton } from "./sidebar-filter-button";
 import { createSidebarHeaderItems } from "./sidebar-native-header-items";
 import { SidebarNavigationShell } from "./sidebar-navigation-shell";
-import {
-  PendingTaskListRow,
-  ThreadListGroupHeader,
-  ThreadListRow,
-  ThreadListShowMoreRow,
-} from "./thread-list-items";
 import {
   ThreadListV2PendingRow,
   ThreadListV2ProjectRow,
@@ -90,10 +68,9 @@ import {
   type ThreadListV2ProjectListItem,
 } from "./threadListV2";
 
-/** The sidebar list serves both lists: v1 grouped items or, when the Thread
-    List v2 beta is on, per-project rows with nested thread cards and the
+/** The sidebar list: per-project rows with nested thread cards plus the
     global snoozed shelf. Settled lives in the fixed dock below the list. */
-type SidebarListItem = HomeListItem | ThreadListV2ProjectListItem;
+type SidebarListItem = ThreadListV2ProjectListItem;
 
 /**
  * Shared capsule behind the sidebar header buttons — a native liquid-glass
@@ -216,7 +193,6 @@ function ThreadNavigationSidebarPane(
     movePinnedThread,
     regenerateThreadTitle,
   } = useThreadListActions();
-  const threadListV2Enabled = useThreadListV2Enabled();
   const pendingTasks = usePendingNewTasks();
   const { openPendingTask, confirmDeletePendingTask } = usePendingTaskListActions();
   const environments = useMemo(
@@ -233,8 +209,7 @@ function ThreadNavigationSidebarPane(
     () => new Set(environments.map((environment) => environment.environmentId)),
     [environments],
   );
-  const { options, setSelectedEnvironmentId, setProjectSortOrder, setThreadSortOrder } =
-    useHomeListOptions(availableEnvironmentIds);
+  const { options, setSelectedEnvironmentId } = useHomeListOptions(availableEnvironmentIds);
   const searchEnvironmentIds = useMemo(
     () =>
       options.selectedEnvironmentId === null
@@ -265,44 +240,34 @@ function ThreadNavigationSidebarPane(
     [threadSearch.matches],
   );
   const [selectedProjectKey, setSelectedProjectKey] = useState<string | null>(null);
-  const projectScopes = useMemo(
+  // Logical project groups in group order — the per-project list model (the
+  // web sidebar partitions the same shared buildProjectGroups output).
+  const v2ProjectGroups = useMemo(
     () =>
-      buildHomeProjectScopes({
+      buildProjectGroups({
         projects,
-        environmentId: options.selectedEnvironmentId,
-        projectGroupingMode: options.projectGroupingMode,
+        settings: {
+          sidebarProjectGroupingMode: options.projectGroupingMode,
+          sidebarProjectGroupingOverrides: {},
+        },
       }),
-    [options.projectGroupingMode, options.selectedEnvironmentId, projects],
+    [options.projectGroupingMode, projects],
   );
   const projectFilterOptions = useMemo(
     () =>
-      projectScopes.map((scope) => ({
-        key: scope.key,
-        label: scope.title,
-      })),
-    [projectScopes],
-  );
-  const projectTitleByProjectKey = useMemo(
-    () =>
-      new Map(
-        projectScopes.flatMap((scope) =>
-          scope.projectRefs.map(
-            (projectRef) =>
-              [
-                scopedProjectKey(projectRef.environmentId, projectRef.projectId),
-                scope.title,
-              ] as const,
-          ),
-        ),
-      ),
-    [projectScopes],
-  );
-  const selectedProjectScope = useMemo(
-    () =>
-      selectedProjectKey === null
-        ? null
-        : (projectScopes.find((scope) => scope.key === selectedProjectKey) ?? null),
-    [projectScopes, selectedProjectKey],
+      v2ProjectGroups
+        .filter(
+          (group) =>
+            options.selectedEnvironmentId === null ||
+            group.memberProjectRefs.some(
+              (projectRef) => projectRef.environmentId === options.selectedEnvironmentId,
+            ),
+        )
+        .map((group) => ({
+          key: group.key,
+          label: group.label,
+        })),
+    [options.selectedEnvironmentId, v2ProjectGroups],
   );
   useEffect(() => {
     if (
@@ -312,91 +277,6 @@ function ThreadNavigationSidebarPane(
       setSelectedProjectKey(null);
     }
   }, [projectFilterOptions, selectedProjectKey]);
-  const selectedProjectRefs = useMemo(
-    () =>
-      selectedProjectScope === null
-        ? null
-        : new Set(
-            selectedProjectScope.projectRefs.map((projectRef) =>
-              scopedProjectKey(projectRef.environmentId, projectRef.projectId),
-            ),
-          ),
-    [selectedProjectScope],
-  );
-  const scopedProjects = useMemo(
-    () =>
-      selectedProjectRefs === null
-        ? projects
-        : projects.filter((project) =>
-            selectedProjectRefs.has(scopedProjectKey(project.environmentId, project.id)),
-          ),
-    [projects, selectedProjectRefs],
-  );
-  const scopedThreads = useMemo(
-    () =>
-      selectedProjectRefs === null
-        ? threads
-        : threads.filter((thread) =>
-            selectedProjectRefs.has(scopedProjectKey(thread.environmentId, thread.projectId)),
-          ),
-    [selectedProjectRefs, threads],
-  );
-  const scopedPendingTasks = useMemo(
-    () =>
-      selectedProjectRefs === null
-        ? pendingTasks
-        : pendingTasks.filter((pendingTask) =>
-            selectedProjectRefs.has(
-              scopedProjectKey(pendingTask.message.environmentId, pendingTask.creation.projectId),
-            ),
-          ),
-    [pendingTasks, selectedProjectRefs],
-  );
-  const groups = useMemo(
-    () =>
-      buildHomeThreadGroups({
-        projects: scopedProjects,
-        threads: scopedThreads,
-        pendingTasks: scopedPendingTasks,
-        environmentId: options.selectedEnvironmentId,
-        searchQuery: props.searchQuery,
-        matchedThreadKeys,
-        projectSortOrder: options.projectSortOrder,
-        threadSortOrder: options.threadSortOrder,
-        projectGroupingMode: options.projectGroupingMode,
-      }),
-    [
-      matchedThreadKeys,
-      options,
-      props.searchQuery,
-      scopedPendingTasks,
-      scopedProjects,
-      scopedThreads,
-    ],
-  );
-  const [groupDisplayStates, setGroupDisplayStates] = useState<
-    ReadonlyMap<string, HomeGroupDisplayState>
-  >(() => new Map());
-  const updateGroupDisplay = useCallback((key: string, action: HomeGroupDisplayAction) => {
-    setGroupDisplayStates((previous) => {
-      const next = new Map(previous);
-      next.set(
-        key,
-        nextGroupDisplayState(previous.get(key) ?? DEFAULT_GROUP_DISPLAY_STATE, action),
-      );
-      return next;
-    });
-  }, []);
-  const hasSearchQuery = props.searchQuery.trim().length > 0;
-  const listLayout = useMemo(
-    () =>
-      buildHomeListLayout({
-        groups,
-        displayStates: groupDisplayStates,
-        showAllThreads: hasSearchQuery,
-      }),
-    [groups, groupDisplayStates, hasSearchQuery],
-  );
   const projectCwdByKey = useMemo(() => {
     const map = new Map<string, string>();
     for (const project of projects) {
@@ -462,14 +342,13 @@ function ThreadNavigationSidebarPane(
   // thread reappears immediately instead of on the next minute tick.
   const [snoozeWakeTick, bumpSnoozeWakeTick] = useState(0);
   useEffect(() => {
-    if (!threadListV2Enabled) return;
-    // Refresh immediately on enable: the mount-time value can be hours old
-    // by the time the beta is switched on, which would misclassify the
-    // inactivity auto-settle boundary until the first tick.
+    // Refresh immediately on mount: the mount-time value can be stale by the
+    // time the list draws, which would misclassify the inactivity auto-settle
+    // boundary until the first tick.
     setNowMinute(new Date().toISOString().slice(0, 16));
     const id = setInterval(() => setNowMinute(new Date().toISOString().slice(0, 16)), 60_000);
     return () => clearInterval(id);
-  }, [threadListV2Enabled]);
+  }, []);
   // Threads on servers without the settlement capability never classify as
   // settled (the user could neither un-settle nor pin them).
   const serverConfigs = useAtomValue(environmentServerConfigsAtom);
@@ -531,19 +410,6 @@ function ThreadNavigationSidebarPane(
     );
     return pinned.map((thread) => `${thread.environmentId}:${thread.id}`);
   }, [pinReorderEnvironmentIds, threads]);
-  // Logical project groups in group order — the per-project list model (the
-  // web sidebar partitions the same shared buildProjectGroups output).
-  const v2ProjectGroups = useMemo(
-    () =>
-      buildProjectGroups({
-        projects,
-        settings: {
-          sidebarProjectGroupingMode: options.projectGroupingMode,
-          sidebarProjectGroupingOverrides: {},
-        },
-      }),
-    [options.projectGroupingMode, projects],
-  );
   const v2ScopedProjectGroup = useMemo(
     () =>
       selectedProjectKey === null
@@ -599,38 +465,37 @@ function ThreadNavigationSidebarPane(
     }
     return combined;
   }, [persistedProjectExpansion, projectExpansion]);
-  const projectThreadList = useMemo(() => {
-    if (!threadListV2Enabled)
-      return { projects: [], snoozed: [], settled: [], nextSnoozeWakeAt: null };
-    return buildProjectThreadListV2({
-      threads: threads.filter((thread) => thread.archivedAt === null),
-      groups: v2ProjectGroups,
-      expansion: effectiveProjectExpansion,
-      environmentId: options.selectedEnvironmentId,
-      projectRefs: v2ScopedProjectGroup === null ? null : v2ScopedProjectGroup.memberProjectRefs,
-      searchQuery: props.searchQuery,
-      matchedThreadKeys,
+  const projectThreadList = useMemo(
+    () =>
+      buildProjectThreadListV2({
+        threads: threads.filter((thread) => thread.archivedAt === null),
+        groups: v2ProjectGroups,
+        expansion: effectiveProjectExpansion,
+        environmentId: options.selectedEnvironmentId,
+        projectRefs: v2ScopedProjectGroup === null ? null : v2ScopedProjectGroup.memberProjectRefs,
+        searchQuery: props.searchQuery,
+        matchedThreadKeys,
+        changeRequestStateByKey,
+        settlementEnvironmentIds,
+        snoozeEnvironmentIds,
+        now: `${nowMinute}:00.000Z`,
+        snoozeNow: new Date().toISOString(),
+      }),
+    [
       changeRequestStateByKey,
+      effectiveProjectExpansion,
+      nowMinute,
+      snoozeWakeTick,
+      options.selectedEnvironmentId,
+      props.searchQuery,
+      matchedThreadKeys,
       settlementEnvironmentIds,
       snoozeEnvironmentIds,
-      now: `${nowMinute}:00.000Z`,
-      snoozeNow: new Date().toISOString(),
-    });
-  }, [
-    changeRequestStateByKey,
-    effectiveProjectExpansion,
-    nowMinute,
-    snoozeWakeTick,
-    options.selectedEnvironmentId,
-    props.searchQuery,
-    matchedThreadKeys,
-    settlementEnvironmentIds,
-    snoozeEnvironmentIds,
-    threadListV2Enabled,
-    threads,
-    v2ProjectGroups,
-    v2ScopedProjectGroup,
-  ]);
+      threads,
+      v2ProjectGroups,
+      v2ScopedProjectGroup,
+    ],
+  );
   const toggleProject = useCallback(
     (projectKey: string) => {
       const project = projectThreadList.projects.find(
@@ -666,12 +531,11 @@ function ThreadNavigationSidebarPane(
     // unchanged: after a clamped fire (wake beyond the 32-bit setTimeout
     // range) the boundary string is identical and the chain would die.
   }, [nextSnoozeWakeAt, snoozeWakeTick]);
+  // Queued offline tasks are not thread shells, so the partition never sees
+  // them; they render above PROJECTS (in flow, like the web drafts) and stay
+  // visible and deletable while their environment is offline. Same
+  // environment scope and search filter as the list.
   const listItems = useMemo<readonly SidebarListItem[]>(() => {
-    if (!threadListV2Enabled) return listLayout.items;
-    // Queued offline tasks are not thread shells, so the v2 item builder
-    // never sees them; they render above PROJECTS (in flow, like the web
-    // drafts) and stay visible and deletable while their environment is
-    // offline. Same environment scope and search filter as the list.
     const v2SearchQuery = props.searchQuery.trim().toLocaleLowerCase();
     const v2PendingTasks = pendingTasks.filter(
       (pendingTask) =>
@@ -699,7 +563,6 @@ function ThreadNavigationSidebarPane(
     projectThreadList,
     props.searchQuery,
     snoozedShelfExpanded,
-    threadListV2Enabled,
     v2ScopedProjectGroup,
   ]);
   // The settled dock lives below the scroll area and pages its own rows; the
@@ -758,33 +621,8 @@ function ThreadNavigationSidebarPane(
               ],
             },
           ] satisfies MenuAction[])),
-      // v2 lays the list out in fixed creation order — offering sort/group
-      // controls it silently ignores would be a lie. Environment still
-      // scopes the v2 partition, so it stays.
-      ...(threadListV2Enabled
-        ? []
-        : ([
-            {
-              id: "project-sort",
-              title: "Sort projects",
-              subactions: PROJECT_SORT_OPTIONS.map((option) => ({
-                id: `project-sort:${option.value}`,
-                title: option.label,
-                state: options.projectSortOrder === option.value ? "on" : "off",
-              })),
-            },
-            {
-              id: "thread-sort",
-              title: "Sort threads",
-              subactions: THREAD_SORT_OPTIONS.map((option) => ({
-                id: `thread-sort:${option.value}`,
-                title: option.label,
-                state: options.threadSortOrder === option.value ? "on" : "off",
-              })),
-            },
-          ] satisfies MenuAction[])),
     ],
-    [environments, options, projectFilterOptions, selectedProjectKey, threadListV2Enabled],
+    [environments, projectFilterOptions, selectedProjectKey, options.selectedEnvironmentId],
   );
   const handleListMenuAction = useCallback(
     ({ nativeEvent }: { readonly nativeEvent: { readonly event: string } }) => {
@@ -811,28 +649,8 @@ function ThreadNavigationSidebarPane(
         }
         return;
       }
-      const projectSort = PROJECT_SORT_OPTIONS.find(
-        (option) => `project-sort:${option.value}` === event,
-      );
-      if (projectSort) {
-        setProjectSortOrder(projectSort.value);
-        return;
-      }
-      const threadSort = THREAD_SORT_OPTIONS.find(
-        (option) => `thread-sort:${option.value}` === event,
-      );
-      if (threadSort) {
-        setThreadSortOrder(threadSort.value);
-        return;
-      }
     },
-    [
-      environments,
-      projectFilterOptions,
-      setProjectSortOrder,
-      setSelectedEnvironmentId,
-      setThreadSortOrder,
-    ],
+    [environments, projectFilterOptions, setSelectedEnvironmentId],
   );
 
   const backgroundColor = useThemeColor("--color-drawer");
@@ -892,7 +710,7 @@ function ThreadNavigationSidebarPane(
       selectedThreadKey: props.selectedThreadKey ?? "",
       projectByKey,
       projectCwdByKey,
-      projectTitleByProjectKey,
+      v2ProjectTitleByProjectKey,
       savedConnectionsById,
       serverConfigs,
       snoozePresetMinute: nowMinute,
@@ -902,7 +720,7 @@ function ThreadNavigationSidebarPane(
       props.selectedThreadKey,
       projectByKey,
       projectCwdByKey,
-      projectTitleByProjectKey,
+      v2ProjectTitleByProjectKey,
       savedConnectionsById,
       serverConfigs,
       nowMinute,
@@ -940,19 +758,7 @@ function ThreadNavigationSidebarPane(
       if (previous.type === "v2-snoozed-shelf" && item.type === "v2-snoozed-shelf") {
         return previous.count === item.count && previous.expanded === item.expanded;
       }
-      if (
-        previous.type === "v2-thread" ||
-        previous.type === "v2-project" ||
-        previous.type === "v2-pending" ||
-        previous.type === "v2-snoozed-shelf" ||
-        item.type === "v2-thread" ||
-        item.type === "v2-project" ||
-        item.type === "v2-pending" ||
-        item.type === "v2-snoozed-shelf"
-      ) {
-        return false;
-      }
-      return homeListItemsAreEqual(previous, item);
+      return false;
     },
     [],
   );
@@ -1130,105 +936,19 @@ function ThreadNavigationSidebarPane(
               pane="sidebar"
             />
           );
-        case "header":
-          return (
-            <ThreadListGroupHeader
-              variant="sidebar"
-              collapsed={item.collapsed}
-              isFirst={item.isFirst}
-              groupKey={item.group.key}
-              onGroupAction={updateGroupDisplay}
-              // Same gating as the compact Home list: aggregated groups have no
-              // single target project, and pending-project groups hold a
-              // placeholder shell rather than a real project.
-              newThreadTarget={item.group.newThreadTarget}
-              onNewThread={props.onNewThreadInProject}
-              project={item.group.representative}
-              threadCount={item.group.threads.length + item.group.pendingTasks.length}
-              title={item.group.title}
-            />
-          );
-        case "pending-task":
-          return (
-            <PendingTaskListRow
-              variant="sidebar"
-              pendingTask={item.pendingTask}
-              environmentLabel={
-                savedConnectionsById[item.pendingTask.message.environmentId]?.environmentLabel ??
-                null
-              }
-              isLast={item.isLast}
-              onSelectPendingTask={openPendingTask}
-              onDeletePendingTask={confirmDeletePendingTask}
-            />
-          );
-        case "thread": {
-          const thread = item.thread;
-          return (
-            <ThreadListRow
-              variant="sidebar"
-              thread={thread}
-              environmentLabel={
-                savedConnectionsById[thread.environmentId]?.environmentLabel ?? null
-              }
-              projectCwd={
-                projectCwdByKey.get(scopedProjectKey(thread.environmentId, thread.projectId)) ??
-                null
-              }
-              isLast={item.isLast}
-              searchMatch={threadSearchMatchByKey.get(
-                threadSearchMatchKey({
-                  environmentId: thread.environmentId,
-                  threadId: thread.id,
-                }),
-              )}
-              searchQuery={props.searchQuery}
-              selected={
-                scopedThreadKey(thread.environmentId, thread.id) === props.selectedThreadKey
-              }
-              fullSwipeWidth={props.width - 20}
-              onArchiveThread={archiveThread}
-              onDeleteThread={confirmDeleteThread}
-              onRegenerateThreadTitle={regenerateThreadTitle}
-              titleRegenerationSupported={titleRegenerationEnvironmentIds.has(thread.environmentId)}
-              onSelectThread={handleSelectThread}
-              onSwipeableClose={handleSwipeableClose}
-              onSwipeableWillOpen={handleSwipeableWillOpen}
-              simultaneousSwipeGesture={sidebarScrollGesture}
-            />
-          );
-        }
-        case "show-more":
-          return (
-            <ThreadListShowMoreRow
-              variant="sidebar"
-              hiddenCount={item.hiddenCount}
-              canShowLess={item.canShowLess}
-              groupKey={item.groupKey}
-              onGroupAction={updateGroupDisplay}
-            />
-          );
       }
     },
     [
       confirmDeletePendingTask,
       openPendingTask,
-      props.onNewThreadInProject,
       projectByKey,
-      projectCwdByKey,
       renderV2ThreadRow,
       savedConnectionsById,
       toggleProject,
       toggleSnoozedShelf,
-      updateGroupDisplay,
-      v2ProjectTitleByProjectKey,
     ],
   );
-  // v2 ignores the sort/group options, so only the environment filter can
-  // light the "customized" state while the beta is on.
-  const filterCustomized = threadListV2Enabled
-    ? options.selectedEnvironmentId !== null || selectedProjectKey !== null
-    : hasCustomHomeListOptions({ ...options, selectedProjectKey });
+  const filterCustomized = options.selectedEnvironmentId !== null || selectedProjectKey !== null;
   const filterIcon = filterCustomized
     ? "line.3.horizontal.decrease.circle.fill"
     : "line.3.horizontal.decrease.circle";
@@ -1239,24 +959,10 @@ function ThreadNavigationSidebarPane(
         projects: projectFilterOptions,
         selectedEnvironmentId: options.selectedEnvironmentId,
         selectedProjectKey,
-        projectSortOrder: options.projectSortOrder,
-        threadSortOrder: options.threadSortOrder,
         onEnvironmentChange: setSelectedEnvironmentId,
         onProjectChange: setSelectedProjectKey,
-        onProjectSortOrderChange: setProjectSortOrder,
-        onThreadSortOrderChange: setThreadSortOrder,
-        listOrganization: !threadListV2Enabled,
       }),
-    [
-      environments,
-      options,
-      projectFilterOptions,
-      selectedProjectKey,
-      setProjectSortOrder,
-      setSelectedEnvironmentId,
-      setThreadSortOrder,
-      threadListV2Enabled,
-    ],
+    [environments, projectFilterOptions, options.selectedEnvironmentId, selectedProjectKey],
   );
   const nativeHeaderItems = useMemo(
     () =>
@@ -1277,8 +983,8 @@ function ThreadNavigationSidebarPane(
           ? threadSearch.isPending
             ? "Searching thread messages…"
             : "No matching threads"
-          : selectedProjectScope !== null
-            ? `No threads in ${selectedProjectScope.title}`
+          : v2ScopedProjectGroup !== null
+            ? `No threads in ${v2ScopedProjectGroup.label}`
             : "No threads yet"}
     </Text>
   );
