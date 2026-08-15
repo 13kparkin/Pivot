@@ -853,6 +853,77 @@ describe("OmpAdapter", () => {
     }),
   );
 
+  it.effect("cancels live subagents after an interrupt when omp supports cancel_subagent", () =>
+    Effect.gen(function* () {
+      const fake = new FakeOmpRpc();
+      const adapter = new OmpAdapter(fake, testRandomUUID);
+      const eventsFiber = yield* Stream.runCollect(
+        adapter.streamEvents.pipe(
+          Stream.takeUntil(
+            (event) => event.type === "turn.aborted" || event.type === "session.exited",
+          ),
+        ),
+      ).pipe(
+        Effect.map((chunk) => Array.from(chunk)),
+        Effect.forkChild,
+      );
+      yield* adapter.startSession(startInput);
+      yield* adapter.sendTurn({ threadId: THREAD_ID, input: "hi" });
+      yield* fake.offer(THREAD_ID, {
+        type: "subagent_lifecycle",
+        payload: { id: "agent-1", agent: "scout", status: "started" },
+      });
+      yield* adapter.interruptTurn(THREAD_ID);
+      yield* fake.offer(THREAD_ID, { type: "agent_end", messages: [], isTerminal: true });
+      const events = yield* Fiber.join(eventsFiber);
+      NodeAssert.equal(
+        events.some(
+          (event) => event.type === "turn.aborted" && event.payload.reason === "user_abort",
+        ),
+        true,
+      );
+      NodeAssert.equal(
+        events.some((event) => event.type === "session.exited"),
+        false,
+      );
+      NodeAssert.equal(
+        fake.sent.some(
+          (command) => command.type === "cancel_subagent" && command.subagentId === "agent-1",
+        ),
+        true,
+      );
+      NodeAssert.equal(yield* adapter.hasSession(THREAD_ID), true);
+    }),
+  );
+
+  it.effect("terminates the session to stop subagents when cancel_subagent is unsupported", () =>
+    Effect.gen(function* () {
+      const fake = new FakeOmpRpc();
+      fake.cancelSubagentUnknown = true;
+      const adapter = new OmpAdapter(fake, testRandomUUID);
+      const eventsFiber = yield* Stream.runCollect(
+        adapter.streamEvents.pipe(Stream.takeUntil((event) => event.type === "session.exited")),
+      ).pipe(
+        Effect.map((chunk) => Array.from(chunk)),
+        Effect.forkChild,
+      );
+      yield* adapter.startSession(startInput);
+      yield* adapter.sendTurn({ threadId: THREAD_ID, input: "hi" });
+      yield* fake.offer(THREAD_ID, {
+        type: "subagent_lifecycle",
+        payload: { id: "agent-1", agent: "scout", status: "started" },
+      });
+      yield* adapter.interruptTurn(THREAD_ID);
+      yield* fake.offer(THREAD_ID, { type: "agent_end", messages: [], isTerminal: true });
+      const events = yield* Fiber.join(eventsFiber);
+      NodeAssert.equal(
+        events.some((event) => event.type === "session.exited"),
+        true,
+      );
+      NodeAssert.equal(yield* adapter.hasSession(THREAD_ID), false);
+    }),
+  );
+
   it.effect("interruptTurn fails when the session is missing", () =>
     Effect.gen(function* () {
       const adapter = new OmpAdapter(new FakeOmpRpc(), testRandomUUID);
