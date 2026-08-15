@@ -79,7 +79,7 @@ export class DesktopEnvironment extends Context.Service<
   }
 >()("@t3tools/desktop/app/DesktopEnvironment") {}
 
-const APP_BASE_NAME = "Pivot";
+const APP_BASE_NAME = "Piπot";
 
 function resolveDesktopAppStageLabel(input: {
   readonly isDevelopment: boolean;

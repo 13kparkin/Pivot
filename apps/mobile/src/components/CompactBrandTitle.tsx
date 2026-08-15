@@ -6,7 +6,7 @@ import type {
 import { Platform, View } from "react-native";
 
 import { AppText as Text } from "./AppText";
-import { T3Wordmark } from "./T3Wordmark";
+import { PiMark } from "./PiMark";
 import { IPAD_HOME_TITLE_OFFSET } from "../lib/layoutMetrics";
 import { resolveMobileStageLabel } from "../lib/mobileBranding";
 import { useThemeColor } from "../lib/useThemeColor";
@@ -45,7 +45,7 @@ export function CompactBrandTitle(
   return (
     <View
       aria-level={1}
-      accessibilityLabel="Pivot, Threads"
+      accessibilityLabel="Piπot, Threads"
       accessible
       role="heading"
       style={{
@@ -55,7 +55,7 @@ export function CompactBrandTitle(
         marginLeft: titleOffset,
       }}
     >
-      <T3Wordmark color={iconColor} height={15} />
+      <PiMark color={iconColor} height={15} />
       <Text
         style={{
           color: mutedColor,
@@ -64,7 +64,7 @@ export function CompactBrandTitle(
           letterSpacing: -0.5,
         }}
       >
-        Code
+        Piπot
       </Text>
       <View
         style={{

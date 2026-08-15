@@ -1,4 +1,4 @@
-// This file mostly exists because we want dev mode to say "T3 Code (Dev)" instead of "electron"
+// This file mostly exists because we want dev mode to say "Piπot (Dev)" instead of "electron"
 
 import * as NodeChildProcess from "node:child_process";
 import * as NodeFS from "node:fs";
@@ -15,7 +15,7 @@ const repoRoot = NodePath.resolve(desktopDir, "..", "..");
 const devBundleIdSuffix = NodePath.basename(repoRoot)
   .toLowerCase()
   .replaceAll(/[^a-z0-9]+/g, "");
-export const APP_DISPLAY_NAME = isDevelopment ? "Pivot (Dev)" : "Pivot (Alpha)";
+export const APP_DISPLAY_NAME = isDevelopment ? "Piπot (Dev)" : "Piπot (Alpha)";
 export const APP_BUNDLE_ID = isDevelopment
   ? `com.13kparkin.pivot.dev.${devBundleIdSuffix || "local"}`
   : "com.13kparkin.pivot";

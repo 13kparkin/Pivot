@@ -117,7 +117,7 @@ function clientMetadata() {
   const desktop = window.desktopBridge !== undefined;
   const platform = navigator.platform.trim();
   return {
-    label: desktop ? "Pivot Desktop" : "Pivot Web",
+    label: desktop ? "Piπot Desktop" : "Piπot Web",
     deviceType: "desktop" as const,
     ...(platform === "" ? {} : { os: platform }),
   };

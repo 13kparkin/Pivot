@@ -241,7 +241,7 @@ export const layer = Layer.effect(
           );
           yield* electronDialog.showErrorBox(
             "WSL backend is still unavailable",
-            `${reason}\n\nPivot will use the Windows backend for this launch and retry WSL the next time the app starts.`,
+            `${reason}\n\nPiπot will use the Windows backend for this launch and retry WSL the next time the app starts.`,
           );
           yield* appSettings.applyWslWindowsFallbackInMemory;
           return true;
@@ -252,7 +252,7 @@ export const layer = Layer.effect(
         });
         yield* electronDialog.showErrorBox(
           "WSL backend couldn't start",
-          `${reason}\n\nFalling back to the Windows backend so Pivot can open. Re-enable the WSL backend from Settings > Connections once the WSL distro is fixed.`,
+          `${reason}\n\nFalling back to the Windows backend so Piπot can open. Re-enable the WSL backend from Settings > Connections once the WSL distro is fixed.`,
         );
         // Fully disable the WSL backend — both flags, matching the "Switch to
         // Windows" recovery path — so the manager's next restart re-resolves the

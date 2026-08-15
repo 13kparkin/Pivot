@@ -486,7 +486,7 @@ describe("mobile cloud link environment client", () => {
       const environmentTokenBody = new URLSearchParams(
         requestBodyText(environmentTokenRequest?.body),
       );
-      expect(environmentTokenBody.get("client_label")).toBe("Pivot Mobile");
+      expect(environmentTokenBody.get("client_label")).toBe("Piπot Mobile");
       expect(environmentTokenBody.get("client_device_type")).toBe("mobile");
       expect(environmentTokenBody.get("client_os")).toBe("iOS");
     }),

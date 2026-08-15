@@ -61,21 +61,21 @@ const RELEASE_ASSETS = {
 
 const VARIANT_CONFIG = {
   development: {
-    appName: "Pivot Dev",
+    appName: "Piπot Dev",
     scheme: "pivot-dev",
     iosBundleIdentifier: "com.13kparkin.pivot.dev",
     androidPackage: "com.13kparkin.pivot.dev",
     assets: DEVELOPMENT_ASSETS,
   },
   preview: {
-    appName: "Pivot Preview",
+    appName: "Piπot Preview",
     scheme: "pivot-preview",
     iosBundleIdentifier: "com.13kparkin.pivot.preview",
     androidPackage: "com.13kparkin.pivot.preview",
     assets: PREVIEW_ASSETS,
   },
   production: {
-    appName: "Pivot",
+    appName: "Piπot",
     scheme: "pivot",
     iosBundleIdentifier: "com.13kparkin.pivot",
     androidPackage: "com.13kparkin.pivot",
@@ -124,7 +124,7 @@ const widgetsPlugin: NonNullable<ExpoConfig["plugins"]>[number] = [
       {
         name: "AgentActivity",
         displayName: "Agent Activity",
-        description: "Shows the current state of active Pivot agents.",
+        description: "Shows the current state of active Piπot agents.",
         supportedFamilies: ["systemSmall", "systemMedium", "accessoryRectangular"],
       },
     ],

@@ -63,7 +63,7 @@ export class DesktopSshPromptWindowUnavailableError extends Schema.TaggedErrorCl
 ) {
   override get message(): string {
     const request = this.requestId === null ? "before a request id was assigned" : this.requestId;
-    return `Pivot window is unavailable during ${this.stage} for SSH authentication to ${this.destination} (request: ${request}).`;
+    return `Piπot window is unavailable during ${this.stage} for SSH authentication to ${this.destination} (request: ${request}).`;
   }
 }
 
