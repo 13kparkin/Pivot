@@ -550,6 +550,11 @@ it.layer(NodeServices.layer)("OmpCapabilitiesService", (it) => {
       // Skill dirs without SKILL.md are not skills.
       yield* fs.makeDirectory(path.join(agentDir, "skills", "draft"), { recursive: true });
 
+      // Isolate from the real home's cursor-compatible skill roots so the
+      // exact-list assertions below are deterministic.
+      const isolatedHome = yield* fs.makeTempDirectoryScoped({ prefix: "t3-omp-isolated-home-" });
+      vi.stubEnv("HOME", isolatedHome);
+
       const { runner } = makeRunner({ agentDir });
       const service = yield* makeService({ agentDir, runner });
 

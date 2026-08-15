@@ -118,6 +118,18 @@ function flattenScalarConfig(
 const isSecretSetting = (key: string, type: string): boolean =>
   type === "secret" || SECRET_KEY_PATTERN.test(key);
 
+/** Cursor-compatible skill roots omp agents also load from on the server host. */
+const cursorSkillRoots = (home: string): ReadonlyArray<string> => [
+  `${home}/.cursor/skills`,
+  `${home}/.cursor/skills-cursor`,
+];
+
+/**
+ * Extract the `description` from a leading YAML frontmatter block, leniently:
+ * only the first `---`-delimited block is inspected and only the first
+ * `description:` line is used. Missing or malformed frontmatter yields
+ * `undefined` (display-only; never fails the snapshot).
+ */
 function parseFrontmatterDescription(content: string): string | undefined {
   if (!content.startsWith("---")) return undefined;
   const end = content.indexOf("\n---");
@@ -562,6 +574,13 @@ export class OmpCapabilitiesService {
         skills.push(...(yield* this.listItemKind("skills", scope.dir, scope.scope)));
         rules.push(...(yield* this.listItemKind("rules", scope.dir, scope.scope)));
       }
+      // omp agents also load skills from cursor-compatible roots on the
+      // server host (`~/.cursor/skills`, `~/.cursor/skills-cursor`), so the
+      // surface lists what the agent actually sees. The dirs already contain
+      // the skill folders directly (no nested `skills/` subdir).
+      for (const root of cursorSkillRoots(NodeOS.homedir())) {
+        skills.push(...(yield* this.listItemKindDir("skills", root, "global")));
+      }
       return { skills, rules };
     }).pipe(
       Effect.mapError(
@@ -579,14 +598,27 @@ export class OmpCapabilitiesService {
     scopeDir: string,
     scope: OmpCapabilityItemScope,
   ): Effect.Effect<ReadonlyArray<OmpCapabilityItem>, OmpCapabilitiesError> {
+    return this.listItemKindDir(kind, this.#path.join(scopeDir, kind), scope);
+  }
+
+  /** List items from a directory that already IS the item kind directory. */
+  private listItemKindDir(
+    kind: OmpCapabilityEditableKind,
+    kindDir: string,
+    scope: OmpCapabilityItemScope,
+  ): Effect.Effect<ReadonlyArray<OmpCapabilityItem>, OmpCapabilitiesError> {
     return Effect.gen({ self: this }, function* () {
-      const kindDir = this.#path.join(scopeDir, kind);
       const dirExists = yield* this.existsPath(kindDir);
       if (!dirExists) return [];
       const entries = yield* this.#fileSystem.readDirectory(kindDir);
       const items: OmpCapabilityItem[] = [];
       for (const entry of entries) {
-        const item = yield* this.itemFromEntry(kind, kindDir, scope, entry);
+        // User-managed roots (cursor-compatible dirs, symlinked installs)
+        // can contain entries that do not resolve to a SKILL.md; those are
+        // skipped per entry rather than failing the whole inventory.
+        const item = Option.getOrUndefined(
+          yield* Effect.option(this.itemFromEntry(kind, kindDir, scope, entry)),
+        );
         if (item !== undefined) items.push(item);
       }
       return items.sort((a, b) => a.name.localeCompare(b.name));
