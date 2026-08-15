@@ -3404,6 +3404,24 @@ export default function Sidebar() {
                 </div>
               </div>
               {projectGroups.length > 0 ? (
+                <SidebarMenu className="ps-px">
+                  <SidebarMenuItem>
+                    <SidebarMenuButton
+                      type="button"
+                      aria-label="Open Capabilities"
+                      className="ps-[calc(var(--sidebar-row-content-inset)-1px)]"
+                      onClick={() => {
+                        if (isMobile) setOpenMobile(false);
+                        void router.navigate({ to: "/capabilities" });
+                      }}
+                    >
+                      <SlidersHorizontalIcon className="size-4 shrink-0" />
+                      <span className="min-w-0 flex-1 truncate text-sm">Capabilities</span>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                </SidebarMenu>
+              ) : null}
+              {projectGroups.length > 0 ? (
                 <div className="flex items-center gap-1">
                   <Menu open={projectScopeMenuOpen} onOpenChange={setProjectScopeMenuOpen}>
                     <MenuTrigger
@@ -3503,26 +3521,6 @@ export default function Sidebar() {
                 </div>
               ) : null}
             </SidebarGroup>
-            {projectGroups.length > 0 ? (
-              <SidebarGroup className="gap-1 p-[var(--sidebar-content-inset)] pt-0">
-                <SidebarMenu className="ps-px">
-                  <SidebarMenuItem>
-                    <SidebarMenuButton
-                      type="button"
-                      aria-label="Open Capabilities"
-                      className="ps-[calc(var(--sidebar-row-content-inset)-1px)]"
-                      onClick={() => {
-                        if (isMobile) setOpenMobile(false);
-                        void router.navigate({ to: "/capabilities" });
-                      }}
-                    >
-                      <SlidersHorizontalIcon className="size-4 shrink-0" />
-                      <span className="min-w-0 flex-1 truncate text-sm">Capabilities</span>
-                    </SidebarMenuButton>
-                  </SidebarMenuItem>
-                </SidebarMenu>
-              </SidebarGroup>
-            ) : null}
           </>
         }
       >
