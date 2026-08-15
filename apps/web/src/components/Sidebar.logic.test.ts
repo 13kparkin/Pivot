@@ -1668,6 +1668,7 @@ function makePartitionShell(
 ): EnvironmentThreadShell {
   return {
     id: ThreadId.make("thread-1"),
+    environmentId: localEnvironmentId,
     projectId: ProjectId.make("project-1"),
     title: "Thread",
     modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.4" },
