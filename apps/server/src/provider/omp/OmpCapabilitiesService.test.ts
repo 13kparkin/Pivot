@@ -195,7 +195,7 @@ it.layer(NodeServices.layer)("OmpCapabilitiesService", (it) => {
         yield* fs.makeDirectory(path.join(projectCwd, ".omp"), { recursive: true });
         yield* fs.writeFileString(
           path.join(projectCwd, ".omp", "config.yml"),
-          "autoResume: false\nmodelRoles:\n  default: gpt-5.6\nthreadCount: 4\n",
+          "autoResume: false\nmodelRoles:\n  default: gpt-5.6\nthreadCount: 4\ncustom.unknownKey: hello\n",
         );
 
         const { runner } = makeRunner({ agentDir });
@@ -218,8 +218,12 @@ it.layer(NodeServices.layer)("OmpCapabilitiesService", (it) => {
           type: "number",
           scope: "project",
         });
-        // Effective/global settings never leak into a project snapshot.
-        expect(byKey.has("theme.dark")).toBe(false);
+        // Effective/global settings stay visible, tagged by their origin:
+        // the project layer tags the keys it overrides, everything else is
+        // tagged global so the project view can label + move them.
+        expect(byKey.get("theme.dark")).toMatchObject({ scope: "global" });
+        // Project-only unknown keys still surface as project-scoped.
+        expect(byKey.get("custom.unknownKey")).toMatchObject({ scope: "project" });
 
         // A project write lands in the layer and shows up in the next snapshot.
         yield* service.writeSetting({
