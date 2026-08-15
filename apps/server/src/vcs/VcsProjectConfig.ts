@@ -64,14 +64,23 @@ const logVcsProjectConfigError = (error: VcsProjectConfigError) =>
     }),
   );
 
-export const make = Effect.gen(function* () {
-  const fileSystem = yield* FileSystem.FileSystem;
-  const path = yield* Path.Path;
-
-  const findConfigPath = Effect.fn("VcsProjectConfig.findConfigPath")(function* (cwd: string) {
-    let current = cwd;
-    while (true) {
-      const candidate = path.join(current, ".t3code", "vcs.json");
+/**
+ * First existing VCS config among the candidate dir names at `current`.
+ * `.pivotcode` is canonical; a pre-rename `.t3code` is still honored. A read
+ * failure logs and counts as missing so the walk continues upward.
+ */
+function firstExistingConfigPath(
+  path: Path.Path,
+  fileSystem: FileSystem.FileSystem,
+  current: string,
+  cwd: string,
+): Effect.Effect<Option.Option<string>, never, never> {
+  const candidates = [
+    path.join(current, ".pivotcode", "vcs.json"),
+    path.join(current, ".t3code", "vcs.json"),
+  ];
+  return Effect.gen(function* () {
+    for (const candidate of candidates) {
       const exists = yield* fileSystem.exists(candidate).pipe(
         Effect.mapError(
           (cause) =>
@@ -89,10 +98,28 @@ export const make = Effect.gen(function* () {
       if (exists) {
         return Option.some(candidate);
       }
+    }
+    return Option.none<string>();
+  });
+}
+
+export const make = Effect.gen(function* () {
+  const fileSystem = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+
+  const findConfigPath = Effect.fn("VcsProjectConfig.findConfigPath")(function* (cwd: string) {
+    let current = cwd;
+    while (true) {
+      // `.pivotcode` is canonical; keep reading a pre-rename `.t3code` so
+      // existing checkouts keep their VCS configuration.
+      const candidate = yield* firstExistingConfigPath(path, fileSystem, current, cwd);
+      if (Option.isSome(candidate)) {
+        return candidate;
+      }
 
       const parent = path.dirname(current);
       if (parent === current) {
-        return Option.none();
+        return Option.none<string>();
       }
       current = parent;
     }

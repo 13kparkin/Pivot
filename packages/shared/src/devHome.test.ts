@@ -6,7 +6,11 @@ import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import * as Effect from "effect/Effect";
 
-import { resolveGitWorktreePath, resolveWorktreeT3Home } from "./devHome.ts";
+import {
+  resolveDefaultPivotHome,
+  resolveGitWorktreePath,
+  resolveWorktreePivotHome,
+} from "./devHome.ts";
 
 const makeRepo = (
   kind:
@@ -94,13 +98,52 @@ describe("resolveGitWorktreePath", () => {
   );
 });
 
-describe("resolveWorktreeT3Home", () => {
-  it.effect("answers with .t3 before the dev runner creates it", () =>
+describe("resolveWorktreePivotHome", () => {
+  it.effect("answers with .pivot before the dev runner creates it", () =>
     Effect.gen(function* () {
       const { root, nested } = yield* makeRepo("worktree");
-      const home = yield* resolveWorktreeT3Home(nested);
-      assert.equal(home, NodePath.join(NodePath.resolve(root), ".t3"));
+      const home = yield* resolveWorktreePivotHome(nested);
+      assert.equal(home, NodePath.join(NodePath.resolve(root), ".pivot"));
       assert.isFalse(NodeFS.existsSync(home ?? ""));
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("keeps an existing legacy .t3 in place", () =>
+    Effect.gen(function* () {
+      const { root, nested } = yield* makeRepo("worktree");
+      const legacy = NodePath.join(NodePath.resolve(root), ".t3");
+      NodeFS.mkdirSync(legacy, { recursive: true });
+      const home = yield* resolveWorktreePivotHome(nested);
+      assert.equal(home, legacy);
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+});
+
+describe("resolveDefaultPivotHome", () => {
+  it.effect("prefers .pivot over a legacy .t3", () =>
+    Effect.gen(function* () {
+      const { root } = yield* makeRepo("checkout");
+      NodeFS.mkdirSync(NodePath.join(root, ".t3"), { recursive: true });
+      NodeFS.mkdirSync(NodePath.join(root, ".pivot"), { recursive: true });
+      const home = yield* resolveDefaultPivotHome(root);
+      assert.equal(home, NodePath.join(root, ".pivot"));
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("falls back to an existing legacy .t3", () =>
+    Effect.gen(function* () {
+      const { root } = yield* makeRepo("checkout");
+      NodeFS.mkdirSync(NodePath.join(root, ".t3"), { recursive: true });
+      const home = yield* resolveDefaultPivotHome(root);
+      assert.equal(home, NodePath.join(root, ".t3"));
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("defaults to .pivot when neither directory exists", () =>
+    Effect.gen(function* () {
+      const { root } = yield* makeRepo("checkout");
+      const home = yield* resolveDefaultPivotHome(root);
+      assert.equal(home, NodePath.join(root, ".pivot"));
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 });

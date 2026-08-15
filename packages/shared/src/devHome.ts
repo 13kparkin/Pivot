@@ -1,8 +1,8 @@
 /**
  * Where development state lives, and how to keep it away from the shared
- * `~/.t3` that a user's installed T3 Code runs against.
+ * `~/.pivot` that a user's installed Pivot runs against.
  *
- * A linked git worktree gets its own (gitignored) `.t3`: feature work in a
+ * A linked git worktree gets its own (gitignored) `.pivot`: feature work in a
  * throwaway branch must not share a database with the real app, and an ambient
  * `T3CODE_HOME` counts as an explicit base dir — flipping the state directory
  * from `<base>/dev` to `<base>/userdata`, the live production database.
@@ -12,6 +12,11 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
+
+/** Canonical base data directory name. */
+export const PIVOT_HOME_DIR = ".pivot";
+/** Pre-rename directory name, still honored when `.pivot` has not been created. */
+export const LEGACY_HOME_DIR = ".t3";
 
 /**
  * A `.git` file points at the real git directory. A linked worktree's lives at
@@ -86,11 +91,36 @@ export const resolveGitWorktreePath = (
   });
 
 /**
- * The worktree-local data directory for `cwd`, or undefined outside a linked
- * worktree. Deliberately does not require the directory to exist yet: falling
- * back because it is missing would send callers at the shared home.
+ * The base data directory under `homeDirectory`: prefer `.pivot`, but keep an
+ * existing legacy `.t3` (pre-rename installs) so a fresh default can never
+ * reset a live database to empty. New installs without either directory get
+ * `.pivot`.
  */
-export const resolveWorktreeT3Home = (
+export const resolveDefaultPivotHome = (
+  homeDirectory: string,
+): Effect.Effect<string, never, FileSystem.FileSystem | Path.Path> =>
+  Effect.gen(function* () {
+    const fileSystem = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const pivot = path.join(homeDirectory, PIVOT_HOME_DIR);
+    const legacy = path.join(homeDirectory, LEGACY_HOME_DIR);
+    if (yield* fileSystem.exists(pivot).pipe(Effect.orElseSucceed(() => false))) {
+      return pivot;
+    }
+    if (yield* fileSystem.exists(legacy).pipe(Effect.orElseSucceed(() => false))) {
+      return legacy;
+    }
+    return pivot;
+  });
+
+/**
+ * The worktree-local data directory for `cwd`, or undefined outside a linked
+ * worktree. Prefers `.pivot`; keeps an existing legacy `.t3` in place so a
+ * half-migrated worktree does not silently orphan its seeded state. When
+ * neither exists the canonical `.pivot` is returned — deliberately not falling
+ * back to the shared home just because the directory is missing yet.
+ */
+export const resolveWorktreePivotHome = (
   cwd: string,
 ): Effect.Effect<string | undefined, never, FileSystem.FileSystem | Path.Path> =>
   Effect.gen(function* () {
@@ -98,6 +128,15 @@ export const resolveWorktreeT3Home = (
     if (worktreePath === undefined) {
       return undefined;
     }
+    const fileSystem = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
-    return path.join(worktreePath, ".t3");
+    const pivot = path.join(worktreePath, PIVOT_HOME_DIR);
+    const legacy = path.join(worktreePath, LEGACY_HOME_DIR);
+    if (yield* fileSystem.exists(pivot).pipe(Effect.orElseSucceed(() => false))) {
+      return pivot;
+    }
+    if (yield* fileSystem.exists(legacy).pipe(Effect.orElseSucceed(() => false))) {
+      return legacy;
+    }
+    return pivot;
   });

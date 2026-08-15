@@ -28,7 +28,7 @@
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as NodeOS from "node:os";
-import { resolveWorktreeT3Home } from "@t3tools/shared/devHome";
+import { resolveWorktreePivotHome } from "@t3tools/shared/devHome";
 import * as Console from "effect/Console";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -369,7 +369,7 @@ export const runMigrateDevDb = Effect.fn("runMigrateDevDb")(function* (
   const baseDir =
     input.baseDir !== undefined
       ? path.resolve(input.baseDir)
-      : yield* resolveWorktreeT3Home(process.cwd());
+      : yield* resolveWorktreePivotHome(process.cwd());
   if (baseDir === undefined) {
     return yield* new MigrateDevDbNotInWorktreeError();
   }

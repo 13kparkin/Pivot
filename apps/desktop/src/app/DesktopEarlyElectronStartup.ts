@@ -20,6 +20,7 @@ interface EarlyDesktopSettingsInput {
   readonly homeDirectory: string;
   readonly joinPath: JoinPath;
   readonly readFileString: (path: string) => string;
+  readonly existsDir: (path: string) => boolean;
 }
 
 type EarlyLinuxElectronOptionsInput = EarlyDesktopSettingsInput;
@@ -48,12 +49,14 @@ function resolveEarlyDesktopSettingsPath(input: {
   readonly env: NodeJS.ProcessEnv;
   readonly homeDirectory: string;
   readonly joinPath: JoinPath;
+  readonly existsDir: (path: string) => boolean;
 }): string {
   const t3Home = Option.fromUndefinedOr(input.env.T3CODE_HOME);
   const baseDir = resolveDesktopBaseDir({
     homeDirectory: input.homeDirectory,
     joinPath: input.joinPath,
     t3Home,
+    existsDir: input.existsDir,
   });
   const stateDir = resolveDesktopStateDir({
     baseDir,

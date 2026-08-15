@@ -10,6 +10,8 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
+// @effect-diagnostics nodeBuiltinImport:off - sync existence probe at the Electron-main boundary.
+import * as NodeFS from "node:fs";
 
 import * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
 import * as DesktopConfig from "./DesktopConfig.ts";
@@ -154,6 +156,7 @@ const make = Effect.fn("desktop.environment.make")(function* (
     homeDirectory,
     joinPath: path.join,
     t3Home: config.t3Home,
+    existsDir: NodeFS.existsSync,
   });
   const rootDir = path.resolve(input.dirname, "../../..");
   const appRoot = input.isPackaged ? input.appPath : rootDir;
