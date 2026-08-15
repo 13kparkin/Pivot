@@ -147,7 +147,7 @@ function CapabilitiesSettingRow({
           <span className="font-mono text-muted-foreground">{entry.displayValue}</span>
         )}
       </td>
-      <td className="sticky right-0 z-10 border-l border-border/60 bg-background py-2 pe-6 ps-5 text-right">
+      <td className="sticky right-0 z-10 bg-background py-2 pe-6 ps-5 text-right">
         {projectView && !isProjectEntry ? (
           <Button
             type="button"
@@ -421,9 +421,9 @@ export function CapabilitiesSettingsPanel({ projectKey = null }: { projectKey?: 
               Cancel
             </Button>
             <p className="w-full text-xs leading-relaxed text-muted-foreground">
-              Key is a dotted omp setting name (for example{" "}
-              <span className="font-mono">modelRoles.default</span>); value is the value to set. The
-              global Settings list shows the known settings and their types.
+              Only needed for a setting omp does not list yet (for example{" "}
+              <span className="font-mono">modelRoles.default</span>); every known setting can be
+              moved from the global list instead. Key is a dotted name, value is what to set.
             </p>
           </div>
         ) : null}
@@ -453,7 +453,7 @@ export function CapabilitiesSettingsPanel({ projectKey = null }: { projectKey?: 
                   <th className="px-3 py-2 font-semibold">Type</th>
                   <th className="px-3 py-2 font-semibold">Description</th>
                   <th className="px-3 py-2 font-semibold">Value</th>
-                  <th className="sticky right-0 z-10 border-l border-border/60 bg-background py-2 pe-6 ps-5 text-right font-semibold">
+                  <th className="sticky right-0 z-10 bg-background py-2 pe-6 ps-5 text-right font-semibold">
                     Actions
                   </th>
                 </tr>
