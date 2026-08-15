@@ -612,7 +612,9 @@ export function CapabilityItemsPanel({
                   <th className="px-4 py-2 font-semibold sm:pl-5">Name</th>
                   <th className="px-3 py-2 font-semibold">Description</th>
                   <th className="px-3 py-2 font-semibold">Scope</th>
-                  <th className="px-3 py-2 pe-6 text-right font-semibold">Actions</th>
+                  <th className="sticky right-0 z-10 border-l border-border/60 bg-background px-3 py-2 pe-6 text-right font-semibold">
+                    Actions
+                  </th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-border/60">
@@ -639,7 +641,7 @@ export function CapabilityItemsPanel({
                         <span className="line-clamp-2">{row.description}</span>
                       </td>
                       <td className="px-3 py-2 text-muted-foreground">{row.scopeLabel}</td>
-                      <td className="px-3 py-2 pe-6 text-right">
+                      <td className="sticky right-0 z-10 border-l border-border/60 bg-background px-3 py-2 pe-6 text-right">
                         <ItemRowActions
                           item={row}
                           itemLabel={itemLabel}
