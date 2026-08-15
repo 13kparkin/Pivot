@@ -41,6 +41,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 
+import { parse as parseYaml } from "yaml";
 import type * as ProcessRunner from "../../processRunner.ts";
 import { writeFileStringAtomically } from "../../atomicWrite.ts";
 import { OmpConfigStore } from "./OmpConfigStore.ts";
@@ -79,6 +80,26 @@ const DIR_KINDS = [
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
+
+/**
+ * Flatten a config doc's scalar leaves into dotted keys (`modelRoles.default`)
+ * so the displayed key matches the write key the server accepts.
+ */
+function flattenScalarConfig(
+  doc: Record<string, unknown>,
+  prefix = "",
+): ReadonlyArray<[string, string | number | boolean]> {
+  const out: Array<[string, string | number | boolean]> = [];
+  for (const [key, value] of Object.entries(doc)) {
+    const dotted = prefix === "" ? key : `${prefix}.${key}`;
+    if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+      out.push([dotted, value]);
+    } else if (isRecord(value)) {
+      out.push(...flattenScalarConfig(value, dotted));
+    }
+  }
+  return out;
+}
 
 const isSecretSetting = (key: string, type: string): boolean =>
   type === "secret" || SECRET_KEY_PATTERN.test(key);
@@ -130,7 +151,7 @@ export class OmpCapabilitiesService {
       const agentDir = yield* this.resolveAgentDir();
       const projectCwd =
         projectId === undefined ? undefined : yield* this.#resolveProjectCwd(projectId);
-      const settings = yield* this.readSettingsSurface();
+      const settings = yield* this.readSettingsSurface(projectCwd);
       const resources = yield* this.inventory(agentDir, projectCwd);
       const items = yield* this.inventoryItems(agentDir, projectCwd);
       const agentDirLabel = this.tildeLabel(agentDir);
@@ -305,7 +326,19 @@ export class OmpCapabilitiesService {
     });
   }
 
-  private readSettingsSurface(): Effect.Effect<
+  private readSettingsSurface(
+    projectCwd?: string,
+  ): Effect.Effect<
+    { readonly entries: ReadonlyArray<OmpSettingsSurfaceEntry> },
+    OmpCapabilitiesError
+  > {
+    return projectCwd === undefined
+      ? this.readEffectiveSettingsSurface()
+      : this.readProjectSettingsSurface(projectCwd);
+  }
+
+  /** Effective merged settings from `omp config list --json`, tagged global. */
+  private readEffectiveSettingsSurface(): Effect.Effect<
     { readonly entries: ReadonlyArray<OmpSettingsSurfaceEntry> },
     OmpCapabilitiesError
   > {
@@ -377,6 +410,45 @@ export class OmpCapabilitiesService {
         ),
       ),
     );
+   * The project layer of omp settings, read directly from the project's
+   * `.omp/config.yml`. `omp config list --json` only reports the EFFECTIVE
+   * merged config, so the project-scoped surface reads the file itself to
+   * show exactly what this project overrides. Scalar leaves flatten to dot
+   * keys so the displayed key matches the write key (writeProjectKey).
+   */
+  private readProjectSettingsSurface(
+    projectCwd: string,
+  ): Effect.Effect<
+    { readonly entries: ReadonlyArray<OmpSettingsSurfaceEntry> },
+    OmpCapabilitiesError
+  > {
+    return Effect.gen({ self: this }, function* () {
+      const configPath = this.#path.join(projectCwd, ".omp", "config.yml");
+      const exists = yield* this.#fileSystem.exists(configPath);
+      if (!exists) return { entries: [] };
+      const text = yield* this.#fileSystem.readFileString(configPath);
+      let doc: unknown;
+      try {
+        doc = parseYaml(text);
+      } catch {
+        return { entries: [] };
+      }
+      if (!isRecord(doc)) return { entries: [] };
+      const entries: OmpSettingsSurfaceEntry[] = [];
+      for (const [key, value] of flattenScalarConfig(doc)) {
+        const type =
+          typeof value === "boolean" ? "boolean" : typeof value === "number" ? "number" : "string";
+        entries.push({
+          key,
+          value,
+          type,
+          description: "",
+          masked: isSecretSetting(key, type),
+          scope: "project",
+        });
+      }
+      return { entries };
+    });
   }
 
   private inventory(
