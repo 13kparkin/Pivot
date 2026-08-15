@@ -180,6 +180,64 @@ it.layer(NodeServices.layer)("OmpCapabilitiesService", (it) => {
       const theme = snapshot.settings.entries.find((e) => e.key === "theme.dark");
       expect(theme?.values).toBeUndefined();
     }),
+  it.effect(
+    "project snapshots surface the project's own config layer as project-scoped settings",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const agentDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-omp-agent-" });
+        const projectCwd = yield* fs.makeTempDirectoryScoped({ prefix: "t3-omp-project-" });
+        yield* fs.makeDirectory(path.join(projectCwd, ".omp"), { recursive: true });
+        yield* fs.writeFileString(
+          path.join(projectCwd, ".omp", "config.yml"),
+          "autoResume: false\nmodelRoles:\n  default: gpt-5.6\nthreadCount: 4\n",
+        );
+
+        const { runner } = makeRunner({ agentDir });
+        const service = yield* makeService({ agentDir, projectCwd, runner });
+
+        const snapshot = yield* service.getSnapshot(ProjectId.make("project-1"));
+        const byKey = new Map(snapshot.settings.entries.map((entry) => [entry.key, entry]));
+        expect(byKey.get("autoResume")).toMatchObject({
+          value: false,
+          type: "boolean",
+          scope: "project",
+        });
+        expect(byKey.get("modelRoles.default")).toMatchObject({
+          value: "gpt-5.6",
+          type: "string",
+          scope: "project",
+        });
+        expect(byKey.get("threadCount")).toMatchObject({
+          value: 4,
+          type: "number",
+          scope: "project",
+        });
+        // Effective/global settings never leak into a project snapshot.
+        expect(byKey.has("theme.dark")).toBe(false);
+
+        // A project write lands in the layer and shows up in the next snapshot.
+        yield* service.writeSetting({
+          key: "retry.enabled",
+          value: true,
+          scope: "project",
+          projectId: ProjectId.make("project-1"),
+        });
+        const after = yield* service.getSnapshot(ProjectId.make("project-1"));
+        expect(
+          new Map(after.settings.entries.map((e) => [e.key, e])).get("retry.enabled"),
+        ).toMatchObject({ value: true, scope: "project" });
+
+        // The global snapshot still returns the effective CLI list.
+        const globalSnapshot = yield* service.getSnapshot();
+        expect(globalSnapshot.settings.entries.some((entry) => entry.key === "theme.dark")).toBe(
+          true,
+        );
+        expect(globalSnapshot.settings.entries.every((entry) => entry.scope === "global")).toBe(
+          true,
+        );
+      }),
   );
 
   it.effect("exposes the settings surface from omp config list --json with masked secrets", () =>
