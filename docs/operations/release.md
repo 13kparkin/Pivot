@@ -4,7 +4,7 @@
 
 This document covers the unified release workflow for stable and nightly releases
 on this repository (**desktop + CLI**). Hosted web (Vercel) and **T3 Connect** are
-not part of this release path. Use local web (`pnpm run dev` / `npx t3`) instead.
+not part of this release path. Use local web (`pnpm run dev` / `npx pivot-cli`) instead.
 
 ## What the workflow does
 

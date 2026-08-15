@@ -1,6 +1,6 @@
 # Server Update Architecture
 
-> For maintainers. Using T3 Code? See [docs/user](../user/).
+> For maintainers. Using Pivot? See [docs/user](../user/).
 
 Remote server updates use one stable systemd launcher. Foreground CLI processes do not self-update,
 and a running server never edits its systemd unit or durable service state.

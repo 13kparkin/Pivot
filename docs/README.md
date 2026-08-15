@@ -1,6 +1,6 @@
-# T3 Code docs
+# Pivot docs
 
-## Using T3 Code
+## Using Pivot
 
 - [Install and first run](./user/install.md)
 - [Permission modes](./user/permission-modes.md)
@@ -18,7 +18,7 @@ Mobile app: [apps/mobile/README.md](../apps/mobile/README.md)
 
 ---
 
-## Working on T3 Code
+## Working on Pivot
 
 Everything below is for maintainers. Setup lives in the [root README](../README.md);
 policy in [CONTRIBUTING.md](../CONTRIBUTING.md); agent rules in [AGENTS.md](../AGENTS.md).

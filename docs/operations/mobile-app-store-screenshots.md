@@ -1,6 +1,6 @@
 # Mobile app-store screenshot harness
 
-> For maintainers. Using T3 Code? See [docs/user](../user/).
+> For maintainers. Using Pivot? See [docs/user](../user/).
 
 The screenshot harness runs the real mobile application against three disposable local T3
 environments. It creates an isolated base directory and server for each environment, real Git

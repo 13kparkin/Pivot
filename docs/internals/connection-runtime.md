@@ -1,6 +1,6 @@
 # Connection Runtime
 
-> For maintainers. Using T3 Code? See [docs/user](../user/).
+> For maintainers. Using Pivot? See [docs/user](../user/).
 
 The connection runtime is shared by web and mobile. It owns connectivity,
 authentication, retries, transport lifetime, cached environment data, and

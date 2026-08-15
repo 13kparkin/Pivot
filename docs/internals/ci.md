@@ -1,6 +1,6 @@
 # CI quality gates
 
-> For maintainers. Using T3 Code? See [docs/user](../user/).
+> For maintainers. Using Pivot? See [docs/user](../user/).
 
 [`.github/workflows/ci.yml`](../../.github/workflows/ci.yml) runs four jobs on pull requests and
 pushes to `main`:

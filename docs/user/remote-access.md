@@ -51,12 +51,12 @@ The default endpoint controls the QR code and primary copy action for pairing li
 When no user default is saved, the app uses the built-in LAN endpoint for pairing links when
 available. You can set another endpoint as the default from the expanded endpoint list.
 
-- HTTPS/WSS-compatible endpoints work from `https://app.t3.codes`, but are not made the default
-  automatically.
+- HTTPS/WSS endpoints are required when the web app is opened over HTTPS (for example Tailscale Serve),
+  but are not made the default automatically.
 - Non-loopback HTTP endpoints are useful for direct LAN pairing.
 - Loopback-only endpoints are not useful for another device unless that device is the same machine.
 
-If the copied link points directly at `http://192.168.x.y:3773`, open it from a client that can reach that LAN address. If it points at `https://app.t3.codes/pair?...`, the hosted web app will save the environment and connect directly to the backend URL in the link.
+If the copied link points directly at `http://192.168.x.y:3773`, open it from a client that can reach that LAN address. If it points at a pairing URL like `http://192.168.x.y:3773/pair#token=…`, the server's web app opens, saves the environment, and connects directly to that backend URL.
 
 In the mobile app's **Add Environment** form, a numeric IP address without a scheme uses HTTP. Include `https://` explicitly when the backend is served over HTTPS.
 
@@ -78,7 +78,7 @@ Tailscale Serve to proxy HTTPS traffic to the local backend. Turn the same switc
 
 The Tailscale support is an endpoint provider add-on. The core remote model still works without Tailscale: LAN HTTP endpoints, custom HTTPS endpoints, future tunnels, and SSH-launched environments all use the same saved environment and pairing flow.
 
-For `https://app.t3.codes`, prefer an HTTPS Tailnet or other HTTPS endpoint. A plain `http://100.x.y.z:3773` endpoint can still work from a desktop client or another browser page served over HTTP, but it will not work from the hosted HTTPS app because of browser mixed-content rules.
+When the web app is served over HTTPS (for example `https://machine.tailnet.ts.net/`), prefer an HTTPS Tailnet or other HTTPS endpoint. A plain `http://100.x.y.z:3773` endpoint can still work from a desktop client or another browser page served over HTTP, but it will not work from the HTTPS web app because of browser mixed-content rules.
 
 ### Option 2: Headless Server (CLI)
 
@@ -102,7 +102,7 @@ From there, connect from another device in either of these ways:
 - scan the QR code on your phone
 - in the desktop app, enter the full pairing URL
 - in the desktop app, enter the host and token separately
-- in the hosted web app, open a hosted pairing URL when the backend is reachable over HTTPS
+- in any browser, open the pairing URL; when the web app is served over HTTPS, the backend must be reachable over HTTPS/WSS
 
 Use `pivot serve --help` for the full flag reference. It supports the same general startup options as the normal server command, including an optional `cwd` argument.
 
@@ -130,15 +130,15 @@ Use this when you want the desktop app to start or reuse Pivot on another machin
 2. Under **Remote Environments**, choose **Add environment**.
 3. Select the SSH launch flow.
 4. Enter the SSH target, such as `user@example.com`.
-5. Confirm the launch. The desktop app probes the host, starts or reuses a remote T3 server, opens a local port forward, and saves the environment.
+5. Confirm the launch. The desktop app probes the host, starts or reuses a remote Pivot server, opens a local port forward, and saves the environment.
 
-After setup, the renderer connects to a local forwarded HTTP/WebSocket endpoint. The remote host still owns the actual T3 server, projects, files, git state, terminals, and provider sessions.
+After setup, the renderer connects to a local forwarded HTTP/WebSocket endpoint. The remote host still owns the actual Pivot server, projects, files, git state, terminals, and provider sessions.
 
 SSH launch is a desktop feature because it needs local process and SSH access. Once the environment is paired and saved, it uses the same environment list and connection model as direct LAN, Tailscale, HTTPS, or future tunnel-backed environments.
 
 #### SSH Launch Troubleshooting
 
-The desktop SSH launcher connects with a non-interactive `sh` session, writes a small launcher script under `~/.t3/ssh-launch/<host-key>/`, starts or reuses a remote T3 server, and forwards the remote loopback port back to your desktop.
+The desktop SSH launcher connects with a non-interactive `sh` session, writes a small launcher script under `~/.t3/ssh-launch/<host-key>/`, starts or reuses a remote Pivot server, and forwards the remote loopback port back to your desktop.
 
 The remote host must have a compatible Node.js runtime. Pivot uses the server package's `engines.node` requirement:
 
@@ -192,19 +192,19 @@ Instead:
 
 After pairing, future access is session-based. You do not need to keep reusing the original token unless you are pairing a new device.
 
-## Hosted Web App Pairing
+## Web App Pairing
 
-The hosted web app at `https://app.t3.codes` can save a remote backend in browser local storage from a URL like:
+Pairing URLs point at the server's own origin and open its web app, which saves the backend in browser local storage and connects directly to it:
 
 ```text
-https://app.t3.codes/pair?host=https://backend.example.com:3773#token=PAIRCODE
+https://backend.example.com:3773/pair#token=PAIRCODE
 ```
 
-Use hosted pairing when the backend is reachable from the browser over HTTPS/WSS. This includes a backend behind a trusted HTTPS tunnel or another HTTPS endpoint you operate.
+Use the pairing URL when the backend is reachable from the browser over HTTPS/WSS. This includes a backend behind a trusted HTTPS tunnel or another HTTPS endpoint you operate.
 
-Do not use hosted pairing for plain HTTP LAN URLs such as `http://192.168.x.y:3773`. Browsers block an HTTPS page from connecting to an insecure HTTP or WS backend. For those endpoints, use the direct pairing URL shown by the desktop app or CLI from a client that can open that HTTP URL directly.
+Do not open the pairing URL from an HTTPS page when the backend is a plain HTTP LAN URL such as `http://192.168.x.y:3773`. Browsers block an HTTPS page from connecting to an insecure HTTP or WS backend. For those endpoints, open the pairing URL from a client that can open that HTTP URL directly.
 
-Hosted pairing does not proxy traffic through Pivot. The browser still connects directly to the backend URL in the pairing link.
+Pairing does not proxy traffic through Pivot. The browser still connects directly to the backend URL in the pairing link.
 
 ## Managing Access Later
 
@@ -218,21 +218,10 @@ Typical uses:
 
 Use `pivot auth --help` and the nested subcommand help pages for the full reference.
 
-### Deregister a T3 Connect Environment
-
-Open your account menu and choose **T3 Connect** to see every environment registered to your
-account. On mobile, open **Settings** → **T3 Connect**. Choose **Deregister** to revoke an
-environment's T3 Connect access, remove any managed tunnel, and free its host space.
-
-Deregistration is an account action and does not need a connection to the environment, so it also
-works for a server that was wiped or is no longer reachable. Device-local connect and disconnect
-controls remain in **Settings** → **Connections** on web and desktop or **Settings** →
-**Environments** on mobile.
-
 ## Security Notes
 
 - Treat pairing URLs and pairing tokens like passwords.
 - Prefer binding `--host` to a trusted private address, such as a Tailnet IP, instead of exposing the server broadly.
 - Anyone with a valid pairing credential can create a session until that credential expires or is revoked.
-- Hosted pairing links keep the credential in the URL hash so it is not sent to the hosted app server, but it can still be exposed through browser history, screenshots, logs, or copy/paste.
+- Pairing links keep the token in the URL hash, but it can still be exposed through browser history, screenshots, logs, or copy/paste.
 - Use `pivot auth` to revoke credentials or sessions you no longer trust.
