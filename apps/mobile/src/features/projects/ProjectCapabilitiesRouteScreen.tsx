@@ -34,6 +34,7 @@ import {
   buildWriteSettingInput,
   canEditEntry,
   isValidItemName,
+  isValidSettingKey,
   NEW_RULE_TEMPLATE,
   NEW_SKILL_TEMPLATE,
   projectScopeOnly,
@@ -49,6 +50,8 @@ interface SettingsEditorState {
   readonly kind: "setting";
   readonly key: string;
   readonly draft: string;
+  /** False when adding a new project-level key; the key is then editable. */
+  readonly isEdit: boolean;
 }
 
 interface ResourceEditorState {
@@ -233,6 +236,10 @@ export function ProjectCapabilitiesRouteScreen(props: ProjectCapabilitiesRoutePr
     });
   }, []);
 
+  const openNewSettingEditor = useCallback(() => {
+    setEditor({ kind: "setting", key: "", draft: "", isEdit: false });
+  }, []);
+
   const saveItem = useCallback(async () => {
     if (editor === null || editor.kind !== "resource") return;
     const name = editor.name.trim();
@@ -307,8 +314,19 @@ export function ProjectCapabilitiesRouteScreen(props: ProjectCapabilitiesRoutePr
   const editorView =
     editor === null ? null : editor.kind === "setting" ? (
       <View className="flex-1 gap-3 px-5 pt-4">
-        <Text className="text-sm text-foreground-muted">Setting</Text>
-        <Text className="text-lg font-t3-medium text-foreground">{editor.key}</Text>
+        <Text className="text-sm text-foreground-muted">
+          {editor.isEdit ? "Setting" : "Setting key (slug)"}
+        </Text>
+        <TextInput
+          accessibilityLabel="Setting key"
+          autoCapitalize="none"
+          autoCorrect={false}
+          editable={!editor.isEdit}
+          onChangeText={(text) => setEditor({ ...editor, key: text })}
+          placeholder="modelRoles.default"
+          className="rounded-2xl border border-input-border bg-input px-3.5 py-2.5 text-base font-sans text-foreground"
+          value={editor.key}
+        />
         <TextInput
           accessibilityLabel={`Value for ${editor.key}`}
           autoCapitalize="none"
@@ -321,22 +339,26 @@ export function ProjectCapabilitiesRouteScreen(props: ProjectCapabilitiesRoutePr
         />
         <Pressable
           accessibilityRole="button"
-          disabled={saving}
+          disabled={saving || !isValidSettingKey(editor.key.trim())}
           onPress={() => void saveSetting()}
           className="items-center rounded-xl bg-primary py-3"
           style={({ pressed }) => ({ opacity: pressed ? 0.7 : 1 })}
         >
-          <Text className="text-base font-t3-bold text-primary-foreground">Save</Text>
+          <Text className="text-base font-t3-bold text-primary-foreground">
+            {editor.isEdit ? "Save" : "Add"}
+          </Text>
         </Pressable>
-        <Pressable
-          accessibilityRole="button"
-          disabled={saving}
-          onPress={confirmResetSetting}
-          className="items-center rounded-xl border border-border py-3"
-          style={({ pressed }) => ({ opacity: pressed ? 0.7 : 1 })}
-        >
-          <Text className="text-base font-t3-medium text-foreground-muted">Reset to default</Text>
-        </Pressable>
+        {editor.isEdit ? (
+          <Pressable
+            accessibilityRole="button"
+            disabled={saving}
+            onPress={confirmResetSetting}
+            className="items-center rounded-xl border border-border py-3"
+            style={({ pressed }) => ({ opacity: pressed ? 0.7 : 1 })}
+          >
+            <Text className="text-base font-t3-medium text-foreground-muted">Reset to default</Text>
+          </Pressable>
+        ) : null}
         <Pressable
           accessibilityRole="button"
           disabled={saving}
@@ -481,6 +503,18 @@ export function ProjectCapabilitiesRouteScreen(props: ProjectCapabilitiesRoutePr
       ) : (
         <>
           <SettingsSection title="Settings">
+            <Pressable
+              key="add-setting"
+              accessibilityRole="button"
+              accessibilityLabel="Add setting"
+              onPress={openNewSettingEditor}
+              className="flex-row items-center gap-3 p-4"
+              style={({ pressed }) => (pressed ? { opacity: 0.6 } : null)}
+            >
+              <View className="min-w-0 flex-1 gap-0.5">
+                <Text className="text-lg text-foreground">Add setting</Text>
+              </View>
+            </Pressable>
             {settingRows.map((row, index) => {
               const editable = row.scope === "project" && canEditEntry(row);
               return (
@@ -490,7 +524,12 @@ export function ProjectCapabilitiesRouteScreen(props: ProjectCapabilitiesRoutePr
                   accessibilityLabel={`${row.key} (${row.scope === "project" ? "Project" : row.scope === "global" ? "Global" : "Profile"})`}
                   disabled={!editable}
                   onPress={() =>
-                    setEditor({ kind: "setting", key: row.key, draft: row.displayValue })
+                    setEditor({
+                      kind: "setting",
+                      key: row.key,
+                      draft: row.displayValue,
+                      isEdit: true,
+                    })
                   }
                   className={
                     index === 0

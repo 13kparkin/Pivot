@@ -126,6 +126,19 @@ export function canEditEntry(entry: OmpSettingsSurfaceEntry): boolean {
   return !entry.masked;
 }
 
+/**
+ * A setting key may be a plain name or a dotted path (`modelRoles.default`),
+ * alphanumeric with inner dots/underscores/hyphens. The server splits on
+ * dots for nested writes, so leading/trailing dots are rejected up front.
+ * Mirrors the web settings panel (`isValidSettingKey`) so create-time
+ * validation fails in the UI instead of on the wire.
+ */
+export const SETTING_KEY_PATTERN = /^[a-zA-Z0-9](?:[a-zA-Z0-9._-]*[a-zA-Z0-9])?$/;
+
+export function isValidSettingKey(key: string): boolean {
+  return SETTING_KEY_PATTERN.test(key);
+}
+
 /** Display order: broadest scope first, then name. */
 const SCOPE_ORDER: Readonly<Record<OmpCapabilityItem["scope"], number>> = {
   global: 0,
