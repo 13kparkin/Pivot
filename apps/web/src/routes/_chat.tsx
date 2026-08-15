@@ -117,7 +117,7 @@ function ChatRouteGlobalShortcuts() {
             stackedThreadToast({
               type: "info",
               title: "Preview is desktop-only",
-              description: "Open Pivot in the desktop app to use the in-app preview.",
+              description: "Open Piπot in the desktop app to use the in-app preview.",
             }),
           );
           return;
