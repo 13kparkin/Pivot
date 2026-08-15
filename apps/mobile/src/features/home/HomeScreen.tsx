@@ -8,7 +8,9 @@ import {
 } from "@t3tools/client-runtime/state/thread-search";
 import { sortPinnedThreadsByOrderKey } from "@t3tools/client-runtime/state/thread-sort";
 import { buildProjectGroups } from "@t3tools/client-runtime/state/project-grouping";
+import type { ProjectGroup } from "@t3tools/client-runtime/state/project-grouping";
 import type { EnvironmentId, SidebarProjectGroupingMode } from "@t3tools/contracts";
+import { useNavigation } from "@react-navigation/native";
 import { useAtomSet, useAtomValue } from "@effect/atom-react";
 import { AsyncResult } from "effect/unstable/reactivity";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -43,6 +45,7 @@ import {
   type ThreadListV2ProjectListItem,
 } from "../threads/threadListV2";
 import type { HomeListFilterMenuEnvironment } from "./home-list-filter-menu";
+import { resolveProjectCapabilitiesTarget } from "../projects/ProjectCapabilitiesRouteScreen.logic";
 import { SwipeableScrollGateProvider, useSwipeableScrollGate } from "./thread-swipe-actions";
 
 /* ─── Types ──────────────────────────────────────────────────────────── */
@@ -172,7 +175,19 @@ export function HomeScreen(props: HomeScreenProps) {
   const preferencesResult = useAtomValue(mobilePreferencesAtom);
   const savePreferences = useAtomSet(updateMobilePreferencesAtom);
   const openSwipeableRef = useRef<SwipeableMethods | null>(null);
+  const navigation = useNavigation();
   const insets = useSafeAreaInsets();
+  const handleOpenProjectCapabilities = useCallback(
+    (group: ProjectGroup) => {
+      const target = resolveProjectCapabilitiesTarget(group, props.selectedEnvironmentId);
+      if (target === null) return;
+      navigation.navigate("ProjectCapabilities", {
+        environmentId: String(target.environmentId),
+        projectId: String(target.projectId),
+      });
+    },
+    [navigation, props.selectedEnvironmentId],
+  );
   const accentColor = useThemeColor("--color-icon-muted");
   const iosBottomToolbarClearance =
     Platform.OS === "ios" && !NATIVE_LIQUID_GLASS_SUPPORTED
@@ -738,6 +753,7 @@ export function HomeScreen(props: HomeScreenProps) {
             expanded={item.expanded}
             isFirstProject={item.isFirstProject}
             onToggle={toggleProject}
+            onOpenCapabilities={handleOpenProjectCapabilities}
           />
         );
       }
@@ -756,6 +772,7 @@ export function HomeScreen(props: HomeScreenProps) {
       props.onDeletePendingTask,
       props.onSelectPendingTask,
       props.savedConnectionsById,
+      handleOpenProjectCapabilities,
       renderV2ThreadRow,
       threadListV2Items,
       toggleProject,

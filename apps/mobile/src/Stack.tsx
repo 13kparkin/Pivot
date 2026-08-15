@@ -34,6 +34,7 @@ import { ThreadRouteScreen } from "./features/threads/ThreadRouteScreen";
 import { ConnectionsRouteScreen } from "./features/connection/ConnectionsRouteScreen";
 import { ConnectionsNewRouteScreen } from "./features/connection/ConnectionsNewRouteScreen";
 import { HomeRouteScreen } from "./features/home/HomeRouteScreen";
+import { ProjectCapabilitiesRouteScreen } from "./features/projects/ProjectCapabilitiesRouteScreen";
 import { AddProjectDestinationRoute } from "./features/projects/AddProjectDestinationRoute";
 import { AddProjectLocalRoute } from "./features/projects/AddProjectLocalRoute";
 import { AddProjectRepositoryRoute } from "./features/projects/AddProjectRepositoryRoute";
@@ -455,6 +456,14 @@ export const RootStack = createNativeStackNavigator({
             ? { backgroundColor: SHEET_BACKGROUND_COLOR }
             : undefined,
         title: "Files",
+      },
+    }),
+    ProjectCapabilities: createNativeStackScreen({
+      screen: ProjectCapabilitiesRouteScreen,
+      linking: "project-capabilities/:environmentId/:projectId",
+      options: {
+        ...GLASS_HEADER_OPTIONS,
+        title: "Project Capabilities",
       },
     }),
     ThreadFile: createNativeStackScreen({

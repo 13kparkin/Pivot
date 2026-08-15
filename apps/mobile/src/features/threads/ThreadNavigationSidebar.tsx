@@ -14,6 +14,8 @@ import { AsyncResult } from "effect/unstable/reactivity";
 import type { EnvironmentId } from "@t3tools/contracts";
 import { sortPinnedThreadsByOrderKey } from "@t3tools/client-runtime/state/thread-sort";
 import { buildProjectGroups } from "@t3tools/client-runtime/state/project-grouping";
+import type { ProjectGroup } from "@t3tools/client-runtime/state/project-grouping";
+import { useNavigation } from "@react-navigation/native";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { LayoutChangeEvent, NativeScrollEvent, NativeSyntheticEvent } from "react-native";
 import { Platform, StyleSheet, TextInput, View, useColorScheme } from "react-native";
@@ -51,6 +53,7 @@ import { SidebarHeaderActions } from "./sidebar-header-actions";
 import { SidebarFilterButton } from "./sidebar-filter-button";
 import { createSidebarHeaderItems } from "./sidebar-native-header-items";
 import { SidebarNavigationShell } from "./sidebar-navigation-shell";
+import { resolveProjectCapabilitiesTarget } from "../projects/ProjectCapabilitiesRouteScreen.logic";
 import {
   ThreadListV2PendingRow,
   ThreadListV2ProjectRow,
@@ -170,6 +173,7 @@ function ThreadNavigationSidebarPane(
   props: ThreadNavigationSidebarProps & { readonly nativeChrome: boolean },
 ) {
   const insets = useSafeAreaInsets();
+  const navigation = useNavigation();
   const colorScheme = useColorScheme() === "dark" ? "dark" : "light";
   const projects = useProjects();
   const threads = useThreadShells();
@@ -516,6 +520,17 @@ function ThreadNavigationSidebarPane(
       });
     },
     [persistedProjectExpansion, projectExpansion, projectThreadList.projects, savePreferences],
+  );
+  const handleOpenProjectCapabilities = useCallback(
+    (group: ProjectGroup) => {
+      const target = resolveProjectCapabilitiesTarget(group, options.selectedEnvironmentId);
+      if (target === null) return;
+      navigation.navigate("ProjectCapabilities", {
+        environmentId: String(target.environmentId),
+        projectId: String(target.projectId),
+      });
+    },
+    [navigation, options.selectedEnvironmentId],
   );
   // Re-partition the moment the earliest snooze expires (clamped to the
   // signed-32-bit setTimeout range; far-future wakes re-arm at the clamp).
@@ -922,6 +937,7 @@ function ThreadNavigationSidebarPane(
               expanded={item.expanded}
               isFirstProject={item.isFirstProject}
               onToggle={toggleProject}
+              onOpenCapabilities={handleOpenProjectCapabilities}
               pane="sidebar"
             />
           );
@@ -940,6 +956,7 @@ function ThreadNavigationSidebarPane(
     },
     [
       confirmDeletePendingTask,
+      handleOpenProjectCapabilities,
       openPendingTask,
       projectByKey,
       renderV2ThreadRow,

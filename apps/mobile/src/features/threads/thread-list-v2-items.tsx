@@ -2,6 +2,7 @@ import type {
   EnvironmentProject,
   EnvironmentThreadShell,
 } from "@t3tools/client-runtime/state/shell";
+import type { ProjectGroup } from "@t3tools/client-runtime/state/project-grouping";
 import type { EnvironmentThreadSearchMatch } from "@t3tools/client-runtime/state/thread-search";
 import { canSnooze, resolveSnoozePresets } from "@t3tools/client-runtime/state/thread-settled";
 import type { MenuAction } from "@react-native-menu/menu";
@@ -199,9 +200,10 @@ export const ThreadListV2SettledShelfHeader = memo(function ThreadListV2SettledS
 });
 
 /**
- * One expandable logical project row: favicon + displayName + chevron. Its
- * pinned + active thread cards render as the following list rows when
- * expanded (pinned first). The gear arrives in Phase 7.
+ * One expandable logical project row: favicon + displayName + chevron, with
+ * a gear opening the project's capabilities screen. Its pinned + active
+ * thread cards render as the following list rows when expanded (pinned
+ * first).
  */
 export const ThreadListV2ProjectRow = memo(function ThreadListV2ProjectRow(props: {
   readonly project: ThreadListV2ProjectThreads;
@@ -210,6 +212,8 @@ export const ThreadListV2ProjectRow = memo(function ThreadListV2ProjectRow(props
   /** Only the leading project row draws the PROJECTS section divider. */
   readonly isFirstProject?: boolean;
   readonly onToggle: (projectKey: string) => void;
+  /** Opens the project's capabilities screen (Phase 7 gear). */
+  readonly onOpenCapabilities?: (group: ProjectGroup) => void;
 }) {
   const group = props.project.group;
   const drawerColor = useThemeColor("--color-drawer");
@@ -234,6 +238,17 @@ export const ThreadListV2ProjectRow = memo(function ThreadListV2ProjectRow(props
       <Text className="flex-1 text-sm font-t3-medium text-foreground" numberOfLines={1}>
         {group.label}
       </Text>
+      {props.onOpenCapabilities ? (
+        <Pressable
+          accessibilityLabel={`Open capabilities for ${group.label}`}
+          accessibilityRole="button"
+          hitSlop={8}
+          onPress={() => props.onOpenCapabilities?.(group)}
+          style={({ pressed }) => ({ opacity: pressed ? 0.6 : 1 })}
+        >
+          <SymbolView name="gearshape" size={15} tintColor={mutedColor} type="monochrome" />
+        </Pressable>
+      ) : null}
     </View>
   );
   return (
