@@ -11,6 +11,7 @@ import {
   emptyAgentPanelModel,
   formatSubagentTokenCount,
 } from "@t3tools/client-runtime/state/subagentRuntime";
+import { splitStatusPoints } from "@t3tools/client-runtime/state/status-points";
 
 const EMPTY_AGENT_PANEL_MODEL = emptyAgentPanelModel();
 const NOOP_OPEN_AGENTS = () => {};
@@ -1111,40 +1112,122 @@ function TurnFoldTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "turn-
   );
 }
 
+function StatusSection(props: {
+  readonly statusText: string | undefined;
+  readonly isStreaming: boolean;
+  readonly markdownCwd: string | undefined;
+  readonly threadRef: ScopedThreadRef | null;
+  readonly skills: ReadonlyArray<Pick<ServerProviderSkill, "name" | "displayName">>;
+}) {
+  const points = splitStatusPoints(props.statusText);
+  const [expanded, setExpanded] = useState(false);
+  const [expandedPoints, setExpandedPoints] = useState<ReadonlySet<number>>(new Set());
+
+  if (points.length === 0) {
+    return null;
+  }
+
+  const togglePoint = (index: number) => {
+    setExpandedPoints((previous) => {
+      const next = new Set(previous);
+      if (next.has(index)) {
+        next.delete(index);
+      } else {
+        next.add(index);
+      }
+      return next;
+    });
+  };
+
+  return (
+    <div className="flex flex-col gap-0.5">
+      <button
+        type="button"
+        aria-expanded={expanded}
+        onClick={() => setExpanded((value) => !value)}
+        className="flex w-full min-w-0 cursor-pointer items-center gap-2 rounded-md px-0.5 py-0.5 text-left text-[12px] leading-5 transition-colors duration-150 hover:bg-accent/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/70"
+      >
+        {expanded ? (
+          <ChevronDownIcon className="size-3.5 shrink-0 text-muted-foreground/65" />
+        ) : (
+          <ChevronRightIcon className="size-3.5 shrink-0 text-muted-foreground/65" />
+        )}
+        <span className="text-muted-foreground text-xs">Status</span>
+      </button>
+      {expanded ? (
+        <div className="flex flex-col">
+          {points.map((point, index) => (
+            <StatusPointRow
+              key={index}
+              point={point}
+              expanded={expandedPoints.has(index)}
+              isStreaming={props.isStreaming}
+              markdownCwd={props.markdownCwd}
+              threadRef={props.threadRef}
+              skills={props.skills}
+              onToggle={() => togglePoint(index)}
+            />
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function StatusPointRow(props: {
+  readonly point: string;
+  readonly expanded: boolean;
+  readonly isStreaming: boolean;
+  readonly markdownCwd: string | undefined;
+  readonly threadRef: ScopedThreadRef | null;
+  readonly skills: ReadonlyArray<Pick<ServerProviderSkill, "name" | "displayName">>;
+  readonly onToggle: () => void;
+}) {
+  return (
+    <div className="flex flex-col">
+      <button
+        type="button"
+        aria-expanded={props.expanded}
+        onClick={props.onToggle}
+        className="flex w-full min-w-0 cursor-pointer items-center gap-2 rounded-md px-0.5 py-0.5 text-left text-[12px] leading-5 transition-colors duration-150 hover:bg-accent/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/70"
+      >
+        {props.expanded ? (
+          <ChevronDownIcon className="size-3 shrink-0 text-muted-foreground/65" />
+        ) : (
+          <ChevronRightIcon className="size-3 shrink-0 text-muted-foreground/65" />
+        )}
+        <span className="min-w-0 truncate text-muted-foreground">{props.point}</span>
+      </button>
+      {props.expanded ? (
+        <div className="pl-5">
+          <ChatMarkdown
+            text={props.point}
+            cwd={props.markdownCwd}
+            threadRef={props.threadRef ?? undefined}
+            isStreaming={props.isStreaming}
+            skills={props.skills}
+          />
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" }> }) {
   const ctx = use(TimelineRowCtx);
-  const statusText = row.message.statusText ?? null;
-  const [statusExpanded, setStatusExpanded] = useState(!row.message.text);
   const messageText =
-    row.message.text || (row.message.streaming || statusText ? "" : "(empty response)");
+    row.message.text || (row.message.streaming || row.message.statusText ? "" : "(empty response)");
 
   return (
     <>
       <div className="relative min-w-0 px-1 py-0.5">
-        {statusText ? (
-          <button
-            type="button"
-            className="flex w-full min-w-0 cursor-pointer items-center gap-2 rounded-md px-0.5 py-0.5 text-left text-[12px] leading-5 transition-colors duration-150 hover:bg-accent/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/70"
-            aria-expanded={statusExpanded}
-            onClick={() => setStatusExpanded((value) => !value)}
-          >
-            {statusExpanded ? (
-              <ChevronDownIcon className="size-3.5 shrink-0 text-muted-foreground/65" />
-            ) : (
-              <ChevronRightIcon className="size-3.5 shrink-0 text-muted-foreground/65" />
-            )}
-            <span className="text-muted-foreground text-xs">Status</span>
-          </button>
-        ) : null}
-        {statusExpanded && statusText ? (
-          <ChatMarkdown
-            text={statusText}
-            cwd={ctx.markdownCwd}
-            threadRef={ctx.threadRef ?? undefined}
-            isStreaming={Boolean(row.message.streaming)}
-            skills={ctx.skills}
-          />
-        ) : null}
+        <StatusSection
+          statusText={row.message.statusText}
+          isStreaming={Boolean(row.message.streaming)}
+          markdownCwd={ctx.markdownCwd}
+          threadRef={ctx.threadRef}
+          skills={ctx.skills}
+        />
         <ChatMarkdown
           text={messageText}
           cwd={ctx.markdownCwd}
