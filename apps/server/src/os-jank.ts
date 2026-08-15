@@ -1,3 +1,4 @@
+import { resolveDefaultPivotHome } from "@t3tools/shared/devHome";
 import { HostProcessEnvironment, HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import {
   listLoginShellCandidates,
@@ -103,9 +104,9 @@ export const expandHomePath = Effect.fn(function* (input: string) {
 });
 
 export const resolveBaseDir = Effect.fn(function* (raw: string | undefined) {
-  const { join, resolve } = yield* Path.Path;
+  const { resolve } = yield* Path.Path;
   if (!raw || raw.trim().length === 0) {
-    return join(NodeOS.homedir(), ".t3");
+    return yield* resolveDefaultPivotHome(NodeOS.homedir());
   }
   return resolve(yield* expandHomePath(raw.trim()));
 });

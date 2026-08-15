@@ -36,6 +36,7 @@ export const resolveEarlyLinuxElectronOptionsFromProcess =
       homeDirectory: NodeOS.homedir(),
       joinPath: NodePath.posix.join,
       readFileString: (path) => NodeFS.readFileSync(path, "utf8"),
+      existsDir: (path) => NodeFS.existsSync(path),
     });
 
 export class DesktopPreReadyElectronOptions extends Context.Service<
