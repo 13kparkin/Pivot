@@ -1076,11 +1076,6 @@ export function partitionThreadsByProjectGroup(input: {
 export const SETTLED_DOCK_INITIAL_COUNT = 10;
 export const SETTLED_DOCK_PAGE_COUNT = 25;
 
-/** Collapsed dock shows only the header bar; expanded shows up to `count` rows. */
-export function resolveSettledDockVisibleCount(count: number, expanded: boolean): number {
-  return expanded ? count : 0;
-}
-
 /**
  * First `visibleCount` settled rows. The open thread must never hide under
  * "Show more": navigating into a deep settled thread (search, deep link)

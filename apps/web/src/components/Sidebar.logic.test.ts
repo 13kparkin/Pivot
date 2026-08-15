@@ -37,7 +37,6 @@ import {
   partitionThreadsByProjectGroup,
   resolveProjectExpansionState,
   resolveSettledDockRows,
-  resolveSettledDockVisibleCount,
   THREAD_JUMP_HINT_SHOW_DELAY_MS,
 } from "./Sidebar.logic";
 import {
@@ -1900,20 +1899,6 @@ describe("resolveProjectExpansionState", () => {
 
   it("defaults empty projects to collapsed", () => {
     expect(resolveProjectExpansionState("project-a", false)).toBe(false);
-  });
-});
-
-describe("resolveSettledDockVisibleCount", () => {
-  it("renders no rows when the dock is collapsed", () => {
-    expect(resolveSettledDockVisibleCount(10, false)).toBe(0);
-  });
-
-  it("caps expanded rows at the paged count", () => {
-    expect(resolveSettledDockVisibleCount(10, true)).toBe(10);
-  });
-
-  it("grows by a page after Show more", () => {
-    expect(resolveSettledDockVisibleCount(35, true)).toBe(35);
   });
 });
 

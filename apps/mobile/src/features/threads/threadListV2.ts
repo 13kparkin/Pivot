@@ -536,8 +536,6 @@ function classifyThreadsForListV2(input: {
 // in a fixed dock below the scroll area. Expansion is keyed per logical
 // projectKey so the map survives physical project renames and grouping
 // changes — same key name as the web sidebar's localStorage map.
-export const PROJECT_EXPANSION_KEY = "t3code:sidebar-v2:project-expanded";
-
 /**
  * Default project-row expansion: projects with threads open (the cards are
  * the point of the row), empty projects collapse to their header row.
