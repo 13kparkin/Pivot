@@ -20,7 +20,7 @@ import { SettingsPageContainer, SettingsRow, SettingsSection } from "../settings
 import {
   buildCapabilityRows,
   buildProjectCapabilitiesOverviewCards,
-  resolveCapabilitiesProjectId,
+  resolveCapabilitiesProjectIdForView,
   type CapabilitiesOverviewCardTarget,
 } from "./CapabilitiesOverviewPanel.logic";
 
@@ -45,7 +45,7 @@ export function CapabilitiesOverviewPanel({ projectKey = null }: { projectKey?: 
   const navigate = useNavigate();
   const environmentId = useActiveEnvironmentId();
   const groups = useSettingsProjectGroups();
-  const projectId = resolveCapabilitiesProjectId(groups, environmentId, projectKey);
+  const projectId = resolveCapabilitiesProjectIdForView(groups, environmentId, projectKey);
   const result = useAtomValue(
     environmentId === null
       ? EMPTY_OVERVIEW_SNAPSHOT_ATOM

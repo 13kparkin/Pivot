@@ -9,7 +9,7 @@ import type {
 } from "@t3tools/contracts";
 import * as Option from "effect/Option";
 import { AsyncResult, Atom } from "effect/unstable/reactivity";
-import { LoaderIcon, PlusIcon, SaveIcon, SearchIcon, Undo2Icon } from "lucide-react";
+import { LoaderIcon, MoveRightIcon, PlusIcon, SaveIcon, SearchIcon, Undo2Icon } from "lucide-react";
 import { useState } from "react";
 
 import { useActiveEnvironmentId } from "../../state/entities";
@@ -19,7 +19,6 @@ import { useSettingsProjectGroups } from "../settings/ProjectSettingsPanel";
 import { SettingsPageContainer, SettingsRow, SettingsSection } from "../settings/settingsLayout";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
-import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { stackedThreadToast, toastManager } from "../ui/toast";
 
 import {
@@ -30,7 +29,7 @@ import {
   filterSettingRows,
   isValidSettingKey,
 } from "./CapabilitiesSettingsPanel.logic";
-import { resolveCapabilitiesProjectId } from "./CapabilitiesOverviewPanel.logic";
+import { resolveCapabilitiesProjectIdForView } from "./CapabilitiesOverviewPanel.logic";
 
 const EMPTY_SETTINGS_SNAPSHOT_ATOM = Atom.make(AsyncResult.initial<never, never>(false)).pipe(
   Atom.withLabel("web-capabilities:snapshot:settings:empty"),
@@ -44,12 +43,17 @@ function CapabilitiesSettingRow({
   environmentId,
   projectId,
   onMutated,
+  onMoveToProject,
+  moving = false,
 }: {
   entry: CapabilitiesSettingsRow;
   scope: OmpCapabilityScope;
   environmentId: EnvironmentId;
   projectId: ProjectId | null;
   onMutated: () => void;
+  /** Project view: global-origin entries offer moving into the project. */
+  onMoveToProject?: () => void;
+  moving?: boolean;
 }) {
   const [draft, setDraft] = useState(entry.masked ? "" : String(entry.value ?? ""));
   const [busy, setBusy] = useState<"save" | "reset" | null>(null);
@@ -108,12 +112,25 @@ function CapabilitiesSettingRow({
     onMutated();
   };
 
-  const editable = canEditEntry(entry);
+  const projectView = onMoveToProject !== undefined;
+  const isProjectEntry = entry.scope === "project";
+  const editable = canEditEntry(entry) && (projectView ? isProjectEntry : true);
   const hasValue = entry.value !== undefined;
 
   return (
     <tr>
-      <td className="px-4 py-2 font-mono font-medium text-foreground sm:pl-5">{entry.key}</td>
+      <td className="px-4 py-2 sm:pl-5">
+        <div className="flex items-center gap-2">
+          <span className="font-mono font-medium text-foreground">{entry.key}</span>
+          {projectView ? (
+            <span
+              className={`rounded-sm px-1.5 py-0.5 text-[10px] font-medium ${isProjectEntry ? "bg-accent/50 text-accent-foreground" : "bg-sidebar-row-hover text-muted-foreground"}`}
+            >
+              {isProjectEntry ? "Project" : "Global"}
+            </span>
+          ) : null}
+        </div>
+      </td>
       <td className="px-3 py-2 text-muted-foreground">{entry.type}</td>
       <td className="max-w-56 px-3 py-2 text-muted-foreground">{entry.description}</td>
       <td className="px-3 py-2">
@@ -131,7 +148,22 @@ function CapabilitiesSettingRow({
         )}
       </td>
       <td className="px-3 py-2 text-right">
-        {editable ? (
+        {projectView && !isProjectEntry ? (
+          <Button
+            type="button"
+            size="sm"
+            className="h-7 px-2 text-xs"
+            disabled={moving || !hasValue || !canEditEntry(entry)}
+            onClick={onMoveToProject}
+          >
+            {moving ? (
+              <LoaderIcon className="size-3.5 animate-spin" />
+            ) : (
+              <MoveRightIcon className="size-3.5" />
+            )}
+            Move to project
+          </Button>
+        ) : editable ? (
           <div className="inline-flex items-center gap-1.5">
             <Button
               type="button"
@@ -176,10 +208,13 @@ function CapabilitiesSettingRow({
 export function CapabilitiesSettingsPanel({ projectKey = null }: { projectKey?: string | null }) {
   const environmentId = useActiveEnvironmentId();
   const groups = useSettingsProjectGroups();
-  const projectId = resolveCapabilitiesProjectId(groups, environmentId, projectKey);
+  const projectId = resolveCapabilitiesProjectIdForView(groups, environmentId, projectKey);
   const projectLocked = projectKey !== null;
-  const [scope, setScope] = useState<OmpCapabilityScope>(projectLocked ? "project" : "global");
+  const effectiveScope: OmpCapabilityScope = projectLocked ? "project" : "global";
   const [query, setQuery] = useState("");
+  // Moving a global-origin setting into the project copies its current value
+  // into the project layer (the existing writeSetting path).
+  const [movingKey, setMovingKey] = useState<string | null>(null);
   // Project-scoped adds: a new key is written straight into the project
   // layer — the list only shows keys the project already overrides.
   const [addingSetting, setAddingSetting] = useState(false);
@@ -189,6 +224,33 @@ export function CapabilitiesSettingsPanel({ projectKey = null }: { projectKey?: 
   const writeSetting = useAtomCommand(serverEnvironment.capabilitiesWriteSetting, {
     label: "capabilities-write-setting",
   });
+  const moveSettingToProject = async (row: CapabilitiesSettingsRow) => {
+    if (environmentId === null || projectId === null || row.value === undefined) return;
+    setMovingKey(row.key);
+    const result = await writeSetting({
+      environmentId,
+      input: buildWriteSettingInput({
+        key: row.key,
+        value: row.value,
+        scope: "project",
+        projectId,
+      }),
+    });
+    setMovingKey(null);
+    if (result._tag === "Failure") {
+      toastManager.add(
+        stackedThreadToast({
+          type: "error",
+          title: `Could not move ${row.key}`,
+          description: "Check that omp is installed on the server host and try again.",
+        }),
+      );
+      return;
+    }
+    toastManager.add({ type: "success", title: `Moved ${row.key} to project` });
+    refreshSnapshot();
+  };
+
   const addSetting = async () => {
     const key = newSettingKey.trim();
     if (environmentId === null || !isValidSettingKey(key)) return;
@@ -220,14 +282,6 @@ export function CapabilitiesSettingsPanel({ projectKey = null }: { projectKey?: 
     setAddingSetting(false);
     refreshSnapshot();
   };
-
-  // Project scope is only available when the active environment has a project;
-  // a targeted project view is always locked to the project scope.
-  const effectiveScope: OmpCapabilityScope = projectLocked
-    ? "project"
-    : scope === "project" && projectId === null
-      ? "global"
-      : scope;
 
   const snapshotAtom =
     environmentId === null
@@ -280,30 +334,10 @@ export function CapabilitiesSettingsPanel({ projectKey = null }: { projectKey?: 
       <SettingsSection title="Settings">
         <SettingsRow
           title="Scope"
-          description="Where writes and resets apply. Project-scoped writes need an active project."
-          control={
-            <Select
-              value={effectiveScope}
-              disabled={projectLocked}
-              onValueChange={(value) => {
-                if (projectLocked) return;
-                if (value === "global" || value === "project") setScope(value);
-              }}
-            >
-              <SelectTrigger className="w-full sm:w-40" aria-label="Capabilities scope">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectPopup align="end" alignItemWithTrigger={false}>
-                {projectLocked ? null : (
-                  <SelectItem hideIndicator value="global">
-                    Global
-                  </SelectItem>
-                )}
-                <SelectItem hideIndicator value="project" disabled={projectId === null}>
-                  Project
-                </SelectItem>
-              </SelectPopup>
-            </Select>
+          description={
+            projectLocked
+              ? "Writes and resets apply to this project's .omp config."
+              : "Writes and resets apply to the global omp agent directory."
           }
         />
         <SettingsRow title="Precedence" description={buildPrecedenceLabel(effectiveScope)} />
@@ -431,6 +465,10 @@ export function CapabilitiesSettingsPanel({ projectKey = null }: { projectKey?: 
                     environmentId={environmentId}
                     projectId={projectId}
                     onMutated={refreshSnapshot}
+                    {...(projectLocked && row.scope === "global"
+                      ? { onMoveToProject: () => void moveSettingToProject(row) }
+                      : {})}
+                    moving={movingKey === row.key}
                   />
                 ))}
               </tbody>

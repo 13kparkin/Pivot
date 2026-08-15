@@ -17,6 +17,7 @@ import {
   buildCapabilityRows,
   buildProjectCapabilitiesOverviewCards,
   resolveCapabilitiesProjectId,
+  resolveCapabilitiesProjectIdForView,
 } from "./CapabilitiesOverviewPanel.logic";
 
 const ENV_LOCAL = EnvironmentId.make("environment-local");
@@ -90,6 +91,30 @@ describe("resolveCapabilitiesProjectId", () => {
       makeGroup("group-a", [makeMember(ENV_LOCAL, PROJECT_A), makeMember(ENV_REMOTE, PROJECT_B)]),
     ];
     expect(resolveCapabilitiesProjectId(groups, ENV_REMOTE, "group-a")).toBe(PROJECT_B);
+  });
+});
+
+describe("resolveCapabilitiesProjectIdForView", () => {
+  const groups = [
+    makeGroup("group-a", [makeMember(ENV_LOCAL, PROJECT_A)]),
+    makeGroup("group-b", [makeMember(ENV_LOCAL, PROJECT_B)]),
+  ];
+
+  it("returns null for the global entry even when projects exist", () => {
+    expect(resolveCapabilitiesProjectIdForView(groups, ENV_LOCAL, null)).toBeNull();
+    expect(resolveCapabilitiesProjectIdForView(groups, ENV_LOCAL, undefined)).toBeNull();
+  });
+
+  it("resolves the explicit projectKey to its member in the active environment", () => {
+    expect(resolveCapabilitiesProjectIdForView(groups, ENV_LOCAL, "group-b")).toBe(PROJECT_B);
+  });
+
+  it("returns null for an unknown projectKey", () => {
+    expect(resolveCapabilitiesProjectIdForView(groups, ENV_LOCAL, "missing")).toBeNull();
+  });
+
+  it("returns null without an environment", () => {
+    expect(resolveCapabilitiesProjectIdForView(groups, null, "group-a")).toBeNull();
   });
 });
 

@@ -53,7 +53,7 @@ import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../
 import { Textarea } from "../ui/textarea";
 import { stackedThreadToast, toastManager } from "../ui/toast";
 
-import { resolveCapabilitiesProjectId } from "./CapabilitiesOverviewPanel.logic";
+import { resolveCapabilitiesProjectIdForView } from "./CapabilitiesOverviewPanel.logic";
 import {
   NEW_RULE_TEMPLATE,
   NEW_SKILL_TEMPLATE,
@@ -427,8 +427,10 @@ export function CapabilityItemsPanel({
   } = PANEL_COPY[kind];
   const environmentId = useActiveEnvironmentId();
   const groups = useSettingsProjectGroups();
-  const projectId = resolveCapabilitiesProjectId(groups, environmentId, projectKey);
+  const projectId = resolveCapabilitiesProjectIdForView(groups, environmentId, projectKey);
   const projectLocked = projectKey !== null;
+  const projectGroup =
+    projectKey === null ? null : (groups.find((group) => group.projectKey === projectKey) ?? null);
   const effectiveScopeHint = projectLocked ? projectScopeHint : scopeHint;
   const effectiveShadowHint = projectLocked ? projectShadowHint : shadowHint;
   const [query, setQuery] = useState("");
@@ -563,6 +565,9 @@ export function CapabilityItemsPanel({
           </Button>
         }
       >
+        {projectGroup !== null ? (
+          <SettingsRow title="Project" description={projectGroup.displayName} />
+        ) : null}
         <SettingsRow title="How it works" description={description} />
         <SettingsRow title="Where items live" description={effectiveScopeHint} />
         <SettingsRow title="Project overrides" description={effectiveShadowHint} />

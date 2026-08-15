@@ -46,12 +46,13 @@ read-only-at-a-glance + editable view of omp's own configuration — the same
 files and CLI that omp itself manages, surfaced in the app. It is omp-only by
 design: Pivot renders and edits omp's config, never a parallel copy.
 
-\Every project row in the sidebar has a gear that opens the same page scoped
-to that project (web, desktop, and mobile). The overview, settings, skills,
-and rules then show only that project's own `.omp` settings, skills, and
-rules — the global items stay out of the project-scoped view — and edits
-write to that project's `.omp` folder. The global entry without a project
-still behaves as before.
+Every project row in the sidebar has a gear that opens the same page scoped
+to that project (web, desktop, and mobile). The project's settings view
+shows every known setting with where it currently comes from: **Global**
+settings can be moved into the project with one click (the current value is
+copied into the project's `.omp/config.yml`), and **Project** settings are
+edited in place. Skills and rules show only that project's own items, named
+by project. The global entry without a project shows the global surface.
 
 - **Overview** lists the discovered capability resources (config, models,
   skills, commands, rules, prompts, instructions, hooks, tools, extensions,
@@ -61,18 +62,21 @@ still behaves as before.
   `PI_CONFIG_DIR`, and XDG relocation are honored automatically.
 - **Settings** shows the effective omp settings (`omp config list --json`):
   key, type, description, current value. Search filters the list by key,
-  type, or description. Secret-typed keys (tokens, keys, passwords) are
-  masked and write-only — their values are managed through omp's own
-  auth/config commands, never edited here.
-- **Skills** and **Rules** list every skill and rule — global (omp agent
-  directory) and project (`.omp` folder) — in one place, with search. You
-  can create, edit, and delete them directly: skills are `<name>/SKILL.md`
-  files invoked on demand; rules are `<name>.md` files loaded into every
-  session. A project rule with the same name as a global rule shadows it
-  (marked "Overrides global" in the list). New files start from a
-  frontmatter template. Skills discovered from other CLI skill directories
-  (e.g. `~/.cursor/skills`) are shown with their origin and can be moved into
-  the omp agent directory where Pivot manages them.
+  type, or description. In a project's view, every setting is tagged by
+  origin — **Global** entries offer **Move to project**, which copies the
+  current value into the project's `.omp/config.yml`; **Project** entries are
+  edited in place. Secret-typed keys (tokens, keys, passwords) are masked and
+  write-only — their values are managed through omp's own auth/config
+  commands, never edited here.
+- **Skills** and **Rules**: the global view lists the omp agent-directory
+  items; a project's view lists that project's own items, labeled with the
+  project name. You can create, edit, and delete them directly: skills are
+  `<name>/SKILL.md` files invoked on demand; rules are `<name>.md` files
+  loaded into every session. A project rule with the same name as a global
+  rule shadows it. New files start from a frontmatter template. Skills
+  discovered from other CLI skill directories (e.g. `~/.cursor/skills`) are
+  shown with their origin and can be moved into the omp agent directory where
+  Pivot manages them.
 - Edits are scope-aware: **Global** writes run `omp config set` on the server
   host; **Project** writes merge into the project's `.omp/config.yml`
   (comments and unknown keys are preserved) after a timestamped `.bak`

@@ -34,6 +34,22 @@ export function resolveCapabilitiesProjectId(
   return null;
 }
 
+/**
+ * Project id for a capabilities VIEW: only an explicit `projectKey` (the
+ * sidebar gear) resolves a project. The global entry (/capabilities without
+ * ?projectKey=) is truly global — it must not fall back to the first project,
+ * which would leak that project's items and layer into the global surface.
+ */
+export function resolveCapabilitiesProjectIdForView(
+  groups: ReadonlyArray<SidebarProjectSnapshot>,
+  environmentId: EnvironmentId | null,
+  projectKey?: string | null,
+): ProjectId | null {
+  return projectKey === null || projectKey === undefined
+    ? null
+    : resolveCapabilitiesProjectId(groups, environmentId, projectKey);
+}
+
 /** Display order: broadest scope first. */
 const SCOPE_ORDER: Readonly<Record<OmpCapabilityResource["scope"], number>> = {
   global: 0,
