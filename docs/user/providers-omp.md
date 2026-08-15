@@ -46,7 +46,7 @@ read-only-at-a-glance + editable view of omp's own configuration — the same
 files and CLI that omp itself manages, surfaced in the app. It is omp-only by
 design: Pivot renders and edits omp's config, never a parallel copy.
 
-\*Every project row in the sidebar has a gear that opens the same page scoped
+\Every project row in the sidebar has a gear that opens the same page scoped
 to that project (web, desktop, and mobile). The overview, settings, skills,
 and rules then show only that project's own `.omp` settings, skills, and
 rules — the global items stay out of the project-scoped view — and edits

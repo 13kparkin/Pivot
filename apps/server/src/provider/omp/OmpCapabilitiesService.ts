@@ -448,7 +448,15 @@ export class OmpCapabilitiesService {
         });
       }
       return { entries };
-    });
+    }).pipe(
+      Effect.mapError(
+        (cause) =>
+          new OmpCapabilitiesError({
+            reason: "failed to read the project settings layer",
+            cause,
+          }),
+      ),
+    );
   }
 
   private inventory(
