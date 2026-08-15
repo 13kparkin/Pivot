@@ -446,7 +446,35 @@ export class OmpCapabilitiesService {
   > {
     return projectCwd === undefined
       ? this.readEffectiveSettingsSurface()
-      : this.readProjectSettingsSurface(projectCwd);
+      : this.readMergedSettingsSurface(projectCwd);
+  }
+
+  /**
+   * Project view of the settings surface: the FULL effective catalog (the
+   * global view), with each entry tagged by origin — keys the project's own
+   * `.omp/config.yml` overrides are `scope: "project"`, everything else stays
+   * `scope: "global"` so the client can label them and offer "move into the
+   * project". Unknown project-only keys are appended as project-scoped.
+   */
+  private readMergedSettingsSurface(
+    projectCwd: string,
+  ): Effect.Effect<
+    { readonly entries: ReadonlyArray<OmpSettingsSurfaceEntry> },
+    OmpCapabilitiesError
+  > {
+    return Effect.gen({ self: this }, function* () {
+      const effective = yield* this.readEffectiveSettingsSurface();
+      const project = yield* this.readProjectSettingsSurface(projectCwd);
+      const projectKeys = new Set(project.entries.map((entry) => entry.key));
+      const entries = effective.entries.map((entry) =>
+        projectKeys.has(entry.key) ? { ...entry, scope: "project" as const } : entry,
+      );
+      for (const entry of project.entries) {
+        if (!projectKeys.has(entry.key)) continue;
+        if (!entries.some((candidate) => candidate.key === entry.key)) entries.push(entry);
+      }
+      return { entries };
+    });
   }
 
   /** Effective merged settings from `omp config list --json`, tagged global. */
