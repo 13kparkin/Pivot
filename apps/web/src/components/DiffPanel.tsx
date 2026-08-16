@@ -75,7 +75,7 @@ import { useAtomCommand } from "../state/use-atom-command";
 import { serverEnvironment } from "../state/server";
 import { reviewEnvironment } from "../state/review";
 import { reviewCommands } from "../state/reviewRuns";
-import { useReviewModelConfigured } from "../state/reviewRuns";
+import { useReviewModelConfigured, useReviewRun } from "../state/reviewRuns";
 import { ReviewRunPanel } from "./chat/ReviewRunPanel";
 import { ReviewModelConfirmDialog } from "./chat/ReviewModelConfirmDialog";
 import { ReviewId } from "@t3tools/contracts";
@@ -154,6 +154,8 @@ export default function DiffPanel({
   const navigate = useNavigate();
   const [reviewId, setReviewId] = useState<ReviewId | null>(null);
   const [confirmDefaultModel, setConfirmDefaultModel] = useState(false);
+  const activeReviewRun = useReviewRun(activeThread?.environmentId ?? null, reviewId);
+  const reviewRunning = activeReviewRun?.status === "running";
   const runReview = () => {
     if (!activeThread || activeProjectId === null) return;
     const nextReviewId = ReviewId.make(randomUUID());
@@ -734,6 +736,7 @@ export default function DiffPanel({
                   size="icon-sm"
                   variant="ghost"
                   aria-label="Review this diff"
+                  disabled={reviewRunning}
                   onClick={() => {
                     if (!activeThread || activeProjectId === null) return;
                     if (!reviewModelConfigured) {
@@ -747,7 +750,9 @@ export default function DiffPanel({
             >
               <ShieldCheckIcon className="size-3.5" />
             </TooltipTrigger>
-            <TooltipPopup side="top">Run an agent review over this diff</TooltipPopup>
+            <TooltipPopup side="top">
+              {reviewRunning ? "Review is running…" : "Run an agent review over this diff"}
+            </TooltipPopup>
           </Tooltip>
         )}
         {codeViewFiles.length > 0 && (
