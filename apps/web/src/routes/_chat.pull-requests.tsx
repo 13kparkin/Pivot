@@ -377,6 +377,7 @@ function PullRequestsRouteView() {
   const selectedPullRequestSurface =
     selectedRightPanelSurface?.kind === "pull-request" ? selectedRightPanelSurface : null;
   const activePullRequestSurface = rightPanelState.isOpen ? selectedPullRequestSurface : null;
+  const selectedPullRequestHost = activePullRequestSurface?.host ?? null;
   // The open tab names its own server; a link that arrived before any tab was opened names it
   // through the project it selected.
   const panelEnvironmentId =
@@ -1561,6 +1562,7 @@ function PullRequestsRouteView() {
             pullRequestStatuses={pullRequestTabStatuses}
           >
             <PullRequestDetailPanel
+              host={selectedPullRequestHost}
               key={activePullRequestSurface.id}
               environmentId={panelEnvironmentId}
               reference={{

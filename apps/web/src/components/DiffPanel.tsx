@@ -18,6 +18,7 @@ import {
   PilcrowIcon,
   RefreshCwIcon,
   Rows3Icon,
+  ShieldCheckIcon,
   SearchIcon,
   TextWrapIcon,
 } from "lucide-react";
@@ -27,6 +28,7 @@ import { type DraftId } from "../composerDraftStore";
 import { openDiffFilePrimaryAction } from "../diffFileActions";
 import { useCheckpointDiff } from "~/lib/checkpointDiffState";
 import { cn } from "~/lib/utils";
+import { randomUUID } from "~/lib/utils";
 import { selectThreadDiffPanelSelection, useDiffPanelStore } from "../diffPanelStore";
 import { useTheme } from "../hooks/useTheme";
 import {
@@ -72,6 +74,8 @@ import { useEnvironmentQuery } from "../state/query";
 import { useAtomCommand } from "../state/use-atom-command";
 import { serverEnvironment } from "../state/server";
 import { reviewEnvironment } from "../state/review";
+import { reviewCommands } from "../state/reviewRuns";
+import { ReviewId } from "@t3tools/contracts";
 import { vcsEnvironment } from "../state/vcs";
 import { buildBaseRefChoices, filterBaseRefChoices } from "../lib/baseRefChoices";
 import { createGitDiffFileContentsLoader } from "../lib/diffFileContents";
@@ -142,6 +146,7 @@ export default function DiffPanel({
     serverConfig?.availableEditors ?? [],
   );
   const getDiffFileContents = useAtomCommand(reviewEnvironment.diffFileContents);
+  const startReview = useAtomCommand(reviewCommands.start, { reportFailure: false });
   const gitStatusQuery = useEnvironmentQuery(
     activeThread !== null && activeThread !== undefined && activeCwd != null
       ? vcsEnvironment.status({
@@ -691,6 +696,39 @@ export default function DiffPanel({
         )}
       </div>
       <div className="flex shrink-0 items-center gap-1 [-webkit-app-region:no-drag]">
+        {activeThread && activeProjectId !== null && (
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <Button
+                  type="button"
+                  size="icon-sm"
+                  variant="ghost"
+                  aria-label="Review this diff"
+                  onClick={() => {
+                    if (!activeThread || activeProjectId === null) return;
+                    void startReview({
+                      environmentId: activeThread.environmentId,
+                      reviewId: ReviewId.make(randomUUID()),
+                      source:
+                        selectedGitScope === "unstaged"
+                          ? { kind: "working-tree" }
+                          : { kind: "branch-range", baseRef: selectedBaseRef },
+                      threadRef: {
+                        environmentId: activeThread.environmentId,
+                        threadId: activeThread.id,
+                      },
+                      projectId: activeProjectId,
+                    });
+                  }}
+                />
+              }
+            >
+              <ShieldCheckIcon className="size-3.5" />
+            </TooltipTrigger>
+            <TooltipPopup side="top">Run an agent review over this diff</TooltipPopup>
+          </Tooltip>
+        )}
         {codeViewFiles.length > 0 && (
           <DiffStatLabel
             additions={diffLineStat.additions}
