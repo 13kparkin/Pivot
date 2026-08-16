@@ -3,6 +3,8 @@ import { memo, useEffect, useEffectEvent, useRef, useState } from "react";
 import { type PendingUserInput } from "../../session-logic";
 import {
   derivePendingUserInputProgress,
+  shouldAutoAdvancePendingUserInputSelection,
+  shouldRequestCustomAnswerForPendingUserInput,
   type PendingUserInputDraftAnswer,
 } from "../../pendingUserInput";
 import { CheckIcon } from "lucide-react";
@@ -15,6 +17,8 @@ interface PendingUserInputPanelProps {
   questionIndex: number;
   onToggleOption: (questionId: string, optionLabel: string) => void;
   onAdvance: () => void;
+  /** Focus the composer so the user can type a free-text answer. */
+  onRequestCustomAnswer: () => void;
 }
 
 export const ComposerPendingUserInputPanel = memo(function ComposerPendingUserInputPanel({
@@ -24,6 +28,7 @@ export const ComposerPendingUserInputPanel = memo(function ComposerPendingUserIn
   questionIndex,
   onToggleOption,
   onAdvance,
+  onRequestCustomAnswer,
 }: PendingUserInputPanelProps) {
   if (pendingUserInputs.length === 0) return null;
   const activePrompt = pendingUserInputs[0];
@@ -38,6 +43,7 @@ export const ComposerPendingUserInputPanel = memo(function ComposerPendingUserIn
       questionIndex={questionIndex}
       onToggleOption={onToggleOption}
       onAdvance={onAdvance}
+      onRequestCustomAnswer={onRequestCustomAnswer}
     />
   );
 });
@@ -49,6 +55,7 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
   questionIndex,
   onToggleOption,
   onAdvance,
+  onRequestCustomAnswer,
 }: {
   prompt: PendingUserInput;
   isResponding: boolean;
@@ -56,6 +63,7 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
   questionIndex: number;
   onToggleOption: (questionId: string, optionLabel: string) => void;
   onAdvance: () => void;
+  onRequestCustomAnswer: () => void;
 }) {
   const progress = derivePendingUserInputProgress(prompt.questions, answers, questionIndex);
   const activeQuestion = progress.activeQuestion;
@@ -101,12 +109,34 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
   }, []);
 
   const handleOptionSelection = useEffectEvent((questionId: string, optionLabel: string) => {
-    if (activeQuestion?.multiSelect) {
+    if (!activeQuestion) {
+      return;
+    }
+    const requestCustomAnswer = shouldRequestCustomAnswerForPendingUserInput(
+      activeQuestion,
+      optionLabel,
+      progress.selectedOptionLabels,
+    );
+    if (activeQuestion.multiSelect) {
       onToggleOption(questionId, optionLabel);
+      if (requestCustomAnswer) {
+        onRequestCustomAnswer();
+      }
       return;
     }
     setOptimisticSingleSelect({ questionId, optionLabel });
     onToggleOption(questionId, optionLabel);
+    if (requestCustomAnswer) {
+      // "Other (type your own)": hand off to the composer instead of
+      // auto-submitting the literal label after the delay.
+      onRequestCustomAnswer();
+      return;
+    }
+    // Only ordinary single-select options auto-advance; the free-text and
+    // multi-select paths already returned above.
+    if (!shouldAutoAdvancePendingUserInputSelection(activeQuestion, optionLabel)) {
+      return;
+    }
     if (autoAdvanceTimerRef.current !== null) {
       window.clearTimeout(autoAdvanceTimerRef.current);
     }
