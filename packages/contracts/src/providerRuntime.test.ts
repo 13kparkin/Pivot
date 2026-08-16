@@ -130,6 +130,47 @@ describe("ProviderRuntimeEvent", () => {
     expect(parsed.payload.answers.sandbox_mode).toBe("workspace-write");
   });
 
+  it("decodes canonical subagent identity and independent status axes", () => {
+    const parsed = decodeRuntimeEvent({
+      type: "task.progress",
+      eventId: "event-agent-progress-1",
+      provider: "omp",
+      createdAt: "2026-08-16T00:00:00.000Z",
+      threadId: "thread-1",
+      turnId: "turn-1",
+      payload: {
+        taskId: "agent-1",
+        description: "Inspect repository",
+        status: "waiting",
+        parentAgentId: "agent-parent",
+        runId: "run-1",
+        sessionFile: "/tmp/agent-1.jsonl",
+        transcriptRevision: "message-12",
+        lifecycle: "running",
+        assignmentStatus: "running",
+        activityStatus: "waiting",
+        capabilities: {
+          message: false,
+          revive: false,
+          cancel: false,
+          kill: false,
+          readOnlyReason: "This OMP version does not expose agent-targeted messaging over RPC.",
+        },
+      },
+    });
+
+    expect(parsed.type).toBe("task.progress");
+    if (parsed.type !== "task.progress") {
+      throw new Error("expected task.progress");
+    }
+    expect(parsed.payload.parentAgentId).toBe("agent-parent");
+    expect(parsed.payload.runId).toBe("run-1");
+    expect(parsed.payload.lifecycle).toBe("running");
+    expect(parsed.payload.assignmentStatus).toBe("running");
+    expect(parsed.payload.activityStatus).toBe("waiting");
+    expect(parsed.payload.capabilities?.message).toBe(false);
+  });
+
   it("rejects legacy message.delta type", () => {
     expect(() =>
       decodeRuntimeEvent({

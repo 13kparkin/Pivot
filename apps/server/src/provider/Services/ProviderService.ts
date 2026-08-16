@@ -23,6 +23,8 @@ import type {
   ProviderStopSessionInput,
   ThreadId,
   ProviderTurnStartResult,
+  ServerOmpAgentCapabilities,
+  ServerOmpAgentChatEntry,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import type * as Effect from "effect/Effect";
@@ -118,7 +120,8 @@ export interface ProviderServiceShape {
       readonly fromByte: number;
       readonly nextByte: number;
       readonly reset: boolean;
-      readonly messages: ReadonlyArray<unknown>;
+      readonly entries: ReadonlyArray<ServerOmpAgentChatEntry>;
+      readonly capabilities: ServerOmpAgentCapabilities;
     },
     ProviderServiceError
   >;
@@ -136,6 +139,7 @@ export interface ProviderServiceShape {
    */
   readonly ompSetSubagentSubscription: (input: {
     readonly threadId: ThreadId;
+    readonly subscriberId: string;
     readonly level: "off" | "progress" | "events";
   }) => Effect.Effect<{ readonly level: "off" | "progress" | "events" }, ProviderServiceError>;
 

@@ -33,6 +33,7 @@ import * as Option from "effect/Option";
 import * as PubSub from "effect/PubSub";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
+import * as Semaphore from "effect/Semaphore";
 import * as SchemaIssue from "effect/SchemaIssue";
 import * as Stream from "effect/Stream";
 
@@ -218,6 +219,8 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
   const registry = yield* ProviderAdapterRegistry.ProviderAdapterRegistry;
   const directory = yield* ProviderSessionDirectory.ProviderSessionDirectory;
   const runtimeEventPubSub = yield* PubSub.unbounded<ProviderRuntimeEvent>();
+  const ompSubagentEventLeases = new Map<ThreadId, Set<string>>();
+  const ompSubagentLeaseMutex = yield* Semaphore.make(1);
   const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
   const prepareMcpSession = (threadId: ThreadId, providerInstanceId: ProviderInstanceId) =>
     McpSessionRegistry.issueActiveMcpCredential({ threadId, providerInstanceId }).pipe(
@@ -698,6 +701,15 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         yield* upsertSessionBinding(sessionWithInstance, threadId, {
           modelSelection: input.modelSelection,
         });
+        if (adapter instanceof OmpAdapter) {
+          yield* ompSubagentLeaseMutex.withPermits(1)(
+            Effect.gen(function* () {
+              if ((ompSubagentEventLeases.get(threadId)?.size ?? 0) > 0) {
+                yield* adapter.setSubagentSubscription(threadId, "events");
+              }
+            }),
+          );
+        }
         yield* analytics.record("provider.session.started", {
           provider: sessionWithInstance.provider,
           runtimeMode: input.runtimeMode,
@@ -1173,19 +1185,46 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
 
   const ompSetSubagentSubscription: ProviderServiceMethod<"ompSetSubagentSubscription"> = Effect.fn(
     "ompSetSubagentSubscription",
-  )(function* (input) {
-    const routed = yield* resolveRoutableSession({
-      threadId: input.threadId,
-      operation: "ProviderService.ompSetSubagentSubscription",
-      allowRecovery: true,
-    });
-    const omp = yield* requireOmpAdapter(
-      routed.adapter,
-      "ProviderService.ompSetSubagentSubscription",
-    );
-    yield* omp.setSubagentSubscription(routed.threadId, input.level);
-    return { level: input.level };
-  });
+  )((input) =>
+    ompSubagentLeaseMutex.withPermits(1)(
+      Effect.gen(function* () {
+        const current = ompSubagentEventLeases.get(input.threadId) ?? new Set<string>();
+        const next = new Set(current);
+        if (input.level === "events") {
+          next.add(input.subscriberId);
+        } else {
+          next.delete(input.subscriberId);
+        }
+        const currentLevel = current.size > 0 ? ("events" as const) : ("progress" as const);
+        const nextLevel = next.size > 0 ? ("events" as const) : ("progress" as const);
+        if (currentLevel === nextLevel) {
+          if (next.size === 0) {
+            ompSubagentEventLeases.delete(input.threadId);
+          } else {
+            ompSubagentEventLeases.set(input.threadId, next);
+          }
+          return { level: nextLevel };
+        }
+        if (nextLevel === "progress") {
+          ompSubagentEventLeases.delete(input.threadId);
+        }
+        const routed = yield* resolveRoutableSession({
+          threadId: input.threadId,
+          operation: "ProviderService.ompSetSubagentSubscription",
+          allowRecovery: nextLevel === "events",
+        });
+        const omp = yield* requireOmpAdapter(
+          routed.adapter,
+          "ProviderService.ompSetSubagentSubscription",
+        );
+        yield* omp.setSubagentSubscription(routed.threadId, nextLevel);
+        if (nextLevel === "events") {
+          ompSubagentEventLeases.set(input.threadId, next);
+        }
+        return { level: nextLevel };
+      }),
+    ),
+  );
 
   const runStopAll = Effect.fn("runStopAll")(function* () {
     const threadIds = yield* directory.listThreadIds();

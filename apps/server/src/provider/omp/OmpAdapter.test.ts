@@ -1542,6 +1542,49 @@ describe("OmpAdapter", () => {
     }),
   );
 
+  it.effect("hydrates canonical subagent state when an omp session starts", () =>
+    Effect.gen(function* () {
+      const fake = new FakeOmpRpc();
+      fake.subagents = [
+        {
+          id: "agent.opaque.1",
+          agent: "scout",
+          description: "Inspect repository",
+          status: "active",
+          index: 2,
+          sessionFile: "/tmp/agent-opaque-1.jsonl",
+          progress: {
+            status: "running",
+            currentTool: "read",
+          },
+        },
+      ];
+      const adapter = new OmpAdapter(fake, testRandomUUID);
+      const eventsFiber = yield* Stream.runCollect(
+        adapter.streamEvents.pipe(Stream.takeUntil((event) => event.type === "task.progress")),
+      ).pipe(
+        Effect.map((chunk) => Array.from(chunk)),
+        Effect.forkChild,
+      );
+
+      yield* adapter.startSession(startInput);
+      const events = yield* Fiber.join(eventsFiber);
+      const started = events.find((event) => event.type === "task.started");
+      const progress = events.find((event) => event.type === "task.progress");
+
+      NodeAssert.equal(started?.payload.taskId, RuntimeTaskId.make("agent.opaque.1"));
+      NodeAssert.equal(started?.payload.parentAgentId, undefined);
+      NodeAssert.equal(started?.payload.runId, "agent.opaque.1");
+      NodeAssert.equal(progress?.payload.status, "running");
+      NodeAssert.equal(progress?.payload.lastToolName, "read");
+      NodeAssert.equal(progress?.payload.sessionFile, "/tmp/agent-opaque-1.jsonl");
+      NodeAssert.deepEqual(
+        fake.sent.slice(0, 2).map((command) => command.type),
+        ["set_subagent_subscription", "get_subagents"],
+      );
+    }),
+  );
+
   it.effect("maps subagent_lifecycle and subagent_progress into task.* events", () =>
     Effect.gen(function* () {
       const fake = new FakeOmpRpc();
@@ -1561,6 +1604,7 @@ describe("OmpAdapter", () => {
           status: "started",
           parentToolCallId: "tool-9",
           index: 0,
+          parentAgentId: "parent-1",
         },
       });
       yield* fake.offer(THREAD_ID, {
@@ -1571,6 +1615,8 @@ describe("OmpAdapter", () => {
           agentSource: "bundled",
           task: "survey repo",
           parentToolCallId: "tool-9",
+          parentAgentId: "parent-1",
+          sessionFile: "/tmp/agent-1.jsonl",
           progress: {
             index: 0,
             id: "agent-1",
@@ -1579,7 +1625,29 @@ describe("OmpAdapter", () => {
             status: "running",
             task: "survey repo",
             currentTool: "read",
+            usage: {
+              inputTokens: 120,
+              outputTokens: 30,
+              totalTokens: 150,
+            },
+            toolUses: 3,
+            model: "openai/gpt-5.6-luna",
+            effort: "high",
           },
+        },
+      });
+      yield* fake.offer(THREAD_ID, {
+        type: "subagent_event",
+        payload: {
+          id: "agent-1",
+          event: { type: "message_delta", id: "delta-ignored" },
+        },
+      });
+      yield* fake.offer(THREAD_ID, {
+        type: "subagent_event",
+        payload: {
+          id: "agent-1",
+          event: { type: "message_end", id: "revision-1" },
         },
       });
       yield* fake.offer(THREAD_ID, {
@@ -1604,10 +1672,43 @@ describe("OmpAdapter", () => {
       NodeAssert.equal(started?.payload.role, "scout");
       NodeAssert.equal(started?.payload.toolUseId, "tool-9");
       NodeAssert.equal(started?.payload.agentIndex, 0);
+      NodeAssert.equal(started?.payload.parentAgentId, "parent-1");
+      NodeAssert.equal(started?.payload.runId, "tool-9");
+      NodeAssert.deepEqual(started?.payload.capabilities, {
+        message: false,
+        revive: false,
+        cancel: false,
+        kill: false,
+        readOnlyReason: "This OMP version does not expose agent-targeted messaging over RPC.",
+      });
       NodeAssert.equal(progress?.payload.taskId, RuntimeTaskId.make("agent-1"));
       NodeAssert.equal(progress?.payload.description, "survey repo");
       NodeAssert.equal(progress?.payload.lastToolName, "read");
       NodeAssert.equal(progress?.payload.status, "running");
+      NodeAssert.equal(progress?.payload.parentAgentId, "parent-1");
+      NodeAssert.equal(progress?.payload.sessionFile, "/tmp/agent-1.jsonl");
+      NodeAssert.deepEqual(progress?.payload.typedUsage, {
+        totalTokens: 150,
+        inputTokens: 120,
+        outputTokens: 30,
+        toolUses: 3,
+      });
+      NodeAssert.equal(progress?.payload.model, "openai/gpt-5.6-luna");
+      NodeAssert.equal(progress?.payload.effort, "high");
+      const revision = events.find(
+        (event) =>
+          event.type === "task.updated" &&
+          event.payload.taskId === RuntimeTaskId.make("agent-1") &&
+          event.payload.transcriptRevision === "revision-1",
+      );
+      NodeAssert.ok(revision);
+      NodeAssert.equal(
+        events.some(
+          (event) =>
+            event.type === "task.updated" && event.payload.transcriptRevision === "delta-ignored",
+        ),
+        false,
+      );
       NodeAssert.equal(completed?.payload.taskId, RuntimeTaskId.make("agent-1"));
       NodeAssert.equal(completed?.payload.status, "completed");
     }),
@@ -1648,7 +1749,21 @@ describe("OmpAdapter", () => {
         fromByte: 0,
         nextByte: 42,
         reset: false,
-        messages: [{ role: "assistant", content: "nested" }],
+        messages: [
+          { role: "assistant", content: "nested" },
+          {
+            role: "assistant",
+            content: [
+              { type: "text", text: "running a tool" },
+              {
+                type: "toolCall",
+                id: "call-1",
+                name: "read",
+                input: { path: "src/index.ts" },
+              },
+            ],
+          },
+        ],
       };
       const adapter = new OmpAdapter(fake, testRandomUUID);
       yield* adapter.startSession(startInput);
@@ -1662,7 +1777,31 @@ describe("OmpAdapter", () => {
       NodeAssert.equal(fake.sent.at(-1)?.fromByte, 10);
       NodeAssert.equal(page.sessionFile, "/tmp/sub.jsonl");
       NodeAssert.equal(page.nextByte, 42);
-      NodeAssert.equal(page.messages.length, 1);
+      NodeAssert.equal(page.entries.length, 3);
+      NodeAssert.deepEqual(page.entries[0], {
+        id: "0:0",
+        kind: "message",
+        role: "assistant",
+        text: "nested",
+      });
+      NodeAssert.equal(page.entries[1]?.kind, "message");
+      NodeAssert.equal(page.entries[1]?.text, "running a tool");
+      NodeAssert.deepEqual(page.entries[2], {
+        id: "0:1:tool:0",
+        kind: "tool",
+        role: "tool",
+        text: "",
+        toolName: "read",
+        toolCallId: "call-1",
+        toolInput: { path: "src/index.ts" },
+      });
+      NodeAssert.deepEqual(page.capabilities, {
+        message: false,
+        revive: false,
+        cancel: false,
+        kill: false,
+        readOnlyReason: "This OMP version does not expose agent-targeted messaging over RPC.",
+      });
     }),
   );
 

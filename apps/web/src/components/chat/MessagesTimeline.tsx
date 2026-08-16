@@ -150,7 +150,7 @@ interface TimelineRowSharedState {
   onToggleTurnFold: (turnId: TurnId) => void;
   onToggleWorkGroup: (groupId: string, anchorKey: string) => void;
   agentPanelModel: AgentPanelModel;
-  onOpenAgents: () => void;
+  onOpenAgents: (agentTaskIds: ReadonlyArray<string>) => void;
   /** Checkpoint summaries by assistant message id, for file-change rows. */
   turnDiffSummaryByAssistantMessageId: Map<MessageId, TurnDiffSummary>;
 }
@@ -212,7 +212,7 @@ const TIMELINE_MAINTAIN_SCROLL_AT_END = {
 
 interface MessagesTimelineProps {
   agentPanelModel?: AgentPanelModel;
-  onOpenAgents?: () => void;
+  onOpenAgents?: (agentTaskIds: ReadonlyArray<string>) => void;
   isWorking: boolean;
   workingStepLabel?: string | null;
   activeTurnInProgress: boolean;
@@ -2290,7 +2290,7 @@ const AgentSpawnCtaRow = memo(function AgentSpawnCtaRow(props: { workEntry: Time
   return (
     <button
       type="button"
-      onClick={onOpenAgents}
+      onClick={() => onOpenAgents(spawn.agentTaskIds)}
       className="-mx-1 flex w-full items-center gap-2 rounded-md border border-border/60 bg-card/50 px-2.5 py-1.5 text-left text-[13px] transition hover:bg-accent/50"
     >
       <span aria-hidden className={cn("size-1.5 shrink-0 rounded-full", dotClass)} />

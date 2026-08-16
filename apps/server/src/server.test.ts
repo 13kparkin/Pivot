@@ -4511,7 +4511,22 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
                   fromByte: 0,
                   nextByte: 8,
                   reset: false,
-                  messages: [{ role: "assistant", content: "nested" }],
+                  entries: [
+                    {
+                      id: "0:0",
+                      kind: "message" as const,
+                      role: "assistant" as const,
+                      text: "nested",
+                    },
+                  ],
+                  capabilities: {
+                    message: false,
+                    revive: false,
+                    cancel: false,
+                    kill: false,
+                    readOnlyReason:
+                      "This OMP version does not expose agent-targeted messaging over RPC.",
+                  },
                 };
               }),
             ompSteer: (input) =>
@@ -4556,7 +4571,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       );
 
       assert.equal(page.nextByte, 8);
-      assert.equal(page.messages.length, 1);
+      assert.equal(page.entries.length, 1);
       assert.deepEqual(hubCalls, [`get:${threadId}:agent-1`, `steer:${threadId}:focus on tests`]);
       assert.equal(failure._tag, "Failure");
       if (failure._tag !== "Failure") {

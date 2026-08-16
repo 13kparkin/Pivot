@@ -1,5 +1,6 @@
 import { type EnvironmentConnectionPhase } from "@t3tools/client-runtime/connection";
 import type { EnvironmentThreadStatus } from "@t3tools/client-runtime/state/threads";
+import type { AgentPanelModel } from "@t3tools/client-runtime/state/subagentRuntime";
 import { useKeyboardChatComposerInset, useKeyboardScrollToEnd } from "@legendapp/list/keyboard";
 import type { LegendListRef } from "@legendapp/list/react-native";
 import { HeaderHeightContext } from "@react-navigation/elements";
@@ -32,6 +33,7 @@ import {
   AppState,
   Keyboard,
   Platform,
+  Pressable,
   useColorScheme,
   useWindowDimensions,
   View,
@@ -53,6 +55,7 @@ import Animated, {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { ControlPill } from "../../components/ControlPill";
+import { AppText as Text } from "../../components/AppText";
 import type { ComposerEditorHandle } from "../../components/ComposerEditor";
 import type { StatusTone } from "../../components/StatusPill";
 import type { DraftComposerImageAttachment } from "../../lib/composerImages";
@@ -65,6 +68,10 @@ import type {
   ThreadFeedEntry,
 } from "../../lib/threadActivity";
 import { PendingApprovalCard } from "./PendingApprovalCard";
+import {
+  MobileAgentConversations,
+  type MobileAgentConversationNavigationState,
+} from "./MobileAgentConversations";
 import { PendingUserInputCard } from "./PendingUserInputCard";
 import {
   derivePendingUserInputMaxHeight,
@@ -86,6 +93,7 @@ export interface ThreadDetailScreenProps {
   readonly connectionError: string | null;
   readonly environmentLabel: string | null;
   readonly selectedThreadFeed: ReadonlyArray<ThreadFeedEntry>;
+  readonly agentPanelModel: AgentPanelModel;
   readonly activeWorkStartedAt: string | null;
   readonly activePendingApproval: PendingApproval | null;
   readonly respondingApprovalId: ApprovalRequestId | null;
@@ -262,6 +270,19 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
   const [composerExpanded, setComposerExpanded] = useState(false);
   const [anchorMessageId, setAnchorMessageId] = useState<MessageId | null>(null);
   const [endFollowEnabled, setEndFollowEnabled] = useState(true);
+  const [agentConversationsOpen, setAgentConversationsOpen] = useState(false);
+  const [agentConversationNavigation, setAgentConversationNavigation] =
+    useState<MobileAgentConversationNavigationState>({
+      selectedRunId: null,
+      selectedAgentId: null,
+    });
+  useEffect(() => {
+    setAgentConversationsOpen(false);
+    setAgentConversationNavigation({
+      selectedRunId: null,
+      selectedAgentId: null,
+    });
+  }, [props.selectedThread.id]);
   // Android keys the safe-area padding on keyboard visibility (#5988): the
   // back gesture closes the keyboard while the editor stays focused, and a
   // focus-keyed inset would leave the toolbar under the gesture bar. iOS must
@@ -574,45 +595,71 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
 
   return (
     <View className="flex-1">
-      {showContent ? (
-        <View
-          className="flex-1"
-          onTouchStart={handleFeedTouchStart}
-          onTouchMove={handleFeedTouchMove}
-          onTouchEnd={handleFeedTouchEnd}
-          onTouchCancel={handleFeedTouchCancel}
-        >
-          <ThreadFeed
-            key={props.selectedThread.id}
-            environmentId={props.environmentId}
-            threadId={props.selectedThread.id}
-            workspaceRoot={props.threadCwd}
-            feed={props.selectedThreadFeed}
-            contentPresentation={props.contentPresentation}
-            agentLabel={agentLabel}
-            latestTurn={props.selectedThread.latestTurn}
-            activeWorkStartedAt={props.activeWorkStartedAt}
-            listRef={listRef}
-            freeze={freeze}
-            anchorMessageId={anchorMessageId}
-            contentInsetEndAdjustment={combinedContentInsetEndAdjustment}
-            contentTopInset={0}
-            contentBottomInset={estimatedOverlayHeight}
-            contentMaxWidth={contentMaxWidth}
-            layoutVariant={layoutVariant}
-            usesAutomaticContentInsets={props.usesAutomaticContentInsets}
-            onHeaderMaterialVisibilityChange={props.onHeaderMaterialVisibilityChange}
-            onEndFollowEnabledChange={setEndFollowEnabled}
-            skills={selectedProviderSkills}
-            loadEarlier={props.loadEarlier ?? null}
-          />
+      {showContent && agentConversationsOpen ? (
+        <MobileAgentConversations
+          environmentId={props.environmentId}
+          threadId={props.selectedThread.id}
+          model={props.agentPanelModel}
+          navigationState={agentConversationNavigation}
+          onNavigationStateChange={setAgentConversationNavigation}
+          onClose={() => setAgentConversationsOpen(false)}
+        />
+      ) : showContent ? (
+        <View className="flex-1">
+          {props.agentPanelModel.hasAgents ? (
+            <View className="h-11 flex-row items-center justify-between border-b border-border px-4">
+              <Text className="text-sm font-t3-bold text-foreground">Main</Text>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel={`Open ${props.agentPanelModel.allAgents.length} agent conversations`}
+                className="min-h-8 justify-center rounded-full bg-subtle px-3"
+                onPress={() => setAgentConversationsOpen(true)}
+              >
+                <Text className="text-xs font-t3-bold text-foreground">
+                  Agents · {props.agentPanelModel.allAgents.length}
+                </Text>
+              </Pressable>
+            </View>
+          ) : null}
+          <View
+            className="flex-1"
+            onTouchStart={handleFeedTouchStart}
+            onTouchMove={handleFeedTouchMove}
+            onTouchEnd={handleFeedTouchEnd}
+            onTouchCancel={handleFeedTouchCancel}
+          >
+            <ThreadFeed
+              key={props.selectedThread.id}
+              environmentId={props.environmentId}
+              threadId={props.selectedThread.id}
+              workspaceRoot={props.threadCwd}
+              feed={props.selectedThreadFeed}
+              contentPresentation={props.contentPresentation}
+              agentLabel={agentLabel}
+              latestTurn={props.selectedThread.latestTurn}
+              activeWorkStartedAt={props.activeWorkStartedAt}
+              listRef={listRef}
+              freeze={freeze}
+              anchorMessageId={anchorMessageId}
+              contentInsetEndAdjustment={combinedContentInsetEndAdjustment}
+              contentTopInset={0}
+              contentBottomInset={estimatedOverlayHeight}
+              contentMaxWidth={contentMaxWidth}
+              layoutVariant={layoutVariant}
+              usesAutomaticContentInsets={props.usesAutomaticContentInsets}
+              onHeaderMaterialVisibilityChange={props.onHeaderMaterialVisibilityChange}
+              onEndFollowEnabledChange={setEndFollowEnabled}
+              skills={selectedProviderSkills}
+              loadEarlier={props.loadEarlier ?? null}
+            />
+          </View>
         </View>
       ) : (
         <View className="flex-1" />
       )}
 
       {/* Floating composer — sticks to keyboard via KeyboardStickyView */}
-      {showContent ? (
+      {showContent && !agentConversationsOpen ? (
         <KeyboardStickyView
           // The animated keyboard height can remain stale after a dismissed
           // IME on both platforms. Visibility is the authoritative closed

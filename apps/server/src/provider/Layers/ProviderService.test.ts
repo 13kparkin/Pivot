@@ -2129,11 +2129,12 @@ ompHub.layer("ProviderService omp hub", (it) => {
       const subscription = yield* provider.ompSetSubagentSubscription({
         threadId,
         level: "events",
+        subscriberId: "socket-a",
       });
 
       assert.equal(page.sessionFile, "/tmp/sub.jsonl");
       assert.equal(page.nextByte, 42);
-      assert.equal(page.messages.length, 1);
+      assert.equal(page.entries.length, 1);
       assert.deepEqual(subscription, { level: "events" });
       assert.deepEqual(
         ompHub.fakeRpc.sent.slice(sentBefore).map((command) => command.type),
@@ -2144,6 +2145,61 @@ ompHub.layer("ProviderService omp hub", (it) => {
     }),
   );
 
+  it.effect("keeps event delivery until the final subscriber releases its lease", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService.ProviderService;
+      const threadId = asThreadId("thread-omp-subscription-leases");
+      yield* provider.startSession(threadId, {
+        provider: OMP_DRIVER,
+        providerInstanceId: ompInstanceId,
+        threadId,
+        cwd: "/tmp/omp-project",
+        runtimeMode: "full-access",
+      });
+      const sentBefore = ompHub.fakeRpc.sent.length;
+
+      const first = yield* provider.ompSetSubagentSubscription({
+        threadId,
+        level: "events",
+        subscriberId: "socket-a",
+      });
+      const second = yield* provider.ompSetSubagentSubscription({
+        threadId,
+        level: "events",
+        subscriberId: "socket-b",
+      });
+      yield* ompHub.ompAdapter.stopSession(threadId);
+      yield* provider.startSession(threadId, {
+        provider: OMP_DRIVER,
+        providerInstanceId: ompInstanceId,
+        threadId,
+        cwd: "/tmp/omp-project",
+        runtimeMode: "full-access",
+      });
+      const firstRelease = yield* provider.ompSetSubagentSubscription({
+        threadId,
+        level: "progress",
+        subscriberId: "socket-a",
+      });
+      const finalRelease = yield* provider.ompSetSubagentSubscription({
+        threadId,
+        level: "progress",
+        subscriberId: "socket-b",
+      });
+
+      assert.deepEqual(first, { level: "events" });
+      assert.deepEqual(second, { level: "events" });
+      assert.deepEqual(firstRelease, { level: "events" });
+      assert.deepEqual(finalRelease, { level: "progress" });
+      assert.deepEqual(
+        ompHub.fakeRpc.sent
+          .slice(sentBefore)
+          .filter((command) => command.type === "set_subagent_subscription")
+          .map((command) => command.level),
+        ["events", "progress", "events", "progress"],
+      );
+    }),
+  );
   it.effect("rejects hub calls for non-omp sessions", () =>
     Effect.gen(function* () {
       const provider = yield* ProviderService.ProviderService;

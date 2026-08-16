@@ -1,8 +1,11 @@
 import { describe, expect, it } from "vite-plus/test";
 import { classifyTaskAgentKind, type OrchestrationThreadActivity } from "@t3tools/contracts";
 import {
+  agentConversationBreadcrumb,
   deriveAgentPanelModel,
+  flattenAgentConversationRun,
   foldSubagentActivities,
+  formatSubagentDisplayLabel,
   formatSubagentModelLabel,
   formatSubagentTokenCount,
   isAgentAttributedToolActivity,
@@ -127,6 +130,27 @@ describe("foldSubagentActivities", () => {
     // The late start must NOT reopen the terminal activation as a new run.
     expect(agent.status).toBe("failed");
     expect(agent.error).toBe("boom");
+  });
+
+  it("an aborted identity ignores late live progress", () => {
+    const agents = fold([
+      activity("task.started", { taskId: "hard-killed", taskType: "local_agent" }),
+      activity("task.completed", {
+        taskId: "hard-killed",
+        status: "stopped",
+        lifecycle: "aborted",
+      }),
+      activity("task.progress", {
+        taskId: "hard-killed",
+        status: "running",
+        lifecycle: "running",
+        summary: "stale replay",
+      }),
+    ]);
+
+    expect(agents[0]!.status).toBe("interrupted");
+    expect(agents[0]!.lifecycle).toBe("aborted");
+    expect(agents[0]!.activationCount).toBe(1);
   });
 
   it("duplicate terminal events are idempotent (timestamps do not slide)", () => {
@@ -324,6 +348,34 @@ describe("foldSubagentActivities", () => {
     expect(member.error).toBeNull();
     expect(member.status).toBe("running");
   });
+  it("uses the explicit OMP agent name when progress title is the assignment", () => {
+    const agents = fold([
+      activity("task.started", {
+        taskId: "BeaconAnalyst",
+        title: "BeaconAnalyst",
+        role: "task",
+      }),
+      activity("task.progress", {
+        taskId: "BeaconAnalyst",
+        title: "Complete assignment thoroughly: # Target Analyze development workflow...",
+        role: "task",
+        summary: "Analyzing development workflow",
+      }),
+    ]);
+    const model = deriveAgentPanelModel({ agents });
+    const breadcrumb = agentConversationBreadcrumb(model.allAgents, "BeaconAnalyst");
+
+    expect(breadcrumb.map(formatSubagentDisplayLabel)).toEqual(["BeaconAnalyst"]);
+    expect(breadcrumb.at(-1)?.title).toBe(
+      "Complete assignment thoroughly: # Target Analyze development workflow...",
+    );
+  });
+
+  it("falls back to the task title when a record has no agent id", () => {
+    expect(formatSubagentDisplayLabel({ id: "", title: "Unnamed assignment" })).toBe(
+      "Unnamed assignment",
+    );
+  });
 
   it("drops non-http(s) session urls at the fold boundary", () => {
     const agents = fold([
@@ -406,31 +458,75 @@ describe("deriveAgentPanelModel", () => {
     ).toEqual(["direct-a", "direct-b"]);
   });
 
-  it("keeps first-seen order after the roster retention ranking runs", () => {
+  it("keeps every agent in first-seen order without a fixed roster cap", () => {
     const starts = Array.from({ length: 101 }, (_, index) =>
       activity(
         "task.started",
-        { taskId: `capped-${index}`, title: `Agent ${index}` },
+        { taskId: `uncapped-${index}`, title: `Agent ${index}` },
         `2026-08-01T12:${String(Math.floor(index / 60)).padStart(2, "0")}:${String(
           index % 60,
         ).padStart(2, "0")}.000Z`,
       ),
     );
-    const cappedRoster = fold([
+    const roster = fold([
       ...starts,
       activity(
         "task.progress",
-        { taskId: "capped-0", summary: "Newest activity" },
+        { taskId: "uncapped-0", summary: "Newest activity" },
         "2026-08-01T12:02:00.000Z",
       ),
     ]);
 
-    const ids = deriveAgentPanelModel({ agents: cappedRoster }).directAgents.map(
-      (agent) => agent.id,
+    const ids = deriveAgentPanelModel({ agents: roster }).directAgents.map((agent) => agent.id);
+    expect(ids).toHaveLength(101);
+    expect(ids.slice(0, 3)).toEqual(["uncapped-0", "uncapped-1", "uncapped-2"]);
+    expect(ids.at(-1)).toBe("uncapped-100");
+  });
+
+  it("projects arbitrary-depth trees only from explicit parent identity", () => {
+    const agents = fold([
+      activity("task.started", { taskId: "root", title: "Root", runId: "run-1" }),
+      activity("task.started", {
+        taskId: "child",
+        title: "Child",
+        runId: "run-1",
+        parentAgentId: "root",
+      }),
+      activity("task.started", {
+        taskId: "grandchild",
+        title: "Grandchild",
+        runId: "run-1",
+        parentAgentId: "child",
+      }),
+      activity("task.started", {
+        taskId: "great-grandchild",
+        title: "Great grandchild",
+        runId: "run-1",
+        parentAgentId: "grandchild",
+      }),
+      activity("task.started", {
+        taskId: "root.opaque-child",
+        title: "Opaque id",
+        runId: "run-1",
+      }),
+    ]);
+    const model = deriveAgentPanelModel({ agents });
+    const run = model.runs[0]!;
+    const rows = flattenAgentConversationRun(
+      run,
+      new Set(["root", "child", "grandchild", "great-grandchild"]),
     );
-    expect(ids).toHaveLength(100);
-    expect(ids.slice(0, 3)).toEqual(["capped-0", "capped-2", "capped-3"]);
-    expect(ids.at(-1)).toBe("capped-100");
+
+    expect(rows.map((row) => [row.agent.id, row.depth])).toEqual([
+      ["root", 0],
+      ["child", 1],
+      ["grandchild", 2],
+      ["great-grandchild", 3],
+      ["root.opaque-child", 0],
+    ]);
+    expect(
+      agentConversationBreadcrumb(model.allAgents, "great-grandchild").map((agent) => agent.id),
+    ).toEqual(["root", "child", "grandchild", "great-grandchild"]);
   });
 
   it("a phase with only pending members never reads as running", () => {
