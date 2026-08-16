@@ -6,8 +6,6 @@ Pivot is a fork of T3 Code: an agent harness control surface (desktop, web, and 
 
 <img width="1920" height="1032" alt="image" src="https://github.com/user-attachments/assets/dd8d5880-b279-44c9-947b-332755e81ccf" />
 
-
-
 CLI package: [`pivot-cli`](https://www.npmjs.com/package/pivot-cli) (bin: `pivot`). Desktop builds publish from [this repo’s Releases](https://github.com/13kparkin/Pivot/releases).
 
 ## What changed from T3 Code
