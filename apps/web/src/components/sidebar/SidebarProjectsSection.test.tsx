@@ -120,6 +120,7 @@ describe("SidebarProjectsSection", () => {
     });
 
     expect(markup).toContain('data-testid="sidebar-project-threads-project-a"');
+    expect(markup).toContain('class="flex flex-col gap-px ps-6"');
     expect(markup).toContain('data-testid="row-pinned-t-pinned"');
     expect(markup).toContain('data-testid="row-active-t-active"');
     expect(markup.indexOf("row-pinned-t-pinned")).toBeLessThan(

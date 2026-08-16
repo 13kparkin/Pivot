@@ -121,7 +121,7 @@ export function SidebarProjectsSection(props: SidebarProjectsSectionProps) {
               </div>
               {expanded ? (
                 <ul
-                  className="flex flex-col gap-px"
+                  className="flex flex-col gap-px ps-6"
                   data-testid={`sidebar-project-threads-${group.projectKey}`}
                 >
                   {pinned.map((thread) => {
