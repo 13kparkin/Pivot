@@ -26,7 +26,9 @@ import {
   type OrchestrationEvent,
   type OrchestrationShellStreamEvent,
   type OrchestrationShellStreamItem,
+  type OrchestrationReviewRunStreamItem,
   type OrchestrationThreadStreamItem,
+  type ReviewRun,
   OrchestrationGetFullThreadDiffError,
   OrchestrationGetSnapshotError,
   OrchestrationSearchThreadsError,
@@ -78,6 +80,7 @@ import {
   projectThreadDetailSnapshot,
 } from "./orchestration/ActivityPayloadProjection.ts";
 import { normalizeDispatchCommand } from "./orchestration/Normalizer.ts";
+import { projectEvent } from "./orchestration/projector.ts";
 import * as OrchestrationEngine from "./orchestration/Services/OrchestrationEngine.ts";
 import * as ProjectionSnapshotQuery from "./orchestration/Services/ProjectionSnapshotQuery.ts";
 import {
@@ -1436,6 +1439,91 @@ const makeWsRpcLayer = (
                 }),
                 afterSnapshot,
               );
+            }),
+            { "rpc.aggregate": "orchestration" },
+          ),
+        [ORCHESTRATION_WS_METHODS.subscribeReviewRun]: (input) =>
+          observeRpcStreamEffect(
+            ORCHESTRATION_WS_METHODS.subscribeReviewRun,
+            Effect.gen(function* () {
+              const isReviewEventForRun = (event: OrchestrationEvent): boolean =>
+                event.aggregateKind === "thread" &&
+                (event.type === "review.started" ||
+                  event.type === "review.finding.added" ||
+                  event.type === "review.completed" ||
+                  event.type === "review.failed") &&
+                (event.payload as { reviewId?: string }).reviewId === input.reviewId;
+
+              // Fold each review event onto a local single-run model through the
+              // canonical projector, so findings dedup and terminal states match
+              // the persisted projection exactly without re-reading the whole read
+              // model on every finding.
+              const foldReviewRun = (run: ReviewRun | null, event: OrchestrationEvent) =>
+                projectEvent(
+                  {
+                    snapshotSequence: 0,
+                    projects: [],
+                    threads: [],
+                    reviewRuns: run ? [run] : [],
+                    updatedAt: "",
+                  },
+                  event,
+                ).pipe(
+                  Effect.map((model) => (model.reviewRuns ?? [])[0] ?? null),
+                  Effect.mapError(
+                    (cause) =>
+                      new OrchestrationGetSnapshotError({
+                        message: "Failed to project review run event",
+                        cause,
+                      }),
+                  ),
+                );
+
+              const readInitialRun = () =>
+                projectionSnapshotQuery.getSnapshot().pipe(
+                  Effect.map(
+                    (snapshot) =>
+                      (snapshot.reviewRuns ?? []).find((run) => run.id === input.reviewId) ?? null,
+                  ),
+                  Effect.mapError(
+                    (cause) =>
+                      new OrchestrationGetSnapshotError({
+                        message: "Failed to load review run snapshot",
+                        cause,
+                      }),
+                  ),
+                );
+
+              // Subscribe live first so an event published while the initial
+              // snapshot loads is not lost. Overlaps are idempotent: the projector
+              // dedups findings by id and the client replaces the run wholesale per
+              // frame.
+              const liveBuffer = yield* Queue.unbounded<OrchestrationEvent>();
+              yield* Effect.forkScoped(
+                orchestrationEngine.streamDomainEvents.pipe(
+                  Stream.filter(isReviewEventForRun),
+                  Stream.runForEach((event) => Queue.offer(liveBuffer, event)),
+                ),
+              );
+
+              const initialRun = yield* readInitialRun();
+
+              const liveStream = Stream.fromQueue(liveBuffer).pipe(
+                Stream.scanEffect(initialRun, foldReviewRun),
+                Stream.filter((run): run is ReviewRun => run !== null),
+                Stream.map(
+                  (review): OrchestrationReviewRunStreamItem => ({
+                    kind: "review-run-updated",
+                    review,
+                  }),
+                ),
+              );
+
+              const initialItems: OrchestrationReviewRunStreamItem[] = [{ kind: "synchronized" }];
+              if (initialRun) {
+                initialItems.push({ kind: "review-run-updated", review: initialRun });
+              }
+              return Stream.concat(Stream.fromIterable(initialItems), liveStream);
             }),
             { "rpc.aggregate": "orchestration" },
           ),

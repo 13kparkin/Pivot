@@ -1,5 +1,6 @@
 import {
   EventId,
+  ThreadId,
   type OrchestrationCommand,
   type OrchestrationEvent,
   type OrchestrationReadModel,
@@ -15,6 +16,8 @@ import {
   requireActiveProjectWorkspaceRootAbsent,
   requireProject,
   requireProjectAbsent,
+  requireReviewAbsent,
+  requireReviewRunning,
   requireThread,
   requireThreadArchived,
   requireThreadAbsent,
@@ -1389,6 +1392,94 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         },
       };
       return [unsettledEvent, activityAppendedEvent];
+    }
+
+    case "review.start": {
+      if (command.threadRef) {
+        yield* requireThread({
+          readModel,
+          command,
+          threadId: command.threadRef.threadId,
+        });
+      }
+      yield* requireReviewAbsent({
+        readModel,
+        command,
+        reviewId: command.reviewId,
+        source: command.source,
+        threadRef: command.threadRef,
+        environmentId: command.environmentId,
+      });
+      return {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: ThreadId.make(command.reviewId),
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        })),
+        type: "review.started",
+        payload: {
+          reviewId: command.reviewId,
+          source: command.source,
+          threadRef: command.threadRef,
+          environmentId: command.environmentId,
+          projectId: command.projectId,
+          createdAt: command.createdAt,
+          updatedAt: command.createdAt,
+        },
+      };
+    }
+
+    case "review.finding.added": {
+      yield* requireReviewRunning({ readModel, command, reviewId: command.reviewId });
+      return {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: ThreadId.make(command.reviewId),
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        })),
+        type: "review.finding.added",
+        payload: {
+          reviewId: command.reviewId,
+          finding: command.finding,
+        },
+      };
+    }
+
+    case "review.completed": {
+      yield* requireReviewRunning({ readModel, command, reviewId: command.reviewId });
+      return {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: ThreadId.make(command.reviewId),
+          occurredAt: command.completedAt,
+          commandId: command.commandId,
+        })),
+        type: "review.completed",
+        payload: {
+          reviewId: command.reviewId,
+          completedAt: command.completedAt,
+        },
+      };
+    }
+
+    case "review.failed": {
+      yield* requireReviewRunning({ readModel, command, reviewId: command.reviewId });
+      return {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: ThreadId.make(command.reviewId),
+          occurredAt: command.completedAt,
+          commandId: command.commandId,
+        })),
+        type: "review.failed",
+        payload: {
+          reviewId: command.reviewId,
+          errorMessage: command.errorMessage,
+          completedAt: command.completedAt,
+        },
+      };
     }
 
     default: {

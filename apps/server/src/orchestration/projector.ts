@@ -1,9 +1,18 @@
-import type { OrchestrationEvent, OrchestrationReadModel, ThreadId } from "@t3tools/contracts";
+import type {
+  OrchestrationEvent,
+  OrchestrationReadModel,
+  ReviewRun,
+  ThreadId,
+} from "@t3tools/contracts";
 import {
   OrchestrationCheckpointSummary,
   OrchestrationMessage,
   OrchestrationSession,
   OrchestrationThread,
+  ReviewCompletedPayload,
+  ReviewFailedPayload,
+  ReviewFindingAddedPayload,
+  ReviewStartedPayload,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
@@ -190,6 +199,7 @@ export function createEmptyReadModel(nowIso: string): OrchestrationReadModel {
     snapshotSequence: 0,
     projects: [],
     threads: [],
+    reviewRuns: [],
     updatedAt: nowIso,
   };
 }
@@ -798,6 +808,83 @@ export function projectEvent(
             }),
           };
         }),
+      );
+
+    case "review.started":
+      return decodeForEvent(ReviewStartedPayload, event.payload, event.type, "payload").pipe(
+        Effect.map((payload) => {
+          const run: ReviewRun = {
+            id: payload.reviewId,
+            source: payload.source,
+            status: "running",
+            findings: [],
+            threadRef: payload.threadRef,
+            environmentId: payload.environmentId,
+            projectId: payload.projectId,
+            errorMessage: null,
+            createdAt: payload.createdAt,
+            completedAt: null,
+            updatedAt: payload.updatedAt,
+          };
+          const existing = (nextBase.reviewRuns ?? []).some((entry) => entry.id === run.id);
+          return {
+            ...nextBase,
+            reviewRuns: existing
+              ? (nextBase.reviewRuns ?? []).map((entry) => (entry.id === run.id ? run : entry))
+              : [...(nextBase.reviewRuns ?? []), run],
+          };
+        }),
+      );
+
+    case "review.finding.added":
+      return decodeForEvent(ReviewFindingAddedPayload, event.payload, event.type, "payload").pipe(
+        Effect.map((payload) => ({
+          ...nextBase,
+          reviewRuns: (nextBase.reviewRuns ?? []).map((run) =>
+            run.id === payload.reviewId && !run.findings.some((f) => f.id === payload.finding.id)
+              ? {
+                  ...run,
+                  findings: [...run.findings, payload.finding],
+                  updatedAt: event.occurredAt,
+                }
+              : run,
+          ),
+        })),
+      );
+
+    case "review.completed":
+      return decodeForEvent(ReviewCompletedPayload, event.payload, event.type, "payload").pipe(
+        Effect.map((payload) => ({
+          ...nextBase,
+          reviewRuns: (nextBase.reviewRuns ?? []).map((run) =>
+            run.id === payload.reviewId
+              ? {
+                  ...run,
+                  status: "completed",
+                  completedAt: payload.completedAt,
+                  updatedAt: event.occurredAt,
+                }
+              : run,
+          ),
+        })),
+      );
+
+    case "review.failed":
+      return decodeForEvent(ReviewFailedPayload, event.payload, event.type, "payload").pipe(
+        Effect.map((payload) => ({
+          ...nextBase,
+          reviewRuns: (nextBase.reviewRuns ?? []).map((run) =>
+            run.id === payload.reviewId
+              ? {
+                  ...run,
+                  status: "failed",
+                  errorMessage: payload.errorMessage,
+                  completedAt: payload.completedAt,
+                  updatedAt: event.occurredAt,
+                }
+              : run,
+          ),
+        })),
       );
 
     default:

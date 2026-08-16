@@ -39,6 +39,7 @@ import {
   RuntimeTaskId,
   type RuntimeMode,
   type ProviderInteractionMode,
+  type ProviderTurnInteractionMode,
   type ThreadId,
   TurnId,
 } from "@t3tools/contracts";
@@ -148,7 +149,7 @@ interface LiveAdapterSession {
   openRunText: string | null;
   /** Text of the most recently closed run, parked as candidate-final. */
   heldBackRunText: string | null;
-  interactionMode: ProviderInteractionMode;
+  interactionMode: ProviderTurnInteractionMode;
   prePlanModelSlug: string | undefined;
   onOpenUrl: ((request: OmpOpenUrlRequest) => Effect.Effect<void>) | undefined;
 }
@@ -1548,7 +1549,10 @@ export class OmpAdapter {
     });
   }
 
-  #applyInteractionMode(session: LiveAdapterSession, mode: ProviderInteractionMode | undefined) {
+  #applyInteractionMode(
+    session: LiveAdapterSession,
+    mode: ProviderTurnInteractionMode | undefined,
+  ) {
     return Effect.gen({ self: this }, function* () {
       if (mode === undefined || mode === session.interactionMode) {
         return;

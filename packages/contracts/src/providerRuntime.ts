@@ -14,6 +14,7 @@ import {
   TurnId,
 } from "./baseSchemas.ts";
 import { ProviderInstanceId, ProviderDriverKind } from "./providerInstance.ts";
+import { ReviewFinding } from "./review.ts";
 
 const TrimmedNonEmptyStringSchema = TrimmedNonEmptyString;
 const UnknownRecordSchema = Schema.Record(Schema.String, Schema.Unknown);
@@ -196,6 +197,7 @@ const ProviderRuntimeEventType = Schema.Literals([
   "runtime.warning",
   "runtime.error",
   "advisor.comment",
+  "review.finding",
   "ttsr.triggered",
 ]);
 export type ProviderRuntimeEventType = typeof ProviderRuntimeEventType.Type;
@@ -250,6 +252,7 @@ const ToolDeniedType = Schema.Literal("tool.denied");
 const RuntimeWarningType = Schema.Literal("runtime.warning");
 const RuntimeErrorType = Schema.Literal("runtime.error");
 const AdvisorCommentType = Schema.Literal("advisor.comment");
+const ReviewFindingType = Schema.Literal("review.finding");
 const TtsrTriggeredType = Schema.Literal("ttsr.triggered");
 
 const ProviderRuntimeEventBase = Schema.Struct({
@@ -1199,6 +1202,15 @@ const ProviderRuntimeTtsrTriggeredEvent = Schema.Struct({
 });
 export type ProviderRuntimeTtsrTriggeredEvent = typeof ProviderRuntimeTtsrTriggeredEvent.Type;
 
+const ReviewFindingPayload = ReviewFinding;
+
+const ProviderRuntimeReviewFindingEvent = Schema.Struct({
+  ...ProviderRuntimeEventBase.fields,
+  type: ReviewFindingType,
+  payload: ReviewFindingPayload,
+});
+export type ProviderRuntimeReviewFindingEvent = typeof ProviderRuntimeReviewFindingEvent.Type;
+
 export const ProviderRuntimeEventV2 = Schema.Union([
   ProviderRuntimeSessionStartedEvent,
   ProviderRuntimeSessionConfiguredEvent,
@@ -1250,6 +1262,7 @@ export const ProviderRuntimeEventV2 = Schema.Union([
   ProviderRuntimeWarningEvent,
   ProviderRuntimeErrorEvent,
   ProviderRuntimeAdvisorCommentEvent,
+  ProviderRuntimeReviewFindingEvent,
   ProviderRuntimeTtsrTriggeredEvent,
 ]);
 export type ProviderRuntimeEventV2 = typeof ProviderRuntimeEventV2.Type;

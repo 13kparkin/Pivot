@@ -4,11 +4,12 @@ import * as SchemaIssue from "effect/SchemaIssue";
 import * as SchemaTransformation from "effect/SchemaTransformation";
 import * as Struct from "effect/Struct";
 import { ProviderOptionSelections } from "./model.ts";
-import { RepositoryIdentity, ThreadEnvMode } from "./environment.ts";
+import { RepositoryIdentity, ScopedThreadRef, ThreadEnvMode } from "./environment.ts";
 import {
   ApprovalRequestId,
   CheckpointRef,
   CommandId,
+  EnvironmentId,
   EventId,
   IsoDateTime,
   MessageId,
@@ -22,6 +23,7 @@ import {
   TurnId,
 } from "./baseSchemas.ts";
 import { ProviderInstanceId } from "./providerInstance.ts";
+import { ReviewFinding, ReviewId, ReviewRun, ReviewSource } from "./review.ts";
 
 export const ORCHESTRATION_WS_METHODS = {
   dispatchCommand: "orchestration.dispatchCommand",
@@ -32,6 +34,7 @@ export const ORCHESTRATION_WS_METHODS = {
   getArchivedShellSnapshot: "orchestration.getArchivedShellSnapshot",
   subscribeShell: "orchestration.subscribeShell",
   subscribeThread: "orchestration.subscribeThread",
+  subscribeReviewRun: "orchestration.subscribeReviewRun",
 } as const;
 
 export const ProviderApprovalPolicy = Schema.Literals([
@@ -413,6 +416,12 @@ export const OrchestrationReadModel = Schema.Struct({
   snapshotSequence: NonNegativeInt,
   projects: Schema.Array(OrchestrationProject),
   threads: Schema.Array(OrchestrationThread),
+  // Optional-with-default so persisted snapshots and test fixtures written
+  // before reviews existed still decode. A review run is its own entity, not
+  // a thread turn (see review.ts).
+  // Optional in the type so fixtures and pre-review snapshots still decode;
+  // read sites normalize with `?? []`.
+  reviewRuns: Schema.optional(Schema.Array(ReviewRun)),
   updatedAt: IsoDateTime,
 });
 export type OrchestrationReadModel = typeof OrchestrationReadModel.Type;
@@ -571,6 +580,27 @@ export const OrchestrationSubscribeThreadInput = Schema.Struct({
   turnLimit: Schema.optionalKey(PositiveInt),
 });
 export type OrchestrationSubscribeThreadInput = typeof OrchestrationSubscribeThreadInput.Type;
+
+export const OrchestrationSubscribeReviewRunInput = Schema.Struct({
+  reviewId: ReviewId,
+});
+export type OrchestrationSubscribeReviewRunInput = typeof OrchestrationSubscribeReviewRunInput.Type;
+
+/**
+ * A review run subscription streams `review-run-updated` frames as findings
+ * land and the run reaches a terminal state, after an initial `synchronized`
+ * frame. Mirrors `OrchestrationThreadStreamItem`.
+ */
+export const OrchestrationReviewRunStreamItem = Schema.Union([
+  Schema.Struct({
+    kind: Schema.Literal("synchronized"),
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("review-run-updated"),
+    review: ReviewRun,
+  }),
+]);
+export type OrchestrationReviewRunStreamItem = typeof OrchestrationReviewRunStreamItem.Type;
 
 /**
  * Bounds a thread detail read to a window of recent turns. `turnLimit` counts
@@ -896,6 +926,42 @@ const ThreadSessionStopCommand = Schema.Struct({
   onlyIfSettled: Schema.optional(Schema.Boolean),
 });
 
+const ReviewStartCommand = Schema.Struct({
+  type: Schema.Literal("review.start"),
+  commandId: CommandId,
+  reviewId: ReviewId,
+  source: ReviewSource,
+  // The thread this review is started from, when it is. Absent for a review
+  // started from the Pull Requests page.
+  threadRef: Schema.NullOr(ScopedThreadRef),
+  environmentId: EnvironmentId,
+  projectId: Schema.NullOr(ProjectId),
+  createdAt: IsoDateTime,
+});
+
+const ReviewFindingAddedCommand = Schema.Struct({
+  type: Schema.Literal("review.finding.added"),
+  commandId: CommandId,
+  reviewId: ReviewId,
+  finding: ReviewFinding,
+  createdAt: IsoDateTime,
+});
+
+const ReviewCompletedCommand = Schema.Struct({
+  type: Schema.Literal("review.completed"),
+  commandId: CommandId,
+  reviewId: ReviewId,
+  completedAt: IsoDateTime,
+});
+
+const ReviewFailedCommand = Schema.Struct({
+  type: Schema.Literal("review.failed"),
+  commandId: CommandId,
+  reviewId: ReviewId,
+  errorMessage: Schema.NullOr(TrimmedNonEmptyString),
+  completedAt: IsoDateTime,
+});
+
 const DispatchableClientOrchestrationCommand = Schema.Union([
   ProjectCreateCommand,
   ProjectMetaUpdateCommand,
@@ -920,6 +986,7 @@ const DispatchableClientOrchestrationCommand = Schema.Union([
   ThreadUserInputRespondCommand,
   ThreadCheckpointRevertCommand,
   ThreadSessionStopCommand,
+  ReviewStartCommand,
 ]);
 export type DispatchableClientOrchestrationCommand =
   typeof DispatchableClientOrchestrationCommand.Type;
@@ -948,6 +1015,7 @@ export const ClientOrchestrationCommand = Schema.Union([
   ThreadUserInputRespondCommand,
   ThreadCheckpointRevertCommand,
   ThreadSessionStopCommand,
+  ReviewStartCommand,
 ]);
 export type ClientOrchestrationCommand = typeof ClientOrchestrationCommand.Type;
 
@@ -1034,6 +1102,9 @@ const InternalOrchestrationCommand = Schema.Union([
   ThreadActivityAppendCommand,
   ThreadRevertCompleteCommand,
   ThreadTitleRegenerationCompleteCommand,
+  ReviewFindingAddedCommand,
+  ReviewCompletedCommand,
+  ReviewFailedCommand,
 ]);
 export type InternalOrchestrationCommand = typeof InternalOrchestrationCommand.Type;
 
@@ -1073,6 +1144,10 @@ export const OrchestrationEventType = Schema.Literals([
   "thread.proposed-plan-upserted",
   "thread.turn-diff-completed",
   "thread.activity-appended",
+  "review.started",
+  "review.finding.added",
+  "review.completed",
+  "review.failed",
 ]);
 export type OrchestrationEventType = typeof OrchestrationEventType.Type;
 
@@ -1308,6 +1383,36 @@ export const ThreadActivityAppendedPayload = Schema.Struct({
   activity: OrchestrationThreadActivity,
 });
 
+export const ReviewStartedPayload = Schema.Struct({
+  reviewId: ReviewId,
+  source: ReviewSource,
+  threadRef: Schema.NullOr(ScopedThreadRef),
+  environmentId: EnvironmentId,
+  projectId: Schema.NullOr(ProjectId),
+  createdAt: IsoDateTime,
+  updatedAt: IsoDateTime,
+});
+export type ReviewStartedPayload = typeof ReviewStartedPayload.Type;
+
+export const ReviewFindingAddedPayload = Schema.Struct({
+  reviewId: ReviewId,
+  finding: ReviewFinding,
+});
+export type ReviewFindingAddedPayload = typeof ReviewFindingAddedPayload.Type;
+
+export const ReviewCompletedPayload = Schema.Struct({
+  reviewId: ReviewId,
+  completedAt: IsoDateTime,
+});
+export type ReviewCompletedPayload = typeof ReviewCompletedPayload.Type;
+
+export const ReviewFailedPayload = Schema.Struct({
+  reviewId: ReviewId,
+  errorMessage: Schema.NullOr(TrimmedNonEmptyString),
+  completedAt: IsoDateTime,
+});
+export type ReviewFailedPayload = typeof ReviewFailedPayload.Type;
+
 export const OrchestrationEventMetadata = Schema.Struct({
   providerTurnId: Schema.optional(TrimmedNonEmptyString),
   providerItemId: Schema.optional(ProviderItemId),
@@ -1474,6 +1579,26 @@ export const OrchestrationEvent = Schema.Union([
     ...EventBaseFields,
     type: Schema.Literal("thread.activity-appended"),
     payload: ThreadActivityAppendedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("review.started"),
+    payload: ReviewStartedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("review.finding.added"),
+    payload: ReviewFindingAddedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("review.completed"),
+    payload: ReviewCompletedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("review.failed"),
+    payload: ReviewFailedPayload,
   }),
 ]);
 export type OrchestrationEvent = typeof OrchestrationEvent.Type;
@@ -1680,6 +1805,10 @@ export const OrchestrationRpcSchemas = {
   subscribeThread: {
     input: OrchestrationSubscribeThreadInput,
     output: OrchestrationThreadStreamItem,
+  },
+  subscribeReviewRun: {
+    input: OrchestrationSubscribeReviewRunInput,
+    output: OrchestrationReviewRunStreamItem,
   },
   subscribeShell: {
     input: OrchestrationSubscribeShellInput,
