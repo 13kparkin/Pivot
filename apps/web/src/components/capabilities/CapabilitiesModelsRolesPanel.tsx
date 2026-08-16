@@ -33,7 +33,7 @@ const EMPTY_SNAPSHOT_ATOM = Atom.make(AsyncResult.initial<never, never>(false)).
 );
 
 const TABLE_HEAD =
-  "px-3 py-2 text-left text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground/70";
+  "px-4 py-2.5 text-left text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground/70";
 
 /**
  * The omp `modelRoles` record: one entry per role (`review`, `plan`, …), each
@@ -276,7 +276,7 @@ export function CapabilitiesModelsRolesPanel({
             className="h-8 pl-8"
           />
         </div>
-        <div className="mt-3 overflow-x-auto">
+        <div className="mt-3 overflow-x-auto rounded-xl border border-border/60">
           <table className="w-full text-left text-xs">
             <thead className="border-b border-border/60">
               <tr>
@@ -288,7 +288,7 @@ export function CapabilitiesModelsRolesPanel({
             <tbody className="divide-y divide-border/60">
               {filteredModels.length === 0 ? (
                 <tr>
-                  <td colSpan={3} className="px-3 py-4 text-muted-foreground">
+                  <td colSpan={3} className="px-4 py-6 text-muted-foreground">
                     {modelQuery.trim().length > 0
                       ? "No models match the current search."
                       : "No models available — connect a provider."}
@@ -297,14 +297,14 @@ export function CapabilitiesModelsRolesPanel({
               ) : (
                 visibleModels.map((model) => (
                   <tr key={model.slug} className="hover:bg-accent/40">
-                    <td className="px-3 py-2 font-medium text-foreground">
+                    <td className="px-4 py-2.5 font-medium text-foreground">
                       {model.name}
                       {model.shortName ? (
                         <span className="ml-1.5 text-muted-foreground/70">{model.shortName}</span>
                       ) : null}
                     </td>
-                    <td className="px-3 py-2 text-muted-foreground">{model.provider}</td>
-                    <td className="px-3 py-2 font-mono text-muted-foreground/80">{model.slug}</td>
+                    <td className="px-4 py-2.5 text-muted-foreground">{model.provider}</td>
+                    <td className="px-4 py-2.5 font-mono text-muted-foreground/80">{model.slug}</td>
                   </tr>
                 ))
               )}
@@ -338,7 +338,7 @@ export function CapabilitiesModelsRolesPanel({
             Connect a provider to pick models for your roles.
           </p>
         ) : (
-          <div className="overflow-x-auto">
+          <div className="overflow-x-auto rounded-xl border border-border/60">
             <table className="w-full text-left text-xs">
               <thead className="border-b border-border/60">
                 <tr>
@@ -352,17 +352,17 @@ export function CapabilitiesModelsRolesPanel({
               <tbody className="divide-y divide-border/60">
                 {roleEntries.length === 0 ? (
                   <tr>
-                    <td colSpan={3} className="px-3 py-4 text-muted-foreground">
+                    <td colSpan={3} className="px-4 py-6 text-muted-foreground">
                       No roles yet — add one below.
                     </td>
                   </tr>
                 ) : (
                   roleEntries.map(([role, model]) => (
                     <tr key={role} className="hover:bg-accent/40">
-                      <td className="w-40 px-3 py-2 font-mono font-medium text-foreground">
+                      <td className="w-40 px-4 py-2.5 font-mono font-medium text-foreground">
                         {role}
                       </td>
-                      <td className="px-3 py-2">
+                      <td className="px-4 py-2.5">
                         <ProviderModelPicker
                           activeInstanceId={instanceForModel(model) ?? defaultInstanceId}
                           model={model}
@@ -376,7 +376,7 @@ export function CapabilitiesModelsRolesPanel({
                           }
                         />
                       </td>
-                      <td className="sticky right-0 z-10 bg-background py-2 pe-4 ps-3 text-right">
+                      <td className="sticky right-0 z-10 bg-background py-2.5 pe-4 ps-4 text-right">
                         <Button
                           type="button"
                           size="icon-sm"
@@ -392,7 +392,7 @@ export function CapabilitiesModelsRolesPanel({
                   ))
                 )}
                 <tr className="border-t border-border/60 bg-muted/20">
-                  <td className="w-40 px-3 py-2">
+                  <td className="w-40 px-4 py-2.5">
                     <Input
                       size="sm"
                       className="h-8 font-mono"
@@ -402,7 +402,7 @@ export function CapabilitiesModelsRolesPanel({
                       aria-label="New role name"
                     />
                   </td>
-                  <td className="px-3 py-2">
+                  <td className="px-4 py-2.5">
                     <ProviderModelPicker
                       activeInstanceId={defaultInstanceId}
                       model={newRoleModel}
@@ -414,7 +414,7 @@ export function CapabilitiesModelsRolesPanel({
                       onInstanceModelChange={(_instanceId, model) => setNewRoleModel(model)}
                     />
                   </td>
-                  <td className="sticky right-0 z-10 bg-muted/20 py-2 pe-4 ps-3 text-right">
+                  <td className="sticky right-0 z-10 bg-muted/20 py-2.5 pe-4 ps-4 text-right">
                     <Button
                       type="button"
                       size="sm"
