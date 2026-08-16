@@ -46,7 +46,23 @@ function makeFakeOmpSpawner(sessionFile: string) {
         protocolVersion: 1,
         supportedProtocolVersions: [1, 2],
       });
-      asSpawnedCommand(command);
+      const spawned = asSpawnedCommand(command);
+      // `omp --help` capability probes are plain CLI, not RPC.
+      if (spawned.args.includes("--help")) {
+        return ChildProcessSpawner.makeHandle({
+          pid: ChildProcessSpawner.ProcessId(1),
+          exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(0)),
+          isRunning: Effect.succeed(false),
+          kill: () => Effect.void,
+          unref: Effect.succeed(Effect.void),
+          stdin: Sink.drain,
+          stdout: Stream.make(encoder.encode("Usage: omp [options] --mode text|json|rpc|rpc-ui\n")),
+          stderr: Stream.empty,
+          all: Stream.empty,
+          getInputFd: () => Sink.drain,
+          getOutputFd: () => Stream.empty,
+        });
+      }
       const exit = yield* Deferred.make<ChildProcessSpawner.ExitCode, never>();
       let stdinBuf = "";
       return ChildProcessSpawner.makeHandle({

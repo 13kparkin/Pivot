@@ -1,6 +1,6 @@
 # omp
 
-Pivot drives [omp](https://omp.sh) over `omp --mode rpc`. omp is the only built-in agent backend.
+Pivot drives [omp](https://omp.sh) over `omp --mode rpc-ui`. omp is the only built-in agent backend.
 
 ## Install
 
@@ -28,6 +28,8 @@ Model lists come from omp (`get_available_models`), not from a hardcoded catalog
 Login runs on the machine hosting the Pivot server (browser opens there; OAuth callbacks stay there). You can also sign in from a terminal on that host with `omp login`.
 
 When omp asks for a confirmation, a paste code, a proposed host-URI edit, or a choice (including login paste prompts), Pivot shows the existing approval / user-input panels in the composer. Your answer is sent back to omp over RPC (`extension_ui_response` or `host_uri_result`).
+
+omp's built-in `ask` tool renders its questions in those same user-input panels (selects and inputs); your answer returns over `extension_ui_response` and the turn continues. Cancelling the question (or stopping the turn) settles it cleanly — omp resolves the ask and the turn is not left hanging. Pivot spawns omp in `rpc-ui` mode so the `ask` tool is available; a user-supplied omp binary too old for `rpc-ui` fails thread startup with an upgrade error instead of silently losing the capability.
 
 Type `/` in the composer to see omp slash commands (from `get_available_commands`), such as `/model`, `/review`, or `/jobs`. Choosing one inserts the command into the prompt. Local commands that omp handles without starting an agent turn (for example `/jobs`) show their result in the chat.
 
