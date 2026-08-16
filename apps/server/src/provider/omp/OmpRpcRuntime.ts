@@ -1,9 +1,12 @@
 /**
- * OmpRpcRuntime — process owner for `omp --mode rpc` over stdio NDJSON.
+ * OmpRpcRuntime — process owner for `omp --mode rpc-ui` over stdio NDJSON.
  *
  * Owns spawn/kill, protocol v2 negotiate, strict rpc_chunk reassembly,
  * request correlation, and resume via switch_session. Adapter code maps
  * logical frames; this module never invents ProviderRuntimeEvent values.
+ * Every session spawn is gated on a lazy `--help` capability probe so an
+ * omp binary too old for `rpc-ui` (and its UI-gated `ask` tool) fails fast
+ * instead of silently losing the capability.
  *
  * @module provider/omp/OmpRpcRuntime
  */
@@ -196,7 +199,7 @@ export interface OmpRpcRuntimeOptions {
 }
 
 /**
- * Spawns and owns one `omp --mode rpc` child per T3 thread session.
+ * Spawns and owns one `omp --mode rpc-ui` child per T3 thread session.
  */
 export class OmpRpcRuntime {
   readonly #sessions = new Map<string, LiveOmpSession>();
@@ -204,6 +207,8 @@ export class OmpRpcRuntime {
   readonly #processSpawner: ChildProcessSpawner.ChildProcessSpawner["Service"];
   #binaryPath: string;
   readonly #pathPrefixDirs: ReadonlyArray<string>;
+  /** Single-flight capability memo: one `--help` probe per binary path. */
+  #rpcUiSupport: Deferred.Deferred<boolean, OmpSpawnError> | null = null;
 
   public constructor(
     processSpawner: ChildProcessSpawner.ChildProcessSpawner["Service"],
@@ -218,6 +223,8 @@ export class OmpRpcRuntime {
   /** Update the spawn binary after a managed install/refresh. */
   public setBinaryPath(binaryPath: string): void {
     this.#binaryPath = binaryPath;
+    // A refreshed binary may have gained rpc-ui support — re-probe on next session.
+    this.#rpcUiSupport = null;
   }
 
   public ensureSession(
@@ -229,6 +236,18 @@ export class OmpRpcRuntime {
         return existing.handle;
       }
 
+      // Capability gate (new sessions only): fail fast before spawning when the
+      // binary is too old for `--mode rpc-ui` (and its UI-gated `ask` tool).
+      // Never falls back to plain `--mode rpc` — that would silently lose the
+      // ask capability. Probe failure also fails closed.
+      const supported = yield* this.probeRpcUiSupport(input.cwd);
+      if (!supported) {
+        return yield* new OmpSpawnError({
+          operation: "capability",
+          detail: `Configured omp binary (${this.#binaryPath}) is too old to support --mode rpc-ui, which the ask tool requires. Update omp (Settings → omp → Update) or set Binary path to a newer omp.`,
+        });
+      }
+
       const platform = yield* HostProcessPlatform;
       const preferredPath =
         this.#pathPrefixDirs.length > 0
@@ -238,7 +257,7 @@ export class OmpRpcRuntime {
       const scope = yield* Scope.make();
       const child = yield* this.#processSpawner
         .spawn(
-          ChildProcess.make(this.#binaryPath, ["--mode", "rpc"], {
+          ChildProcess.make(this.#binaryPath, ["--mode", "rpc-ui"], {
             cwd: input.cwd,
             extendEnv: true,
             ...(mergedPath !== undefined ? { env: { PATH: mergedPath } } : {}),
@@ -253,7 +272,7 @@ export class OmpRpcRuntime {
             (cause) =>
               new OmpSpawnError({
                 operation: "spawn",
-                detail: "failed to spawn omp --mode rpc",
+                detail: "failed to spawn omp --mode rpc-ui",
                 cause,
               }),
           ),
@@ -265,7 +284,7 @@ export class OmpRpcRuntime {
 
       // Watch for child death (crash, host restart, kill from outside) and
       // surface it to every in-flight request and to the frame stream. Without
-      // this a dead `omp --mode rpc` leaves awaiting Deferreds hanging and
+      // this a dead `omp --mode rpc-ui` leaves awaiting Deferreds hanging and
       // `streamFrames` idle forever: the adapter never settles the turn and the
       // thread stays "running" in the UI with a stop button that does nothing.
       yield* child.exitCode.pipe(
@@ -432,6 +451,81 @@ export class OmpRpcRuntime {
       yield* live.child.kill().pipe(Effect.ignore);
       yield* Scope.close(live.scope, Exit.void).pipe(Effect.ignore);
     });
+  }
+
+  /**
+   * Single-flight `--help` capability probe: `supported = exit 0 && help
+   * lists rpc-ui`. Memoized per binary path; `setBinaryPath` clears the memo.
+   * Probe failure fails closed — never assume rpc-ui support.
+   */
+  private probeRpcUiSupport(cwd: string): Effect.Effect<boolean, OmpSpawnError> {
+    return Effect.gen({ self: this }, function* () {
+      const existing = this.#rpcUiSupport;
+      if (existing) {
+        return yield* Deferred.await(existing);
+      }
+      const deferred = yield* Deferred.make<boolean, OmpSpawnError>();
+      this.#rpcUiSupport = deferred;
+      const outcome = yield* this.#runCapabilityProbe(cwd).pipe(Effect.exit);
+      yield* Deferred.done(deferred, outcome).pipe(Effect.ignore);
+      return yield* Deferred.await(deferred);
+    });
+  }
+
+  #runCapabilityProbe(cwd: string): Effect.Effect<boolean, OmpSpawnError> {
+    return Effect.gen({ self: this }, function* () {
+      const platform = yield* HostProcessPlatform;
+      const preferredPath =
+        this.#pathPrefixDirs.length > 0
+          ? this.#pathPrefixDirs.join(platform === "win32" ? ";" : ":")
+          : undefined;
+      const mergedPath = mergePathValues(preferredPath, process.env.PATH, platform);
+      const child = yield* this.#processSpawner
+        .spawn(
+          ChildProcess.make(this.#binaryPath, ["--help"], {
+            cwd,
+            extendEnv: true,
+            ...(mergedPath !== undefined ? { env: { PATH: mergedPath } } : {}),
+          }),
+        )
+        .pipe(
+          Effect.mapError(
+            (cause) =>
+              new OmpSpawnError({
+                operation: "capability",
+                detail: `could not verify rpc-ui support for ${this.#binaryPath}: failed to spawn --help`,
+                cause,
+              }),
+          ),
+        );
+      const [output, exitCode] = yield* Effect.all(
+        [
+          child.stdout.pipe(
+            Stream.decodeText(),
+            Stream.runFold(
+              () => "",
+              (acc, chunk) => acc + chunk,
+            ),
+            Effect.orElseSucceed(() => ""),
+          ),
+          child.exitCode.pipe(
+            Effect.map(Number),
+            Effect.orElseSucceed(() => 1),
+          ),
+        ],
+        { concurrency: "unbounded" },
+      ).pipe(
+        Effect.mapError(
+          (cause) =>
+            new OmpSpawnError({
+              operation: "capability",
+              detail: `could not verify rpc-ui support for ${this.#binaryPath}`,
+              cause,
+            }),
+        ),
+      );
+      return exitCode === 0 && output.includes("rpc-ui");
+    }).pipe(Effect.scoped);
   }
 
   #request(

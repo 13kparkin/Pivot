@@ -217,11 +217,10 @@ function makeFakeOmpSpawner(input: {
       };
       spawns.push(spawn);
 
-      // `omp --help` capability probes are plain CLI, not RPC: write help text
-      // to stdout, end the stream, and resolve the exit code.
+      // `omp --help` capability probes are plain CLI, not RPC: emit the help
+      // text as a finite stdout stream and resolve the exit code (mirrors the
+      // plain-CLI `--version` branches in OmpDriver.test.ts).
       if (command.args.includes("--help")) {
-        yield* Queue.offer(stdout, encoder.encode(helpText));
-        yield* Queue.shutdown(stdout);
         yield* Deferred.succeed(spawn.exit, ChildProcessSpawner.ExitCode(helpExitCode)).pipe(
           Effect.asVoid,
         );
@@ -232,7 +231,7 @@ function makeFakeOmpSpawner(input: {
           kill: () => Effect.void,
           unref: Effect.succeed(Effect.void),
           stdin: Sink.drain,
-          stdout: Stream.fromQueue(stdout),
+          stdout: Stream.make(encoder.encode(helpText)),
           stderr: Stream.empty,
           all: Stream.empty,
           getInputFd: () => Sink.drain,
