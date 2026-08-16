@@ -75,7 +75,11 @@ import { useAtomCommand } from "../state/use-atom-command";
 import { serverEnvironment } from "../state/server";
 import { reviewEnvironment } from "../state/review";
 import { reviewCommands } from "../state/reviewRuns";
-import { useDefaultModelLabel, useReviewModelConfigured, useReviewRun } from "../state/reviewRuns";
+import {
+  useReviewFallbackModelLabel,
+  useReviewModelConfigured,
+  useReviewRun,
+} from "../state/reviewRuns";
 import { ReviewRunPanel } from "./chat/ReviewRunPanel";
 import { ReviewModelConfirmDialog } from "./chat/ReviewModelConfirmDialog";
 import { ReviewId } from "@t3tools/contracts";
@@ -151,7 +155,7 @@ export default function DiffPanel({
   const getDiffFileContents = useAtomCommand(reviewEnvironment.diffFileContents);
   const startReview = useAtomCommand(reviewCommands.start, { reportFailure: false });
   const reviewModelConfigured = useReviewModelConfigured(activeThread?.environmentId ?? null);
-  const defaultModelLabel = useDefaultModelLabel();
+  const defaultModelLabel = useReviewFallbackModelLabel(activeThread?.modelSelection);
   const navigate = useNavigate();
   const [reviewId, setReviewId] = useState<ReviewId | null>(null);
   const [confirmDefaultModel, setConfirmDefaultModel] = useState(false);

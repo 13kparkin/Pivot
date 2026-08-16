@@ -67,7 +67,7 @@ import {
   dismissFinding,
   isFindingDismissed,
   useDismissedFindingIds,
-  useDefaultModelLabel,
+  useReviewFallbackModelLabel,
   useReviewModelConfigured,
   useReviewRun,
 } from "~/state/reviewRuns";
@@ -478,7 +478,7 @@ export function PullRequestDetailPanel({
   // alone. One at a time whatever the key: they all check the same pull request out.
   const [handoff, setHandoff] = useState<string | null>(null);
   const navigate = useNavigate();
-  const defaultModelLabel = useDefaultModelLabel();
+  const defaultModelLabel = useReviewFallbackModelLabel(null);
   const [confirmDefaultModel, setConfirmDefaultModel] = useState(false);
   const startReview = useAtomCommand(reviewCommands.start, { reportFailure: false });
   const [reviewId, setReviewId] = useState<ReviewId | null>(null);

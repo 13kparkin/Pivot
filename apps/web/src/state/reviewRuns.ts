@@ -1,7 +1,7 @@
 import { useAtomValue } from "@effect/atom-react";
 import { createReviewRunsStore } from "@t3tools/client-runtime/state/review-runs";
 import { createReviewCommandsAtoms } from "@t3tools/client-runtime/state/review-commands";
-import type { EnvironmentId, ReviewId, ReviewRun } from "@t3tools/contracts";
+import type { EnvironmentId, ModelSelection, ReviewId, ReviewRun } from "@t3tools/contracts";
 import * as Option from "effect/Option";
 import { AsyncResult, Atom } from "effect/unstable/reactivity";
 import { useSyncExternalStore } from "react";
@@ -125,22 +125,34 @@ export function useReviewModelConfigured(environmentId: EnvironmentId | null): b
 }
 
 /**
- * The display label of the app's default model, or the raw slug when no
- * option resolves. Used to name the model a review falls back to when no
- * `review` role is configured.
+ * The display label of the model a review falls back to when no `review` role
+ * is configured. When a thread model selection is provided (the thread entry
+ * point), that selection is named; otherwise the app's default model. Falls
+ * back to the raw slug when no option resolves.
  */
-export function useDefaultModelLabel(): string | null {
+export function useReviewFallbackModelLabel(
+  modelSelection: ModelSelection | null | undefined,
+): string | null {
   const settings = usePrimarySettings();
   const providers = useAtomValue(primaryServerProvidersAtom);
   return useMemo(() => {
+    const entries = deriveProviderInstanceEntries(providers);
+    if (modelSelection?.model) {
+      const entry = entries.find((candidate) => candidate.instanceId === modelSelection.instanceId);
+      const model = entry?.models.find((candidate) => candidate.slug === modelSelection.model);
+      if (model) {
+        return getDisplayModelName(model);
+      }
+      return modelSelection.model;
+    }
     const selection = resolveAppModelSelectionState(settings, providers);
-    const entry = deriveProviderInstanceEntries(providers).find(
-      (candidate) => candidate.instanceId === selection.instanceId,
+    const defaultEntry = entries.find((candidate) => candidate.instanceId === selection.instanceId);
+    const defaultModel = defaultEntry?.models.find(
+      (candidate) => candidate.slug === selection.model,
     );
-    const model = entry?.models.find((candidate) => candidate.slug === selection.model);
-    if (model) {
-      return getDisplayModelName(model);
+    if (defaultModel) {
+      return getDisplayModelName(defaultModel);
     }
     return selection.model || null;
-  }, [providers, settings]);
+  }, [modelSelection, providers, settings]);
 }
