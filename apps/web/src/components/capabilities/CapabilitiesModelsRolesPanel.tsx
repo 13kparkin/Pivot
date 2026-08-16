@@ -297,14 +297,14 @@ export function CapabilitiesModelsRolesPanel({
               ) : (
                 visibleModels.map((model) => (
                   <tr key={model.slug} className="hover:bg-accent/40">
-                    <td className="px-4 py-2.5 font-medium text-foreground">
+                    <td className="px-4 py-3 font-medium text-foreground">
                       {model.name}
                       {model.shortName ? (
                         <span className="ml-1.5 text-muted-foreground/70">{model.shortName}</span>
                       ) : null}
                     </td>
-                    <td className="px-4 py-2.5 text-muted-foreground">{model.provider}</td>
-                    <td className="px-4 py-2.5 font-mono text-muted-foreground/80">{model.slug}</td>
+                    <td className="px-4 py-3 text-muted-foreground">{model.provider}</td>
+                    <td className="px-4 py-3 font-mono text-muted-foreground/80">{model.slug}</td>
                   </tr>
                 ))
               )}
@@ -359,7 +359,7 @@ export function CapabilitiesModelsRolesPanel({
                 ) : (
                   roleEntries.map(([role, model]) => (
                     <tr key={role} className="hover:bg-accent/40">
-                      <td className="w-40 px-4 py-2.5 font-mono font-medium text-foreground">
+                      <td className="w-40 px-4 py-3 font-mono font-medium text-foreground">
                         {role}
                       </td>
                       <td className="px-4 py-2.5">
