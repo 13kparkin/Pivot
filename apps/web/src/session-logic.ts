@@ -359,7 +359,7 @@ function requestKindFromRequestType(requestType: unknown): PendingApproval["requ
   }
 }
 
-function isStalePendingRequestFailureDetail(detail: string | undefined): boolean {
+export function isStalePendingRequestFailureDetail(detail: string | undefined): boolean {
   const normalized = detail?.toLowerCase();
   if (!normalized) {
     return false;
