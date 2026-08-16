@@ -1164,6 +1164,141 @@ describe("OmpAdapter", () => {
     }),
   );
 
+  it.effect("completes a turn when the agent asks a select mid-turn and the user answers", () =>
+    Effect.gen(function* () {
+      const fake = new FakeOmpRpc();
+      const adapter = new OmpAdapter(fake, testRandomUUID);
+      // Wait for the pending ask to register before answering (the frame
+      // stream processes the select on its own fiber).
+      const requestedFiber = yield* Stream.runCollect(
+        adapter.streamEvents.pipe(
+          Stream.takeUntil((event) => event.type === "user-input.requested"),
+        ),
+      ).pipe(Effect.forkChild);
+      yield* adapter.startSession(startInput);
+      yield* adapter.sendTurn({ threadId: THREAD_ID, input: "hi" });
+      yield* fake.offer(THREAD_ID, {
+        type: "extension_ui_request",
+        id: "ask-select-1",
+        method: "select",
+        title: "Which storage backend?",
+        options: ["local", "s3"],
+      });
+      const requestedEvents = yield* Fiber.join(requestedFiber);
+      const requested = requestedEvents.find(
+        (event) => event.type === "user-input.requested" && event.requestId === "ask-select-1",
+      );
+      NodeAssert.ok(requested);
+      NodeAssert.deepEqual(
+        requested.payload.questions[0]?.options.map((option) => option.label),
+        ["local", "s3"],
+      );
+
+      const completedFiber = yield* collectUntilTurnCompleted(adapter.streamEvents).pipe(
+        Effect.forkChild,
+      );
+      yield* adapter.respondToUserInput(THREAD_ID, ApprovalRequestId.make("ask-select-1"), {
+        choice: "s3",
+      });
+      yield* fake.offer(THREAD_ID, { type: "agent_end", messages: [], isTerminal: true });
+      const events = yield* Fiber.join(completedFiber);
+      NodeAssert.deepEqual(
+        fake.sent.find((command) => command.type === "extension_ui_response"),
+        { type: "extension_ui_response", id: "ask-select-1", value: "s3" },
+      );
+      NodeAssert.equal(
+        events.some(
+          (event) => event.type === "user-input.resolved" && event.requestId === "ask-select-1",
+        ),
+        true,
+      );
+      NodeAssert.equal(events.filter((event) => event.type === "turn.completed").length, 1);
+    }),
+  );
+
+  it.effect(
+    "resolves a pending ask with empty answers when omp cancels it, and the turn completes",
+    () =>
+      Effect.gen(function* () {
+        const fake = new FakeOmpRpc();
+        const adapter = new OmpAdapter(fake, testRandomUUID);
+        const requestedFiber = yield* Stream.runCollect(
+          adapter.streamEvents.pipe(
+            Stream.takeUntil((event) => event.type === "user-input.requested"),
+          ),
+        ).pipe(Effect.forkChild);
+        yield* adapter.startSession(startInput);
+        yield* adapter.sendTurn({ threadId: THREAD_ID, input: "hi" });
+        yield* fake.offer(THREAD_ID, {
+          type: "extension_ui_request",
+          id: "ask-select-2",
+          method: "select",
+          title: "Which storage backend?",
+          options: ["local", "s3"],
+        });
+        yield* Fiber.join(requestedFiber);
+        yield* fake.offer(THREAD_ID, {
+          type: "extension_ui_request",
+          method: "cancel",
+          targetId: "ask-select-2",
+        });
+        const eventsFiber = yield* collectUntilTurnCompleted(adapter.streamEvents).pipe(
+          Effect.forkChild,
+        );
+        yield* fake.offer(THREAD_ID, { type: "agent_end", messages: [], isTerminal: true });
+        const events = yield* Fiber.join(eventsFiber);
+        const resolved = events.find(
+          (event) => event.type === "user-input.resolved" && event.requestId === "ask-select-2",
+        );
+        NodeAssert.ok(resolved);
+        NodeAssert.deepEqual(resolved.payload.answers, {});
+        NodeAssert.equal(
+          events.some((event) => event.type === "turn.completed"),
+          true,
+        );
+        // A cancelled ask must not be answered.
+        NodeAssert.equal(
+          fake.sent.some((command) => command.type === "extension_ui_response"),
+          false,
+        );
+      }),
+  );
+
+  it.effect("interruptTurn during a pending ask writes abort and settles without hanging", () =>
+    Effect.gen(function* () {
+      const fake = new FakeOmpRpc();
+      const adapter = new OmpAdapter(fake, testRandomUUID);
+      const requestedFiber = yield* Stream.runCollect(
+        adapter.streamEvents.pipe(
+          Stream.takeUntil((event) => event.type === "user-input.requested"),
+        ),
+      ).pipe(Effect.forkChild);
+      yield* adapter.startSession(startInput);
+      yield* adapter.sendTurn({ threadId: THREAD_ID, input: "hi" });
+      yield* fake.offer(THREAD_ID, {
+        type: "extension_ui_request",
+        id: "ask-select-3",
+        method: "select",
+        title: "Which storage backend?",
+        options: ["local", "s3"],
+      });
+      yield* Fiber.join(requestedFiber);
+      yield* adapter.interruptTurn(THREAD_ID);
+      NodeAssert.equal(
+        fake.sent.some((command) => command.type === "abort"),
+        true,
+      );
+      const eventsFiber = yield* Stream.runCollect(
+        adapter.streamEvents.pipe(Stream.takeUntil((event) => event.type === "turn.aborted")),
+      ).pipe(Effect.forkChild);
+      yield* fake.offer(THREAD_ID, { type: "agent_end", messages: [], isTerminal: true });
+      const events = yield* Fiber.join(eventsFiber);
+      const aborted = events.find((event) => event.type === "turn.aborted");
+      NodeAssert.ok(aborted);
+      NodeAssert.equal(aborted.payload.reason, "user_abort");
+    }),
+  );
+
   it.effect("respondToRequest without a pending confirm fails clearly", () =>
     Effect.gen(function* () {
       const adapter = new OmpAdapter(new FakeOmpRpc(), testRandomUUID);
