@@ -5,6 +5,7 @@ import {
   MessageId,
   NonNegativeInt,
   OrchestrationCheckpointFile,
+  ReviewRun,
   OrchestrationProposedPlanId,
   OrchestrationReadModel,
   OrchestrationThreadSearchSource,
@@ -761,6 +762,21 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
       `,
   });
 
+  const ReviewRunDbRowSchema = Schema.Struct({
+    run_json: Schema.fromJsonString(ReviewRun),
+  });
+
+  const listReviewRunRows = SqlSchema.findAll({
+    Request: Schema.Void,
+    Result: ReviewRunDbRowSchema,
+    execute: () =>
+      sql`
+        SELECT run_json
+        FROM projection_review_runs
+        ORDER BY id ASC
+      `,
+  });
+
   const readProjectionCounts = SqlSchema.findOne({
     Request: Schema.Void,
     Result: ProjectionCountsRowSchema,
@@ -1394,6 +1410,14 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
               ),
             ),
           ),
+          listReviewRunRows(undefined).pipe(
+            Effect.mapError(
+              toPersistenceSqlOrDecodeError(
+                "ProjectionSnapshotQuery.getSnapshot:listReviewRuns:query",
+                "ProjectionSnapshotQuery.getSnapshot:listReviewRuns:decodeRows",
+              ),
+            ),
+          ),
         ]),
       )
       .pipe(
@@ -1408,6 +1432,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
             checkpointRows,
             latestTurnRows,
             stateRows,
+            reviewRunRows,
           ]) =>
             Effect.gen(function* () {
               const messagesByThread = new Map<string, Array<OrchestrationMessage>>();
@@ -1595,6 +1620,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                 snapshotSequence: computeSnapshotSequence(stateRows),
                 projects,
                 threads,
+                reviewRuns: reviewRunRows.map((row) => row.run_json),
                 updatedAt: updatedAt ?? "1970-01-01T00:00:00.000Z",
               };
 
@@ -1665,11 +1691,27 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
               ),
             ),
           ),
+          listReviewRunRows(undefined).pipe(
+            Effect.mapError(
+              toPersistenceSqlOrDecodeError(
+                "ProjectionSnapshotQuery.getCommandReadModel:listReviewRuns:query",
+                "ProjectionSnapshotQuery.getCommandReadModel:listReviewRuns:decodeRows",
+              ),
+            ),
+          ),
         ]),
       )
       .pipe(
         Effect.flatMap(
-          ([projectRows, threadRows, proposedPlanRows, sessionRows, latestTurnRows, stateRows]) =>
+          ([
+            projectRows,
+            threadRows,
+            proposedPlanRows,
+            sessionRows,
+            latestTurnRows,
+            stateRows,
+            reviewRunRows,
+          ]) =>
             Effect.sync(() => {
               let updatedAt: string | null = null;
               const projects: OrchestrationProject[] = [];
@@ -1799,10 +1841,13 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                 });
               }
 
+              const reviewRuns = reviewRunRows.map((row) => row.run_json);
+
               return {
                 snapshotSequence: computeSnapshotSequence(stateRows),
                 projects,
                 threads,
+                reviewRuns,
                 updatedAt: updatedAt ?? "1970-01-01T00:00:00.000Z",
               } satisfies OrchestrationReadModel;
             }),
