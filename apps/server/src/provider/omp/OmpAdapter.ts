@@ -40,12 +40,18 @@ import {
   type RuntimeMode,
   type ProviderInteractionMode,
   type ProviderTurnInteractionMode,
+  PullRequestDiffSide,
+  PositiveInt,
+  ReviewFinding,
+  ReviewFindingSeverity,
+  TrimmedNonEmptyString,
   type ThreadId,
   TurnId,
 } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
 import * as DateTime from "effect/DateTime";
+import * as Option from "effect/Option";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Queue from "effect/Queue";
@@ -75,6 +81,37 @@ const PROVIDER = ProviderDriverKind.make("omp");
 const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
 const isProviderAdapterProcessError = Schema.is(ProviderAdapterProcessError);
 const isOmpSpawnError = Schema.is(OmpSpawnError);
+
+// ---------------------------------------------------------------------------
+// Review mode (issue #42): a review turn ends with a fenced JSON findings
+// block. The adapter decodes it and emits one `review.finding` runtime event
+// per finding; a missing or malformed block fails the turn so the review run
+// surfaces the error instead of silently dropping findings.
+// ---------------------------------------------------------------------------
+
+const ReviewFindingInputSchema = Schema.Struct({
+  file: TrimmedNonEmptyString,
+  message: TrimmedNonEmptyString,
+  line: Schema.NullOr(PositiveInt).pipe(Schema.withDecodingDefault(Effect.succeed(null))),
+  side: PullRequestDiffSide.pipe(Schema.withDecodingDefault(Effect.succeed("right"))),
+  severity: ReviewFindingSeverity.pipe(Schema.withDecodingDefault(Effect.succeed("should-fix"))),
+  symbol: Schema.NullOr(TrimmedNonEmptyString).pipe(
+    Schema.withDecodingDefault(Effect.succeed(null)),
+  ),
+});
+type ReviewFindingInput = typeof ReviewFindingInputSchema.Type;
+
+const ReviewFindingsBlockSchema = Schema.Struct({
+  findings: Schema.Array(ReviewFindingInputSchema),
+});
+
+function parseJsonBlock(text: string): unknown {
+  try {
+    return JSON.parse(text) as unknown;
+  } catch {
+    return undefined;
+  }
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -151,6 +188,7 @@ interface LiveAdapterSession {
   heldBackRunText: string | null;
   interactionMode: ProviderTurnInteractionMode;
   prePlanModelSlug: string | undefined;
+  preReviewModelSlug: string | undefined;
   onOpenUrl: ((request: OmpOpenUrlRequest) => Effect.Effect<void>) | undefined;
 }
 
@@ -334,6 +372,7 @@ export class OmpAdapter {
         heldBackRunText: null,
         interactionMode: "default",
         prePlanModelSlug: undefined,
+        preReviewModelSlug: undefined,
         onOpenUrl: undefined,
       };
       this.#sessions.set(input.threadId, session);
@@ -1327,6 +1366,9 @@ export class OmpAdapter {
 
   #emitTurnCompleted(session: LiveAdapterSession): Effect.Effect<void> {
     return Effect.gen({ self: this }, function* () {
+      // Capture the final assistant text before the flush nulls it; a review
+      // turn's findings are decoded from it.
+      const runText = session.heldBackRunText ?? session.openRunText;
       yield* this.#flushFinalAssistantRun(session);
       const now = yield* Clock.currentTimeMillis;
       yield* this.#emitTokenUsageFromState(session, now).pipe(Effect.ignore);
@@ -1343,6 +1385,20 @@ export class OmpAdapter {
           turnId,
           payload: { reason: "user_abort" },
         });
+      } else if (session.interactionMode === "review") {
+        // Emit findings first so the stream carries them before the terminal
+        // frame; a malformed findings block fails the turn so the run surfaces
+        // the error rather than silently dropping findings.
+        const outcome = yield* this.#emitReviewFindings(session, turnId, runText);
+        yield* this.#emit({
+          type: "turn.completed",
+          threadId: session.threadId,
+          turnId,
+          payload:
+            outcome._tag === "ok"
+              ? { state: "completed" }
+              : { state: "failed", errorMessage: outcome.errorMessage },
+        });
       } else {
         yield* this.#emit({
           type: "turn.completed",
@@ -1358,6 +1414,71 @@ export class OmpAdapter {
       if (aborted && session.liveSubagents.size > 0) {
         yield* this.#cancelLiveSubagents(session);
       }
+    });
+  }
+
+  #extractReviewFindings(
+    runText: string | null,
+  ): Effect.Effect<ReadonlyArray<ReviewFinding> | null> {
+    return Effect.gen({ self: this }, function* () {
+      if (runText === null || runText.length === 0) {
+        return null;
+      }
+      // The persona ends with one fenced JSON block; take the last one so any
+      // incidental prose fences earlier in the review are ignored.
+      const fence = /```json\s*([\s\S]*?)```/gu;
+      let last: RegExpExecArray | null = null;
+      let match: RegExpExecArray | null;
+      while ((match = fence.exec(runText)) !== null) {
+        last = match;
+      }
+      if (last === null) {
+        return null;
+      }
+      const blockText = last[1];
+      if (blockText === undefined) {
+        return null;
+      }
+      const parsed = parseJsonBlock(blockText);
+      if (parsed === undefined) {
+        return null;
+      }
+      const decoded = Schema.decodeUnknownOption(ReviewFindingsBlockSchema)(parsed);
+      if (Option.isNone(decoded)) {
+        return null;
+      }
+      const findings: ReviewFinding[] = [];
+      for (const entry of decoded.value.findings as ReadonlyArray<ReviewFindingInput>) {
+        findings.push({ id: `finding-${yield* this.#randomUUID}`, ...entry });
+      }
+      return findings;
+    });
+  }
+
+  #emitReviewFindings(
+    session: LiveAdapterSession,
+    turnId: TurnId | undefined,
+    runText: string | null,
+  ): Effect.Effect<
+    { readonly _tag: "ok" } | { readonly _tag: "error"; readonly errorMessage: string }
+  > {
+    return Effect.gen({ self: this }, function* () {
+      const findings = yield* this.#extractReviewFindings(runText);
+      if (findings === null) {
+        return {
+          _tag: "error",
+          errorMessage: "Review run finished without a parseable findings block.",
+        } as const;
+      }
+      for (const finding of findings) {
+        yield* this.#emit({
+          type: "review.finding",
+          threadId: session.threadId,
+          turnId,
+          payload: finding,
+        });
+      }
+      return { _tag: "ok" } as const;
     });
   }
 
@@ -1566,8 +1687,18 @@ export class OmpAdapter {
         session.interactionMode = "plan";
         return;
       }
-      const restoreSlug = session.prePlanModelSlug;
+      if (mode === "review") {
+        session.preReviewModelSlug = yield* this.#readCurrentModelSlug(session.threadId);
+        const reviewSlug = yield* this.#resolveRoleModel("review");
+        if (reviewSlug !== undefined) {
+          yield* this.#applyModelSelection(session.threadId, reviewSlug);
+        }
+        session.interactionMode = "review";
+        return;
+      }
+      const restoreSlug = session.prePlanModelSlug ?? session.preReviewModelSlug;
       session.prePlanModelSlug = undefined;
+      session.preReviewModelSlug = undefined;
       session.interactionMode = "default";
       if (restoreSlug !== undefined) {
         yield* this.#applyModelSelection(session.threadId, restoreSlug);

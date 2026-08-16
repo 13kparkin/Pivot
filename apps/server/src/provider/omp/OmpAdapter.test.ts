@@ -2066,3 +2066,131 @@ describe("OmpAdapter", () => {
     );
   });
 });
+
+describe("OmpAdapter review mode", () => {
+  const findingsJson =
+    '```json\n{"findings":[{"file":"src/a.ts","line":12,"severity":"blocking","message":"Inline the single-use helper.","symbol":"doThing"}]}\n```';
+
+  const feedAssistantText = (fake: FakeOmpRpc, text: string) =>
+    fake.offer(THREAD_ID, {
+      type: "message_update",
+      assistantMessageEvent: { type: "text_delta", delta: text },
+    });
+
+  it.effect("emits one review.finding per finding and completes on a valid block", () =>
+    Effect.gen(function* () {
+      const fake = new FakeOmpRpc();
+      const adapter = new OmpAdapter(fake, testRandomUUID, {
+        resolveRoleModel: () => Effect.succeed(undefined),
+      });
+      const eventsFiber = yield* collectUntilTurnCompleted(adapter.streamEvents).pipe(
+        Effect.forkChild,
+      );
+      yield* adapter.startSession(startInput);
+      yield* adapter.sendTurn({
+        threadId: THREAD_ID,
+        input: "review it",
+        interactionMode: "review",
+      });
+      yield* feedAssistantText(fake, findingsJson);
+      yield* fake.offer(THREAD_ID, { type: "agent_end", messages: [], isTerminal: true });
+      const events = yield* Fiber.join(eventsFiber);
+
+      const findings = events.filter((event) => event.type === "review.finding");
+      NodeAssert.equal(findings.length, 1);
+      if (findings[0]?.type === "review.finding") {
+        NodeAssert.equal(findings[0].payload.file, "src/a.ts");
+        NodeAssert.equal(findings[0].payload.line, 12);
+        NodeAssert.equal(findings[0].payload.severity, "blocking");
+        NodeAssert.equal(findings[0].payload.side, "right");
+        NodeAssert.ok(findings[0].payload.id.startsWith("finding-"));
+      }
+
+      const completed = events.filter((event) => event.type === "turn.completed");
+      NodeAssert.equal(completed.length, 1);
+      NodeAssert.equal(completed[0]?.payload.state, "completed");
+    }),
+  );
+
+  it.effect("defaults side and severity when a finding omits them", () =>
+    Effect.gen(function* () {
+      const fake = new FakeOmpRpc();
+      const adapter = new OmpAdapter(fake, testRandomUUID);
+      const eventsFiber = yield* collectUntilTurnCompleted(adapter.streamEvents).pipe(
+        Effect.forkChild,
+      );
+      yield* adapter.startSession(startInput);
+      yield* adapter.sendTurn({
+        threadId: THREAD_ID,
+        input: "review it",
+        interactionMode: "review",
+      });
+      yield* feedAssistantText(
+        fake,
+        '```json\n{"findings":[{"file":"b.ts","message":"Nit."}]}\n```',
+      );
+      yield* fake.offer(THREAD_ID, { type: "agent_end", messages: [], isTerminal: true });
+      const events = yield* Fiber.join(eventsFiber);
+
+      const findings = events.filter((event) => event.type === "review.finding");
+      NodeAssert.equal(findings.length, 1);
+      if (findings[0]?.type === "review.finding") {
+        NodeAssert.equal(findings[0].payload.file, "b.ts");
+        NodeAssert.equal(findings[0].payload.line, null);
+        NodeAssert.equal(findings[0].payload.side, "right");
+        NodeAssert.equal(findings[0].payload.severity, "should-fix");
+      }
+    }),
+  );
+
+  it.effect("fails the turn when no parseable findings block is present", () =>
+    Effect.gen(function* () {
+      const fake = new FakeOmpRpc();
+      const adapter = new OmpAdapter(fake, testRandomUUID);
+      const eventsFiber = yield* collectUntilTurnCompleted(adapter.streamEvents).pipe(
+        Effect.forkChild,
+      );
+      yield* adapter.startSession(startInput);
+      yield* adapter.sendTurn({
+        threadId: THREAD_ID,
+        input: "review it",
+        interactionMode: "review",
+      });
+      yield* feedAssistantText(fake, "I reviewed it and found nothing worth blocking.");
+      yield* fake.offer(THREAD_ID, { type: "agent_end", messages: [], isTerminal: true });
+      const events = yield* Fiber.join(eventsFiber);
+
+      NodeAssert.equal(events.filter((event) => event.type === "review.finding").length, 0);
+      const completed = events.filter((event) => event.type === "turn.completed");
+      NodeAssert.equal(completed.length, 1);
+      NodeAssert.equal(completed[0]?.payload.state, "failed");
+      NodeAssert.ok(String(completed[0]?.payload.errorMessage).includes("findings block"));
+    }),
+  );
+
+  it.effect("review mode switches to the review-role model before the prompt", () =>
+    Effect.gen(function* () {
+      const fake = new FakeOmpRpc();
+      fake.stateModel = { provider: "openai", id: "gpt-5" };
+      const adapter = new OmpAdapter(fake, testRandomUUID, {
+        resolveRoleModel: (role) =>
+          Effect.succeed(role === "review" ? "anthropic/claude-review" : undefined),
+      });
+      yield* adapter.startSession(startInput);
+
+      const enterReviewFrom = fake.sent.length;
+      yield* adapter.sendTurn({
+        threadId: THREAD_ID,
+        input: "review it",
+        interactionMode: "review",
+      });
+      const enterReviewCommands = fake.sent.slice(enterReviewFrom);
+      NodeAssert.deepEqual(
+        enterReviewCommands.map((command) => command.type),
+        ["get_state", "set_model", "prompt"],
+      );
+      NodeAssert.equal(enterReviewCommands[1]?.provider, "anthropic");
+      NodeAssert.equal(enterReviewCommands[1]?.modelId, "claude-review");
+    }),
+  );
+});
