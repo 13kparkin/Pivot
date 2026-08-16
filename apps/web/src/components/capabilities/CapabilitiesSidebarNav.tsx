@@ -15,6 +15,7 @@ import {
   ScrollTextIcon,
   SearchIcon,
   Settings2Icon,
+  Trash2Icon,
   XIcon,
 } from "lucide-react";
 import { useCanGoBack, useNavigate, useSearch } from "@tanstack/react-router";
@@ -31,6 +32,20 @@ import {
   SidebarMenuItem,
   useSidebar,
 } from "../ui/sidebar";
+import {
+  isAtomCommandInterrupted,
+  mapAtomCommandResult,
+  settlePromise,
+  squashAtomCommandFailure,
+} from "@t3tools/client-runtime/state/runtime";
+import { scopeProjectRef } from "@t3tools/client-runtime/environment";
+
+import { useComposerDraftStore } from "../../composerDraftStore";
+import { readLocalApi } from "../../localApi";
+import { useThreadShells } from "../../state/entities";
+import { projectEnvironment } from "../../state/projects";
+import { useAtomCommand } from "../../state/use-atom-command";
+import { stackedThreadToast, toastManager } from "../ui/toast";
 import { useSettingsProjectGroups } from "../settings/ProjectSettingsPanel";
 import {
   CAPABILITIES_SECTION_LABELS,
@@ -61,6 +76,10 @@ export const CAPABILITIES_NAV_ITEMS: ReadonlyArray<{
 function CapabilitiesSectionIcon({ to }: { to: CapabilitiesPath }) {
   const Icon = CAPABILITIES_SECTION_ICONS[to];
   return <Icon className="mt-0.5 size-3.5 shrink-0 text-sidebar-muted-foreground/60" />;
+}
+
+function memberKey(member: { environmentId: string; id: string }): string {
+  return `${member.environmentId}:${member.id}`;
 }
 
 export function CapabilitiesSidebarNav({ pathname }: { pathname: string }) {
@@ -165,6 +184,87 @@ export function CapabilitiesSidebarNav({ pathname }: { pathname: string }) {
     }
     void navigate({ to: "/" });
   }, [canGoBack, isMobile, navigate, setOpenMobile]);
+
+  // Project removal from the project-scoped capabilities nav. Mirrors the
+  // settings-page flow: confirm (naming thread loss), delete every grouped
+  // member, clear drafts, then drop the scope back to global capabilities.
+  const threads = useThreadShells();
+  const deleteProject = useAtomCommand(projectEnvironment.delete, { reportFailure: false });
+  const handleRemoveProject = useCallback(async () => {
+    if (projectGroup === null) return;
+    const api = readLocalApi();
+    if (!api) return;
+
+    const memberKeys = new Set(projectGroup.memberProjects.map(memberKey));
+    const projectThreads = threads.filter((thread) =>
+      memberKeys.has(`${thread.environmentId}:${thread.projectId}`),
+    );
+    const singleMember =
+      projectGroup.memberProjects.length === 1 ? projectGroup.memberProjects[0]! : null;
+    const targetLabel = singleMember?.title ?? projectGroup.displayName;
+    const confirmed = await settlePromise(() =>
+      api.dialogs.confirm(
+        [
+          projectThreads.length > 0
+            ? `Remove project "${targetLabel}" and delete its ${projectThreads.length} thread${projectThreads.length === 1 ? "" : "s"}?`
+            : `Remove project "${targetLabel}"?`,
+          ...(singleMember
+            ? [
+                `Path: ${singleMember.workspaceRoot}`,
+                ...(singleMember.environmentLabel
+                  ? [`Environment: ${singleMember.environmentLabel}`]
+                  : []),
+              ]
+            : [`This removes ${projectGroup.memberProjects.length} grouped project entries.`]),
+          ...(projectThreads.length > 0
+            ? ["This permanently clears conversation history for those threads."]
+            : []),
+          "This removes only the project entries, not the files on disk.",
+          "This action cannot be undone.",
+        ].join("\n"),
+        { variant: "destructive" },
+      ),
+    );
+    if (confirmed._tag === "Failure" || !confirmed.value) return;
+
+    const draftStore = useComposerDraftStore.getState();
+    for (const member of projectGroup.memberProjects) {
+      const memberThreads = projectThreads.filter(
+        (thread) => thread.environmentId === member.environmentId && thread.projectId === member.id,
+      );
+      const result = mapAtomCommandResult(
+        await deleteProject({
+          environmentId: member.environmentId,
+          input: {
+            projectId: member.id,
+            ...(memberThreads.length > 0 ? { force: true } : {}),
+          },
+        }),
+        () => undefined,
+      );
+      if (result._tag === "Failure") {
+        if (isAtomCommandInterrupted(result)) return;
+        const error = squashAtomCommandFailure(result);
+        toastManager.add(
+          stackedThreadToast({
+            type: "error",
+            title: `Failed to remove "${member.title}"`,
+            description: error instanceof Error ? error.message : "Could not remove the project.",
+          }),
+        );
+        return;
+      }
+      const projectRef = scopeProjectRef(member.environmentId, member.id);
+      const projectDraftThread = draftStore.getDraftThreadByProjectRef(projectRef);
+      if (projectDraftThread) {
+        draftStore.clearDraftThread(projectDraftThread.draftId);
+      }
+      draftStore.clearProjectDraftThreadId(projectRef);
+    }
+
+    // The scoped project is gone; drop the scope and stay in capabilities.
+    void navigate({ to: "/capabilities", search: {}, replace: true });
+  }, [deleteProject, navigate, projectGroup, threads]);
   const handleSearchKeyDown = useCallback(
     (event: KeyboardEvent<HTMLInputElement>) => {
       if (event.key === "Escape" && isSearching) {
@@ -310,6 +410,18 @@ export function CapabilitiesSidebarNav({ pathname }: { pathname: string }) {
           </div>
         ) : null}
         <SidebarMenu className="min-w-0 flex-1">
+          {projectGroup !== null ? (
+            <SidebarMenuItem>
+              <SidebarMenuButton
+                type="button"
+                className="text-destructive hover:bg-destructive/8 hover:text-destructive"
+                onClick={() => void handleRemoveProject()}
+              >
+                <Trash2Icon />
+                <span>Remove project</span>
+              </SidebarMenuButton>
+            </SidebarMenuItem>
+          ) : null}
           <SidebarMenuItem>
             <SidebarMenuButton onClick={handleBackClick}>
               <ArrowLeftIcon />

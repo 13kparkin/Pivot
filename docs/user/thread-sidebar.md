@@ -18,8 +18,10 @@ their pinned threads keep the default newest-first order below the ones you have
 The **Projects** section sits below the search and filter controls. Each row
 shows the project's icon, name, and environment badge; the gear on the row
 opens that project's omp capabilities (settings, skills, and rules scoped to
-the project's `.omp` folder). The project filter above the list narrows which
-projects — and their nested threads — appear.
+the project's `.omp` folder). The capabilities sidebar there also offers
+**Remove project**, which deletes the project's entries — and their
+conversation history — without touching the files on disk. The project filter
+above the list narrows which projects — and their nested threads — appear.
 
 Drafts you are composing stay at the top of the sidebar, above the projects.
 
