@@ -299,7 +299,7 @@ describe("MessagesTimeline", () => {
     expect(markup).toContain("1 changed file");
   });
 
-  it("keeps the status chip collapsed when the assistant already has an answer", () => {
+  it("collapses the status disclosure by default when the assistant already has an answer", () => {
     const markup = renderToStaticMarkup(
       <MessagesTimeline
         {...buildProps()}
@@ -330,7 +330,7 @@ describe("MessagesTimeline", () => {
     expect(markup).not.toContain("(empty response)");
   });
 
-  it("keeps the status chip collapsed by default for status-only messages and skips empty-response", () => {
+  it("collapses the status disclosure by default for status-only messages and skips empty-response", () => {
     const markup = renderToStaticMarkup(
       <MessagesTimeline
         {...buildProps()}
@@ -360,7 +360,7 @@ describe("MessagesTimeline", () => {
     expect(markup).not.toContain("(empty response)");
   });
 
-  it("keeps every status point hidden while the status chip is collapsed", () => {
+  it("keeps every status point hidden while the status disclosure is collapsed", () => {
     const markup = renderToStaticMarkup(
       <MessagesTimeline
         {...buildProps()}
