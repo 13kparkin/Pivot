@@ -4,7 +4,7 @@ import { useAtomRefresh, useAtomValue } from "@effect/atom-react";
 import type { OmpCapabilityScope, ProviderInstanceId } from "@t3tools/contracts";
 import * as Option from "effect/Option";
 import { AsyncResult, Atom } from "effect/unstable/reactivity";
-import { LoaderIcon, PlusIcon, SearchIcon, Trash2Icon } from "lucide-react";
+import { LoaderIcon, MinusIcon, PlusIcon, SearchIcon, Trash2Icon } from "lucide-react";
 import { useMemo, useState } from "react";
 
 import { useActiveEnvironmentId } from "../../state/entities";
@@ -76,6 +76,7 @@ export function CapabilitiesModelsRolesPanel({
   const [newRoleName, setNewRoleName] = useState("");
   const [newRoleModel, setNewRoleModel] = useState("");
   const [modelQuery, setModelQuery] = useState("");
+  const [showAllModels, setShowAllModels] = useState(false);
 
   const snapshotAtom =
     environmentId === null
@@ -124,6 +125,13 @@ export function CapabilitiesModelsRolesPanel({
         model.provider.toLowerCase().includes(query),
     );
   }, [allModels, modelQuery]);
+
+  // Show the first 10 models with a "+ View all models" button; the slice resets
+  // whenever the search query changes so a new search collapses back to 10.
+  const visibleModels = useMemo(
+    () => (showAllModels ? filteredModels : filteredModels.slice(0, 10)),
+    [filteredModels, showAllModels],
+  );
 
   /** The instance whose options contain this model slug, or the default. */
   const instanceForModel = (slug: string): ProviderInstanceId | null => {
@@ -287,7 +295,7 @@ export function CapabilitiesModelsRolesPanel({
                   </td>
                 </tr>
               ) : (
-                filteredModels.map((model) => (
+                visibleModels.map((model) => (
                   <tr key={model.slug} className="hover:bg-accent/40">
                     <td className="px-3 py-2 font-medium text-foreground">
                       {model.name}
@@ -303,6 +311,21 @@ export function CapabilitiesModelsRolesPanel({
             </tbody>
           </table>
         </div>
+        {filteredModels.length > 10 ? (
+          <button
+            type="button"
+            onClick={() => setShowAllModels((open) => !open)}
+            className="mt-1 flex h-10 w-full items-center justify-start gap-1.5 rounded-md px-3 text-[13px] font-medium text-muted-foreground transition-colors hover:bg-accent/40 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            {showAllModels ? (
+              <MinusIcon className="size-3.5 shrink-0" />
+            ) : (
+              <PlusIcon className="size-3.5 shrink-0" />
+            )}
+            {showAllModels ? "Show fewer" : "View all models"}
+            <span className="text-muted-foreground/60">({filteredModels.length})</span>
+          </button>
+        ) : null}
       </SettingsSection>
 
       <SettingsSection title="Roles">
