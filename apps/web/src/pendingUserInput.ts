@@ -77,6 +77,40 @@ export function setPendingUserInputCustomAnswer(
   };
 }
 
+/**
+ * Option labels that mean "type your own answer" rather than a literal value.
+ * Mirrors omp's TUI `Other (type your own)` entry, which agents echo when they
+ * offer a fallback option.
+ */
+export function isFreeTextOptionLabel(label: string): boolean {
+  const normalized = label.trim().toLowerCase();
+  return normalized === "other" || normalized.startsWith("other (");
+}
+
+/** Single-select ordinary options auto-advance; free-text options never do. */
+export function shouldAutoAdvancePendingUserInputSelection(
+  question: UserInputQuestion,
+  optionLabel: string,
+): boolean {
+  return !question.multiSelect && !isFreeTextOptionLabel(optionLabel);
+}
+
+/**
+ * A free-text option click should focus the composer for a typed answer:
+ * always for single-select, and for multi-select only while the option is
+ * being added (removing it must not steal focus).
+ */
+export function shouldRequestCustomAnswerForPendingUserInput(
+  question: UserInputQuestion,
+  optionLabel: string,
+  currentlySelectedOptionLabels: ReadonlyArray<string>,
+): boolean {
+  if (!isFreeTextOptionLabel(optionLabel)) {
+    return false;
+  }
+  return question.multiSelect ? !currentlySelectedOptionLabels.includes(optionLabel) : true;
+}
+
 export function togglePendingUserInputOptionSelection(
   question: UserInputQuestion,
   draft: PendingUserInputDraftAnswer | undefined,
