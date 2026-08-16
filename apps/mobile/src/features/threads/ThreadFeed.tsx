@@ -1077,7 +1077,10 @@ function AssistantStatusSection(props: {
   readonly onLinkPress: (href: string) => void;
 }) {
   const points = splitStatusPoints(props.statusText);
+  const [expanded, setExpanded] = useState(false);
   const [expandedPoints, setExpandedPoints] = useState<ReadonlySet<number>>(new Set());
+  const colorScheme = useColorScheme();
+  const pressedBackground = colorScheme === "dark" ? "rgba(255,255,255,0.05)" : "rgba(0,0,0,0.035)";
 
   if (points.length === 0) {
     return null;
@@ -1097,18 +1100,50 @@ function AssistantStatusSection(props: {
 
   return (
     <View className="-mx-1 mb-1 px-1 py-0">
-      {points.map((point, index) => (
-        <StatusPointRow
-          key={index}
-          point={point}
-          expanded={expandedPoints.has(index)}
-          iconSubtleColor={props.iconSubtleColor}
-          markdownStyles={props.markdownStyles}
-          skills={props.skills}
-          onLinkPress={props.onLinkPress}
-          onToggle={() => togglePoint(index)}
-        />
-      ))}
+      <Pressable
+        accessibilityRole="button"
+        accessibilityState={{ expanded }}
+        accessibilityLabel="Status"
+        hitSlop={4}
+        onPress={() => {
+          void Haptics.selectionAsync();
+          setExpanded((value) => !value);
+        }}
+        style={({ pressed }) => ({
+          backgroundColor: pressed ? pressedBackground : "transparent",
+        })}
+        className="min-h-8 flex-row items-center gap-1.5 rounded-md px-0.5 py-0"
+      >
+        <View className="h-[18px] w-5 items-center justify-center">
+          <SymbolView
+            name={
+              expanded
+                ? { ios: "chevron.up", android: "keyboard_arrow_up" }
+                : { ios: "chevron.down", android: "keyboard_arrow_down" }
+            }
+            size={12}
+            tintColor={props.iconSubtleColor}
+            type="monochrome"
+          />
+        </View>
+        <Text className="font-t3-medium text-xs text-foreground opacity-80">Status</Text>
+      </Pressable>
+      {expanded ? (
+        <View className="flex-col">
+          {points.map((point, index) => (
+            <StatusPointRow
+              key={index}
+              point={point}
+              expanded={expandedPoints.has(index)}
+              iconSubtleColor={props.iconSubtleColor}
+              markdownStyles={props.markdownStyles}
+              skills={props.skills}
+              onLinkPress={props.onLinkPress}
+              onToggle={() => togglePoint(index)}
+            />
+          ))}
+        </View>
+      ) : null}
     </View>
   );
 }
