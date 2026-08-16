@@ -101,7 +101,8 @@ function makeFakeOmpSpawner(sessionFile: string, agentDir = "/tmp/t3-omp-agent")
       };
       spawns.push(spawn);
 
-      // `omp --version` probes and `omp config path` are plain CLI, not RPC.
+      // `omp --version` probes, `omp --help` capability probes, and
+      // `omp config path` are plain CLI, not RPC.
       if (spawned.args.includes("--version")) {
         return ChildProcessSpawner.makeHandle({
           pid: ChildProcessSpawner.ProcessId(spawns.length),
@@ -111,6 +112,22 @@ function makeFakeOmpSpawner(sessionFile: string, agentDir = "/tmp/t3-omp-agent")
           unref: Effect.succeed(Effect.void),
           stdin: Sink.drain,
           stdout: Stream.make(encoder.encode("omp/17.3.0\n")),
+          stderr: Stream.empty,
+          all: Stream.empty,
+          getInputFd: () => Sink.drain,
+          getOutputFd: () => Stream.empty,
+        });
+      }
+
+      if (spawned.args.includes("--help")) {
+        return ChildProcessSpawner.makeHandle({
+          pid: ChildProcessSpawner.ProcessId(spawns.length),
+          exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(0)),
+          isRunning: Effect.succeed(false),
+          kill: () => Effect.void,
+          unref: Effect.succeed(Effect.void),
+          stdin: Sink.drain,
+          stdout: Stream.make(encoder.encode("Usage: omp [options] --mode text|json|rpc|rpc-ui\n")),
           stderr: Stream.empty,
           all: Stream.empty,
           getInputFd: () => Sink.drain,
@@ -270,7 +287,11 @@ describe("OmpDriver", () => {
       NodeAssert.equal(fake.spawns.length, spawnsBeforeSession + 1);
       const sessionSpawn = fake.spawns[fake.spawns.length - 1];
       NodeAssert.equal(sessionSpawn?.command, binaryPath);
-      NodeAssert.ok(sessionSpawn?.args.includes("--mode"));
+      const sessionModeIndex = sessionSpawn?.args.indexOf("--mode") ?? -1;
+      NodeAssert.equal(
+        sessionModeIndex >= 0 ? sessionSpawn?.args[sessionModeIndex + 1] : undefined,
+        "rpc-ui",
+      );
       NodeAssert.equal(session.resumeCursor, "/tmp/omp-session.jsonl");
     }).pipe(Effect.scoped),
   );
