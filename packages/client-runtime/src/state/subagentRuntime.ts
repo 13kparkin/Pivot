@@ -29,6 +29,38 @@ export type RuntimeSubagentStatus =
   | "cancelled"
   | "interrupted";
 
+export type RuntimeSubagentLifecycle =
+  | "starting"
+  | "running"
+  | "idle"
+  | "parked"
+  | "aborted"
+  | "unknown";
+
+export type RuntimeSubagentAssignmentStatus =
+  | "queued"
+  | "running"
+  | "completed"
+  | "failed"
+  | "cancelled"
+  | "unknown";
+
+export type RuntimeSubagentActivityStatus =
+  | "working"
+  | "waiting"
+  | "retrying"
+  | "rate_limited"
+  | "budget_stopped"
+  | "unknown";
+
+export interface RuntimeSubagentCapabilities {
+  readonly message: boolean;
+  readonly revive: boolean;
+  readonly cancel: boolean;
+  readonly kill: boolean;
+  readonly readOnlyReason: string | null;
+}
+
 export interface SubagentUsage {
   readonly totalTokens: number;
   readonly inputTokens?: number;
@@ -64,6 +96,13 @@ export interface RuntimeSubagent {
   readonly model: string | null;
   readonly effort: string | null;
   readonly status: RuntimeSubagentStatus;
+  readonly lifecycle: RuntimeSubagentLifecycle;
+  readonly assignmentStatus: RuntimeSubagentAssignmentStatus;
+  readonly activityStatus: RuntimeSubagentActivityStatus;
+  readonly capabilities: RuntimeSubagentCapabilities;
+  readonly runId: string;
+  readonly sessionFile: string | null;
+  readonly transcriptRevision: string | null;
   readonly activationCount: number;
   readonly usage: SubagentUsage | null;
   readonly progress: string | null;
@@ -103,10 +142,21 @@ export function isTerminalSubagentStatus(status: RuntimeSubagentStatus): boolean
 export function isActiveSubagentStatus(status: RuntimeSubagentStatus): boolean {
   return status === "pending" || status === "running" || status === "waiting";
 }
+/**
+ * Stable user-facing identity for an OMP child. OMP's requested `name` is
+ * carried as the runtime id, while `title` is also used for the task
+ * assignment on progress rows. Keep the name authoritative and only fall
+ * back to the title for records without an id.
+ */
+export function formatSubagentDisplayLabel(agent: Pick<RuntimeSubagent, "id" | "title">): string {
+  const id = agent.id.trim();
+  if (id.length > 0) return id;
+  const title = agent.title.trim();
+  return title.length > 0 ? title : "Agent";
+}
 
 const RECENT_ACTIVITY_LIMIT = 6;
 const SUMMARY_CHAR_LIMIT = 180;
-const ROSTER_LIMIT = 100;
 
 /**
  * True when this activity's payload does NOT belong on the Agents surface.
@@ -233,6 +283,13 @@ interface MutableAgent {
   model: string | null;
   effort: string | null;
   status: RuntimeSubagentStatus;
+  lifecycle: RuntimeSubagentLifecycle;
+  assignmentStatus: RuntimeSubagentAssignmentStatus;
+  activityStatus: RuntimeSubagentActivityStatus;
+  capabilities: RuntimeSubagentCapabilities;
+  runId: string;
+  sessionFile: string | null;
+  transcriptRevision: string | null;
   activationCount: number;
   usage: SubagentUsage | null;
   progress: string | null;
@@ -287,6 +344,19 @@ function getOrCreate(
     model: asString(payload.model) ?? null,
     effort: asString(payload.effort) ?? null,
     status: "pending",
+    lifecycle: "starting",
+    assignmentStatus: "queued",
+    activityStatus: "unknown",
+    capabilities: {
+      message: false,
+      revive: false,
+      cancel: false,
+      kill: false,
+      readOnlyReason: null,
+    },
+    runId: asString(payload.runId) ?? asString(payload.toolUseId) ?? id,
+    sessionFile: asString(payload.sessionFile) ?? null,
+    transcriptRevision: asString(payload.transcriptRevision) ?? null,
     activationCount: 0,
     usage: null,
     progress: null,
@@ -350,6 +420,59 @@ function fillMetadata(agent: MutableAgent, payload: Record<string, unknown>): vo
     }
     agent.attempt = attempt;
   }
+  const lifecycle = asString(payload.lifecycle);
+  if (
+    (lifecycle === "starting" ||
+      lifecycle === "running" ||
+      lifecycle === "idle" ||
+      lifecycle === "parked" ||
+      lifecycle === "aborted" ||
+      lifecycle === "unknown") &&
+    (agent.lifecycle !== "aborted" || lifecycle === "aborted")
+  ) {
+    // Aborted is an identity tombstone. Late/replayed provider frames may
+    // enrich the row, but cannot make a hard-killed agent live again.
+    agent.lifecycle = lifecycle;
+  }
+  const assignmentStatus = asString(payload.assignmentStatus);
+  if (
+    assignmentStatus === "queued" ||
+    assignmentStatus === "running" ||
+    assignmentStatus === "completed" ||
+    assignmentStatus === "failed" ||
+    assignmentStatus === "cancelled" ||
+    assignmentStatus === "unknown"
+  ) {
+    agent.assignmentStatus = assignmentStatus;
+  }
+  const activityStatus = asString(payload.activityStatus);
+  if (
+    activityStatus === "working" ||
+    activityStatus === "waiting" ||
+    activityStatus === "retrying" ||
+    activityStatus === "rate_limited" ||
+    activityStatus === "budget_stopped" ||
+    activityStatus === "unknown"
+  ) {
+    agent.activityStatus = activityStatus;
+  }
+  const runId = asString(payload.runId) ?? asString(payload.toolUseId);
+  if (runId) agent.runId = runId;
+  const sessionFile = asString(payload.sessionFile);
+  if (sessionFile) agent.sessionFile = sessionFile;
+  const transcriptRevision = asString(payload.transcriptRevision);
+  if (transcriptRevision) agent.transcriptRevision = transcriptRevision;
+  if (typeof payload.capabilities === "object" && payload.capabilities !== null) {
+    const capabilities = payload.capabilities as Record<string, unknown>;
+    const readOnlyReason = asString(capabilities.readOnlyReason);
+    agent.capabilities = {
+      message: capabilities.message === true,
+      revive: capabilities.revive === true,
+      cancel: capabilities.cancel === true,
+      kill: capabilities.kill === true,
+      readOnlyReason: readOnlyReason ?? null,
+    };
+  }
   const outputFile = asString(payload.outputFile);
   if (outputFile) agent.outputFile = outputFile;
   if (Array.isArray(payload.phases)) {
@@ -391,9 +514,26 @@ function fillMetadata(agent: MutableAgent, payload: Record<string, unknown>): vo
   }
 }
 
+function fillRunIdentity(
+  agent: MutableAgent,
+  payload: Record<string, unknown>,
+  turnId: string | null,
+): void {
+  if (asString(payload.runId) || asString(payload.toolUseId) || turnId === null) {
+    return;
+  }
+  agent.runId = turnId;
+}
+
 function applyStatus(agent: MutableAgent, status: RuntimeSubagentStatus, at: string): void {
   const wasTerminal = isTerminalSubagentStatus(agent.status);
   const isTerminal = isTerminalSubagentStatus(status);
+  if (
+    agent.lifecycle === "aborted" &&
+    (status === "pending" || status === "running" || status === "waiting" || status === "idle")
+  ) {
+    return;
+  }
   if (wasTerminal && isTerminal) {
     // Duplicate terminal events are idempotent: first write wins, timestamps
     // don't slide.
@@ -417,6 +557,32 @@ function applyStatus(agent: MutableAgent, status: RuntimeSubagentStatus, at: str
     agent.completedAt = at;
   }
   agent.status = status;
+  if (status === "pending") {
+    agent.lifecycle = agent.lifecycle === "unknown" ? "starting" : agent.lifecycle;
+    agent.assignmentStatus = "queued";
+  } else if (status === "running") {
+    agent.lifecycle = "running";
+    agent.assignmentStatus = "running";
+    agent.activityStatus = "working";
+  } else if (status === "waiting") {
+    agent.lifecycle = "running";
+    agent.assignmentStatus = "running";
+    agent.activityStatus = "waiting";
+  } else if (status === "idle") {
+    agent.lifecycle = "idle";
+    agent.assignmentStatus = "completed";
+    agent.activityStatus = "unknown";
+  } else if (status === "completed") {
+    agent.assignmentStatus = "completed";
+    agent.activityStatus = "unknown";
+  } else if (status === "failed") {
+    agent.assignmentStatus = "failed";
+    agent.activityStatus = "unknown";
+  } else if (status === "cancelled" || status === "interrupted") {
+    agent.assignmentStatus = "cancelled";
+    agent.activityStatus = "unknown";
+    if (status === "interrupted") agent.lifecycle = "aborted";
+  }
 }
 
 // Map, not object literal: payloads aren't schema-validated on the read
@@ -479,6 +645,7 @@ export function foldSubagentActivities(
         if (isBackgroundTaskActivity(payload)) break;
         const agent = getOrCreate(agents, taskId, payload, at);
         fillMetadata(agent, payload);
+        fillRunIdentity(agent, payload, activity.turnId);
         // Order-robustness: a start row arriving after a terminal state is a
         // late/out-of-order delivery and only fills metadata — it must not
         // reopen the run. Reactivation comes exclusively from explicit
@@ -488,8 +655,7 @@ export function foldSubagentActivities(
         // (review finding: a late start reopened a failed child).
         if (agent.activationCount === 0 && !isTerminalSubagentStatus(agent.status)) {
           agent.activationCount = 1;
-          agent.startedAt = agent.startedAt ?? at;
-          agent.status = "running";
+          applyStatus(agent, "running", at);
         } else if (agent.status === "idle") {
           applyStatus(agent, "running", at);
         }
@@ -508,6 +674,7 @@ export function foldSubagentActivities(
         if (!existed && isBackgroundTaskActivity(payload)) break;
         const agent = getOrCreate(agents, taskId, payload, at);
         fillMetadata(agent, payload);
+        fillRunIdentity(agent, payload, activity.turnId);
         if (agent.activationCount === 0) agent.activationCount = 1;
         const explicitStatus = asRuntimeStatus(payload.status);
         if (explicitStatus) {
@@ -546,6 +713,7 @@ export function foldSubagentActivities(
         if (!agents.has(taskId) && isBackgroundTaskActivity(payload)) break;
         const agent = getOrCreate(agents, taskId, payload, at);
         fillMetadata(agent, payload);
+        fillRunIdentity(agent, payload, activity.turnId);
         // A task first seen via task.updated (start row aged out) has run at
         // least once — zero activations would misreport "run 0" and let a
         // later start row treat it as never-started (review finding).
@@ -574,6 +742,7 @@ export function foldSubagentActivities(
         if (!agents.has(taskId) && isBackgroundTaskActivity(payload)) break;
         const agent = getOrCreate(agents, taskId, payload, at);
         fillMetadata(agent, payload);
+        fillRunIdentity(agent, payload, activity.turnId);
         if (agent.activationCount === 0) agent.activationCount = 1;
         // Already-terminal: status and timestamps are frozen (first write
         // wins, duplicates must not slide them) but the completion still
@@ -654,22 +823,12 @@ export function foldSubagentActivities(
   if (options?.sessionLive === false) {
     for (const agent of agents.values()) {
       if (isActiveSubagentStatus(agent.status)) {
-        agent.status = "interrupted";
-        agent.completedAt = agent.completedAt ?? agent.updatedAt;
+        applyStatus(agent, "interrupted", agent.updatedAt);
       }
     }
   }
 
-  let roster = Array.from(agents.values());
-  if (roster.length > ROSTER_LIMIT) {
-    // Prefer live, then waiting/idle, then newest settled.
-    const rank = (agent: MutableAgent): number =>
-      isActiveSubagentStatus(agent.status) ? 0 : agent.status === "idle" ? 1 : 2;
-    roster = roster
-      .slice()
-      .sort((a, b) => rank(a) - rank(b) || b.updatedAt.localeCompare(a.updatedAt))
-      .slice(0, ROSTER_LIMIT);
-  }
+  const roster = Array.from(agents.values());
 
   return roster.map((agent) => ({ ...agent }));
 }
@@ -689,9 +848,27 @@ export interface AgentPanelWorkflowGroup {
   readonly unphasedMembers: ReadonlyArray<RuntimeSubagent>;
 }
 
+export interface AgentConversationRun {
+  readonly id: string;
+  readonly title: string;
+  readonly agents: ReadonlyArray<RuntimeSubagent>;
+  readonly rootAgentIds: ReadonlyArray<string>;
+  readonly activeCount: number;
+  readonly settledCount: number;
+  readonly firstSeenAt: string;
+}
+
+export interface AgentConversationTreeRow {
+  readonly agent: RuntimeSubagent;
+  readonly depth: number;
+  readonly hasChildren: boolean;
+}
+
 export interface AgentPanelModel {
   readonly workflows: ReadonlyArray<AgentPanelWorkflowGroup>;
   readonly directAgents: ReadonlyArray<RuntimeSubagent>;
+  readonly runs: ReadonlyArray<AgentConversationRun>;
+  readonly allAgents: ReadonlyArray<RuntimeSubagent>;
   readonly runningCount: number;
   readonly waitingCount: number;
   readonly idleCount: number;
@@ -704,6 +881,8 @@ export interface AgentPanelModel {
 const EMPTY_PANEL_MODEL: AgentPanelModel = {
   workflows: [],
   directAgents: [],
+  runs: [],
+  allAgents: [],
   runningCount: 0,
   waitingCount: 0,
   idleCount: 0,
@@ -715,6 +894,106 @@ const EMPTY_PANEL_MODEL: AgentPanelModel = {
 
 export function emptyAgentPanelModel(): AgentPanelModel {
   return EMPTY_PANEL_MODEL;
+}
+
+function deriveConversationRuns(
+  source: ReadonlyArray<RuntimeSubagent>,
+): ReadonlyArray<AgentConversationRun> {
+  const byId = new Map(source.map((agent) => [agent.id, agent]));
+  const groups = new Map<string, RuntimeSubagent[]>();
+  for (const agent of source) {
+    let root = agent;
+    const seen = new Set([agent.id]);
+    while (root.parentAgentId !== null) {
+      const parent = byId.get(root.parentAgentId);
+      if (!parent || seen.has(parent.id)) {
+        break;
+      }
+      seen.add(parent.id);
+      root = parent;
+    }
+    const group = groups.get(root.runId) ?? [];
+    group.push(agent);
+    groups.set(root.runId, group);
+  }
+  return Array.from(groups, ([id, agents]) => {
+    const ordered = agents
+      .slice()
+      .sort(
+        (a, b) =>
+          a.firstSeenAt.localeCompare(b.firstSeenAt) ||
+          (a.agentIndex ?? 0) - (b.agentIndex ?? 0) ||
+          a.id.localeCompare(b.id),
+      );
+    const ids = new Set(ordered.map((agent) => agent.id));
+    const roots = ordered.filter(
+      (agent) => agent.parentAgentId === null || !ids.has(agent.parentAgentId),
+    );
+    const titleSource = roots.find((agent) => agent.kind === "workflow") ?? roots[0] ?? ordered[0]!;
+    return {
+      id,
+      title: titleSource.workflowName ?? titleSource.title,
+      agents: ordered,
+      rootAgentIds: roots.map((agent) => agent.id),
+      activeCount: ordered.filter((agent) => isActiveSubagentStatus(agent.status)).length,
+      settledCount: ordered.filter((agent) => isTerminalSubagentStatus(agent.status)).length,
+      firstSeenAt: ordered[0]!.firstSeenAt,
+    };
+  }).sort((a, b) => a.firstSeenAt.localeCompare(b.firstSeenAt) || a.id.localeCompare(b.id));
+}
+
+export function agentConversationBreadcrumb(
+  agents: ReadonlyArray<RuntimeSubagent>,
+  agentId: string,
+): ReadonlyArray<RuntimeSubagent> {
+  const byId = new Map(agents.map((agent) => [agent.id, agent]));
+  const selected = byId.get(agentId);
+  if (!selected) {
+    return [];
+  }
+  const reversed = [selected];
+  const seen = new Set([selected.id]);
+  let current = selected;
+  while (current.parentAgentId !== null) {
+    const parent = byId.get(current.parentAgentId);
+    if (!parent || seen.has(parent.id)) {
+      break;
+    }
+    reversed.push(parent);
+    seen.add(parent.id);
+    current = parent;
+  }
+  return reversed.reverse();
+}
+
+export function flattenAgentConversationRun(
+  run: AgentConversationRun,
+  expandedAgentIds: ReadonlySet<string>,
+): ReadonlyArray<AgentConversationTreeRow> {
+  const children = new Map<string, RuntimeSubagent[]>();
+  const byId = new Map(run.agents.map((agent) => [agent.id, agent]));
+  for (const agent of run.agents) {
+    if (agent.parentAgentId === null || !byId.has(agent.parentAgentId)) {
+      continue;
+    }
+    const siblings = children.get(agent.parentAgentId) ?? [];
+    siblings.push(agent);
+    children.set(agent.parentAgentId, siblings);
+  }
+  const rows: AgentConversationTreeRow[] = [];
+  const append = (agent: RuntimeSubagent, depth: number) => {
+    const descendants = children.get(agent.id) ?? [];
+    rows.push({ agent, depth, hasChildren: descendants.length > 0 });
+    if (!expandedAgentIds.has(agent.id)) {
+      return;
+    }
+    descendants.forEach((child) => append(child, depth + 1));
+  };
+  run.rootAgentIds.forEach((id) => {
+    const root = byId.get(id);
+    if (root) append(root, 0);
+  });
+  return rows;
 }
 
 /**
@@ -820,6 +1099,11 @@ export function deriveAgentPanelModel({
     return { workflow, phases, unphasedMembers };
   });
 
+  const allAgents = source
+    .slice()
+    .sort((a, b) => a.firstSeenAt.localeCompare(b.firstSeenAt) || a.id.localeCompare(b.id));
+  const runs = deriveConversationRuns(allAgents);
+
   let runningCount = 0;
   let waitingCount = 0;
   let idleCount = 0;
@@ -844,6 +1128,8 @@ export function deriveAgentPanelModel({
     directAgents: direct
       .slice()
       .sort((a, b) => a.firstSeenAt.localeCompare(b.firstSeenAt) || a.id.localeCompare(b.id)),
+    runs,
+    allAgents,
     runningCount,
     waitingCount,
     idleCount,

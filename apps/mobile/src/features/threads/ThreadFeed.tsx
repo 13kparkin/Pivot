@@ -819,6 +819,42 @@ function useMarkdownStyles(onLinkPress: (href: string) => void): MarkdownStyleSe
   ]);
 }
 
+export function ThreadMarkdownText(props: {
+  readonly text: string;
+  readonly skills?: ReadonlyArray<SelectableMarkdownSkill>;
+  readonly onLinkPress?: (href: string) => void;
+}) {
+  const onLinkPress = useCallback(
+    (href: string) => {
+      if (props.onLinkPress) {
+        props.onLinkPress(href);
+        return;
+      }
+      void Linking.openURL(href);
+    },
+    [props.onLinkPress],
+  );
+  const styles = useMarkdownStyles(onLinkPress).assistant;
+
+  return hasNativeSelectableMarkdownText() ? (
+    <SelectableMarkdownText
+      markdown={props.text}
+      skills={props.skills}
+      textStyle={styles.nativeTextStyle}
+      onLinkPress={onLinkPress}
+    />
+  ) : (
+    <Markdown
+      options={{ gfm: true }}
+      renderers={styles.renderers}
+      styles={styles.styles}
+      theme={styles.theme}
+    >
+      {props.text}
+    </Markdown>
+  );
+}
+
 function renderFeedEntry(
   info: { item: ThreadFeedEntry; index: number },
   props: Pick<ThreadFeedProps, "environmentId" | "skills"> & {

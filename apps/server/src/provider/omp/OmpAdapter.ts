@@ -33,6 +33,8 @@ import {
   RuntimeItemId,
   RuntimeRequestId,
   type RuntimeTaskStatus,
+  type RuntimeSubagentActivityStatus,
+  type RuntimeSubagentAssignmentStatus,
   type ServerProviderModel,
   type ServerProviderSlashCommand,
   ProviderDriverKind,
@@ -42,6 +44,7 @@ import {
   type ThreadId,
   TurnId,
 } from "@t3tools/contracts";
+import type { ServerOmpAgentCapabilities, ServerOmpAgentChatEntry } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
 import * as DateTime from "effect/DateTime";
@@ -77,6 +80,256 @@ const isOmpSpawnError = Schema.is(OmpSpawnError);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+const OMP_AGENT_RPC_READ_ONLY_REASON =
+  "This OMP version does not expose agent-targeted messaging over RPC.";
+
+const OMP_AGENT_READ_ONLY_CAPABILITIES: ServerOmpAgentCapabilities = {
+  message: false,
+  revive: false,
+  cancel: false,
+  kill: false,
+  readOnlyReason: OMP_AGENT_RPC_READ_ONLY_REASON,
+};
+
+function transcriptText(value: unknown): string {
+  if (typeof value === "string") {
+    return value;
+  }
+  if (Array.isArray(value)) {
+    return value.map(transcriptText).filter(Boolean).join("");
+  }
+  if (!isRecord(value)) {
+    return value === null || value === undefined ? "" : String(value);
+  }
+  if (typeof value.text === "string") {
+    return value.text;
+  }
+  if (typeof value.content === "string" || Array.isArray(value.content)) {
+    return transcriptText(value.content);
+  }
+  return "";
+}
+
+function transcriptRole(value: unknown): ServerOmpAgentChatEntry["role"] {
+  switch (value) {
+    case "user":
+    case "assistant":
+    case "system":
+    case "tool":
+    case "custom":
+      return value;
+    default:
+      return "unknown";
+  }
+}
+
+function transcriptTimestamp(message: Record<string, unknown>): string | undefined {
+  const candidate =
+    typeof message.createdAt === "string"
+      ? message.createdAt
+      : typeof message.timestamp === "string"
+        ? message.timestamp
+        : undefined;
+  return candidate !== undefined && !Number.isNaN(Date.parse(candidate)) ? candidate : undefined;
+}
+
+function normalizeTranscriptMessages(
+  messages: ReadonlyArray<unknown>,
+  fromByte: number,
+): ReadonlyArray<ServerOmpAgentChatEntry> {
+  const entries: ServerOmpAgentChatEntry[] = [];
+  messages.forEach((message, messageIndex) => {
+    const baseId = `${fromByte}:${messageIndex}`;
+    if (!isRecord(message)) {
+      entries.push({
+        id: baseId,
+        kind: "message",
+        role: "unknown",
+        text: transcriptText(message),
+      });
+      return;
+    }
+
+    const role = transcriptRole(message.role);
+    const createdAt = transcriptTimestamp(message);
+    const content = Array.isArray(message.content) ? message.content : null;
+    const toolParts =
+      content?.filter(
+        (part) =>
+          isRecord(part) &&
+          (part.type === "toolCall" ||
+            part.type === "tool_use" ||
+            part.type === "toolResult" ||
+            part.type === "tool_result"),
+      ) ?? [];
+
+    if (toolParts.length > 0) {
+      const prose = content
+        ?.filter((part) => !toolParts.includes(part))
+        .map(transcriptText)
+        .filter(Boolean)
+        .join("");
+      if (prose) {
+        entries.push({
+          id: `${baseId}:text`,
+          kind: "message",
+          role,
+          text: prose,
+          ...(createdAt === undefined ? {} : { createdAt }),
+        });
+      }
+      toolParts.forEach((part, partIndex) => {
+        const record = part as Record<string, unknown>;
+        const toolName =
+          typeof record.name === "string"
+            ? record.name
+            : typeof message.toolName === "string"
+              ? message.toolName
+              : undefined;
+        const toolCallId =
+          typeof record.id === "string"
+            ? record.id
+            : typeof record.toolCallId === "string"
+              ? record.toolCallId
+              : undefined;
+        const toolInput = record.input ?? record.arguments;
+        const toolOutput = record.output ?? record.result ?? record.content;
+        entries.push({
+          id: `${baseId}:tool:${partIndex}`,
+          kind: "tool",
+          role: "tool",
+          text: transcriptText(toolOutput) || transcriptText(record),
+          ...(toolName === undefined ? {} : { toolName }),
+          ...(toolCallId === undefined ? {} : { toolCallId }),
+          ...(toolInput === undefined ? {} : { toolInput }),
+          ...(toolOutput === undefined ? {} : { toolOutput }),
+          ...(record.isError === true ? { isError: true } : {}),
+          ...(createdAt === undefined ? {} : { createdAt }),
+        });
+      });
+      return;
+    }
+
+    const toolName =
+      typeof message.toolName === "string"
+        ? message.toolName
+        : typeof message.name === "string" && role === "tool"
+          ? message.name
+          : undefined;
+    const toolCallId =
+      typeof message.toolCallId === "string"
+        ? message.toolCallId
+        : typeof message.tool_call_id === "string"
+          ? message.tool_call_id
+          : undefined;
+    const kind =
+      role === "tool" || toolName !== undefined ? ("tool" as const) : ("message" as const);
+    const text =
+      transcriptText(message.content) ||
+      transcriptText(message.text) ||
+      (kind === "tool" ? transcriptText(message.output ?? message.result) : "");
+    entries.push({
+      id: baseId,
+      kind,
+      role,
+      text,
+      ...(toolName === undefined ? {} : { toolName }),
+      ...(toolCallId === undefined ? {} : { toolCallId }),
+      ...(message.input === undefined ? {} : { toolInput: message.input }),
+      ...(message.output === undefined && message.result === undefined
+        ? {}
+        : { toolOutput: message.output ?? message.result }),
+      ...(message.isError === true ? { isError: true } : {}),
+      ...(createdAt === undefined ? {} : { createdAt }),
+    });
+  });
+  return entries;
+}
+
+function nonNegativeNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
+}
+
+function ompProgressUsage(progress: Record<string, unknown>): Record<string, number> | undefined {
+  const usage = isRecord(progress.usage) ? progress.usage : progress;
+  const inputTokens =
+    nonNegativeNumber(usage.inputTokens) ??
+    nonNegativeNumber(usage.input) ??
+    nonNegativeNumber(usage.promptTokens);
+  const cachedInputTokens =
+    nonNegativeNumber(usage.cachedInputTokens) ??
+    nonNegativeNumber(usage.cacheReadTokens) ??
+    nonNegativeNumber(usage.cacheRead);
+  const outputTokens =
+    nonNegativeNumber(usage.outputTokens) ??
+    nonNegativeNumber(usage.output) ??
+    nonNegativeNumber(usage.completionTokens);
+  const reasoningOutputTokens =
+    nonNegativeNumber(usage.reasoningOutputTokens) ?? nonNegativeNumber(usage.reasoningTokens);
+  const explicitTotal = nonNegativeNumber(usage.totalTokens) ?? nonNegativeNumber(usage.tokens);
+  const totalTokens =
+    explicitTotal ??
+    (inputTokens !== undefined || outputTokens !== undefined
+      ? (inputTokens ?? 0) + (outputTokens ?? 0)
+      : undefined);
+  if (totalTokens === undefined) {
+    return undefined;
+  }
+  const toolUses =
+    nonNegativeNumber(progress.toolUses) ??
+    nonNegativeNumber(progress.toolCount) ??
+    (Array.isArray(progress.recentTools) ? progress.recentTools.length : undefined);
+  const durationMs =
+    nonNegativeNumber(progress.durationMs) ?? nonNegativeNumber(progress.elapsedMs);
+  return {
+    totalTokens,
+    ...(inputTokens === undefined ? {} : { inputTokens }),
+    ...(cachedInputTokens === undefined ? {} : { cachedInputTokens }),
+    ...(outputTokens === undefined ? {} : { outputTokens }),
+    ...(reasoningOutputTokens === undefined ? {} : { reasoningOutputTokens }),
+    ...(toolUses === undefined ? {} : { toolUses }),
+    ...(durationMs === undefined ? {} : { durationMs }),
+  };
+}
+
+function ompAssignmentStatus(status: unknown): RuntimeSubagentAssignmentStatus | undefined {
+  switch (status) {
+    case "pending":
+      return "queued";
+    case "running":
+    case "completed":
+    case "failed":
+    case "cancelled":
+      return status;
+    case "waiting":
+      return "running";
+    case "idle":
+      return "completed";
+    case "aborted":
+    case "interrupted":
+      return "cancelled";
+    default:
+      return undefined;
+  }
+}
+
+function ompActivityStatus(progress: Record<string, unknown>): RuntimeSubagentActivityStatus {
+  if (progress.rateLimited === true || progress.status === "rate_limited") {
+    return "rate_limited";
+  }
+  const retryCount = nonNegativeNumber(progress.retryCount);
+  if (retryCount !== undefined && retryCount > 0) {
+    return "retrying";
+  }
+  if (progress.status === "waiting" || progress.waiting === true) {
+    return "waiting";
+  }
+  if (progress.status === "budget_stopped" || progress.budgetStopped === true) {
+    return "budget_stopped";
+  }
+  return "working";
 }
 
 /** Normalize omp Rule condition/scope fields (string or string[]) to string[]. */
@@ -180,7 +433,8 @@ export interface OmpSubagentTranscriptPage {
   readonly fromByte: number;
   readonly nextByte: number;
   readonly reset: boolean;
-  readonly messages: ReadonlyArray<unknown>;
+  readonly entries: ReadonlyArray<ServerOmpAgentChatEntry>;
+  readonly capabilities: ServerOmpAgentCapabilities;
 }
 
 /**
@@ -201,6 +455,7 @@ export class OmpAdapter {
   readonly #randomUUID: Effect.Effect<string>;
   readonly #resolveRoleModel: OmpResolveRoleModel;
   readonly #capabilitiesService: OmpAdapterOptions["capabilitiesService"];
+  readonly #subagentRevision = { current: 0 };
 
   public constructor(
     runtime: OmpRpcClient,
@@ -355,6 +610,7 @@ export class OmpAdapter {
           level: "progress",
         })
         .pipe(Effect.mapError((cause) => mapOmpSpawnError(input.threadId, cause)));
+      yield* this.#hydrateSubagents(session);
       yield* this.#applyModelSelection(input.threadId, input.modelSelection?.model);
       return snapshot;
     });
@@ -466,12 +722,14 @@ export class OmpAdapter {
       }
       const data = response.data;
       const messages = Array.isArray(data.messages) ? data.messages : [];
+      const responseFromByte = typeof data.fromByte === "number" ? data.fromByte : 0;
       return {
         sessionFile: typeof data.sessionFile === "string" ? data.sessionFile : "",
-        fromByte: typeof data.fromByte === "number" ? data.fromByte : 0,
+        fromByte: responseFromByte,
         nextByte: typeof data.nextByte === "number" ? data.nextByte : 0,
         reset: data.reset === true,
-        messages,
+        entries: normalizeTranscriptMessages(messages, responseFromByte),
+        capabilities: OMP_AGENT_READ_ONLY_CAPABILITIES,
       } satisfies OmpSubagentTranscriptPage;
     });
   }
@@ -498,6 +756,10 @@ export class OmpAdapter {
       }
       yield* this.#send(threadId, { type: "set_subagent_subscription", level });
     });
+  }
+
+  public getSubagentCapabilities(_threadId: ThreadId, _subagentId: string) {
+    return Effect.succeed(OMP_AGENT_READ_ONLY_CAPABILITIES);
   }
 
   public readThread(threadId: ThreadId) {
@@ -877,7 +1139,67 @@ export class OmpAdapter {
     if (frame.type === "subagent_progress") {
       return this.#onSubagentProgress(session, frame);
     }
+    if (frame.type === "subagent_event") {
+      return this.#onSubagentEvent(session, frame);
+    }
     return Effect.void;
+  }
+
+  #hydrateSubagents(session: LiveAdapterSession): Effect.Effect<void> {
+    return Effect.gen({ self: this }, function* () {
+      const response = yield* this.#send(session.threadId, { type: "get_subagents" });
+      if (!isRecord(response) || !isRecord(response.data)) {
+        return;
+      }
+      const snapshots = Array.isArray(response.data.subagents)
+        ? response.data.subagents
+        : Array.isArray(response.data.agents)
+          ? response.data.agents
+          : [];
+      yield* Effect.forEach(
+        snapshots,
+        (snapshot) => {
+          if (!isRecord(snapshot) || typeof snapshot.id !== "string") {
+            return Effect.void;
+          }
+          const description =
+            typeof snapshot.description === "string"
+              ? snapshot.description
+              : typeof snapshot.assignment === "string"
+                ? snapshot.assignment
+                : typeof snapshot.task === "string"
+                  ? snapshot.task
+                  : snapshot.id;
+          return Effect.all(
+            [
+              this.#onSubagentLifecycle(session, {
+                payload: {
+                  ...snapshot,
+                  description,
+                  status: "started",
+                },
+              }),
+              this.#onSubagentProgress(session, {
+                payload: {
+                  ...snapshot,
+                  task: description,
+                  progress: {
+                    ...(isRecord(snapshot.progress) ? snapshot.progress : {}),
+                    id: snapshot.id,
+                    task: description,
+                    agent: snapshot.agent,
+                    index: snapshot.index,
+                    status: snapshot.status === "active" ? "running" : snapshot.status,
+                  },
+                },
+              }),
+            ],
+            { discard: true },
+          );
+        },
+        { discard: true },
+      );
+    }).pipe(Effect.catch(() => Effect.void));
   }
 
   #onSubagentLifecycle(
@@ -896,12 +1218,19 @@ export class OmpAdapter {
         : undefined;
     const toolUseId =
       typeof payload.parentToolCallId === "string" ? payload.parentToolCallId : undefined;
+    const parentAgentId =
+      typeof payload.parentAgentId === "string" ? payload.parentAgentId : undefined;
+    const sessionFile = typeof payload.sessionFile === "string" ? payload.sessionFile : undefined;
     const agentIndex = typeof payload.index === "number" ? payload.index : undefined;
     const linkage = {
       ...(role === undefined ? {} : { role }),
       ...(description === undefined ? {} : { title: description }),
       ...(toolUseId === undefined ? {} : { toolUseId }),
+      ...(parentAgentId === undefined ? {} : { parentAgentId }),
+      ...(sessionFile === undefined ? {} : { sessionFile }),
       ...(agentIndex === undefined ? {} : { agentIndex }),
+      runId: toolUseId ?? session.turnId ?? payload.id,
+      capabilities: OMP_AGENT_READ_ONLY_CAPABILITIES,
     };
     if (payload.status === "started") {
       session.liveSubagents.add(payload.id);
@@ -913,6 +1242,9 @@ export class OmpAdapter {
           taskId,
           ...(description === undefined ? {} : { description }),
           ...linkage,
+          lifecycle: "running",
+          assignmentStatus: "running",
+          activityStatus: "working",
         },
       });
     }
@@ -936,6 +1268,12 @@ export class OmpAdapter {
         taskId,
         status,
         ...linkage,
+        lifecycle: status === "stopped" ? "aborted" : "unknown",
+        assignmentStatus:
+          status === "completed" ? "completed" : status === "failed" ? "failed" : "cancelled",
+        ...(typeof payload.result === "string" ? { summary: payload.result } : {}),
+        ...(typeof payload.error === "string" ? { error: payload.error } : {}),
+        ...(typeof payload.outputFile === "string" ? { outputFile: payload.outputFile } : {}),
       },
     });
   }
@@ -966,10 +1304,26 @@ export class OmpAdapter {
           : undefined;
     const toolUseId =
       typeof payload.parentToolCallId === "string" ? payload.parentToolCallId : undefined;
+    const parentAgentId =
+      typeof payload.parentAgentId === "string" ? payload.parentAgentId : undefined;
     const lastToolName =
       typeof progress.currentTool === "string" ? progress.currentTool : undefined;
     const status = runtimeTaskStatusFromOmpProgress(progress.status);
     const agentIndex = typeof progress.index === "number" ? progress.index : undefined;
+    const assignmentStatus = ompAssignmentStatus(progress.status);
+    const typedUsage = ompProgressUsage(progress);
+    const summary =
+      typeof progress.message === "string"
+        ? progress.message
+        : typeof progress.statusText === "string"
+          ? progress.statusText
+          : undefined;
+    const progressSessionFile =
+      typeof payload.sessionFile === "string"
+        ? payload.sessionFile
+        : typeof progress.sessionFile === "string"
+          ? progress.sessionFile
+          : undefined;
     return this.#emit({
       type: "task.progress",
       threadId: session.threadId,
@@ -982,6 +1336,64 @@ export class OmpAdapter {
         ...(role === undefined ? {} : { role }),
         ...(toolUseId === undefined ? {} : { toolUseId }),
         ...(agentIndex === undefined ? {} : { agentIndex }),
+        runId: toolUseId ?? session.turnId ?? progress.id,
+        lifecycle:
+          status === "idle" || status === "completed"
+            ? "idle"
+            : status === "interrupted" || status === "cancelled"
+              ? "aborted"
+              : "running",
+        ...(assignmentStatus === undefined ? {} : { assignmentStatus }),
+        activityStatus: ompActivityStatus(progress),
+        capabilities: OMP_AGENT_READ_ONLY_CAPABILITIES,
+        ...(parentAgentId === undefined ? {} : { parentAgentId }),
+        ...(progressSessionFile === undefined ? {} : { sessionFile: progressSessionFile }),
+        ...(summary === undefined ? {} : { summary }),
+        ...(typedUsage === undefined ? {} : { typedUsage }),
+        ...(typeof progress.model === "string" ? { model: progress.model } : {}),
+        ...(typeof progress.effort === "string" ? { effort: progress.effort } : {}),
+      },
+    });
+  }
+
+  #onSubagentEvent(
+    session: LiveAdapterSession,
+    frame: Record<string, unknown>,
+  ): Effect.Effect<void> {
+    const payload = frame.payload;
+    if (!isRecord(payload)) {
+      return Effect.void;
+    }
+    const event = isRecord(payload.event) ? payload.event : payload;
+    const eventType = typeof event.type === "string" ? event.type : "";
+    if (
+      eventType !== "message_end" &&
+      eventType !== "tool_execution_end" &&
+      eventType !== "agent_end"
+    ) {
+      return Effect.void;
+    }
+    const agentId =
+      typeof payload.id === "string"
+        ? payload.id
+        : typeof payload.subagentId === "string"
+          ? payload.subagentId
+          : typeof frame.subagentId === "string"
+            ? frame.subagentId
+            : undefined;
+    if (agentId === undefined) {
+      return Effect.void;
+    }
+    return this.#emit({
+      type: "task.updated",
+      threadId: session.threadId,
+      turnId: session.turnId,
+      payload: {
+        taskId: RuntimeTaskId.make(agentId),
+        transcriptRevision:
+          typeof event.id === "string"
+            ? event.id
+            : `${eventType}:${++this.#subagentRevision.current}`,
       },
     });
   }
@@ -1851,11 +2263,14 @@ function runtimeTaskStatusFromOmpProgress(status: unknown): RuntimeTaskStatus | 
   switch (status) {
     case "pending":
     case "running":
+    case "waiting":
+    case "idle":
     case "completed":
     case "failed":
+    case "cancelled":
       return status;
     case "aborted":
-      return "cancelled";
+      return "interrupted";
     default:
       return undefined;
   }

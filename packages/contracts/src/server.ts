@@ -628,6 +628,29 @@ export class ServerOmpLoginError extends Schema.TaggedErrorClass<ServerOmpLoginE
   }
 }
 
+export const ServerOmpAgentChatEntry = Schema.Struct({
+  id: TrimmedNonEmptyString,
+  kind: Schema.Literals(["message", "tool"]),
+  role: Schema.Literals(["user", "assistant", "system", "tool", "custom", "unknown"]),
+  text: Schema.String,
+  toolName: Schema.optionalKey(TrimmedNonEmptyString),
+  toolCallId: Schema.optionalKey(TrimmedNonEmptyString),
+  toolInput: Schema.optionalKey(Schema.Unknown),
+  toolOutput: Schema.optionalKey(Schema.Unknown),
+  isError: Schema.optionalKey(Schema.Boolean),
+  createdAt: Schema.optionalKey(IsoDateTime),
+});
+export type ServerOmpAgentChatEntry = typeof ServerOmpAgentChatEntry.Type;
+
+export const ServerOmpAgentCapabilities = Schema.Struct({
+  message: Schema.Boolean,
+  revive: Schema.Boolean,
+  cancel: Schema.Boolean,
+  kill: Schema.Boolean,
+  readOnlyReason: Schema.optionalKey(TrimmedNonEmptyString),
+});
+export type ServerOmpAgentCapabilities = typeof ServerOmpAgentCapabilities.Type;
+
 export const ServerOmpGetSubagentMessagesInput = Schema.Struct({
   threadId: ThreadId,
   subagentId: TrimmedNonEmptyString,
@@ -637,10 +660,11 @@ export type ServerOmpGetSubagentMessagesInput = typeof ServerOmpGetSubagentMessa
 
 export const ServerOmpGetSubagentMessagesResult = Schema.Struct({
   sessionFile: Schema.String,
-  fromByte: Schema.Number,
-  nextByte: Schema.Number,
+  fromByte: NonNegativeInt,
+  nextByte: NonNegativeInt,
   reset: Schema.Boolean,
-  messages: Schema.Array(Schema.Unknown),
+  entries: Schema.Array(ServerOmpAgentChatEntry),
+  capabilities: ServerOmpAgentCapabilities,
 });
 export type ServerOmpGetSubagentMessagesResult = typeof ServerOmpGetSubagentMessagesResult.Type;
 
@@ -699,7 +723,7 @@ export class ServerProviderUpdateError extends Schema.TaggedErrorClass<ServerPro
 
 export const ServerSelfUpdateInput = Schema.Struct({
   /** Exact npm version of the `t3` package to install (never a dist-tag, so
-      the server and the acknowledging client agree on what was requested). */
+     the server and the acknowledging client agree on what was requested). */
   targetVersion: TrimmedNonEmptyString,
 });
 export type ServerSelfUpdateInput = typeof ServerSelfUpdateInput.Type;

@@ -46,6 +46,7 @@ export class FakeOmpRpc {
         readonly messages: ReadonlyArray<object>;
       }
     | undefined = undefined;
+  subagents: ReadonlyArray<Record<string, unknown>> = [];
   branchMessages: ReadonlyArray<{ readonly entryId: string; readonly text?: string }> = [];
   sessionStats:
     | {
@@ -143,6 +144,13 @@ export class FakeOmpRpc {
       return this.getStateGate === undefined
         ? Effect.succeed(response)
         : Deferred.await(this.getStateGate).pipe(Effect.as(response));
+    }
+    if (command.type === "get_subagents") {
+      return Effect.succeed({
+        type: "response",
+        success: true,
+        data: { subagents: this.subagents },
+      });
     }
     if (command.type === "get_subagent_messages") {
       return Effect.succeed({

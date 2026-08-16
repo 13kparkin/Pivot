@@ -390,6 +390,25 @@ const makeWsRpcLayer = (
       const serverEnvironment = yield* ServerEnvironment.ServerEnvironment;
       const backgroundPolicy = yield* BackgroundPolicy.BackgroundPolicy;
       const rpcClientIds = yield* Ref.make(new Set<RpcClientId>());
+      const ompSubagentSubscriberId = yield* crypto.randomUUIDv4.pipe(Effect.orDie);
+      const ompSubagentLeasedThreads = yield* Ref.make(new Set<ThreadId>());
+      yield* Effect.addFinalizer(() =>
+        Ref.get(ompSubagentLeasedThreads).pipe(
+          Effect.flatMap((threadIds) =>
+            Effect.forEach(
+              threadIds,
+              (threadId) =>
+                providerService.ompSetSubagentSubscription({
+                  threadId,
+                  subscriberId: ompSubagentSubscriberId,
+                  level: "progress",
+                }),
+              { discard: true },
+            ),
+          ),
+          Effect.ignore,
+        ),
+      );
       yield* Effect.addFinalizer(() =>
         Ref.get(rpcClientIds).pipe(
           Effect.flatMap((clientIds) =>
@@ -1547,9 +1566,21 @@ const makeWsRpcLayer = (
             providerService
               .ompSetSubagentSubscription({
                 threadId: input.threadId,
+                subscriberId: ompSubagentSubscriberId,
                 level: input.level,
               })
               .pipe(
+                Effect.tap(() =>
+                  Ref.update(ompSubagentLeasedThreads, (threadIds) => {
+                    const next = new Set(threadIds);
+                    if (input.level === "events") {
+                      next.add(input.threadId);
+                    } else {
+                      next.delete(input.threadId);
+                    }
+                    return next;
+                  }),
+                ),
                 Effect.mapError(
                   (cause) =>
                     new ServerOmpHubError({

@@ -6,11 +6,13 @@ import {
   ServerProvider,
   ServerProviders,
   ServerUpsertKeybindingResult,
+  ServerOmpGetSubagentMessagesResult,
 } from "./server.ts";
 
 const decodeServerProvider = Schema.decodeUnknownSync(ServerProvider);
 const decodeServerProviders = Schema.decodeUnknownSync(ServerProviders);
 const decodeUpsertKeybindingResult = Schema.decodeUnknownSync(ServerUpsertKeybindingResult);
+const decodeSubagentMessagesResult = Schema.decodeUnknownSync(ServerOmpGetSubagentMessagesResult);
 const decodeAvailableEditors = Schema.decodeUnknownSync(ServerConfig.fields.availableEditors);
 
 const baseProviderSnapshot = {
@@ -24,6 +26,46 @@ const baseProviderSnapshot = {
   checkedAt: "2026-04-10T00:00:00.000Z",
   models: [],
 };
+
+describe("ServerOmpGetSubagentMessagesResult", () => {
+  it("decodes cursor metadata, semantic transcript entries, and capabilities", () => {
+    const parsed = decodeSubagentMessagesResult({
+      sessionFile: "/tmp/agent-1.jsonl",
+      fromByte: 10,
+      nextByte: 42,
+      reset: false,
+      entries: [
+        {
+          id: "10:0",
+          kind: "message",
+          role: "assistant",
+          text: "Done",
+          createdAt: "2026-08-16T00:00:00.000Z",
+        },
+        {
+          id: "10:1",
+          kind: "tool",
+          role: "tool",
+          text: "read src/index.ts",
+          toolName: "read",
+          toolInput: { path: "src/index.ts" },
+        },
+      ],
+      capabilities: {
+        message: false,
+        revive: false,
+        cancel: false,
+        kill: false,
+        readOnlyReason: "This OMP version does not expose agent-targeted messaging over RPC.",
+      },
+    });
+
+    expect(parsed.fromByte).toBe(10);
+    expect(parsed.nextByte).toBe(42);
+    expect(parsed.entries[1]?.kind).toBe("tool");
+    expect(parsed.capabilities.message).toBe(false);
+  });
+});
 
 describe("ServerProvider", () => {
   it("defaults capability arrays when decoding provider snapshots", () => {

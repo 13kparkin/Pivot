@@ -548,6 +548,45 @@ export function classifyTaskAgentKind(input: {
   return nonAgentType ? "background" : "agent";
 }
 
+export const RuntimeSubagentLifecycle = Schema.Literals([
+  "starting",
+  "running",
+  "idle",
+  "parked",
+  "aborted",
+  "unknown",
+]);
+export type RuntimeSubagentLifecycle = typeof RuntimeSubagentLifecycle.Type;
+
+export const RuntimeSubagentAssignmentStatus = Schema.Literals([
+  "queued",
+  "running",
+  "completed",
+  "failed",
+  "cancelled",
+  "unknown",
+]);
+export type RuntimeSubagentAssignmentStatus = typeof RuntimeSubagentAssignmentStatus.Type;
+
+export const RuntimeSubagentActivityStatus = Schema.Literals([
+  "working",
+  "waiting",
+  "retrying",
+  "rate_limited",
+  "budget_stopped",
+  "unknown",
+]);
+export type RuntimeSubagentActivityStatus = typeof RuntimeSubagentActivityStatus.Type;
+
+export const RuntimeSubagentCapabilities = Schema.Struct({
+  message: Schema.Boolean,
+  revive: Schema.Boolean,
+  cancel: Schema.Boolean,
+  kill: Schema.Boolean,
+  readOnlyReason: Schema.optional(TrimmedNonEmptyStringSchema),
+});
+export type RuntimeSubagentCapabilities = typeof RuntimeSubagentCapabilities.Type;
+
 /**
  * Optional agent-identity linkage carried on every task lifecycle payload.
  * Repeated on progress and terminal rows (not just start) so client folds can
@@ -577,6 +616,16 @@ const taskAgentLinkageFields = {
   effort: Schema.optional(TrimmedNonEmptyStringSchema),
   toolUseId: Schema.optional(TrimmedNonEmptyStringSchema),
   parentAgentId: Schema.optional(TrimmedNonEmptyStringSchema),
+  /** Stable provider run identity used to group agents launched together. */
+  runId: Schema.optional(TrimmedNonEmptyStringSchema),
+  /** Provider-owned transcript file identity, never a client path. */
+  sessionFile: Schema.optional(TrimmedNonEmptyStringSchema),
+  /** Monotonic or opaque provider revision used to invalidate transcript cursors. */
+  transcriptRevision: Schema.optional(TrimmedNonEmptyStringSchema),
+  lifecycle: Schema.optional(RuntimeSubagentLifecycle),
+  assignmentStatus: Schema.optional(RuntimeSubagentAssignmentStatus),
+  activityStatus: Schema.optional(RuntimeSubagentActivityStatus),
+  capabilities: Schema.optional(RuntimeSubagentCapabilities),
   workflowName: Schema.optional(TrimmedNonEmptyStringSchema),
   agentIndex: Schema.optional(NonNegativeInt),
   phaseIndex: Schema.optional(NonNegativeInt),
