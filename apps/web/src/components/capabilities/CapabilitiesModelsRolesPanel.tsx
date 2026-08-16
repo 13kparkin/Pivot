@@ -4,7 +4,7 @@ import { useAtomRefresh, useAtomValue } from "@effect/atom-react";
 import type { OmpCapabilityScope, ProviderInstanceId } from "@t3tools/contracts";
 import * as Option from "effect/Option";
 import { AsyncResult, Atom } from "effect/unstable/reactivity";
-import { LoaderIcon, PlusIcon, Trash2Icon } from "lucide-react";
+import { LoaderIcon, PlusIcon, SearchIcon, Trash2Icon } from "lucide-react";
 import { useMemo, useState } from "react";
 
 import { useActiveEnvironmentId } from "../../state/entities";
@@ -17,7 +17,6 @@ import {
   applyProviderInstanceSettings,
   deriveProviderInstanceEntries,
   sortProviderInstanceEntries,
-  type ProviderInstanceEntry,
 } from "../../providerInstances";
 import { useSettingsProjectGroups } from "../settings/ProjectSettingsPanel";
 import { SettingsPageContainer, SettingsRow, SettingsSection } from "../settings/settingsLayout";
@@ -32,6 +31,9 @@ import { buildWriteSettingInput } from "./CapabilitiesSettingsPanel.logic";
 const EMPTY_SNAPSHOT_ATOM = Atom.make(AsyncResult.initial<never, never>(false)).pipe(
   Atom.withLabel("web-capabilities:snapshot:models-roles:empty"),
 );
+
+const TABLE_HEAD =
+  "px-3 py-2 text-left text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground/70";
 
 /**
  * The omp `modelRoles` record: one entry per role (`review`, `plan`, …), each
@@ -73,6 +75,7 @@ export function CapabilitiesModelsRolesPanel({
 
   const [newRoleName, setNewRoleName] = useState("");
   const [newRoleModel, setNewRoleModel] = useState("");
+  const [modelQuery, setModelQuery] = useState("");
 
   const snapshotAtom =
     environmentId === null
@@ -88,6 +91,39 @@ export function CapabilitiesModelsRolesPanel({
     () => (snapshot === null ? {} : modelRolesFromSettingsEntries(snapshot.settings.entries)),
     [snapshot],
   );
+
+  /** Every available model across instances, for the Models catalog. */
+  const allModels = useMemo(() => {
+    const rows: Array<{
+      readonly slug: string;
+      readonly name: string;
+      readonly shortName: string | undefined;
+      readonly provider: string;
+    }> = [];
+    for (const entry of instanceEntries) {
+      const options = modelOptionsByInstance.get(entry.instanceId) ?? [];
+      for (const option of options) {
+        rows.push({
+          slug: option.slug,
+          name: option.name,
+          shortName: option.shortName,
+          provider: entry.displayName || entry.driverKind,
+        });
+      }
+    }
+    return rows;
+  }, [instanceEntries, modelOptionsByInstance]);
+
+  const filteredModels = useMemo(() => {
+    const query = modelQuery.trim().toLowerCase();
+    if (query.length === 0) return allModels;
+    return allModels.filter(
+      (model) =>
+        model.name.toLowerCase().includes(query) ||
+        model.slug.toLowerCase().includes(query) ||
+        model.provider.toLowerCase().includes(query),
+    );
+  }, [allModels, modelQuery]);
 
   /** The instance whose options contain this model slug, or the default. */
   const instanceForModel = (slug: string): ProviderInstanceId | null => {
@@ -203,101 +239,173 @@ export function CapabilitiesModelsRolesPanel({
   const roleEntries = Object.entries(roles).sort(([a], [b]) => a.localeCompare(b));
 
   return (
-    <SettingsPageContainer className="max-w-4xl">
-      <SettingsSection title="Models & roles">
+    <SettingsPageContainer className="max-w-5xl">
+      <SettingsSection title="Scope">
         <SettingsRow
           title="Scope"
           description={
             projectLocked
-              ? "Roles apply to this project's .omp config."
-              : "Roles apply to the global omp agent directory."
+              ? "Models and roles apply to this project's .omp config."
+              : "Models and roles apply to the global omp agent directory."
           }
-        />
-        <SettingsRow
-          title="What roles do"
-          description="A role maps a name (review, plan, …) to a model. The review agent uses the 'review' role when it is set; otherwise it falls back to your current model."
         />
       </SettingsSection>
 
+      <SettingsSection title="Models">
+        <SettingsRow
+          title="Available models"
+          description="Every model your connected providers expose. Assign one to a role below."
+        />
+        <div className="relative max-w-xs">
+          <SearchIcon className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground/70" />
+          <Input
+            size="sm"
+            type="search"
+            value={modelQuery}
+            onChange={(event) => setModelQuery(event.currentTarget.value)}
+            placeholder="Search models"
+            aria-label="Search models"
+            className="h-8 pl-8"
+          />
+        </div>
+        <div className="mt-3 overflow-x-auto">
+          <table className="w-full text-left text-xs">
+            <thead className="border-b border-border/60">
+              <tr>
+                <th className={TABLE_HEAD}>Model</th>
+                <th className={TABLE_HEAD}>Provider</th>
+                <th className={TABLE_HEAD}>Slug</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-border/60">
+              {filteredModels.length === 0 ? (
+                <tr>
+                  <td colSpan={3} className="px-3 py-4 text-muted-foreground">
+                    {modelQuery.trim().length > 0
+                      ? "No models match the current search."
+                      : "No models available — connect a provider."}
+                  </td>
+                </tr>
+              ) : (
+                filteredModels.map((model) => (
+                  <tr key={model.slug} className="hover:bg-accent/40">
+                    <td className="px-3 py-2 font-medium text-foreground">
+                      {model.name}
+                      {model.shortName ? (
+                        <span className="ml-1.5 text-muted-foreground/70">{model.shortName}</span>
+                      ) : null}
+                    </td>
+                    <td className="px-3 py-2 text-muted-foreground">{model.provider}</td>
+                    <td className="px-3 py-2 font-mono text-muted-foreground/80">{model.slug}</td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+      </SettingsSection>
+
       <SettingsSection title="Roles">
+        <SettingsRow
+          title="Role to model mapping"
+          description="A role names a model for a specific job. The review agent uses the 'review' role when it is set; otherwise it falls back to your current model."
+        />
         {defaultInstanceId === null ? (
           <p className="text-sm text-muted-foreground">
             Connect a provider to pick models for your roles.
           </p>
         ) : (
-          <div className="flex flex-col gap-2">
-            {roleEntries.length === 0 ? (
-              <p className="text-sm text-muted-foreground">No roles yet — add one below.</p>
-            ) : (
-              roleEntries.map(([role, model]) => (
-                <div key={role} className="flex items-center gap-3">
-                  <span className="w-32 shrink-0 truncate font-mono text-sm text-foreground">
-                    {role}
-                  </span>
-                  <div className="min-w-0 flex-1">
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-xs">
+              <thead className="border-b border-border/60">
+                <tr>
+                  <th className={TABLE_HEAD + " w-40"}>Role</th>
+                  <th className={TABLE_HEAD}>Model</th>
+                  <th className={"sticky right-0 z-10 bg-background " + TABLE_HEAD + " text-right"}>
+                    Actions
+                  </th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-border/60">
+                {roleEntries.length === 0 ? (
+                  <tr>
+                    <td colSpan={3} className="px-3 py-4 text-muted-foreground">
+                      No roles yet — add one below.
+                    </td>
+                  </tr>
+                ) : (
+                  roleEntries.map(([role, model]) => (
+                    <tr key={role} className="hover:bg-accent/40">
+                      <td className="w-40 px-3 py-2 font-mono font-medium text-foreground">
+                        {role}
+                      </td>
+                      <td className="px-3 py-2">
+                        <ProviderModelPicker
+                          activeInstanceId={instanceForModel(model) ?? defaultInstanceId}
+                          model={model}
+                          lockedProvider={null}
+                          instanceEntries={instanceEntries}
+                          modelOptionsByInstance={modelOptionsByInstance}
+                          triggerVariant="outline"
+                          triggerClassName="min-w-0 max-w-none shrink-0 text-foreground/90 hover:text-foreground"
+                          onInstanceModelChange={(_instanceId, nextModel) =>
+                            setRoleModel(role, nextModel)
+                          }
+                        />
+                      </td>
+                      <td className="sticky right-0 z-10 bg-background py-2 pe-4 ps-3 text-right">
+                        <Button
+                          type="button"
+                          size="icon-sm"
+                          variant="ghost"
+                          className="text-muted-foreground hover:text-destructive"
+                          aria-label={`Delete role ${role}`}
+                          onClick={() => deleteRole(role)}
+                        >
+                          <Trash2Icon className="size-3.5" />
+                        </Button>
+                      </td>
+                    </tr>
+                  ))
+                )}
+                <tr className="border-t border-border/60 bg-muted/20">
+                  <td className="w-40 px-3 py-2">
+                    <Input
+                      size="sm"
+                      className="h-8 font-mono"
+                      value={newRoleName}
+                      onChange={(event) => setNewRoleName(event.currentTarget.value)}
+                      placeholder="review"
+                      aria-label="New role name"
+                    />
+                  </td>
+                  <td className="px-3 py-2">
                     <ProviderModelPicker
-                      activeInstanceId={instanceForModel(model) ?? defaultInstanceId}
-                      model={model}
+                      activeInstanceId={defaultInstanceId}
+                      model={newRoleModel}
                       lockedProvider={null}
                       instanceEntries={instanceEntries}
                       modelOptionsByInstance={modelOptionsByInstance}
                       triggerVariant="outline"
                       triggerClassName="min-w-0 max-w-none shrink-0 text-foreground/90 hover:text-foreground"
-                      onInstanceModelChange={(_instanceId, nextModel) =>
-                        setRoleModel(role, nextModel)
-                      }
+                      onInstanceModelChange={(_instanceId, model) => setNewRoleModel(model)}
                     />
-                  </div>
-                  <Button
-                    type="button"
-                    size="icon-sm"
-                    variant="ghost"
-                    className="shrink-0 text-muted-foreground hover:text-destructive"
-                    aria-label={`Delete role ${role}`}
-                    onClick={() => deleteRole(role)}
-                  >
-                    <Trash2Icon className="size-3.5" />
-                  </Button>
-                </div>
-              ))
-            )}
-            <div className="mt-2 flex items-center gap-3 rounded-lg border border-border/70 p-3">
-              <label className="flex min-w-32 flex-1 flex-col gap-1 text-xs text-muted-foreground">
-                Role name
-                <Input
-                  size="sm"
-                  className="h-8 font-mono"
-                  value={newRoleName}
-                  onChange={(event) => setNewRoleName(event.currentTarget.value)}
-                  placeholder="review"
-                  aria-label="New role name"
-                  autoFocus
-                />
-              </label>
-              <div className="flex min-w-0 flex-1 flex-col gap-1 text-xs text-muted-foreground">
-                Model
-                <ProviderModelPicker
-                  activeInstanceId={defaultInstanceId}
-                  model={newRoleModel}
-                  lockedProvider={null}
-                  instanceEntries={instanceEntries}
-                  modelOptionsByInstance={modelOptionsByInstance}
-                  triggerVariant="outline"
-                  triggerClassName="min-w-0 max-w-none shrink-0 text-foreground/90 hover:text-foreground"
-                  onInstanceModelChange={(_instanceId, model) => setNewRoleModel(model)}
-                />
-              </div>
-              <Button
-                type="button"
-                size="sm"
-                className="mt-5 h-8 shrink-0 px-2.5 text-xs"
-                disabled={newRoleName.trim().length === 0 || newRoleModel.length === 0}
-                onClick={addRole}
-              >
-                <PlusIcon className="size-3.5" />
-                Add role
-              </Button>
-            </div>
+                  </td>
+                  <td className="sticky right-0 z-10 bg-muted/20 py-2 pe-4 ps-3 text-right">
+                    <Button
+                      type="button"
+                      size="sm"
+                      className="h-8 px-2.5 text-xs"
+                      disabled={newRoleName.trim().length === 0 || newRoleModel.length === 0}
+                      onClick={addRole}
+                    >
+                      <PlusIcon className="size-3.5" />
+                      Add role
+                    </Button>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
           </div>
         )}
       </SettingsSection>
