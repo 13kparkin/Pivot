@@ -116,6 +116,12 @@ Controls how assistant text reaches the thread timeline. In [the contracts][1], 
 
 A point-in-time view of state. The word is used in multiple layers, including orchestration, provider, and checkpointing. See [ProjectionSnapshotQuery.ts][10], [ProviderAdapter.ts][15], and [CheckpointStore.ts][19].
 
+### Review runs
+
+#### Review run
+
+A first-class orchestration entity that runs the agent over a change — uncommitted working-tree edits, committed-but-unpushed commits, or an open pull request — and records its findings. It is not a thread turn: it has its own provider session (keyed by a `review-` thread id), its own read-model record, and a `running` / `completed` / `failed` status. Findings stream in while it runs and render as inline review comments in the diff view; each is advisory and can be dismissed or fixed in a thread. See [source-control.md](../../../docs/user/source-control.md).
+
 ### Checkpointing
 
 Checkpointing captures workspace state over time so the app can diff turns and restore earlier points. The main pieces are [CheckpointStore.ts][19], [CheckpointDiffQuery.ts][20], and [CheckpointReactor.ts][6].

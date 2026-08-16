@@ -45,6 +45,13 @@ Pivot works with the platforms your team already uses:
 - Command-click (Control-click on Windows and Linux) a pull request number in the sidebar to open it in your browser instead of in Pivot
 - Check out a teammate's branch to review code locally
 
+**Get a second pass from an agent**
+
+- Run an agent review over your changes — the uncommitted working tree, committed-but-unpushed work, or an open pull request — and read its findings as inline comments in the diff, each with a severity tier (blocking / should-fix / nit)
+- **Review this PR** in the pull request's actions menu reviews the open pull request; the **Review** button in a thread's diff view reviews the working tree or branch changes you are looking at
+- Findings are advisory — nothing is ever blocked — and each one can be dismissed or fixed in a thread
+- The review is read-only: it never edits, commits, or opens anything
+
 **Fix what you wrote, in place**
 
 - Rewrite a pull request's title and description from the review itself, in Markdown, with a
