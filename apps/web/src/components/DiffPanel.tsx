@@ -1,6 +1,6 @@
 import { useAtomValue } from "@effect/atom-react";
 import type { FileDiffContentsLoader } from "@pierre/diffs";
-import { useParams } from "@tanstack/react-router";
+import { useNavigate, useParams } from "@tanstack/react-router";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
@@ -149,6 +149,7 @@ export default function DiffPanel({
   const getDiffFileContents = useAtomCommand(reviewEnvironment.diffFileContents);
   const startReview = useAtomCommand(reviewCommands.start, { reportFailure: false });
   const reviewModelConfigured = useReviewModelConfigured(activeThread?.environmentId ?? null);
+  const navigate = useNavigate();
   const gitStatusQuery = useEnvironmentQuery(
     activeThread !== null && activeThread !== undefined && activeCwd != null
       ? vcsEnvironment.status({
@@ -709,7 +710,10 @@ export default function DiffPanel({
                   aria-label="Review this diff"
                   onClick={() => {
                     if (!activeThread || activeProjectId === null) return;
-                    if (!reviewModelConfigured) showReviewModelNotice();
+                    if (!reviewModelConfigured)
+                      showReviewModelNotice(
+                        () => void navigate({ to: "/capabilities/models-and-roles" }),
+                      );
                     void startReview({
                       environmentId: activeThread.environmentId,
                       input: {

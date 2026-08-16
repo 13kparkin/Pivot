@@ -120,12 +120,13 @@ export function useReviewModelConfigured(environmentId: EnvironmentId | null): b
   }, [snapshot]);
 }
 
-/** Advisory notice shown when a review runs without a configured review model. */
-export function showReviewModelNotice(): void {
+/** Advisory notice shown when a review runs without a configured review model. The review is already running; the notice only tells you why, and offers to jump to the Models & Roles page when a navigator is provided. */
+export function showReviewModelNotice(onSetModel?: () => void): void {
   toastManager.add({
     type: "info",
-    title: "No review model set",
+    title: "Review started — using your default model",
     description:
-      "This review uses your current model. Set a dedicated one under Settings → Capabilities → Models & Roles.",
+      "No review model is set, so this review runs on your current model. Set a dedicated one under Settings → Capabilities → Models & Roles.",
+    ...(onSetModel ? { actionProps: { children: "Set review model", onClick: onSetModel } } : {}),
   });
 }

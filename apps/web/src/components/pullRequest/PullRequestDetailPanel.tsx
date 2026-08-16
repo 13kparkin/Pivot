@@ -1,4 +1,5 @@
 import { scopedThreadKey, scopeProjectRef } from "@t3tools/client-runtime/environment";
+import { useNavigate } from "@tanstack/react-router";
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import type {
   EnvironmentId,
@@ -475,6 +476,7 @@ export function PullRequestDetailPanel({
   // Which handoff is preparing, keyed so a per-finding button can say "Preparing..." on itself
   // alone. One at a time whatever the key: they all check the same pull request out.
   const [handoff, setHandoff] = useState<string | null>(null);
+  const navigate = useNavigate();
   const startReview = useAtomCommand(reviewCommands.start, { reportFailure: false });
   const [reviewId, setReviewId] = useState<ReviewId | null>(null);
   const reviewRun = useReviewRun(environmentId, reviewId);
@@ -794,7 +796,8 @@ export function PullRequestDetailPanel({
   // before sending. Checking out is the whole point of the ones that carry nothing.
   const handleReview = () => {
     if (!detail) return;
-    if (!useReviewModelConfigured(environmentId)) showReviewModelNotice();
+    if (!useReviewModelConfigured(environmentId))
+      showReviewModelNotice(() => void navigate({ to: "/capabilities/models-and-roles" }));
     const nextReviewId = ReviewId.make(randomUUID());
     setReviewId(nextReviewId);
     void startReview({
