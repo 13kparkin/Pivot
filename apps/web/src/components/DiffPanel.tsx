@@ -709,16 +709,19 @@ export default function DiffPanel({
                     if (!activeThread || activeProjectId === null) return;
                     void startReview({
                       environmentId: activeThread.environmentId,
-                      reviewId: ReviewId.make(randomUUID()),
-                      source:
-                        selectedGitScope === "unstaged"
-                          ? { kind: "working-tree" }
-                          : { kind: "branch-range", baseRef: selectedBaseRef },
-                      threadRef: {
+                      input: {
                         environmentId: activeThread.environmentId,
-                        threadId: activeThread.id,
+                        reviewId: ReviewId.make(randomUUID()),
+                        source:
+                          selectedGitScope === "unstaged"
+                            ? { kind: "working-tree" }
+                            : { kind: "branch-range", baseRef: selectedBaseRef },
+                        threadRef: {
+                          environmentId: activeThread.environmentId,
+                          threadId: activeThread.id,
+                        },
+                        projectId: activeProjectId,
                       },
-                      projectId: activeProjectId,
                     });
                   }}
                 />

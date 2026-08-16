@@ -1,6 +1,6 @@
 import { useAtomValue } from "@effect/atom-react";
-import { createReviewRunsStore } from "@t3tools/client-runtime/state/reviewRuns";
-import { createReviewCommandsAtoms } from "@t3tools/client-runtime/state/reviewCommands";
+import { createReviewRunsStore } from "@t3tools/client-runtime/state/review-runs";
+import { createReviewCommandsAtoms } from "@t3tools/client-runtime/state/review-commands";
 import type { EnvironmentId, ReviewId, ReviewRun } from "@t3tools/contracts";
 import * as Option from "effect/Option";
 import { AsyncResult } from "effect/unstable/reactivity";
@@ -83,5 +83,11 @@ export function useReviewRun(
     input: { reviewId },
   });
   const result = useAtomValue(atom);
-  return Option.getOrNull(AsyncResult.value(result));
+  const item = Option.getOrNull(AsyncResult.value(result)) as
+    | import("@t3tools/contracts").OrchestrationReviewRunStreamItem
+    | null;
+  if (item === null || item.kind !== "review-run-updated") {
+    return null;
+  }
+  return item.review;
 }

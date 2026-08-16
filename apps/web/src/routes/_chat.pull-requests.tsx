@@ -377,7 +377,13 @@ function PullRequestsRouteView() {
   const selectedPullRequestSurface =
     selectedRightPanelSurface?.kind === "pull-request" ? selectedRightPanelSurface : null;
   const activePullRequestSurface = rightPanelState.isOpen ? selectedPullRequestSurface : null;
-  const selectedPullRequestHost = activePullRequestSurface?.host ?? null;
+  const selectedPullRequestHost = useMemo(() => {
+    if (!selectedProject?.repositoryIdentity) return null;
+    return pullRequestHostOf(
+      selectedProject.repositoryIdentity,
+      selectedProject.repositoryIdentity.provider as SourceControlProviderKind,
+    );
+  }, [selectedProject?.repositoryIdentity]);
   // The open tab names its own server; a link that arrived before any tab was opened names it
   // through the project it selected.
   const panelEnvironmentId =

@@ -796,15 +796,18 @@ export function PullRequestDetailPanel({
     setReviewId(nextReviewId);
     void startReview({
       environmentId,
-      reviewId: nextReviewId,
-      source: {
-        kind: "pr",
-        host: host ?? "",
-        repository: detail.repository,
-        number: detail.number,
+      input: {
+        environmentId,
+        reviewId: nextReviewId,
+        source: {
+          kind: "pr",
+          host: host ?? "",
+          repository: detail.repository,
+          number: detail.number,
+        },
+        threadRef: null,
+        projectId: reference.projectId,
       },
-      threadRef: null,
-      projectId: reference.projectId,
     });
   };
 
