@@ -46,9 +46,9 @@ function makeFakeOmpSpawner(sessionFile: string) {
         protocolVersion: 1,
         supportedProtocolVersions: [1, 2],
       });
-      asSpawnedCommand(command);
+      const spawned = asSpawnedCommand(command);
       // `omp --help` capability probes are plain CLI, not RPC.
-      if (command.args.includes("--help")) {
+      if (spawned.args.includes("--help")) {
         return ChildProcessSpawner.makeHandle({
           pid: ChildProcessSpawner.ProcessId(1),
           exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(0)),

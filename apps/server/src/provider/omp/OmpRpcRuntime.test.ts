@@ -220,7 +220,7 @@ function makeFakeOmpSpawner(input: {
       // `omp --help` capability probes are plain CLI, not RPC: emit the help
       // text as a finite stdout stream and resolve the exit code (mirrors the
       // plain-CLI `--version` branches in OmpDriver.test.ts).
-      if (command.args.includes("--help")) {
+      if (spawned.args.includes("--help")) {
         yield* Deferred.succeed(spawn.exit, ChildProcessSpawner.ExitCode(helpExitCode)).pipe(
           Effect.asVoid,
         );

@@ -1185,10 +1185,9 @@ describe("OmpAdapter", () => {
         options: ["local", "s3"],
       });
       const requestedEvents = yield* Fiber.join(requestedFiber);
-      const requested = requestedEvents.find(
-        (event) => event.type === "user-input.requested" && event.requestId === "ask-select-1",
-      );
+      const requested = requestedEvents.find((event) => event.type === "user-input.requested");
       NodeAssert.ok(requested);
+      NodeAssert.equal(requested.requestId, "ask-select-1");
       NodeAssert.deepEqual(
         requested.payload.questions[0]?.options.map((option) => option.label),
         ["local", "s3"],
@@ -1247,10 +1246,9 @@ describe("OmpAdapter", () => {
         );
         yield* fake.offer(THREAD_ID, { type: "agent_end", messages: [], isTerminal: true });
         const events = yield* Fiber.join(eventsFiber);
-        const resolved = events.find(
-          (event) => event.type === "user-input.resolved" && event.requestId === "ask-select-2",
-        );
+        const resolved = events.find((event) => event.type === "user-input.resolved");
         NodeAssert.ok(resolved);
+        NodeAssert.equal(resolved.requestId, "ask-select-2");
         NodeAssert.deepEqual(resolved.payload.answers, {});
         NodeAssert.equal(
           events.some((event) => event.type === "turn.completed"),
