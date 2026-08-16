@@ -3,11 +3,18 @@ import { createReviewRunsStore } from "@t3tools/client-runtime/state/review-runs
 import { createReviewCommandsAtoms } from "@t3tools/client-runtime/state/review-commands";
 import type { EnvironmentId, ReviewId, ReviewRun } from "@t3tools/contracts";
 import * as Option from "effect/Option";
-import { AsyncResult } from "effect/unstable/reactivity";
+import { AsyncResult, Atom } from "effect/unstable/reactivity";
 import { useSyncExternalStore } from "react";
 
 import { connectionAtomRuntime } from "../connection/runtime";
+import { serverEnvironment } from "./server";
+import { modelRolesFromSettingsEntries } from "../components/capabilities/CapabilitiesModelsRolesPanel.logic";
+import { toastManager } from "../components/ui/toast";
+import { useMemo } from "react";
 
+const EMPTY_CAPABILITIES_SNAPSHOT_ATOM = Atom.make(AsyncResult.initial<never, never>(false)).pipe(
+  Atom.withLabel("web:review:capabilities-snapshot:empty"),
+);
 export const reviewRunsStore = createReviewRunsStore(connectionAtomRuntime);
 export const reviewCommands = createReviewCommandsAtoms(connectionAtomRuntime);
 
@@ -90,4 +97,35 @@ export function useReviewRun(
     return null;
   }
   return item.review;
+}
+
+/**
+ * Whether a dedicated `review` model role is configured for this environment.
+ * Returns true when the snapshot has not loaded yet, so callers do not nag
+ * before we know.
+ */
+export function useReviewModelConfigured(environmentId: EnvironmentId | null): boolean {
+  const snapshotAtom =
+    environmentId === null
+      ? EMPTY_CAPABILITIES_SNAPSHOT_ATOM
+      : serverEnvironment.capabilitiesSnapshot({ environmentId, input: {} });
+  const result = useAtomValue(snapshotAtom);
+  const snapshot = Option.getOrNull(AsyncResult.value(result))?.snapshot ?? null;
+  return useMemo(() => {
+    if (snapshot === null) {
+      return true;
+    }
+    const roles = modelRolesFromSettingsEntries(snapshot.settings.entries);
+    return roles.review !== undefined;
+  }, [snapshot]);
+}
+
+/** Advisory notice shown when a review runs without a configured review model. */
+export function showReviewModelNotice(): void {
+  toastManager.add({
+    type: "info",
+    title: "No review model set",
+    description:
+      "This review uses your current model. Set a dedicated one under Settings → Capabilities → Models & Roles.",
+  });
 }

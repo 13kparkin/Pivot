@@ -65,7 +65,9 @@ import {
   reviewCommands,
   dismissFinding,
   isFindingDismissed,
+  showReviewModelNotice,
   useDismissedFindingIds,
+  useReviewModelConfigured,
   useReviewRun,
 } from "~/state/reviewRuns";
 import { reviewFindingToReviewThread } from "~/lib/reviewFindings";
@@ -792,6 +794,7 @@ export function PullRequestDetailPanel({
   // before sending. Checking out is the whole point of the ones that carry nothing.
   const handleReview = () => {
     if (!detail) return;
+    if (!useReviewModelConfigured(environmentId)) showReviewModelNotice();
     const nextReviewId = ReviewId.make(randomUUID());
     setReviewId(nextReviewId);
     void startReview({

@@ -29,6 +29,7 @@ import { Route as ProjectsProjectKeyRouteImport } from './routes/projects.$proje
 import { Route as ConnectCallbackRouteImport } from './routes/connect_.callback'
 import { Route as CapabilitiesSkillsRouteImport } from './routes/capabilities.skills'
 import { Route as CapabilitiesSettingsRouteImport } from './routes/capabilities.settings'
+import { Route as CapabilitiesModelsAndRolesRouteImport } from './routes/capabilities.models-and-roles'
 import { Route as CapabilitiesRulesRouteImport } from './routes/capabilities.rules'
 import { Route as ChatPullRequestsRouteImport } from './routes/_chat.pull-requests'
 import { Route as ChatDraftDraftIdRouteImport } from './routes/_chat.draft.$draftId'
@@ -133,6 +134,11 @@ const CapabilitiesSettingsRoute = CapabilitiesSettingsRouteImport.update({
   path: '/settings',
   getParentRoute: () => CapabilitiesRoute,
 } as any)
+const CapabilitiesModelsAndRolesRoute = CapabilitiesModelsAndRolesRouteImport.update({
+  id: '/models-and-roles',
+  path: '/models-and-roles',
+  getParentRoute: () => CapabilitiesRoute,
+} as any)
 const CapabilitiesRulesRoute = CapabilitiesRulesRouteImport.update({
   id: '/rules',
   path: '/rules',
@@ -165,6 +171,7 @@ export interface FileRoutesByFullPath {
   '/pull-requests': typeof ChatPullRequestsRoute
   '/capabilities/rules': typeof CapabilitiesRulesRoute
   '/capabilities/settings': typeof CapabilitiesSettingsRoute
+  '/capabilities/models-and-roles': typeof CapabilitiesModelsAndRolesRoute
   '/capabilities/skills': typeof CapabilitiesSkillsRoute
   '/connect/callback': typeof ConnectCallbackRoute
   '/projects/$projectKey': typeof ProjectsProjectKeyRoute
@@ -188,6 +195,7 @@ export interface FileRoutesByTo {
   '/pull-requests': typeof ChatPullRequestsRoute
   '/capabilities/rules': typeof CapabilitiesRulesRoute
   '/capabilities/settings': typeof CapabilitiesSettingsRoute
+  '/capabilities/models-and-roles': typeof CapabilitiesModelsAndRolesRoute
   '/capabilities/skills': typeof CapabilitiesSkillsRoute
   '/connect/callback': typeof ConnectCallbackRoute
   '/projects/$projectKey': typeof ProjectsProjectKeyRoute
@@ -215,6 +223,7 @@ export interface FileRoutesById {
   '/_chat/pull-requests': typeof ChatPullRequestsRoute
   '/capabilities/rules': typeof CapabilitiesRulesRoute
   '/capabilities/settings': typeof CapabilitiesSettingsRoute
+  '/capabilities/models-and-roles': typeof CapabilitiesModelsAndRolesRoute
   '/capabilities/skills': typeof CapabilitiesSkillsRoute
   '/connect_/callback': typeof ConnectCallbackRoute
   '/projects/$projectKey': typeof ProjectsProjectKeyRoute
@@ -243,6 +252,7 @@ export interface FileRouteTypes {
     | '/pull-requests'
     | '/capabilities/rules'
     | '/capabilities/settings'
+    | '/capabilities/models-and-roles'
     | '/capabilities/skills'
     | '/connect/callback'
     | '/projects/$projectKey'
@@ -266,6 +276,7 @@ export interface FileRouteTypes {
     | '/pull-requests'
     | '/capabilities/rules'
     | '/capabilities/settings'
+    | '/capabilities/models-and-roles'
     | '/capabilities/skills'
     | '/connect/callback'
     | '/projects/$projectKey'
@@ -292,6 +303,7 @@ export interface FileRouteTypes {
     | '/_chat/pull-requests'
     | '/capabilities/rules'
     | '/capabilities/settings'
+    | '/capabilities/models-and-roles'
     | '/capabilities/skills'
     | '/connect_/callback'
     | '/projects/$projectKey'
@@ -462,6 +474,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof CapabilitiesSettingsRouteImport
       parentRoute: typeof CapabilitiesRoute
     }
+    '/capabilities/models-and-roles': {
+      id: '/capabilities/models-and-roles'
+      path: '/models-and-roles'
+      fullPath: '/capabilities/models-and-roles'
+      preLoaderRoute: typeof CapabilitiesModelsAndRolesRouteImport
+      parentRoute: typeof CapabilitiesRoute
+    }
     '/capabilities/rules': {
       id: '/capabilities/rules'
       path: '/rules'
@@ -513,6 +532,7 @@ interface CapabilitiesRouteChildren {
   CapabilitiesRulesRoute: typeof CapabilitiesRulesRoute
   CapabilitiesSettingsRoute: typeof CapabilitiesSettingsRoute
   CapabilitiesSkillsRoute: typeof CapabilitiesSkillsRoute
+  CapabilitiesModelsAndRolesRoute: typeof CapabilitiesModelsAndRolesRoute
   CapabilitiesIndexRoute: typeof CapabilitiesIndexRoute
 }
 
@@ -520,6 +540,7 @@ const CapabilitiesRouteChildren: CapabilitiesRouteChildren = {
   CapabilitiesRulesRoute: CapabilitiesRulesRoute,
   CapabilitiesSettingsRoute: CapabilitiesSettingsRoute,
   CapabilitiesSkillsRoute: CapabilitiesSkillsRoute,
+  CapabilitiesModelsAndRolesRoute: CapabilitiesModelsAndRolesRoute,
   CapabilitiesIndexRoute: CapabilitiesIndexRoute,
 }
 

@@ -75,6 +75,7 @@ import { useAtomCommand } from "../state/use-atom-command";
 import { serverEnvironment } from "../state/server";
 import { reviewEnvironment } from "../state/review";
 import { reviewCommands } from "../state/reviewRuns";
+import { showReviewModelNotice, useReviewModelConfigured } from "../state/reviewRuns";
 import { ReviewId } from "@t3tools/contracts";
 import { vcsEnvironment } from "../state/vcs";
 import { buildBaseRefChoices, filterBaseRefChoices } from "../lib/baseRefChoices";
@@ -147,6 +148,7 @@ export default function DiffPanel({
   );
   const getDiffFileContents = useAtomCommand(reviewEnvironment.diffFileContents);
   const startReview = useAtomCommand(reviewCommands.start, { reportFailure: false });
+  const reviewModelConfigured = useReviewModelConfigured(activeThread?.environmentId ?? null);
   const gitStatusQuery = useEnvironmentQuery(
     activeThread !== null && activeThread !== undefined && activeCwd != null
       ? vcsEnvironment.status({
@@ -707,6 +709,7 @@ export default function DiffPanel({
                   aria-label="Review this diff"
                   onClick={() => {
                     if (!activeThread || activeProjectId === null) return;
+                    if (!reviewModelConfigured) showReviewModelNotice();
                     void startReview({
                       environmentId: activeThread.environmentId,
                       input: {
