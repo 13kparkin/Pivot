@@ -137,6 +137,7 @@ Full glossary with file links: `docs/internals/glossary.md`
 ## Where code lives
 
 - `apps/server` - WebSocket, orchestration, providers, checkpointing. Effect-heavy: read `.repos/effect-smol/LLMS.md` before writing Effect code.
+- **OMP upstream** - For any change whose correctness depends on omp CLI, RPC, configuration, or protocol behavior, inspect `https://github.com/can1357/oh-my-pi` before designing the change. Make a shallow clone in a unique temporary directory outside this repository; inspect the relevant implementation and tests end to end, including every message or state transition Pivot consumes. Ground shipped behavior in the current release tag, compare `main` when the task concerns unreleased behavior, record the inspected commit in your work notes, and remove the clone when done. Do not infer omp behavior from Pivot's adapter or from memory.
 - `apps/web` - React/Vite UI. `apps/desktop` wraps it, `apps/mobile` is React Native, `apps/marketing` is the site.
 - `packages/contracts` - Effect/Schema contracts plus small derived helpers. No heavy runtime logic.
 - `packages/shared` - shared runtime utils, subpath exports, no barrel.
