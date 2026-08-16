@@ -5,8 +5,11 @@ import {
   countAnsweredPendingUserInputQuestions,
   derivePendingUserInputProgress,
   findFirstUnansweredPendingUserInputQuestionIndex,
+  isFreeTextOptionLabel,
   resolvePendingUserInputAnswer,
   setPendingUserInputCustomAnswer,
+  shouldAutoAdvancePendingUserInputSelection,
+  shouldRequestCustomAnswerForPendingUserInput,
   togglePendingUserInputOptionSelection,
 } from "./pendingUserInput";
 
@@ -246,5 +249,84 @@ describe("pending user input question progress", () => {
       canAdvance: true,
       isComplete: true,
     });
+  });
+});
+
+const singleSelectWithOther = {
+  id: "storage",
+  header: "Storage",
+  question: "Which storage backend?",
+  options: [
+    { label: "local", description: "local" },
+    { label: "s3", description: "s3" },
+    { label: "Other", description: "Other" },
+  ],
+  multiSelect: false,
+} as const;
+
+describe("isFreeTextOptionLabel", () => {
+  it("matches the exact label Other", () => {
+    expect(isFreeTextOptionLabel("Other")).toBe(true);
+  });
+
+  it("matches omp's TUI 'Other (type your own)' form, case-insensitively", () => {
+    expect(isFreeTextOptionLabel("Other (type your own)")).toBe(true);
+    expect(isFreeTextOptionLabel("other (type your own)")).toBe(true);
+  });
+
+  it("does not match ordinary option labels", () => {
+    expect(isFreeTextOptionLabel("local")).toBe(false);
+    expect(isFreeTextOptionLabel("s3")).toBe(false);
+    expect(isFreeTextOptionLabel("Others")).toBe(false);
+    expect(isFreeTextOptionLabel("")).toBe(false);
+  });
+});
+
+describe("shouldAutoAdvancePendingUserInputSelection", () => {
+  it("auto-advances single-select ordinary options", () => {
+    expect(shouldAutoAdvancePendingUserInputSelection(singleSelectWithOther, "s3")).toBe(true);
+  });
+
+  it("never auto-advances a free-text option (clicking Other must not submit the literal label)", () => {
+    expect(shouldAutoAdvancePendingUserInputSelection(singleSelectWithOther, "Other")).toBe(false);
+    expect(
+      shouldAutoAdvancePendingUserInputSelection(singleSelectWithOther, "Other (type your own)"),
+    ).toBe(false);
+  });
+
+  it("never auto-advances multi-select questions", () => {
+    expect(shouldAutoAdvancePendingUserInputSelection(multiSelectQuestion, "Server")).toBe(false);
+  });
+});
+
+describe("shouldRequestCustomAnswerForPendingUserInput", () => {
+  it("requests a custom answer for a single-select free-text option", () => {
+    expect(shouldRequestCustomAnswerForPendingUserInput(singleSelectWithOther, "Other", [])).toBe(
+      true,
+    );
+  });
+
+  it("requests a custom answer when adding a free-text option to a multi-select question", () => {
+    expect(
+      shouldRequestCustomAnswerForPendingUserInput(multiSelectQuestion, "Other", ["Server"]),
+    ).toBe(true);
+  });
+
+  it("does not request a custom answer when removing a free-text option from a multi-select question", () => {
+    expect(
+      shouldRequestCustomAnswerForPendingUserInput(multiSelectQuestion, "Other", [
+        "Server",
+        "Other",
+      ]),
+    ).toBe(false);
+  });
+
+  it("does not request a custom answer for ordinary options", () => {
+    expect(shouldRequestCustomAnswerForPendingUserInput(singleSelectWithOther, "s3", [])).toBe(
+      false,
+    );
+    expect(shouldRequestCustomAnswerForPendingUserInput(multiSelectQuestion, "Server", [])).toBe(
+      false,
+    );
   });
 });
