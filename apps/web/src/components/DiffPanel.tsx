@@ -75,7 +75,9 @@ import { useAtomCommand } from "../state/use-atom-command";
 import { serverEnvironment } from "../state/server";
 import { reviewEnvironment } from "../state/review";
 import { reviewCommands } from "../state/reviewRuns";
-import { showReviewModelNotice, useReviewModelConfigured } from "../state/reviewRuns";
+import { useReviewModelConfigured } from "../state/reviewRuns";
+import { ReviewRunPanel } from "./chat/ReviewRunPanel";
+import { ReviewModelConfirmDialog } from "./chat/ReviewModelConfirmDialog";
 import { ReviewId } from "@t3tools/contracts";
 import { vcsEnvironment } from "../state/vcs";
 import { buildBaseRefChoices, filterBaseRefChoices } from "../lib/baseRefChoices";
@@ -150,6 +152,30 @@ export default function DiffPanel({
   const startReview = useAtomCommand(reviewCommands.start, { reportFailure: false });
   const reviewModelConfigured = useReviewModelConfigured(activeThread?.environmentId ?? null);
   const navigate = useNavigate();
+  const [reviewId, setReviewId] = useState<ReviewId | null>(null);
+  const [confirmDefaultModel, setConfirmDefaultModel] = useState(false);
+  const runReview = () => {
+    if (!activeThread || activeProjectId === null) return;
+    const nextReviewId = ReviewId.make(randomUUID());
+    setReviewId(nextReviewId);
+    void startReview({
+      environmentId: activeThread.environmentId,
+      input: {
+        environmentId: activeThread.environmentId,
+        reviewId: nextReviewId,
+        source:
+          selectedGitScope === "unstaged"
+            ? { kind: "working-tree" }
+            : { kind: "branch-range", baseRef: selectedBaseRef },
+        threadRef: {
+          environmentId: activeThread.environmentId,
+          threadId: activeThread.id,
+        },
+        projectId: activeProjectId,
+      },
+    });
+  };
+
   const gitStatusQuery = useEnvironmentQuery(
     activeThread !== null && activeThread !== undefined && activeCwd != null
       ? vcsEnvironment.status({
@@ -710,26 +736,11 @@ export default function DiffPanel({
                   aria-label="Review this diff"
                   onClick={() => {
                     if (!activeThread || activeProjectId === null) return;
-                    if (!reviewModelConfigured)
-                      showReviewModelNotice(
-                        () => void navigate({ to: "/capabilities/models-and-roles" }),
-                      );
-                    void startReview({
-                      environmentId: activeThread.environmentId,
-                      input: {
-                        environmentId: activeThread.environmentId,
-                        reviewId: ReviewId.make(randomUUID()),
-                        source:
-                          selectedGitScope === "unstaged"
-                            ? { kind: "working-tree" }
-                            : { kind: "branch-range", baseRef: selectedBaseRef },
-                        threadRef: {
-                          environmentId: activeThread.environmentId,
-                          threadId: activeThread.id,
-                        },
-                        projectId: activeProjectId,
-                      },
-                    });
+                    if (!reviewModelConfigured) {
+                      setConfirmDefaultModel(true);
+                      return;
+                    }
+                    runReview();
                   }}
                 />
               }
@@ -859,6 +870,12 @@ export default function DiffPanel({
 
   return (
     <DiffPanelShell mode={mode} header={headerRow}>
+      <ReviewModelConfirmDialog
+        open={confirmDefaultModel}
+        onOpenChange={setConfirmDefaultModel}
+        onConfirm={runReview}
+        onSetModel={() => void navigate({ to: "/capabilities/models-and-roles" })}
+      />
       {!activeThread ? (
         <div className="flex flex-1 items-center justify-center px-5 text-center text-xs text-muted-foreground/70">
           Select a thread to inspect turn diffs.
@@ -873,6 +890,12 @@ export default function DiffPanel({
         </div>
       ) : (
         <>
+          {reviewId ? (
+            <ReviewRunPanel
+              environmentId={activeThread?.environmentId ?? null}
+              reviewId={reviewId}
+            />
+          ) : null}
           <div className="diff-panel-viewport flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
             {isSelectedPatchTruncated && (
               <p className="shrink-0 border-b border-border/70 bg-muted/40 px-3 py-1.5 text-[11px] text-muted-foreground">

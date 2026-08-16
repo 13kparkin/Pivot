@@ -9,7 +9,6 @@ import { useSyncExternalStore } from "react";
 import { connectionAtomRuntime } from "../connection/runtime";
 import { serverEnvironment } from "./server";
 import { modelRolesFromSettingsEntries } from "../components/capabilities/CapabilitiesModelsRolesPanel.logic";
-import { toastManager } from "../components/ui/toast";
 import { useMemo } from "react";
 
 const EMPTY_CAPABILITIES_SNAPSHOT_ATOM = Atom.make(AsyncResult.initial<never, never>(false)).pipe(
@@ -118,15 +117,4 @@ export function useReviewModelConfigured(environmentId: EnvironmentId | null): b
     const roles = modelRolesFromSettingsEntries(snapshot.settings.entries);
     return roles.review !== undefined;
   }, [snapshot]);
-}
-
-/** Advisory notice shown when a review runs without a configured review model. The review is already running; the notice only tells you why, and offers to jump to the Models & Roles page when a navigator is provided. */
-export function showReviewModelNotice(onSetModel?: () => void): void {
-  toastManager.add({
-    type: "info",
-    title: "Review started — using your default model",
-    description:
-      "No review model is set, so this review runs on your current model. Set a dedicated one under Settings → Capabilities → Models & Roles.",
-    ...(onSetModel ? { actionProps: { children: "Set review model", onClick: onSetModel } } : {}),
-  });
 }

@@ -66,13 +66,13 @@ import {
   reviewCommands,
   dismissFinding,
   isFindingDismissed,
-  showReviewModelNotice,
   useDismissedFindingIds,
   useReviewModelConfigured,
   useReviewRun,
 } from "~/state/reviewRuns";
 import { reviewFindingToReviewThread } from "~/lib/reviewFindings";
 import { ReviewId } from "@t3tools/contracts";
+import { ReviewModelConfirmDialog } from "~/components/chat/ReviewModelConfirmDialog";
 import { useAtomCommand } from "~/state/use-atom-command";
 import { formatRelativeTimeLabel } from "~/timestampFormat";
 
@@ -477,6 +477,7 @@ export function PullRequestDetailPanel({
   // alone. One at a time whatever the key: they all check the same pull request out.
   const [handoff, setHandoff] = useState<string | null>(null);
   const navigate = useNavigate();
+  const [confirmDefaultModel, setConfirmDefaultModel] = useState(false);
   const startReview = useAtomCommand(reviewCommands.start, { reportFailure: false });
   const [reviewId, setReviewId] = useState<ReviewId | null>(null);
   const reviewRun = useReviewRun(environmentId, reviewId);
@@ -794,10 +795,8 @@ export function PullRequestDetailPanel({
   // Every handoff works the same way: check the pull request out into its own worktree, open a
   // thread there, and — when it carries a task — put that in the composer for the user to read
   // before sending. Checking out is the whole point of the ones that carry nothing.
-  const handleReview = () => {
+  const startReviewRun = () => {
     if (!detail) return;
-    if (!useReviewModelConfigured(environmentId))
-      showReviewModelNotice(() => void navigate({ to: "/capabilities/models-and-roles" }));
     const nextReviewId = ReviewId.make(randomUUID());
     setReviewId(nextReviewId);
     void startReview({
@@ -815,6 +814,15 @@ export function PullRequestDetailPanel({
         projectId: reference.projectId,
       },
     });
+  };
+
+  const handleReview = () => {
+    if (!detail) return;
+    if (!useReviewModelConfigured(environmentId)) {
+      setConfirmDefaultModel(true);
+      return;
+    }
+    startReviewRun();
   };
 
   const startHandoff = async (
@@ -1958,6 +1966,13 @@ export function PullRequestDetailPanel({
           </AlertDialogFooter>
         </AlertDialogPopup>
       </AlertDialog>
+
+      <ReviewModelConfirmDialog
+        open={confirmDefaultModel}
+        onOpenChange={setConfirmDefaultModel}
+        onConfirm={startReviewRun}
+        onSetModel={() => void navigate({ to: "/capabilities/models-and-roles" })}
+      />
     </div>
   );
 }
