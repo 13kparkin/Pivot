@@ -67,6 +67,7 @@ import {
   dismissFinding,
   isFindingDismissed,
   useDismissedFindingIds,
+  useDefaultModelLabel,
   useReviewModelConfigured,
   useReviewRun,
 } from "~/state/reviewRuns";
@@ -477,6 +478,7 @@ export function PullRequestDetailPanel({
   // alone. One at a time whatever the key: they all check the same pull request out.
   const [handoff, setHandoff] = useState<string | null>(null);
   const navigate = useNavigate();
+  const defaultModelLabel = useDefaultModelLabel();
   const [confirmDefaultModel, setConfirmDefaultModel] = useState(false);
   const startReview = useAtomCommand(reviewCommands.start, { reportFailure: false });
   const [reviewId, setReviewId] = useState<ReviewId | null>(null);
@@ -1972,6 +1974,7 @@ export function PullRequestDetailPanel({
         onOpenChange={setConfirmDefaultModel}
         onConfirm={startReviewRun}
         onSetModel={() => void navigate({ to: "/capabilities/models-and-roles" })}
+        defaultModelLabel={defaultModelLabel}
       />
     </div>
   );

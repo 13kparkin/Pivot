@@ -10,6 +10,11 @@ import { connectionAtomRuntime } from "../connection/runtime";
 import { serverEnvironment } from "./server";
 import { modelRolesFromSettingsEntries } from "../components/capabilities/CapabilitiesModelsRolesPanel.logic";
 import { useMemo } from "react";
+import { usePrimarySettings } from "../hooks/useSettings";
+import { primaryServerProvidersAtom } from "./server";
+import { resolveAppModelSelectionState } from "../modelSelection";
+import { deriveProviderInstanceEntries } from "../providerInstances";
+import { getDisplayModelName } from "../components/chat/providerIconUtils";
 
 const EMPTY_CAPABILITIES_SNAPSHOT_ATOM = Atom.make(AsyncResult.initial<never, never>(false)).pipe(
   Atom.withLabel("web:review:capabilities-snapshot:empty"),
@@ -117,4 +122,25 @@ export function useReviewModelConfigured(environmentId: EnvironmentId | null): b
     const roles = modelRolesFromSettingsEntries(snapshot.settings.entries);
     return roles.review !== undefined;
   }, [snapshot]);
+}
+
+/**
+ * The display label of the app's default model, or the raw slug when no
+ * option resolves. Used to name the model a review falls back to when no
+ * `review` role is configured.
+ */
+export function useDefaultModelLabel(): string | null {
+  const settings = usePrimarySettings();
+  const providers = useAtomValue(primaryServerProvidersAtom);
+  return useMemo(() => {
+    const selection = resolveAppModelSelectionState(settings, providers);
+    const entry = deriveProviderInstanceEntries(providers).find(
+      (candidate) => candidate.instanceId === selection.instanceId,
+    );
+    const model = entry?.models.find((candidate) => candidate.slug === selection.model);
+    if (model) {
+      return getDisplayModelName(model);
+    }
+    return selection.model || null;
+  }, [providers, settings]);
 }
