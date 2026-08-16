@@ -1120,7 +1120,6 @@ function StatusSection(props: {
   readonly skills: ReadonlyArray<Pick<ServerProviderSkill, "name" | "displayName">>;
 }) {
   const points = splitStatusPoints(props.statusText);
-  const [expanded, setExpanded] = useState(false);
   const [expandedPoints, setExpandedPoints] = useState<ReadonlySet<number>>(new Set());
 
   if (points.length === 0) {
@@ -1141,35 +1140,18 @@ function StatusSection(props: {
 
   return (
     <div className="flex flex-col gap-0.5">
-      <button
-        type="button"
-        aria-expanded={expanded}
-        onClick={() => setExpanded((value) => !value)}
-        className="flex w-full min-w-0 cursor-pointer items-center gap-2 rounded-md px-0.5 py-0.5 text-left text-[12px] leading-5 transition-colors duration-150 hover:bg-accent/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/70"
-      >
-        {expanded ? (
-          <ChevronDownIcon className="size-3.5 shrink-0 text-muted-foreground/65" />
-        ) : (
-          <ChevronRightIcon className="size-3.5 shrink-0 text-muted-foreground/65" />
-        )}
-        <span className="text-muted-foreground text-xs">Status</span>
-      </button>
-      {expanded ? (
-        <div className="flex flex-col">
-          {points.map((point, index) => (
-            <StatusPointRow
-              key={index}
-              point={point}
-              expanded={expandedPoints.has(index)}
-              isStreaming={props.isStreaming}
-              markdownCwd={props.markdownCwd}
-              threadRef={props.threadRef}
-              skills={props.skills}
-              onToggle={() => togglePoint(index)}
-            />
-          ))}
-        </div>
-      ) : null}
+      {points.map((point, index) => (
+        <StatusPointRow
+          key={index}
+          point={point}
+          expanded={expandedPoints.has(index)}
+          isStreaming={props.isStreaming}
+          markdownCwd={props.markdownCwd}
+          threadRef={props.threadRef}
+          skills={props.skills}
+          onToggle={() => togglePoint(index)}
+        />
+      ))}
     </div>
   );
 }

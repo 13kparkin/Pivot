@@ -299,7 +299,7 @@ describe("MessagesTimeline", () => {
     expect(markup).toContain("1 changed file");
   });
 
-  it("keeps the status chip collapsed when the assistant already has an answer", () => {
+  it("renders the status point as its own line item alongside the assistant answer", () => {
     const markup = renderToStaticMarkup(
       <MessagesTimeline
         {...buildProps()}
@@ -324,13 +324,12 @@ describe("MessagesTimeline", () => {
     );
 
     expect(markup).toContain("24 commits behind.");
-    expect(markup).toContain("Status");
-    expect(markup).toContain('aria-expanded="false"');
-    expect(markup).not.toContain("Fetching latest upstream.");
+    expect(markup).toContain("Fetching latest upstream.");
+    expect(markup).not.toContain(">Status<");
     expect(markup).not.toContain("(empty response)");
   });
 
-  it("keeps the status chip collapsed by default for status-only messages and skips empty-response", () => {
+  it("renders a status-only message as its own line item and skips empty-response", () => {
     const markup = renderToStaticMarkup(
       <MessagesTimeline
         {...buildProps()}
@@ -354,13 +353,12 @@ describe("MessagesTimeline", () => {
       />,
     );
 
-    expect(markup).toContain("Status");
-    expect(markup).toContain('aria-expanded="false"');
-    expect(markup).not.toContain("No background jobs running.");
+    expect(markup).toContain("No background jobs running.");
+    expect(markup).not.toContain(">Status<");
     expect(markup).not.toContain("(empty response)");
   });
 
-  it("keeps every status point hidden while the status chip is collapsed", () => {
+  it("renders each status update as its own line item", () => {
     const markup = renderToStaticMarkup(
       <MessagesTimeline
         {...buildProps()}
@@ -385,10 +383,11 @@ describe("MessagesTimeline", () => {
     );
 
     expect(markup).toContain("Done.");
-    expect(markup).toContain("Status");
-    expect(markup).toContain('aria-expanded="false"');
-    expect(markup).not.toContain("Fetching latest upstream.");
-    expect(markup).not.toContain("No background jobs running.");
+    expect(markup).toContain("Fetching latest upstream.");
+    expect(markup).toContain("No background jobs running.");
+    expect(markup).not.toContain(">Status<");
+    // Each status update is its own expandable line item, not one merged block.
+    expect(markup.match(/aria-expanded="false"/g)).toHaveLength(2);
   });
 
   it("treats only the strict list end as the live edge", async () => {
