@@ -13,6 +13,7 @@ import {
   ThreadId,
   type ThreadTokenUsageSnapshot,
   TurnId,
+  REVIEW_SESSION_THREAD_ID_PREFIX,
   type OrchestrationCheckpointSummary,
   type OrchestrationProposedPlan,
   type OrchestrationThread,
@@ -2143,7 +2144,9 @@ const make = Effect.gen(function* () {
     Effect.gen(function* () {
       yield* forkParked(
         Stream.runForEach(providerService.streamEvents, (event) =>
-          worker.enqueue({ source: "runtime", event }),
+          event.threadId.startsWith(REVIEW_SESSION_THREAD_ID_PREFIX)
+            ? Effect.void
+            : worker.enqueue({ source: "runtime", event }),
         ),
       );
       yield* forkParked(

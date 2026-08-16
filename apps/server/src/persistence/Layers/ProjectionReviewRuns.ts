@@ -23,8 +23,10 @@ const ProjectionReviewRunDbRowSchema = Schema.Struct({
 });
 type ProjectionReviewRunDbRow = typeof ProjectionReviewRunDbRowSchema.Type;
 
+const decodeReviewRun = Schema.decodeUnknownOption(ReviewRun);
+
 const decodeReviewRunRow = (row: ProjectionReviewRunDbRow): Option.Option<ReviewRun> =>
-  Schema.decodeUnknownOption(ReviewRun)(JSON.parse(row.run_json));
+  decodeReviewRun(JSON.parse(row.run_json));
 
 function toPersistenceSqlOrDecodeError(sqlOperation: string, decodeOperation: string) {
   return (cause: unknown) =>

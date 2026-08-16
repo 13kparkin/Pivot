@@ -38,7 +38,6 @@ import {
   ProviderDriverKind,
   RuntimeTaskId,
   type RuntimeMode,
-  type ProviderInteractionMode,
   type ProviderTurnInteractionMode,
   PullRequestDiffSide,
   PositiveInt,
@@ -104,6 +103,8 @@ type ReviewFindingInput = typeof ReviewFindingInputSchema.Type;
 const ReviewFindingsBlockSchema = Schema.Struct({
   findings: Schema.Array(ReviewFindingInputSchema),
 });
+
+const decodeReviewFindingsBlock = Schema.decodeUnknownOption(ReviewFindingsBlockSchema);
 
 function parseJsonBlock(text: string): unknown {
   try {
@@ -1443,7 +1444,7 @@ export class OmpAdapter {
       if (parsed === undefined) {
         return null;
       }
-      const decoded = Schema.decodeUnknownOption(ReviewFindingsBlockSchema)(parsed);
+      const decoded = decodeReviewFindingsBlock(parsed);
       if (Option.isNone(decoded)) {
         return null;
       }
