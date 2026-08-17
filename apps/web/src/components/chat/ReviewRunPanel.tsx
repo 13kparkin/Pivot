@@ -1,11 +1,13 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import type { FileDiffMetadata } from "@pierre/diffs";
 import type { EnvironmentId, ReviewFindingSeverity, ReviewId } from "@t3tools/contracts";
 import { CheckIcon, LoaderIcon, Trash2Icon, TriangleAlertIcon } from "lucide-react";
 
 import { dismissFinding, useDismissedFindingIds, useReviewRun } from "../../state/reviewRuns";
 import { reviewSeverityLabel } from "../../lib/reviewFindings";
+import { deriveReviewRunCoverage } from "./ReviewRunPanel.logic";
 
 const SEVERITY_CLASS: Record<ReviewFindingSeverity, string> = {
   blocking: "text-red-500",
@@ -43,9 +45,12 @@ function useElapsedSeconds(since: string | null): number {
 export function ReviewRunPanel({
   environmentId,
   reviewId,
+  files,
 }: {
   environmentId: EnvironmentId | null;
   reviewId: ReviewId | null;
+  /** The rendered diff files the review is checked against. */
+  files: ReadonlyArray<{ readonly fileDiff: FileDiffMetadata; readonly filePath: string }>;
 }) {
   const run = useReviewRun(environmentId, reviewId);
   const dismissed = useDismissedFindingIds(reviewId);
@@ -100,6 +105,13 @@ export function ReviewRunPanel({
   }
 
   const visibleFindings = run.findings.filter((finding) => !dismissed.has(finding.id));
+  const coverage = deriveReviewRunCoverage({
+    filesReviewed: run.filesReviewed,
+    findings: run.findings,
+    files,
+  });
+  const outdatedIds = new Set(coverage.outdatedFindings.map((finding) => finding.id));
+  const coveredSet = new Set(coverage.covered);
 
   if (visibleFindings.length === 0) {
     return (
@@ -138,6 +150,37 @@ export function ReviewRunPanel({
           ) : null}
         </div>
       ) : null}
+      {files.length > 0 && (coverage.covered.length > 0 || coverage.missing.length > 0) ? (
+        <div className="border-b border-border/60 bg-muted/30 px-3 py-1.5">
+          <div className="flex items-center justify-between text-[11px]">
+            <span className="font-medium uppercase tracking-wider text-muted-foreground/70">
+              Coverage
+            </span>
+            <span className="tabular-nums text-muted-foreground/70">
+              {coverage.covered.length}/{files.length} files
+            </span>
+          </div>
+          <ul className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5">
+            {files.map(({ filePath }) => (
+              <li
+                key={filePath}
+                className={`flex min-w-0 items-center gap-1 font-mono text-[11px] ${
+                  coveredSet.has(filePath)
+                    ? "text-muted-foreground/70"
+                    : "font-medium text-amber-500"
+                }`}
+              >
+                {coveredSet.has(filePath) ? (
+                  <CheckIcon className="size-2.5 shrink-0 text-emerald-500" />
+                ) : (
+                  <TriangleAlertIcon className="size-2.5 shrink-0 text-amber-500" />
+                )}
+                <span className="truncate">{filePath}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
       <div className="flex items-center justify-between border-b border-border/60 bg-muted/30 px-3 py-1.5 text-[11px] font-medium uppercase tracking-wider text-muted-foreground/70">
         <span>Review findings</span>
         <span>{visibleFindings.length} total</span>
@@ -155,6 +198,11 @@ export function ReviewRunPanel({
                 >
                   {reviewSeverityLabel(finding.severity)}
                 </span>
+                {outdatedIds.has(finding.id) ? (
+                  <span className="ml-2 rounded-sm bg-amber-500/15 px-1 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-500">
+                    Outdated
+                  </span>
+                ) : null}
                 <span className="ml-2 font-mono text-[11px] text-muted-foreground/70">
                   {finding.file}
                   {finding.line !== null ? `:${finding.line}` : ""}

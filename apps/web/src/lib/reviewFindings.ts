@@ -33,6 +33,40 @@ function findingLineRange(finding: ReviewFinding): SelectedLineRange | null {
 }
 
 /**
+ * Whether the diff-comment mapper would place a finding: it has a line, names
+ * a file in the rendered diff, and the line resolves to a rendered hunk on
+ * the finding's side. Shared by the mapper (placement) and the run panel
+ * (outdated badge).
+ */
+export function isFindingPlaceable(
+  finding: ReviewFinding,
+  files: ReadonlyArray<{
+    readonly fileDiff: FileDiffMetadata;
+    readonly filePath: string;
+  }>,
+): boolean {
+  const range = findingLineRange(finding);
+  if (range === null) {
+    return false;
+  }
+  const file = files.find((candidate) => candidate.filePath === finding.file);
+  if (file === undefined) {
+    return false;
+  }
+  return (
+    buildDiffReviewComment({
+      id: finding.id,
+      sectionId: "",
+      sectionTitle: "",
+      filePath: finding.file,
+      fileDiff: file.fileDiff,
+      range,
+      text: "",
+    }) !== null
+  );
+}
+
+/**
  * Convert review findings into inline diff comments for the code view, the
  * GitHub-style placement: one comment bubble anchored to the finding's
  * (file, line). A finding is skipped when it has no line, names a file not in
@@ -50,12 +84,14 @@ export function reviewFindingsToDiffComments(input: {
 }): ReadonlyArray<ReviewCommentContext> {
   const comments: ReviewCommentContext[] = [];
   for (const finding of input.findings) {
-    const range = findingLineRange(finding);
-    if (range === null) {
+    if (!isFindingPlaceable(finding, input.files)) {
       continue;
     }
+    const range = findingLineRange(finding);
     const file = input.files.find((candidate) => candidate.filePath === finding.file);
-    if (file === undefined) {
+    // isFindingPlaceable already confirmed both; the guards keep the types
+    // sound without casts and never fire.
+    if (range === null || file === undefined) {
       continue;
     }
     const comment = buildDiffReviewComment({

@@ -963,6 +963,7 @@ export default function DiffPanel({
             <ReviewRunPanel
               environmentId={activeThread?.environmentId ?? null}
               reviewId={reviewId}
+              files={codeViewFiles.map(({ fileDiff, filePath }) => ({ fileDiff, filePath }))}
             />
           ) : null}
           <div className="diff-panel-viewport flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">

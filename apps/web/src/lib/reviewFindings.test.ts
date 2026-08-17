@@ -169,9 +169,7 @@ describe("reviewFindings", () => {
 
   describe("isFindingPlaceable", () => {
     const files = [{ fileDiff: fileDiff(), filePath: "src/a.ts" }];
-    const finding = (
-      overrides: Partial<Parameters<typeof isFindingPlaceable>[0]["findings"][number]> = {},
-    ) =>
+    const finding = (overrides: Partial<Parameters<typeof isFindingPlaceable>[0]> = {}) =>
       ({
         id: "finding-1",
         file: "src/a.ts",
@@ -181,7 +179,7 @@ describe("reviewFindings", () => {
         message: "Inline the single-use helper.",
         symbol: "doThing",
         ...overrides,
-      }) as Parameters<typeof isFindingPlaceable>[0]["findings"][number];
+      }) as Parameters<typeof isFindingPlaceable>[0];
 
     it("accepts a finding anchored to a rendered addition line", () => {
       expect(isFindingPlaceable(finding(), files)).toBe(true);
