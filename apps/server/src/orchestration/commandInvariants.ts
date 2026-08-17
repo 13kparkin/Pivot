@@ -1,9 +1,14 @@
 import type {
+  EnvironmentId,
   OrchestrationCommand,
   OrchestrationProject,
   OrchestrationReadModel,
   OrchestrationThread,
   ProjectId,
+  ReviewId,
+  ReviewRun,
+  ReviewSource,
+  ScopedThreadRef,
   ThreadId,
 } from "@t3tools/contracts";
 import { normalizeProjectPathForComparison } from "@t3tools/shared/path";
@@ -179,6 +184,95 @@ export function requireNonNegativeInteger(input: {
     invariantError(
       input.commandType,
       `${input.field} must be an integer greater than or equal to 0.`,
+    ),
+  );
+}
+
+export function findReviewById(
+  readModel: OrchestrationReadModel,
+  reviewId: ReviewId,
+): ReviewRun | undefined {
+  return (readModel.reviewRuns ?? []).find((run) => run.id === reviewId);
+}
+
+function sameThreadRef(left: ScopedThreadRef, right: ScopedThreadRef): boolean {
+  return left.environmentId === right.environmentId && left.threadId === right.threadId;
+}
+
+function sourceIdentityKey(source: ReviewSource): string {
+  switch (source.kind) {
+    case "working-tree":
+      return "working-tree";
+    case "branch-range":
+      return `branch-range:${source.baseRef ?? ""}`;
+    case "pr":
+      return `pr:${source.host}/${source.repository}#${source.number}`;
+  }
+}
+
+/**
+ * D13: one active review per (source identity, environment) and per host
+ * thread. A working-tree / branch-range review is tied to the host thread's
+ * workspace; a pr review is tied to the pull request. A completed or failed
+ * run is never a conflict, so a user can re-review after dismissing.
+ */
+function hasActiveReviewConflict(
+  readModel: OrchestrationReadModel,
+  input: {
+    readonly reviewId: ReviewId;
+    readonly source: ReviewSource;
+    readonly threadRef: ScopedThreadRef | null;
+    readonly environmentId: EnvironmentId;
+  },
+): boolean {
+  for (const run of readModel.reviewRuns ?? []) {
+    if (run.status !== "running") continue;
+    if (run.id === input.reviewId) return true;
+    if (input.threadRef && run.threadRef && sameThreadRef(run.threadRef, input.threadRef)) {
+      return true;
+    }
+    if (
+      run.environmentId === input.environmentId &&
+      sourceIdentityKey(run.source) === sourceIdentityKey(input.source)
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+export function requireReviewAbsent(input: {
+  readonly readModel: OrchestrationReadModel;
+  readonly command: OrchestrationCommand;
+  readonly reviewId: ReviewId;
+  readonly source: ReviewSource;
+  readonly threadRef: ScopedThreadRef | null;
+  readonly environmentId: EnvironmentId;
+}): Effect.Effect<void, OrchestrationCommandInvariantError> {
+  if (!hasActiveReviewConflict(input.readModel, input)) {
+    return Effect.void;
+  }
+  return Effect.fail(
+    invariantError(
+      input.command.type,
+      `A review is already running for this change; finish or dismiss it before starting another.`,
+    ),
+  );
+}
+
+export function requireReviewRunning(input: {
+  readonly readModel: OrchestrationReadModel;
+  readonly command: OrchestrationCommand;
+  readonly reviewId: ReviewId;
+}): Effect.Effect<ReviewRun, OrchestrationCommandInvariantError> {
+  const run = findReviewById(input.readModel, input.reviewId);
+  if (run && run.status === "running") {
+    return Effect.succeed(run);
+  }
+  return Effect.fail(
+    invariantError(
+      input.command.type,
+      `Review '${input.reviewId}' is not running and cannot handle command '${input.command.type}'.`,
     ),
   );
 }

@@ -1,7 +1,21 @@
 import * as Schema from "effect/Schema";
+
 import { TrimmedNonEmptyString } from "./baseSchemas.ts";
+import {
+  EnvironmentId,
+  IsoDateTime,
+  NonNegativeInt,
+  PositiveInt,
+  ProjectId,
+} from "./baseSchemas.ts";
+import { ScopedThreadRef } from "./environment.ts";
+import { PullRequestDiffSide } from "./pullRequest.ts";
 import { GitCommandError } from "./git.ts";
 import { VcsError } from "./vcs.ts";
+
+// ---------------------------------------------------------------------------
+// Local review diff preview (existing surface).
+// ---------------------------------------------------------------------------
 
 export const ReviewDiffPreviewInput = Schema.Struct({
   cwd: TrimmedNonEmptyString,
@@ -51,3 +65,158 @@ export type ReviewDiffPreviewResult = typeof ReviewDiffPreviewResult.Type;
 
 export const ReviewDiffPreviewError = Schema.Union([VcsError, GitCommandError]);
 export type ReviewDiffPreviewError = typeof ReviewDiffPreviewError.Type;
+
+// ---------------------------------------------------------------------------
+// Agent diff review runs (issue #42).
+// ---------------------------------------------------------------------------
+
+/**
+ * Provider sessions that back a review run use a thread id namespaced with this
+ * prefix, so `ProviderRuntimeIngestion` can tell a review run's events from a
+ * real thread's and skip them (they are consumed by `ReviewReactor` instead).
+ */
+export const REVIEW_SESSION_THREAD_ID_PREFIX = "review-";
+
+/**
+ * A review run's identity, and the provider session thread id it runs under
+ * (the two are the same value: `ThreadId.make(reviewId)`). Client-generated,
+ * mirroring how clients generate thread ids.
+ */
+export const ReviewId = TrimmedNonEmptyString.pipe(Schema.brand("ReviewId"));
+export type ReviewId = typeof ReviewId.Type;
+
+/**
+ * Which change a review run covers. `working-tree` is the uncommitted diff
+ * (git diff HEAD + untracked); `branch-range` is committed-but-unpushed work
+ * against `baseRef`; `pr` is an open pull request on a host.
+ */
+export const ReviewSource = Schema.Union([
+  Schema.Struct({ kind: Schema.Literal("working-tree") }),
+  Schema.Struct({
+    kind: Schema.Literal("branch-range"),
+    baseRef: Schema.NullOr(TrimmedNonEmptyString),
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("pr"),
+    host: TrimmedNonEmptyString,
+    repository: TrimmedNonEmptyString,
+    number: PositiveInt,
+  }),
+]);
+export type ReviewSource = typeof ReviewSource.Type;
+
+export const ReviewFindingSeverity = Schema.Literals(["blocking", "should-fix", "nit"]);
+export type ReviewFindingSeverity = typeof ReviewFindingSeverity.Type;
+
+/**
+ * One actionable finding from a review run, anchored to a file and line of the
+ * diff under review. `line` is null for a file-level finding. `side` matches
+ * the existing `PullRequestDiffSide` so findings render through the same
+ * annotation surface as host review threads.
+ */
+export const ReviewFinding = Schema.Struct({
+  id: TrimmedNonEmptyString,
+  file: TrimmedNonEmptyString,
+  line: Schema.NullOr(PositiveInt),
+  side: PullRequestDiffSide,
+  severity: ReviewFindingSeverity,
+  message: TrimmedNonEmptyString,
+  symbol: Schema.NullOr(TrimmedNonEmptyString),
+  /**
+   * The call sites / consumers the orchestrator verified for this finding's
+   * symbol before emitting it (cross-file attestation). Empty when the finding
+   * names no symbol or nothing was traced.
+   */
+  verifiedCallSites: Schema.optional(Schema.Array(TrimmedNonEmptyString)),
+});
+export type ReviewFinding = typeof ReviewFinding.Type;
+
+/**
+ * The review's per-file line-coverage attestation: the line ranges (new-file
+ * line numbers, "1-50, 60-90" style) each file's subagent reported reviewing.
+ * The client cross-checks these against the rendered diff's changed lines to
+ * surface any changed lines the review did not explicitly account for.
+ */
+export const ReviewFileLineCoverage = Schema.Struct({
+  file: TrimmedNonEmptyString,
+  lines: Schema.Array(TrimmedNonEmptyString),
+});
+export type ReviewFileLineCoverage = typeof ReviewFileLineCoverage.Type;
+
+export const ReviewRunStatus = Schema.Literals(["running", "completed", "failed"]);
+export type ReviewRunStatus = typeof ReviewRunStatus.Type;
+
+/**
+ * The review agent's overall assessment, emitted in the findings block.
+ * `approve` means no blocking issues; `request-changes` means blocking issues
+ * were found. Mirrors the decision shape of omp's own review workflow.
+ */
+export const ReviewRunVerdict = Schema.Literals(["approve", "request-changes"]);
+export type ReviewRunVerdict = typeof ReviewRunVerdict.Type;
+
+/**
+ * One live progress entry for a running review: a tool the agent invoked
+ * (`read`, `grep`, `bash`, …) and what it targeted. Streamed to the client so
+ * a long review shows its activity instead of a bare spinner.
+ */
+export const ReviewRunActivityItem = Schema.Struct({
+  kind: TrimmedNonEmptyString,
+  title: TrimmedNonEmptyString,
+  at: IsoDateTime,
+});
+export type ReviewRunActivityItem = typeof ReviewRunActivityItem.Type;
+
+export const ReviewRunProgress = Schema.Struct({
+  /** Most recent tool calls, newest last; the server keeps a small cap. */
+  activity: Schema.Array(ReviewRunActivityItem),
+  tokensUsed: NonNegativeInt,
+});
+export type ReviewRunProgress = typeof ReviewRunProgress.Type;
+
+/**
+ * Read-model view of one review run: its source, its status, and the findings
+ * produced so far. Findings stream in while the run is `running`.
+ */
+export const ReviewRun = Schema.Struct({
+  id: ReviewId,
+  source: ReviewSource,
+  status: ReviewRunStatus,
+  findings: Schema.Array(ReviewFinding),
+  /**
+   * Live agent activity while the run is `running`. Optional so runs persisted
+   * before the field existed still decode.
+   */
+  progress: Schema.optional(ReviewRunProgress),
+  /**
+   * The agent's overall assessment, present once the run completes. Optional
+   * so runs completed before the field existed still decode.
+   */
+  verdict: Schema.optional(ReviewRunVerdict),
+  summary: Schema.optional(TrimmedNonEmptyString),
+  /**
+   * The changed-file coverage ledger: every file the review actually covered,
+   * or a subset with the rest intentionally skipped. Optional so runs
+   * completed before the field existed still decode.
+   */
+  filesReviewed: Schema.optional(Schema.Array(TrimmedNonEmptyString)),
+  /**
+   * The per-file line-coverage attestation from the review block. The client
+   * cross-checks it against the rendered diff to flag changed lines the
+   * review did not explicitly account for. Optional so runs completed before
+   * the field existed still decode.
+   */
+  lineCoverage: Schema.optional(Schema.Array(ReviewFileLineCoverage)),
+  /**
+   * The thread this review was started from, when it was. Absent for a review
+   * started from the Pull Requests page. A review run is never a thread turn;
+   * this only records provenance.
+   */
+  threadRef: Schema.NullOr(ScopedThreadRef),
+  environmentId: EnvironmentId,
+  projectId: Schema.NullOr(ProjectId),
+  errorMessage: Schema.NullOr(TrimmedNonEmptyString),
+  createdAt: IsoDateTime,
+  completedAt: Schema.NullOr(IsoDateTime),
+  updatedAt: IsoDateTime,
+});
+export type ReviewRun = typeof ReviewRun.Type;

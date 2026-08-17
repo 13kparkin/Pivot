@@ -4,8 +4,10 @@
  * Turn completion (AC11): terminal `agent_end` (`isTerminal !== false`),
  * prompt `data.agentInvoked === false`, and `prompt_result` with
  * `agentInvoked: false`. Local slash results arrive as `command_output`
- * frames and become `status_text` deltas. Interim assistant runs are
- * classified as `status_text`; the held-back run is flushed as
+ * frames and become `status_text` deltas. Every completed assistant prose
+ * run is flushed as `assistant_text` (interim runs included), so a finished
+ * answer followed by a later message — a rule interrupt, a trailing tool
+ * call — stays in the message body; the held-back run is also flushed as
  * `assistant_text` at terminal completion. Empty assistant deltas are
  * not emitted (AC2).
  * Tools: `toolcall_end` / `tool_execution_*` → `item.*` (+ output deltas).
@@ -20,9 +22,10 @@
  *
  * @module provider/omp/OmpAdapter
  */
+import { ReviewBlockDecoder } from "./ReviewBlockDecoder.ts";
+import { formatOmpToolOutputText, OmpToolPresentation } from "./OmpToolPresentation.ts";
 import {
   type ApprovalRequestId,
-  type CanonicalItemType,
   EventId,
   type ProviderApprovalDecision,
   type ProviderRuntimeEvent,
@@ -36,9 +39,12 @@ import {
   type ServerProviderModel,
   type ServerProviderSlashCommand,
   ProviderDriverKind,
+  ReviewFileLineCoverage,
   RuntimeTaskId,
   type RuntimeMode,
-  type ProviderInteractionMode,
+  type ProviderTurnInteractionMode,
+  ReviewFinding,
+  ReviewRunVerdict,
   type ThreadId,
   TurnId,
 } from "@t3tools/contracts";
@@ -74,6 +80,14 @@ const PROVIDER = ProviderDriverKind.make("omp");
 const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
 const isProviderAdapterProcessError = Schema.is(ProviderAdapterProcessError);
 const isOmpSpawnError = Schema.is(OmpSpawnError);
+
+// ---------------------------------------------------------------------------
+// Review findings block decoding (issue #42): the persona ends with one
+// fenced JSON block. The adapter decodes it and emits one `review.finding`
+// runtime event per finding; a missing or malformed block fails the turn so
+// the review run surfaces the error instead of silently dropping findings.
+// Decoding lives in ReviewBlockDecoder (this file keeps the emit orchestration).
+// ---------------------------------------------------------------------------
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -148,8 +162,9 @@ interface LiveAdapterSession {
   openRunText: string | null;
   /** Text of the most recently closed run, parked as candidate-final. */
   heldBackRunText: string | null;
-  interactionMode: ProviderInteractionMode;
+  interactionMode: ProviderTurnInteractionMode;
   prePlanModelSlug: string | undefined;
+  preReviewModelSlug: string | undefined;
   onOpenUrl: ((request: OmpOpenUrlRequest) => Effect.Effect<void>) | undefined;
 }
 
@@ -201,6 +216,8 @@ export class OmpAdapter {
   readonly #randomUUID: Effect.Effect<string>;
   readonly #resolveRoleModel: OmpResolveRoleModel;
   readonly #capabilitiesService: OmpAdapterOptions["capabilitiesService"];
+  readonly #reviewBlockDecoder = new ReviewBlockDecoder();
+  readonly #toolPresentation = new OmpToolPresentation();
 
   public constructor(
     runtime: OmpRpcClient,
@@ -333,6 +350,7 @@ export class OmpAdapter {
         heldBackRunText: null,
         interactionMode: "default",
         prePlanModelSlug: undefined,
+        preReviewModelSlug: undefined,
         onOpenUrl: undefined,
       };
       this.#sessions.set(input.threadId, session);
@@ -586,7 +604,9 @@ export class OmpAdapter {
       if (numTurns <= 0) {
         return { threadId, turns: [] as const };
       }
-      const response = yield* this.#send(threadId, { type: "get_branch_messages" });
+      const response = yield* this.#send(threadId, {
+        type: "get_branch_messages",
+      });
       if (
         !isRecord(response) ||
         !isRecord(response.data) ||
@@ -757,7 +777,9 @@ export class OmpAdapter {
           threadId,
         });
       }
-      const response = yield* this.#send(threadId, { type: "get_available_models" });
+      const response = yield* this.#send(threadId, {
+        type: "get_available_models",
+      });
       return yield* modelsFromAvailableModelsResponse(response);
     });
   }
@@ -770,7 +792,9 @@ export class OmpAdapter {
           threadId,
         });
       }
-      const response = yield* this.#send(threadId, { type: "get_available_commands" });
+      const response = yield* this.#send(threadId, {
+        type: "get_available_commands",
+      });
       return yield* slashCommandsFromAvailableCommandsResponse(response);
     });
   }
@@ -783,7 +807,9 @@ export class OmpAdapter {
           threadId,
         });
       }
-      const response = yield* this.#send(threadId, { type: "get_login_providers" });
+      const response = yield* this.#send(threadId, {
+        type: "get_login_providers",
+      });
       return yield* loginProvidersFromResponse(response);
     });
   }
@@ -1232,7 +1258,7 @@ export class OmpAdapter {
     const tracked = session.toolCalls.get(toolCallId);
     const args = frame.args !== undefined ? frame.args : tracked?.args;
     const intent = typeof frame.intent === "string" ? frame.intent : tracked?.intent;
-    const presentation = presentOmpToolCall({
+    const presentation = this.#toolPresentation.present({
       toolCallId,
       toolName,
       args,
@@ -1273,7 +1299,7 @@ export class OmpAdapter {
       args: input.args,
       intent: input.intent,
     });
-    const presentation = presentOmpToolCall(input);
+    const presentation = this.#toolPresentation.present(input);
     return this.#emit({
       type: "item.started",
       threadId: session.threadId,
@@ -1295,12 +1321,26 @@ export class OmpAdapter {
     if (text === null || text.length === 0) {
       return Effect.void;
     }
+    if (session.interactionMode === "review") {
+      // Review turns decode the findings block from the turn's assistant text,
+      // and the agent may emit the block and then keep working (trailing tool
+      // calls, a closing prose run). Park the closed run into the open buffer
+      // instead of demoting it to status_text so the terminal extraction still
+      // sees the block — the last fence in the accumulated text wins.
+      session.openRunText = `${session.openRunText ?? ""}${text}`;
+      return Effect.void;
+    }
+    // A completed prose run is real assistant output, not status: a new
+    // assistant message may follow it for many reasons (a rule interrupt, a
+    // trailing tool call, a closing run), and demoting it to status_text hid
+    // finished answers from the message body. Flush it as assistant_text so
+    // the body accumulates every completed run.
     return this.#emit({
       type: "content.delta",
       threadId: session.threadId,
       turnId: session.turnId,
       payload: {
-        streamKind: "status_text",
+        streamKind: "assistant_text",
         delta: text,
       },
     });
@@ -1326,6 +1366,9 @@ export class OmpAdapter {
 
   #emitTurnCompleted(session: LiveAdapterSession): Effect.Effect<void> {
     return Effect.gen({ self: this }, function* () {
+      // Capture the final assistant text before the flush nulls it; a review
+      // turn's findings are decoded from it.
+      const runText = session.heldBackRunText ?? session.openRunText;
       yield* this.#flushFinalAssistantRun(session);
       const now = yield* Clock.currentTimeMillis;
       yield* this.#emitTokenUsageFromState(session, now).pipe(Effect.ignore);
@@ -1341,6 +1384,30 @@ export class OmpAdapter {
           threadId: session.threadId,
           turnId,
           payload: { reason: "user_abort" },
+        });
+      } else if (session.interactionMode === "review") {
+        // Emit findings first so the stream carries them before the terminal
+        // frame; a malformed findings block fails the turn so the run surfaces
+        // the error rather than silently dropping findings.
+        const outcome = yield* this.#emitReviewFindings(session, turnId, runText);
+        yield* this.#emit({
+          type: "turn.completed",
+          threadId: session.threadId,
+          turnId,
+          payload:
+            outcome._tag === "ok"
+              ? {
+                  state: "completed",
+                  ...(outcome.verdict === undefined ? {} : { verdict: outcome.verdict }),
+                  ...(outcome.summary === undefined ? {} : { summary: outcome.summary }),
+                  ...(outcome.filesReviewed === undefined
+                    ? {}
+                    : { filesReviewed: outcome.filesReviewed }),
+                  ...(outcome.lineCoverage === undefined
+                    ? {}
+                    : { lineCoverage: outcome.lineCoverage }),
+                }
+              : { state: "failed", errorMessage: outcome.errorMessage },
         });
       } else {
         yield* this.#emit({
@@ -1360,6 +1427,74 @@ export class OmpAdapter {
     });
   }
 
+  #extractReviewFindings(runText: string | null): Effect.Effect<{
+    readonly findings: ReadonlyArray<ReviewFinding>;
+    readonly verdict?: ReviewRunVerdict;
+    readonly summary?: string;
+    readonly filesReviewed?: ReadonlyArray<string>;
+    readonly lineCoverage?: ReadonlyArray<ReviewFileLineCoverage>;
+  } | null> {
+    return Effect.gen({ self: this }, function* () {
+      const decoded = this.#reviewBlockDecoder.decode(runText);
+      if (decoded === null) {
+        return null;
+      }
+      const findings: ReviewFinding[] = [];
+      for (const entry of decoded.findings) {
+        findings.push({ id: `finding-${yield* this.#randomUUID}`, ...entry });
+      }
+      return {
+        findings,
+        ...(decoded.verdict === undefined ? {} : { verdict: decoded.verdict }),
+        ...(decoded.summary === undefined ? {} : { summary: decoded.summary }),
+        ...(decoded.filesReviewed === undefined ? {} : { filesReviewed: decoded.filesReviewed }),
+        ...(decoded.coverage === undefined ? {} : { lineCoverage: decoded.coverage }),
+      };
+    });
+  }
+
+  #emitReviewFindings(
+    session: LiveAdapterSession,
+    turnId: TurnId | undefined,
+    runText: string | null,
+  ): Effect.Effect<
+    | {
+        readonly _tag: "ok";
+        readonly verdict?: ReviewRunVerdict;
+        readonly summary?: string;
+        readonly filesReviewed?: ReadonlyArray<string>;
+        readonly lineCoverage?: ReadonlyArray<ReviewFileLineCoverage>;
+      }
+    | { readonly _tag: "error"; readonly errorMessage: string }
+  > {
+    return Effect.gen({ self: this }, function* () {
+      const extracted = yield* this.#extractReviewFindings(runText);
+      if (extracted === null) {
+        return {
+          _tag: "error",
+          errorMessage: "Review run finished without a parseable findings block.",
+        } as const;
+      }
+      for (const finding of extracted.findings) {
+        yield* this.#emit({
+          type: "review.finding",
+          threadId: session.threadId,
+          turnId,
+          payload: finding,
+        });
+      }
+      return {
+        _tag: "ok",
+        ...(extracted.verdict === undefined ? {} : { verdict: extracted.verdict }),
+        ...(extracted.summary === undefined ? {} : { summary: extracted.summary }),
+        ...(extracted.filesReviewed === undefined
+          ? {}
+          : { filesReviewed: extracted.filesReviewed }),
+        ...(extracted.lineCoverage === undefined ? {} : { lineCoverage: extracted.lineCoverage }),
+      } as const;
+    });
+  }
+
   #cancelLiveSubagents(session: LiveAdapterSession): Effect.Effect<void> {
     const ids = Array.from(session.liveSubagents);
     if (ids.length === 0) {
@@ -1368,9 +1503,10 @@ export class OmpAdapter {
     return Effect.gen({ self: this }, function* () {
       for (const subagentId of ids) {
         const outcome = yield* Effect.exit(
-          this.#send(session.threadId, { type: "cancel_subagent", subagentId }).pipe(
-            Effect.timeout(OMP_ABORT_ACK_TIMEOUT),
-          ),
+          this.#send(session.threadId, {
+            type: "cancel_subagent",
+            subagentId,
+          }).pipe(Effect.timeout(OMP_ABORT_ACK_TIMEOUT)),
         );
         // `cancel_subagent` acknowledges with a response; a `success: false`
         // response means the command is unknown (pre-`cancel_subagent` omp) or
@@ -1408,7 +1544,9 @@ export class OmpAdapter {
       // D2/D3: claim the throttle slot synchronously, before any RPC yield. The
       // slot is consumed even if the emit later fails or early-returns (no tokens).
       session.lastTokenUsageEmitAtMs = now;
-      const response = yield* this.#send(session.threadId, { type: "get_state" });
+      const response = yield* this.#send(session.threadId, {
+        type: "get_state",
+      });
       if (!isRecord(response) || !isRecord(response.data)) {
         return;
       }
@@ -1437,9 +1575,9 @@ export class OmpAdapter {
         typeof state.queuedMessageCount === "number" && state.queuedMessageCount >= 0
           ? Math.floor(state.queuedMessageCount)
           : undefined;
-      const statsResponse = yield* this.#send(session.threadId, { type: "get_session_stats" }).pipe(
-        Effect.orElseSucceed(() => undefined),
-      );
+      const statsResponse = yield* this.#send(session.threadId, {
+        type: "get_session_stats",
+      }).pipe(Effect.orElseSucceed(() => undefined));
       const stats =
         statsResponse !== undefined && isRecord(statsResponse) && isRecord(statsResponse.data)
           ? statsResponse.data
@@ -1463,7 +1601,9 @@ export class OmpAdapter {
               ? { outputTokens: Math.max(0, Math.floor(tokens.output)) }
               : {}),
             ...(tokens !== undefined && typeof tokens.reasoning === "number"
-              ? { reasoningOutputTokens: Math.max(0, Math.floor(tokens.reasoning)) }
+              ? {
+                  reasoningOutputTokens: Math.max(0, Math.floor(tokens.reasoning)),
+                }
               : {}),
             ...(stats !== undefined && typeof stats.toolUses === "number"
               ? { toolUses: Math.max(0, Math.floor(stats.toolUses)) }
@@ -1493,10 +1633,16 @@ export class OmpAdapter {
             option.id === "thinkingLevel") &&
           typeof option.value === "string"
         ) {
-          yield* this.#send(threadId, { type: "set_thinking_level", level: option.value });
+          yield* this.#send(threadId, {
+            type: "set_thinking_level",
+            level: option.value,
+          });
         }
         if (option.id === "fastMode" && typeof option.value === "boolean") {
-          yield* this.#send(threadId, { type: "set_fast_mode", enabled: option.value });
+          yield* this.#send(threadId, {
+            type: "set_fast_mode",
+            enabled: option.value,
+          });
         }
       }
     });
@@ -1513,7 +1659,10 @@ export class OmpAdapter {
     const url = typeof frame.url === "string" ? frame.url : "";
     const title = operation === "write" ? "Accept proposed edit" : "Allow host URI read";
     const detail = url.length > 0 ? `${title}\n${url}` : title;
-    session.pendingUiRequests.set(frame.id, { kind: "host_uri", ompId: frame.id });
+    session.pendingUiRequests.set(frame.id, {
+      kind: "host_uri",
+      ompId: frame.id,
+    });
     return this.#emit({
       type: "request.opened",
       threadId: session.threadId,
@@ -1548,7 +1697,10 @@ export class OmpAdapter {
     });
   }
 
-  #applyInteractionMode(session: LiveAdapterSession, mode: ProviderInteractionMode | undefined) {
+  #applyInteractionMode(
+    session: LiveAdapterSession,
+    mode: ProviderTurnInteractionMode | undefined,
+  ) {
     return Effect.gen({ self: this }, function* () {
       if (mode === undefined || mode === session.interactionMode) {
         return;
@@ -1562,8 +1714,18 @@ export class OmpAdapter {
         session.interactionMode = "plan";
         return;
       }
-      const restoreSlug = session.prePlanModelSlug;
+      if (mode === "review") {
+        session.preReviewModelSlug = yield* this.#readCurrentModelSlug(session.threadId);
+        const reviewSlug = yield* this.#resolveRoleModel("review");
+        if (reviewSlug !== undefined) {
+          yield* this.#applyModelSelection(session.threadId, reviewSlug);
+        }
+        session.interactionMode = "review";
+        return;
+      }
+      const restoreSlug = session.prePlanModelSlug ?? session.preReviewModelSlug;
       session.prePlanModelSlug = undefined;
+      session.preReviewModelSlug = undefined;
       session.interactionMode = "default";
       if (restoreSlug !== undefined) {
         yield* this.#applyModelSelection(session.threadId, restoreSlug);
@@ -1737,7 +1899,10 @@ export class OmpAdapter {
       const title = typeof frame.title === "string" ? frame.title : "Confirm";
       const message = typeof frame.message === "string" ? frame.message : "";
       const detail = message.length > 0 ? `${title}\n${message}` : title;
-      session.pendingUiRequests.set(frame.id, { kind: "confirm", ompId: frame.id });
+      session.pendingUiRequests.set(frame.id, {
+        kind: "confirm",
+        ompId: frame.id,
+      });
       return this.#emit({
         type: "request.opened",
         threadId: session.threadId,
@@ -1754,7 +1919,10 @@ export class OmpAdapter {
       const options = Array.isArray(frame.options)
         ? frame.options.filter((option): option is string => typeof option === "string")
         : [];
-      session.pendingUiRequests.set(frame.id, { kind: "select", ompId: frame.id });
+      session.pendingUiRequests.set(frame.id, {
+        kind: "select",
+        ompId: frame.id,
+      });
       return this.#emit({
         type: "user-input.requested",
         threadId: session.threadId,
@@ -1766,7 +1934,10 @@ export class OmpAdapter {
               id: "choice",
               header: title,
               question: title,
-              options: options.map((option) => ({ label: option, description: option })),
+              options: options.map((option) => ({
+                label: option,
+                description: option,
+              })),
             },
           ],
         },
@@ -1863,152 +2034,6 @@ function runtimeTaskStatusFromOmpProgress(status: unknown): RuntimeTaskStatus | 
 
 function isLocalOnlyPromptResponse(response: object): boolean {
   return isRecord(response) && isRecord(response.data) && response.data.agentInvoked === false;
-}
-
-function ompToolKind(toolName: string): string | undefined {
-  const name = toolName.toLowerCase();
-  if (name === "bash" || name === "shell" || name === "execute") {
-    return "execute";
-  }
-  if (name === "read") {
-    return "read";
-  }
-  if (
-    name === "write" ||
-    name === "edit" ||
-    name === "multiedit" ||
-    name.includes("patch") ||
-    name.includes("edit")
-  ) {
-    return "edit";
-  }
-  if (name.includes("web_search") || name === "websearch" || name === "grep" || name === "find") {
-    return "search";
-  }
-  return undefined;
-}
-
-function ompToolItemType(toolName: string): CanonicalItemType {
-  const name = toolName.toLowerCase();
-  const kind = ompToolKind(toolName);
-  if (kind === "execute") {
-    return "command_execution";
-  }
-  if (kind === "edit") {
-    return "file_change";
-  }
-  if (name.includes("web_search") || name === "websearch") {
-    return "web_search";
-  }
-  if (name.startsWith("mcp__") || name.startsWith("mcp_")) {
-    return "mcp_tool_call";
-  }
-  if (name === "task" || name.includes("collab") || name === "agent") {
-    return "collab_agent_tool_call";
-  }
-  // read + other omp tools: dynamic_tool_call + data.kind for UI presentation
-  return "dynamic_tool_call";
-}
-
-function extractOmpToolCommand(args: unknown): string | undefined {
-  if (!isRecord(args) || typeof args.command !== "string") {
-    return undefined;
-  }
-  const command = args.command.trim();
-  return command.length > 0 ? command : undefined;
-}
-
-function extractOmpToolPath(args: unknown): string | undefined {
-  if (!isRecord(args)) {
-    return undefined;
-  }
-  for (const key of ["path", "filePath", "filename", "file", "target"] as const) {
-    const value = args[key];
-    if (typeof value === "string" && value.trim().length > 0) {
-      return value.trim();
-    }
-  }
-  return undefined;
-}
-
-/** Unwrap omp AgentToolResult `{ content: [{ type:"text", text }] }` to plain text. */
-function formatOmpToolOutputText(value: unknown): string {
-  if (value === undefined || value === null) {
-    return "";
-  }
-  if (typeof value === "string") {
-    return value;
-  }
-  if (typeof value === "number" || typeof value === "boolean") {
-    return String(value);
-  }
-  if (isRecord(value) && Array.isArray(value.content)) {
-    const parts: string[] = [];
-    for (const entry of value.content) {
-      if (isRecord(entry) && typeof entry.text === "string" && entry.text.length > 0) {
-        parts.push(entry.text);
-      }
-    }
-    if (parts.length > 0) {
-      return parts.join("");
-    }
-  }
-  if (isRecord(value)) {
-    if (typeof value.stdout === "string" && value.stdout.length > 0) {
-      return value.stdout;
-    }
-    if (typeof value.text === "string" && value.text.length > 0) {
-      return value.text;
-    }
-  }
-  return "";
-}
-
-function truncateDetail(value: string, maxLength = 500): string {
-  if (value.length <= maxLength) {
-    return value;
-  }
-  return `${value.slice(0, maxLength - 1)}…`;
-}
-
-function presentOmpToolCall(input: {
-  readonly toolCallId: string;
-  readonly toolName: string;
-  readonly args: unknown;
-  readonly intent?: string | undefined;
-  readonly result?: unknown;
-  readonly isError?: boolean;
-}): {
-  readonly itemType: CanonicalItemType;
-  readonly title: string;
-  readonly detail: string | undefined;
-  readonly data: Record<string, unknown>;
-} {
-  const kind = ompToolKind(input.toolName);
-  const command = extractOmpToolCommand(input.args);
-  const path = extractOmpToolPath(input.args);
-  const intent =
-    typeof input.intent === "string" && input.intent.trim().length > 0
-      ? input.intent.trim()
-      : undefined;
-  const detailSource = intent ?? command ?? path;
-  const outputText = formatOmpToolOutputText(input.result);
-  return {
-    itemType: ompToolItemType(input.toolName),
-    title: input.toolName,
-    detail: detailSource !== undefined ? truncateDetail(detailSource) : undefined,
-    data: {
-      toolCallId: input.toolCallId,
-      toolName: input.toolName,
-      ...(kind === undefined ? {} : { kind }),
-      ...(command === undefined ? {} : { command }),
-      ...(input.args === undefined ? {} : { rawInput: input.args, args: input.args }),
-      ...(path === undefined ? {} : { locations: [{ path }] }),
-      ...(outputText.length > 0 ? { rawOutput: { content: outputText } } : {}),
-      ...(input.result === undefined ? {} : { result: input.result }),
-      ...(input.isError === undefined ? {} : { isError: input.isError }),
-    },
-  };
 }
 
 function loginProvidersFromResponse(

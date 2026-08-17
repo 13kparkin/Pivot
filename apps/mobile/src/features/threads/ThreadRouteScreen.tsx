@@ -50,6 +50,7 @@ import {
 } from "../terminal/terminalLaunchContext";
 import { terminalDebugLog } from "../terminal/terminalDebugLog";
 import { ThreadDetailScreen } from "./ThreadDetailScreen";
+import { ReviewSheet } from "./ReviewSheet";
 import {
   ThreadGitControls,
   useThreadGitCenterHeaderItems,
@@ -180,6 +181,7 @@ function ThreadRouteContent(
     readonly selectedThreadDetailState: ReturnType<typeof useSelectedThreadDetailState>;
   },
 ) {
+  const [reviewSheetVisible, setReviewSheetVisible] = useState(false);
   const {
     fileInspector,
     layout,
@@ -643,6 +645,7 @@ function ThreadRouteContent(
     gitOperationLabel: gitState.gitOperationLabel,
     canOpenTerminal: Boolean(selectedThreadProject?.workspaceRoot),
     canOpenFiles: Boolean(selectedThreadProject?.workspaceRoot),
+    onOpenReview: () => setReviewSheetVisible(true),
     projectScripts: selectedThreadProject?.scripts ?? [],
     terminalSessions: terminalMenuSessions,
     showDirectFileControl: layout.usesSplitView,
@@ -781,6 +784,21 @@ function ThreadRouteContent(
       <ThreadGitControls {...threadGitControlProps} showActionControls={showActionControls} />
 
       <GitActionProgressOverlay progress={gitActionProgress} onDismiss={dismissGitActionResult} />
+
+      {selectedThread ? (
+        <ReviewSheet
+          environmentId={selectedThread.environmentId}
+          threadId={selectedThread.id}
+          projectId={selectedThread.projectId}
+          threadRef={{
+            environmentId: selectedThread.environmentId,
+            threadId: selectedThread.id,
+          }}
+          gitStatus={gitStatus.data}
+          visible={reviewSheetVisible}
+          onClose={() => setReviewSheetVisible(false)}
+        />
+      ) : null}
 
       <View className="flex-1 bg-screen">
         <ThreadDetailScreen

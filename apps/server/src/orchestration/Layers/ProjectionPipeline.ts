@@ -43,6 +43,8 @@ import { ProjectionThreadProposedPlanRepositoryLive } from "../../persistence/La
 import { ProjectionThreadSessionRepositoryLive } from "../../persistence/Layers/ProjectionThreadSessions.ts";
 import { ProjectionTurnRepositoryLive } from "../../persistence/Layers/ProjectionTurns.ts";
 import { ProjectionThreadRepositoryLive } from "../../persistence/Layers/ProjectionThreads.ts";
+import { ProjectionReviewRunRepository } from "../../persistence/Services/ProjectionReviewRuns.ts";
+import { ProjectionReviewRunRepositoryLive } from "../../persistence/Layers/ProjectionReviewRuns.ts";
 import { ServerConfig } from "../../config.ts";
 import {
   OrchestrationProjectionPipeline,
@@ -65,6 +67,7 @@ export const ORCHESTRATION_PROJECTOR_NAMES = {
   threadTurns: "projection.thread-turns",
   checkpoints: "projection.checkpoints",
   pendingApprovals: "projection.pending-approvals",
+  reviewRuns: "projection.review-runs",
 } as const;
 
 type ProjectorName =
@@ -480,6 +483,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
     const projectionThreadSessionRepository = yield* ProjectionThreadSessionRepository;
     const projectionTurnRepository = yield* ProjectionTurnRepository;
     const projectionPendingApprovalRepository = yield* ProjectionPendingApprovalRepository;
+    const projectionReviewRunRepository = yield* ProjectionReviewRunRepository;
 
     const fileSystem = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
@@ -1616,6 +1620,105 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
       }
     });
 
+    const applyReviewRunsProjection: ProjectorDefinition["apply"] = Effect.fn(
+      "applyReviewRunsProjection",
+    )(function* (event, _attachmentSideEffects) {
+      switch (event.type) {
+        case "review.started": {
+          yield* projectionReviewRunRepository.upsert({
+            id: event.payload.reviewId,
+            source: event.payload.source,
+            status: "running",
+            findings: [],
+            progress: { activity: [], tokensUsed: 0 },
+            threadRef: event.payload.threadRef,
+            environmentId: event.payload.environmentId,
+            projectId: event.payload.projectId,
+            errorMessage: null,
+            createdAt: event.payload.createdAt,
+            completedAt: null,
+            updatedAt: event.payload.updatedAt,
+          });
+          return;
+        }
+        case "review.finding.added": {
+          const existing = yield* projectionReviewRunRepository.getById({
+            reviewId: event.payload.reviewId,
+          });
+          if (Option.isNone(existing)) {
+            return;
+          }
+          const run = existing.value;
+          if (run.status !== "running") {
+            return;
+          }
+          yield* projectionReviewRunRepository.upsert({
+            ...run,
+            findings: run.findings.some((entry) => entry.id === event.payload.finding.id)
+              ? run.findings
+              : [...run.findings, event.payload.finding],
+            updatedAt: event.occurredAt,
+          });
+          return;
+        }
+        case "review.progress": {
+          const existing = yield* projectionReviewRunRepository.getById({
+            reviewId: event.payload.reviewId,
+          });
+          if (Option.isNone(existing)) {
+            return;
+          }
+          yield* projectionReviewRunRepository.upsert({
+            ...existing.value,
+            progress: event.payload.progress,
+            updatedAt: event.occurredAt,
+          });
+          return;
+        }
+        case "review.completed": {
+          const existing = yield* projectionReviewRunRepository.getById({
+            reviewId: event.payload.reviewId,
+          });
+          if (Option.isNone(existing)) {
+            return;
+          }
+          yield* projectionReviewRunRepository.upsert({
+            ...existing.value,
+            status: "completed",
+            completedAt: event.payload.completedAt,
+            ...(event.payload.verdict !== undefined ? { verdict: event.payload.verdict } : {}),
+            ...(event.payload.summary !== undefined ? { summary: event.payload.summary } : {}),
+            ...(event.payload.filesReviewed !== undefined
+              ? { filesReviewed: event.payload.filesReviewed }
+              : {}),
+            ...(event.payload.lineCoverage !== undefined
+              ? { lineCoverage: event.payload.lineCoverage }
+              : {}),
+            updatedAt: event.occurredAt,
+          });
+          return;
+        }
+        case "review.failed": {
+          const existing = yield* projectionReviewRunRepository.getById({
+            reviewId: event.payload.reviewId,
+          });
+          if (Option.isNone(existing)) {
+            return;
+          }
+          yield* projectionReviewRunRepository.upsert({
+            ...existing.value,
+            status: "failed",
+            errorMessage: event.payload.errorMessage,
+            completedAt: event.payload.completedAt,
+            updatedAt: event.occurredAt,
+          });
+          return;
+        }
+        default:
+          return;
+      }
+    });
+
     const projectors: ReadonlyArray<ProjectorDefinition> = [
       {
         name: ORCHESTRATION_PROJECTOR_NAMES.projects,
@@ -1652,6 +1755,10 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
       {
         name: ORCHESTRATION_PROJECTOR_NAMES.threads,
         apply: applyThreadsProjection,
+      },
+      {
+        name: ORCHESTRATION_PROJECTOR_NAMES.reviewRuns,
+        apply: applyReviewRunsProjection,
       },
     ];
 
@@ -1756,4 +1863,5 @@ export const OrchestrationProjectionPipelineLive = Layer.effect(
   Layer.provideMerge(ProjectionTurnRepositoryLive),
   Layer.provideMerge(ProjectionPendingApprovalRepositoryLive),
   Layer.provideMerge(ProjectionStateRepositoryLive),
+  Layer.provideMerge(ProjectionReviewRunRepositoryLive),
 );

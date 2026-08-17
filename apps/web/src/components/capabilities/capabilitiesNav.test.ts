@@ -81,6 +81,7 @@ describe("searchCapabilities", () => {
       "capabilities-settings",
       "capabilities-skills",
       "capabilities-rules",
+      "capabilities-models-and-roles",
     ]);
   });
 

@@ -1,6 +1,6 @@
 import { useAtomValue } from "@effect/atom-react";
 import type { FileDiffContentsLoader } from "@pierre/diffs";
-import { useParams } from "@tanstack/react-router";
+import { useNavigate, useParams } from "@tanstack/react-router";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
@@ -18,15 +18,18 @@ import {
   PilcrowIcon,
   RefreshCwIcon,
   Rows3Icon,
+  ShieldCheckIcon,
   SearchIcon,
   TextWrapIcon,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useOpenInPreferredEditor } from "../editorPreferences";
+import type { FileDiffMetadata } from "@pierre/diffs";
 import { type DraftId } from "../composerDraftStore";
 import { openDiffFilePrimaryAction } from "../diffFileActions";
 import { useCheckpointDiff } from "~/lib/checkpointDiffState";
 import { cn } from "~/lib/utils";
+import { randomUUID } from "~/lib/utils";
 import { selectThreadDiffPanelSelection, useDiffPanelStore } from "../diffPanelStore";
 import { useTheme } from "../hooks/useTheme";
 import {
@@ -44,6 +47,14 @@ import { resolveThreadRouteRef } from "../threadRoutes";
 import { useClientSettings } from "../hooks/useSettings";
 import { formatShortTimestamp } from "../timestampFormat";
 import { DiffPanelLoadingState, DiffPanelShell, type DiffPanelMode } from "./DiffPanelShell";
+import {
+  deriveDiffEmptyState,
+  diffScopeKind,
+  diffScopeLabel,
+  reviewSectionKey,
+  reviewSectionTitle as deriveReviewSectionTitle,
+  reviewSourceForScope,
+} from "./DiffPanel.logic";
 import { DiffStatLabel } from "./chat/DiffStatLabel";
 import { AnnotatableCodeView, type AnnotatableCodeViewHandle } from "./diffs/AnnotatableCodeView";
 import { Button } from "./ui/button";
@@ -70,8 +81,20 @@ import {
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
 import { useEnvironmentQuery } from "../state/query";
 import { useAtomCommand } from "../state/use-atom-command";
+import { stackedThreadToast, toastManager } from "./ui/toast";
 import { serverEnvironment } from "../state/server";
 import { reviewEnvironment } from "../state/review";
+import { reviewCommands } from "../state/reviewRuns";
+import { reviewFindingsToDiffComments } from "../lib/reviewFindings";
+import type { ReviewCommentContext } from "~/reviewCommentContext";
+import {
+  useReviewFallbackModelLabel,
+  useReviewModelConfigured,
+  useReviewRun,
+} from "../state/reviewRuns";
+import { ReviewRunPanel } from "./chat/ReviewRunPanel";
+import { ReviewModelConfirmDialog } from "./chat/ReviewModelConfirmDialog";
+import { ReviewId, type ReviewFinding } from "@t3tools/contracts";
 import { vcsEnvironment } from "../state/vcs";
 import { buildBaseRefChoices, filterBaseRefChoices } from "../lib/baseRefChoices";
 import { createGitDiffFileContentsLoader } from "../lib/diffFileContents";
@@ -85,6 +108,7 @@ interface CollapsedDiffFilesState {
 }
 
 const EMPTY_COLLAPSED_DIFF_FILE_KEYS: ReadonlySet<string> = new Set();
+const EMPTY_FINDING_COMMENTS: ReadonlyArray<ReviewCommentContext> = [];
 
 interface DiffPanelProps {
   mode?: DiffPanelMode;
@@ -142,6 +166,69 @@ export default function DiffPanel({
     serverConfig?.availableEditors ?? [],
   );
   const getDiffFileContents = useAtomCommand(reviewEnvironment.diffFileContents);
+  const startReview = useAtomCommand(reviewCommands.start, { reportFailure: false });
+  const reviewModelConfigured = useReviewModelConfigured(activeThread?.environmentId ?? null);
+  const defaultModelLabel = useReviewFallbackModelLabel(activeThread?.modelSelection);
+  const navigate = useNavigate();
+  const [reviewId, setReviewId] = useState<ReviewId | null>(null);
+  const [confirmDefaultModel, setConfirmDefaultModel] = useState(false);
+  const activeReviewRun = useReviewRun(activeThread?.environmentId ?? null, reviewId);
+  // The review actually running for this thread, tracked independently of the
+  // displayed `reviewId`: between the start click and the first run frame, and
+  // after a start replaces the id, the displayed run alone would leave the
+  // review button enabled while a review is still running (the server rejects
+  // a second start, but the user gets a dead click).
+  const [startedReviewId, setStartedReviewId] = useState<ReviewId | null>(null);
+  const [startPending, setStartPending] = useState(false);
+  const startedReviewRun = useReviewRun(activeThread?.environmentId ?? null, startedReviewId);
+  const reviewRunning =
+    startPending || startedReviewRun?.status === "running" || activeReviewRun?.status === "running";
+
+  // Release the button once the started review reaches a terminal state so a
+  // fresh review can start.
+  useEffect(() => {
+    if (startedReviewRun !== null && startedReviewRun.status !== "running") {
+      setStartedReviewId(null);
+    }
+  }, [startedReviewRun]);
+
+  const runReview = () => {
+    if (!activeThread || activeProjectId === null) return;
+    const nextReviewId = ReviewId.make(randomUUID());
+    setReviewId(nextReviewId);
+    setStartPending(true);
+    void startReview({
+      environmentId: activeThread.environmentId,
+      input: {
+        environmentId: activeThread.environmentId,
+        reviewId: nextReviewId,
+        source: reviewSourceForScope(selectedGitScope, selectedBaseRef),
+        threadRef: {
+          environmentId: activeThread.environmentId,
+          threadId: activeThread.id,
+        },
+        projectId: activeProjectId,
+      },
+    }).then((result) => {
+      setStartPending(false);
+      if (result._tag === "Success") {
+        setStartedReviewId(nextReviewId);
+        return;
+      }
+      if (!isAtomCommandInterrupted(result)) {
+        const error = squashAtomCommandFailure(result);
+        toastManager.add(
+          stackedThreadToast({
+            type: "error",
+            title: "Review failed to start",
+            description:
+              error instanceof Error ? error.message : "The review could not be started.",
+          }),
+        );
+      }
+    });
+  };
+
   const gitStatusQuery = useEnvironmentQuery(
     activeThread !== null && activeThread !== undefined && activeCwd != null
       ? vcsEnvironment.status({
@@ -186,6 +273,7 @@ export default function DiffPanel({
   const selectedTurnId = diffSelection.kind === "turn" ? diffSelection.turnId : null;
   const selectedGitScope = diffSelection.kind === "unstaged" ? "unstaged" : "branch";
   const selectedBaseRef = diffSelection.kind === "branch" ? diffSelection.baseRef : null;
+  const scopeKind = diffScopeKind(diffSelection);
   const selectedFilePath = diffSelection.kind === "turn" ? diffSelection.filePath : null;
   const selectedFileRevealRequestId =
     diffSelection.kind === "turn" ? diffSelection.revealRequestId : 0;
@@ -198,15 +286,17 @@ export default function DiffPanel({
     selectedTurn &&
     (selectedTurn.checkpointTurnCount ?? inferredCheckpointTurnCountByTurnId[selectedTurn.turnId]);
   const latestTurn = orderedTurnDiffSummaries[0];
-  const selectedScopeLabel =
-    selectedTurnId === null
-      ? selectedGitScope === "unstaged"
-        ? "Working tree"
-        : "Branch changes"
-      : selectedTurn?.turnId === latestTurn?.turnId
-        ? "Latest turn"
-        : `Turn ${selectedCheckpointTurnCount ?? "?"}`;
-  const reviewSectionId = selectedTurn ? `turn:${selectedTurn.turnId}` : selectedGitScope;
+  const selectedScopeLabel = diffScopeLabel({
+    scopeKind,
+    gitScope: selectedGitScope,
+    isLatestTurn: selectedTurn?.turnId === latestTurn?.turnId,
+    turnCount: selectedCheckpointTurnCount ?? null,
+  });
+  const reviewSectionId = reviewSectionKey({
+    scopeKind,
+    turnId: selectedTurn?.turnId ?? null,
+    gitScope: selectedGitScope,
+  });
   const collapseScopeKey = routeThreadRef
     ? `${routeThreadRef.environmentId}:${routeThreadRef.threadId}:${reviewSectionId}`
     : null;
@@ -215,11 +305,11 @@ export default function DiffPanel({
     collapsedDiffFiles.scopeKey === collapseScopeKey
       ? collapsedDiffFiles.fileKeys
       : EMPTY_COLLAPSED_DIFF_FILE_KEYS;
-  const reviewSectionTitle = selectedTurn
-    ? `Turn ${selectedCheckpointTurnCount ?? "?"}`
-    : selectedGitScope === "unstaged"
-      ? "Working tree"
-      : "Branch changes";
+  const reviewSectionTitle = deriveReviewSectionTitle({
+    scopeKind,
+    gitScope: selectedGitScope,
+    turnCount: selectedCheckpointTurnCount ?? null,
+  });
   const selectedCheckpointRange = useMemo(
     () =>
       typeof selectedCheckpointTurnCount === "number"
@@ -387,6 +477,13 @@ export default function DiffPanel({
   const selectedPatchError = selectedTurn ? activeCheckpointDiff.error : branchDiffPreview.error;
   const hasResolvedPatch = typeof selectedPatch === "string";
   const hasNoNetChanges = hasResolvedPatch && selectedPatch.trim().length === 0;
+  const diffEmptyState = deriveDiffEmptyState({
+    scopeKind,
+    hasTurnSummaries: orderedTurnDiffSummaries.length > 0,
+    isLoadingPatch: isLoadingSelectedPatch,
+    hasResolvedPatch,
+    patchIsEmpty: hasNoNetChanges,
+  });
   const renderablePatch = useMemo(
     () =>
       getRenderablePatch(selectedPatch, `diff-panel:${resolvedTheme}`, {
@@ -424,6 +521,43 @@ export default function DiffPanel({
         };
       }),
     [collapsedDiffFileKeys, renderableFileEntries],
+  );
+  // Freeze the roster for the review run: the diff preview may refresh (or
+  // briefly empty) mid-run; the review panel must keep showing the same files
+  // for the whole run instead of flickering with the preview.
+  const [reviewRosterFiles, setReviewRosterFiles] = useState<
+    ReadonlyArray<{ readonly fileDiff: FileDiffMetadata; readonly filePath: string }>
+  >([]);
+  useEffect(() => {
+    setReviewRosterFiles([]);
+    if (reviewId !== null) {
+      setReviewRosterFiles(codeViewFiles.map(({ fileDiff, filePath }) => ({ fileDiff, filePath })));
+    }
+    // Capture once per run; the preview may not be ready at start.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reviewId]);
+  useEffect(() => {
+    if (reviewId !== null && reviewRosterFiles.length === 0 && codeViewFiles.length > 0) {
+      setReviewRosterFiles(codeViewFiles.map(({ fileDiff, filePath }) => ({ fileDiff, filePath })));
+    }
+  }, [reviewId, reviewRosterFiles.length, codeViewFiles]);
+  // Review findings render as GitHub-style inline comments on the diff, like
+  // the PR code view does for host review threads. They anchor to the
+  // reviewed git scope only: a turn diff shows different content, so findings
+  // stay in the run panel's list there. Findings that cannot be placed (no
+  // line, file not in the diff, line outside a rendered hunk) also stay in
+  // the list.
+  const reviewFindingComments = useMemo(
+    () =>
+      activeReviewRun === null || selectedTurnId !== null
+        ? EMPTY_FINDING_COMMENTS
+        : reviewFindingsToDiffComments({
+            findings: activeReviewRun.findings,
+            files: codeViewFiles,
+            sectionId: reviewSectionId,
+            sectionTitle: reviewSectionTitle,
+          }),
+    [activeReviewRun, codeViewFiles, reviewSectionId, reviewSectionTitle, selectedTurnId],
   );
   const diffFileKeys = useMemo(() => codeViewFiles.map((file) => file.fileKey), [codeViewFiles]);
   const allDiffFilesCollapsed = areAllDiffFilesCollapsed(diffFileKeys, collapsedDiffFileKeys);
@@ -463,6 +597,27 @@ export default function DiffPanel({
       });
     },
     [activeCwd, openInPreferredEditor, routeThreadRef],
+  );
+
+  // GitHub-comment style: jump the diff to a review finding's line.
+  const handleSelectFinding = useCallback(
+    (finding: ReviewFinding) => {
+      if (finding.line === null) {
+        return;
+      }
+      const file = codeViewFiles.find((candidate) => candidate.filePath === finding.file);
+      if (file === undefined) {
+        return;
+      }
+      codeViewRef.current?.scrollTo({
+        type: "line",
+        id: file.fileKey,
+        lineNumber: finding.line,
+        side: finding.side === "left" ? "deletions" : "additions",
+        align: "center",
+      });
+    },
+    [codeViewFiles],
   );
   const toggleDiffFileCollapsed = useCallback(
     (fileKey: string) => {
@@ -691,6 +846,34 @@ export default function DiffPanel({
         )}
       </div>
       <div className="flex shrink-0 items-center gap-1 [-webkit-app-region:no-drag]">
+        {activeThread && activeProjectId !== null && (
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <Button
+                  type="button"
+                  size="icon-sm"
+                  variant="ghost"
+                  aria-label="Review this diff"
+                  disabled={reviewRunning}
+                  onClick={() => {
+                    if (!activeThread || activeProjectId === null) return;
+                    if (!reviewModelConfigured) {
+                      setConfirmDefaultModel(true);
+                      return;
+                    }
+                    runReview();
+                  }}
+                />
+              }
+            >
+              <ShieldCheckIcon className="size-3.5" />
+            </TooltipTrigger>
+            <TooltipPopup side="top">
+              {reviewRunning ? "Review is running…" : "Run an agent review over this diff"}
+            </TooltipPopup>
+          </Tooltip>
+        )}
         {codeViewFiles.length > 0 && (
           <DiffStatLabel
             additions={diffLineStat.additions}
@@ -811,6 +994,13 @@ export default function DiffPanel({
 
   return (
     <DiffPanelShell mode={mode} header={headerRow}>
+      <ReviewModelConfirmDialog
+        open={confirmDefaultModel}
+        onOpenChange={setConfirmDefaultModel}
+        onConfirm={runReview}
+        onSetModel={() => void navigate({ to: "/capabilities/models-and-roles" })}
+        defaultModelLabel={defaultModelLabel}
+      />
       {!activeThread ? (
         <div className="flex flex-1 items-center justify-center px-5 text-center text-xs text-muted-foreground/70">
           Select a thread to inspect turn diffs.
@@ -819,12 +1009,24 @@ export default function DiffPanel({
         <div className="flex flex-1 items-center justify-center px-5 text-center text-xs text-muted-foreground/70">
           Turn diffs are unavailable because this project is not a git repository.
         </div>
-      ) : selectedTurnId !== null && orderedTurnDiffSummaries.length === 0 ? (
+      ) : diffEmptyState === "no-completed-turns" ? (
         <div className="flex flex-1 items-center justify-center px-5 text-center text-xs text-muted-foreground/70">
           No completed turns yet.
         </div>
       ) : (
         <>
+          {reviewId ? (
+            <ReviewRunPanel
+              environmentId={activeThread?.environmentId ?? null}
+              reviewId={reviewId}
+              files={
+                reviewId !== null && reviewRosterFiles.length > 0
+                  ? reviewRosterFiles
+                  : codeViewFiles.map(({ fileDiff, filePath }) => ({ fileDiff, filePath }))
+              }
+              onSelectFinding={handleSelectFinding}
+            />
+          ) : null}
           <div className="diff-panel-viewport flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
             {isSelectedPatchTruncated && (
               <p className="shrink-0 border-b border-border/70 bg-muted/40 px-3 py-1.5 text-[11px] text-muted-foreground">
@@ -838,7 +1040,7 @@ export default function DiffPanel({
               </div>
             )}
             {!renderablePatch ? (
-              isLoadingSelectedPatch ? (
+              diffEmptyState === "loading" ? (
                 <DiffPanelLoadingState
                   label={
                     selectedTurn
@@ -851,7 +1053,7 @@ export default function DiffPanel({
               ) : (
                 <div className="flex h-full items-center justify-center px-3 py-2 text-xs text-muted-foreground/70">
                   <p>
-                    {hasNoNetChanges
+                    {diffEmptyState === "no-net-changes"
                       ? "No net changes in this selection."
                       : "No patch available for this selection."}
                   </p>
@@ -901,6 +1103,7 @@ export default function DiffPanel({
                   sectionId={reviewSectionId}
                   sectionTitle={reviewSectionTitle}
                   composerDraftTarget={composerDraftTarget}
+                  readOnlyComments={reviewFindingComments}
                   renderHeaderPrefix={(fileDiff, fileKey, collapsed) => {
                     const filePath = resolveFileDiffPath(fileDiff);
                     return (

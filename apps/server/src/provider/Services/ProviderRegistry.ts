@@ -25,7 +25,7 @@ import type {
 import * as Context from "effect/Context";
 import type * as Effect from "effect/Effect";
 import type * as Stream from "effect/Stream";
-import type { OmpLoginError } from "../omp/OmpLogin.ts";
+import type { OmpLoginError } from "../omp/index.ts";
 import type { ProviderMaintenanceCapabilities } from "../providerMaintenance.ts";
 
 export type ProviderMaintenanceActionKind = "update";

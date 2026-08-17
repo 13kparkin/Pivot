@@ -21,7 +21,7 @@ import { type ModelSelection, type OmpSettings, TextGenerationError } from "@t3t
 import { sanitizeBranchFragment, sanitizeFeatureBranchName } from "@t3tools/shared/git";
 import { extractJsonObject } from "@t3tools/shared/schemaJson";
 
-import { OmpRpcRuntime, OmpSpawnError } from "../provider/omp/OmpRpcRuntime.ts";
+import { OmpRpcRuntime, OmpSpawnError } from "../provider/omp/index.ts";
 import * as TextGeneration from "./TextGeneration.ts";
 import {
   buildBranchNamePrompt,

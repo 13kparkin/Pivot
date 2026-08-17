@@ -1,5 +1,9 @@
 import { scopedThreadKey, scopeProjectRef } from "@t3tools/client-runtime/environment";
-import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
+import { useNavigate } from "@tanstack/react-router";
+import {
+  isAtomCommandInterrupted,
+  squashAtomCommandFailure,
+} from "@t3tools/client-runtime/state/runtime";
 import type {
   EnvironmentId,
   PullRequestAction,
@@ -33,6 +37,7 @@ import {
   PencilIcon,
   RefreshCwIcon,
   ServerIcon,
+  ShieldCheckIcon,
   TriangleAlertIcon,
 } from "lucide-react";
 import {
@@ -52,6 +57,7 @@ import { useNewThreadHandler } from "~/hooks/useHandleNewThread";
 import { useCopyToClipboard, writeTextToClipboard } from "~/hooks/useCopyToClipboard";
 import { usePreparePullRequestThreadAction } from "~/lib/sourceControlActions";
 import { cn } from "~/lib/utils";
+import { randomUUID } from "~/lib/utils";
 import { readLocalApi } from "~/localApi";
 import type { ReviewCommentContext } from "~/reviewCommentContext";
 import { useProjects } from "~/state/entities";
@@ -59,6 +65,18 @@ import { useEnvironments } from "~/state/environments";
 import { useEnvironmentQuery } from "~/state/query";
 import { useLiveRefresh } from "~/hooks/useLiveRefresh";
 import { pullRequestEnvironment } from "~/state/pullRequests";
+import {
+  reviewCommands,
+  dismissFinding,
+  isFindingDismissed,
+  useDismissedFindingIds,
+  useReviewFallbackModelLabel,
+  useReviewModelConfigured,
+  useReviewRun,
+} from "~/state/reviewRuns";
+import { reviewFindingToReviewThread } from "~/lib/reviewFindings";
+import { ReviewId } from "@t3tools/contracts";
+import { ReviewModelConfirmDialog } from "~/components/chat/ReviewModelConfirmDialog";
 import { useAtomCommand } from "~/state/use-atom-command";
 import { formatRelativeTimeLabel } from "~/timestampFormat";
 
@@ -84,7 +102,7 @@ import {
   MenuTrigger,
 } from "../ui/menu";
 import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
-import { toastManager } from "../ui/toast";
+import { stackedThreadToast, toastManager } from "../ui/toast";
 import { PullRequestDetailGhost, PullRequestTimelineGhost } from "./PullRequestGhosts";
 import { PullRequestActivityUnavailableState } from "./PullRequestActivityUnavailableState";
 import { DiffPanelLoadingState } from "../DiffPanelShell";
@@ -351,9 +369,12 @@ export function PullRequestDetailPanel({
   context = "page",
   chromeVariant = "full",
   composerDraftTarget,
+  host = null,
 }: {
   environmentId: EnvironmentId;
   reference: PullRequestRef;
+  /** The host the pull request lives on, for the agent review source. */
+  host?: string | null;
   /**
    * Bumped by whatever holds the panel when a reader asks for everything on screen to be read
    * again. The panel owns its own reads, so the page cannot refresh them for it — it says when,
@@ -459,6 +480,29 @@ export function PullRequestDetailPanel({
   // Which handoff is preparing, keyed so a per-finding button can say "Preparing..." on itself
   // alone. One at a time whatever the key: they all check the same pull request out.
   const [handoff, setHandoff] = useState<string | null>(null);
+  const navigate = useNavigate();
+  const defaultModelLabel = useReviewFallbackModelLabel(null);
+  const [confirmDefaultModel, setConfirmDefaultModel] = useState(false);
+  const startReview = useAtomCommand(reviewCommands.start, { reportFailure: false });
+  const [reviewId, setReviewId] = useState<ReviewId | null>(null);
+  const reviewRun = useReviewRun(environmentId, reviewId);
+  // The review actually running for this pull request, tracked independently of
+  // the displayed `reviewId` so the menu stays disabled while a review runs
+  // even before its first frame arrives or after the id was replaced.
+  const [startedReviewId, setStartedReviewId] = useState<ReviewId | null>(null);
+  const [startPending, setStartPending] = useState(false);
+  const startedReviewRun = useReviewRun(environmentId, startedReviewId);
+  const reviewRunning =
+    startPending || startedReviewRun?.status === "running" || reviewRun?.status === "running";
+
+  // Release the menu once the started review reaches a terminal state so a
+  // fresh review can start.
+  useEffect(() => {
+    if (startedReviewRun !== null && startedReviewRun.status !== "running") {
+      setStartedReviewId(null);
+    }
+  }, [startedReviewRun]);
+  const dismissedFindingIds = useDismissedFindingIds(reviewId);
   const { copyToClipboard: copyBranchToClipboard, isCopied: isBranchCopied } = useCopyToClipboard({
     target: "branch name",
     timeout: 1600,
@@ -496,11 +540,18 @@ export function PullRequestDetailPanel({
             comments: activity?.comments ?? [],
             commentCount: activity?.commentCount ?? 0,
             commentsTruncated: activity?.commentsTruncated ?? false,
-            reviewThreads: activity?.reviewThreads ?? [],
+            reviewThreads: [
+              ...(activity?.reviewThreads ?? []),
+              ...(reviewRun
+                ? reviewRun.findings
+                    .filter((finding) => !dismissedFindingIds.has(finding.id))
+                    .map((finding) => reviewFindingToReviewThread(finding, reviewRun.createdAt))
+                : []),
+            ],
             commits: activity?.commits ?? [],
             reactions: activity?.reactions ?? [],
           },
-    [activity, coreDetail],
+    [activity, coreDetail, dismissedFindingIds, reviewRun],
   );
   const activityPending = activityQuery.isPending && activity === null;
   const activityError = activity === null ? activityQuery.error : null;
@@ -765,6 +816,54 @@ export function PullRequestDetailPanel({
   // Every handoff works the same way: check the pull request out into its own worktree, open a
   // thread there, and — when it carries a task — put that in the composer for the user to read
   // before sending. Checking out is the whole point of the ones that carry nothing.
+  const startReviewRun = () => {
+    if (!detail) return;
+    const nextReviewId = ReviewId.make(randomUUID());
+    setReviewId(nextReviewId);
+    setStartPending(true);
+    void startReview({
+      environmentId,
+      input: {
+        environmentId,
+        reviewId: nextReviewId,
+        source: {
+          kind: "pr",
+          host: host ?? "",
+          repository: detail.repository,
+          number: detail.number,
+        },
+        threadRef: null,
+        projectId: reference.projectId,
+      },
+    }).then((result) => {
+      setStartPending(false);
+      if (result._tag === "Success") {
+        setStartedReviewId(nextReviewId);
+        return;
+      }
+      if (!isAtomCommandInterrupted(result)) {
+        const error = squashAtomCommandFailure(result);
+        toastManager.add(
+          stackedThreadToast({
+            type: "error",
+            title: "Review failed to start",
+            description:
+              error instanceof Error ? error.message : "The review could not be started.",
+          }),
+        );
+      }
+    });
+  };
+
+  const handleReview = () => {
+    if (!detail) return;
+    if (!useReviewModelConfigured(environmentId)) {
+      setConfirmDefaultModel(true);
+      return;
+    }
+    startReviewRun();
+  };
+
   const startHandoff = async (
     kind: string,
     task: { prompt: string; reviewComments?: ReadonlyArray<ReviewCommentContext> } | null,
@@ -1143,6 +1242,13 @@ export function PullRequestDetailPanel({
                   <MoreHorizontalIcon className="size-4" />
                 </MenuTrigger>
                 <MenuPopup align="end" side="bottom" className="min-w-72">
+                  <MenuItem
+                    disabled={detailQuery.isPending || reviewRunning}
+                    onClick={handleReview}
+                  >
+                    <ShieldCheckIcon className="size-3.5" />
+                    {reviewRunning ? "Reviewing…" : "Review this PR"}
+                  </MenuItem>
                   <MenuItem disabled={detailQuery.isPending} onClick={() => void refreshFromHost()}>
                     <RefreshCwIcon className="size-3.5" />
                     Refresh
@@ -1899,6 +2005,14 @@ export function PullRequestDetailPanel({
           </AlertDialogFooter>
         </AlertDialogPopup>
       </AlertDialog>
+
+      <ReviewModelConfirmDialog
+        open={confirmDefaultModel}
+        onOpenChange={setConfirmDefaultModel}
+        onConfirm={startReviewRun}
+        onSetModel={() => void navigate({ to: "/capabilities/models-and-roles" })}
+        defaultModelLabel={defaultModelLabel}
+      />
     </div>
   );
 }

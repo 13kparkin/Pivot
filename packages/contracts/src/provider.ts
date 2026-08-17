@@ -15,7 +15,6 @@ import {
   PROVIDER_SEND_TURN_MAX_INPUT_CHARS,
   ProviderApprovalDecision,
   ProviderApprovalPolicy,
-  ProviderInteractionMode,
   ProviderRequestKind,
   ProviderSandboxMode,
   ProviderUserInputAnswers,
@@ -64,6 +63,14 @@ export const ProviderSessionStartInput = Schema.Struct({
 });
 export type ProviderSessionStartInput = typeof ProviderSessionStartInput.Type;
 
+/**
+ * Interaction modes a provider turn can run in. Threads themselves only ever
+ * hold `default` or `plan` (`ProviderInteractionMode`); `review` is a turn-level
+ * mode a review run uses, never a thread state.
+ */
+export const ProviderTurnInteractionMode = Schema.Literals(["default", "plan", "review"]);
+export type ProviderTurnInteractionMode = typeof ProviderTurnInteractionMode.Type;
+
 export const ProviderSendTurnInput = Schema.Struct({
   threadId: ThreadId,
   input: Schema.optional(
@@ -73,7 +80,7 @@ export const ProviderSendTurnInput = Schema.Struct({
     Schema.Array(ChatAttachment).check(Schema.isMaxLength(PROVIDER_SEND_TURN_MAX_ATTACHMENTS)),
   ),
   modelSelection: Schema.optional(ModelSelection),
-  interactionMode: Schema.optional(ProviderInteractionMode),
+  interactionMode: Schema.optional(ProviderTurnInteractionMode),
 });
 export type ProviderSendTurnInput = typeof ProviderSendTurnInput.Type;
 

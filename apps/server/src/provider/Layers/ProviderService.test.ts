@@ -60,7 +60,7 @@ import * as ServerSettings from "../../serverSettings.ts";
 import * as AnalyticsService from "../../telemetry/AnalyticsService.ts";
 import { makeAdapterRegistryMock } from "../testUtils/providerAdapterRegistryMock.ts";
 import { FakeOmpRpc } from "../omp/FakeOmpRpc.ts";
-import { OmpAdapter } from "../omp/OmpAdapter.ts";
+import { OmpAdapter } from "../omp/index.ts";
 
 const defaultServerSettingsLayer = ServerSettings.ServerSettingsService.layerTest();
 const serverConfigTestLayer = ServerConfig.layerTest(process.cwd(), process.cwd()).pipe(

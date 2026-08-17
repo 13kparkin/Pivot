@@ -99,6 +99,18 @@
       "types": "./src/state/review.ts",
       "default": "./src/state/review.ts"
     },
+    "./state/review-runs": {
+      "types": "./src/state/reviewRuns.ts",
+      "default": "./src/state/reviewRuns.ts"
+    },
+    "./state/review-commands": {
+      "types": "./src/state/reviewCommands.ts",
+      "default": "./src/state/reviewCommands.ts"
+    },
+    "./state/review-progress": {
+      "types": "./src/state/reviewProgress.ts",
+      "default": "./src/state/reviewProgress.ts"
+    },
     "./state/runtime": {
       "types": "./src/state/runtime.ts",
       "default": "./src/state/runtime.ts"

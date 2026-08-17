@@ -9,7 +9,15 @@ import type {
 } from "@t3tools/contracts";
 import * as Option from "effect/Option";
 import { AsyncResult, Atom } from "effect/unstable/reactivity";
-import { LoaderIcon, MoveRightIcon, PlusIcon, SaveIcon, SearchIcon, Undo2Icon } from "lucide-react";
+import {
+  BracesIcon,
+  LoaderIcon,
+  MoveRightIcon,
+  PlusIcon,
+  SaveIcon,
+  SearchIcon,
+  Undo2Icon,
+} from "lucide-react";
 import { useState } from "react";
 
 import { useActiveEnvironmentId } from "../../state/entities";
@@ -33,6 +41,7 @@ import {
   parseSettingDraft,
 } from "./CapabilitiesSettingsPanel.logic";
 import { resolveCapabilitiesProjectIdForView } from "./CapabilitiesOverviewPanel.logic";
+import { CapabilitiesSettingDialog } from "./CapabilitiesSettingDialog";
 
 const EMPTY_SETTINGS_SNAPSHOT_ATOM = Atom.make(AsyncResult.initial<never, never>(false)).pipe(
   Atom.withLabel("web-capabilities:snapshot:settings:empty"),
@@ -60,6 +69,10 @@ function CapabilitiesSettingRow({
 }) {
   const enumValues =
     entry.type === "enum" && (entry.values?.length ?? 0) > 0 ? entry.values : undefined;
+  // Structured values (records/arrays) open the JSON modal instead of a
+  // one-line table input; primitives and enums edit inline.
+  const isStructured = entry.type === "record" || entry.type === "array";
+  const [dialogOpen, setDialogOpen] = useState(false);
   const [draft, setDraft] = useState(() => (entry.masked ? "" : formatSettingValue(entry.value)));
   const [draftError, setDraftError] = useState<string | null>(null);
   const [busy, setBusy] = useState<"save" | "reset" | null>(null);
@@ -135,111 +148,137 @@ function CapabilitiesSettingRow({
   const hasValue = entry.value !== undefined;
 
   return (
-    <tr>
-      <td className="px-4 py-2 sm:pl-5">
-        <div className="flex items-center gap-2">
-          <span className="font-mono font-medium text-foreground">{entry.key}</span>
-          {projectView ? (
-            <span
-              className={`rounded-sm px-1.5 py-0.5 text-[10px] font-medium ${isProjectEntry ? "bg-accent/50 text-accent-foreground" : "bg-sidebar-row-hover text-muted-foreground"}`}
-            >
-              {isProjectEntry ? "Project" : "Global"}
-            </span>
-          ) : null}
-        </div>
-      </td>
-      <td className="px-3 py-2 text-muted-foreground">{entry.type}</td>
-      <td className="max-w-56 px-3 py-2 text-muted-foreground">{entry.description}</td>
-      <td className="px-3 py-2">
-        {editable ? (
-          enumValues !== undefined ? (
-            <Select
-              value={draft}
-              onValueChange={(value) => {
-                if (typeof value === "string") setDraft(value);
-                setDraftError(null);
-              }}
-            >
-              <SelectTrigger className="h-7 w-44" aria-label={`Value for ${entry.key}`}>
-                <SelectValue placeholder="Unset" />
-              </SelectTrigger>
-              <SelectPopup align="end" alignItemWithTrigger={false}>
-                {(selectValues ?? []).map((value) => (
-                  <SelectItem hideIndicator key={value} value={value}>
-                    {value}
-                  </SelectItem>
-                ))}
-              </SelectPopup>
-            </Select>
-          ) : (
-            <Input
-              size="sm"
-              className="h-7 min-w-40 font-mono text-xs"
-              value={draft}
-              onChange={(event) => {
-                setDraft(event.currentTarget.value);
-                setDraftError(null);
-              }}
-              placeholder="Unset"
-              aria-label={`Value for ${entry.key}`}
-            />
-          )
-        ) : (
-          <span className="font-mono text-muted-foreground">{entry.displayValue}</span>
-        )}
-        {draftError !== null ? (
-          <span className="mt-0.5 block text-[11px] text-destructive">{draftError}</span>
-        ) : null}
-      </td>
-      <td className="sticky right-0 z-10 bg-background py-2 pe-6 ps-5 text-right">
-        {projectView && !isProjectEntry ? (
-          <Button
-            type="button"
-            size="sm"
-            className="h-7 px-2 text-xs"
-            disabled={moving || !hasValue || !canEditEntry(entry)}
-            onClick={onMoveToProject}
-          >
-            {moving ? (
-              <LoaderIcon className="size-3.5 animate-spin" />
+    <>
+      <tr>
+        <td className="px-4 py-2 sm:pl-5">
+          <div className="flex items-center gap-2">
+            <span className="font-mono font-medium text-foreground">{entry.key}</span>
+            {projectView ? (
+              <span
+                className={`rounded-sm px-1.5 py-0.5 text-[10px] font-medium ${isProjectEntry ? "bg-accent/50 text-accent-foreground" : "bg-sidebar-row-hover text-muted-foreground"}`}
+              >
+                {isProjectEntry ? "Project" : "Global"}
+              </span>
+            ) : null}
+          </div>
+        </td>
+        <td className="px-3 py-2 text-muted-foreground">{entry.type}</td>
+        <td className="max-w-56 px-3 py-2 text-muted-foreground">{entry.description}</td>
+        <td className="px-3 py-2">
+          {editable ? (
+            isStructured ? (
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                className="h-7 max-w-72 justify-start gap-1.5 font-mono text-xs"
+                onClick={() => setDialogOpen(true)}
+                aria-label={`Edit ${entry.key}`}
+              >
+                <BracesIcon className="size-3 shrink-0" />
+                <span className="truncate">{hasValue ? entry.displayValue : "Unset"}</span>
+              </Button>
+            ) : enumValues !== undefined ? (
+              <Select
+                value={draft}
+                onValueChange={(value) => {
+                  if (typeof value === "string") setDraft(value);
+                  setDraftError(null);
+                }}
+              >
+                <SelectTrigger className="h-7 w-44" aria-label={`Value for ${entry.key}`}>
+                  <SelectValue placeholder="Unset" />
+                </SelectTrigger>
+                <SelectPopup align="end" alignItemWithTrigger={false}>
+                  {(selectValues ?? []).map((value) => (
+                    <SelectItem hideIndicator key={value} value={value}>
+                      {value}
+                    </SelectItem>
+                  ))}
+                </SelectPopup>
+              </Select>
             ) : (
-              <MoveRightIcon className="size-3.5" />
-            )}
-            Move to project
-          </Button>
-        ) : editable ? (
-          <div className="inline-flex items-center gap-1.5">
+              <Input
+                size="sm"
+                className="h-7 min-w-40 font-mono text-xs"
+                value={draft}
+                onChange={(event) => {
+                  setDraft(event.currentTarget.value);
+                  setDraftError(null);
+                }}
+                placeholder="Unset"
+                aria-label={`Value for ${entry.key}`}
+              />
+            )
+          ) : (
+            <span className="font-mono text-muted-foreground">{entry.displayValue}</span>
+          )}
+          {draftError !== null ? (
+            <span className="mt-0.5 block text-[11px] text-destructive">{draftError}</span>
+          ) : null}
+        </td>
+        <td className="sticky right-0 z-10 bg-background py-2 pe-6 ps-5 text-right">
+          {projectView && !isProjectEntry ? (
             <Button
               type="button"
               size="sm"
               className="h-7 px-2 text-xs"
-              disabled={busy !== null}
-              onClick={() => void save()}
+              disabled={moving || !hasValue || !canEditEntry(entry)}
+              onClick={onMoveToProject}
             >
-              {busy === "save" ? (
+              {moving ? (
                 <LoaderIcon className="size-3.5 animate-spin" />
               ) : (
-                <SaveIcon className="size-3.5" />
+                <MoveRightIcon className="size-3.5" />
               )}
-              Save
+              Move to project
             </Button>
-            {hasValue ? (
-              <Button
-                type="button"
-                size="sm"
-                variant="ghost"
-                className="h-7 px-2 text-xs text-muted-foreground hover:text-foreground"
-                disabled={busy !== null}
-                onClick={() => void reset()}
-              >
-                <Undo2Icon className="size-3.5" />
-                Reset
-              </Button>
-            ) : null}
-          </div>
-        ) : null}
-      </td>
-    </tr>
+          ) : editable ? (
+            <div className="inline-flex items-center gap-1.5">
+              {!isStructured ? (
+                <Button
+                  type="button"
+                  size="sm"
+                  className="h-7 px-2 text-xs"
+                  disabled={busy !== null}
+                  onClick={() => void save()}
+                >
+                  {busy === "save" ? (
+                    <LoaderIcon className="size-3.5 animate-spin" />
+                  ) : (
+                    <SaveIcon className="size-3.5" />
+                  )}
+                  Save
+                </Button>
+              ) : null}
+              {hasValue ? (
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="ghost"
+                  className="h-7 px-2 text-xs text-muted-foreground hover:text-foreground"
+                  disabled={busy !== null}
+                  onClick={() => void reset()}
+                >
+                  <Undo2Icon className="size-3.5" />
+                  Reset
+                </Button>
+              ) : null}
+            </div>
+          ) : null}
+        </td>
+      </tr>
+      {dialogOpen ? (
+        <CapabilitiesSettingDialog
+          entry={entry}
+          scope={scope}
+          environmentId={environmentId}
+          projectId={projectId}
+          onOpenChange={setDialogOpen}
+          onMutated={onMutated}
+        />
+      ) : null}
+    </>
   );
 }
 

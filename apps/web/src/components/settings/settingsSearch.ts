@@ -1,6 +1,7 @@
 export type SettingsPath =
   | "/settings/general"
   | "/settings/appearance"
+  | "/settings/notifications"
   | "/settings/keybindings"
   | "/settings/providers"
   | "/settings/source-control"
@@ -21,6 +22,7 @@ export interface SettingsSearchItem {
 export const SETTINGS_SECTION_LABELS: Readonly<Record<SettingsPath, string>> = {
   "/settings/general": "General",
   "/settings/appearance": "Appearance",
+  "/settings/notifications": "Notifications",
   "/settings/keybindings": "Keybindings",
   "/settings/providers": "Providers",
   "/settings/source-control": "Source Control",
@@ -62,6 +64,21 @@ export const SETTINGS_SEARCH_ITEMS = [
     to: "/settings/appearance",
     // The setting is stage-dependent, so its parent section is the stable destination.
     targetId: "appearance",
+  },
+  {
+    id: "notification-model-failures",
+    title: "Model run failures",
+    to: "/settings/notifications",
+  },
+  {
+    id: "notification-repeated-failures",
+    title: "Repeated failures",
+    to: "/settings/notifications",
+  },
+  {
+    id: "notification-plan-limit-warnings",
+    title: "Plan limit warnings",
+    to: "/settings/notifications",
   },
   {
     id: "interface-font",

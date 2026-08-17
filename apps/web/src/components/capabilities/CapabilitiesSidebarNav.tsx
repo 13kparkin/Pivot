@@ -14,6 +14,7 @@ import {
   LayoutDashboardIcon,
   ScrollTextIcon,
   SearchIcon,
+  CpuIcon,
   Settings2Icon,
   Trash2Icon,
   XIcon,
@@ -61,6 +62,7 @@ const CAPABILITIES_SECTION_ICONS: Readonly<
   "/capabilities/settings": Settings2Icon,
   "/capabilities/skills": BookOpenIcon,
   "/capabilities/rules": ScrollTextIcon,
+  "/capabilities/models-and-roles": CpuIcon,
 };
 
 export const CAPABILITIES_NAV_ITEMS: ReadonlyArray<{

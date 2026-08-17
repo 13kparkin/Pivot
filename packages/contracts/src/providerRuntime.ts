@@ -14,6 +14,7 @@ import {
   TurnId,
 } from "./baseSchemas.ts";
 import { ProviderInstanceId, ProviderDriverKind } from "./providerInstance.ts";
+import { ReviewFileLineCoverage, ReviewFinding, ReviewRunVerdict } from "./review.ts";
 
 const TrimmedNonEmptyStringSchema = TrimmedNonEmptyString;
 const UnknownRecordSchema = Schema.Record(Schema.String, Schema.Unknown);
@@ -196,6 +197,7 @@ const ProviderRuntimeEventType = Schema.Literals([
   "runtime.warning",
   "runtime.error",
   "advisor.comment",
+  "review.finding",
   "ttsr.triggered",
 ]);
 export type ProviderRuntimeEventType = typeof ProviderRuntimeEventType.Type;
@@ -250,6 +252,7 @@ const ToolDeniedType = Schema.Literal("tool.denied");
 const RuntimeWarningType = Schema.Literal("runtime.warning");
 const RuntimeErrorType = Schema.Literal("runtime.error");
 const AdvisorCommentType = Schema.Literal("advisor.comment");
+const ReviewFindingType = Schema.Literal("review.finding");
 const TtsrTriggeredType = Schema.Literal("ttsr.triggered");
 
 const ProviderRuntimeEventBase = Schema.Struct({
@@ -379,6 +382,13 @@ const TurnCompletedPayload = Schema.Struct({
   modelUsage: Schema.optional(UnknownRecordSchema),
   totalCostUsd: Schema.optional(Schema.Number),
   errorMessage: Schema.optional(TrimmedNonEmptyStringSchema),
+  // Review mode: the agent's overall assessment from the findings block.
+  verdict: Schema.optional(ReviewRunVerdict),
+  summary: Schema.optional(TrimmedNonEmptyStringSchema),
+  // Review mode: the changed-file coverage ledger from the findings block.
+  filesReviewed: Schema.optional(Schema.Array(TrimmedNonEmptyStringSchema)),
+  // Review mode: the per-file line-coverage attestation from the findings block.
+  lineCoverage: Schema.optional(Schema.Array(ReviewFileLineCoverage)),
 });
 export type TurnCompletedPayload = typeof TurnCompletedPayload.Type;
 
@@ -1199,6 +1209,15 @@ const ProviderRuntimeTtsrTriggeredEvent = Schema.Struct({
 });
 export type ProviderRuntimeTtsrTriggeredEvent = typeof ProviderRuntimeTtsrTriggeredEvent.Type;
 
+const ReviewFindingPayload = ReviewFinding;
+
+const ProviderRuntimeReviewFindingEvent = Schema.Struct({
+  ...ProviderRuntimeEventBase.fields,
+  type: ReviewFindingType,
+  payload: ReviewFindingPayload,
+});
+export type ProviderRuntimeReviewFindingEvent = typeof ProviderRuntimeReviewFindingEvent.Type;
+
 export const ProviderRuntimeEventV2 = Schema.Union([
   ProviderRuntimeSessionStartedEvent,
   ProviderRuntimeSessionConfiguredEvent,
@@ -1250,6 +1269,7 @@ export const ProviderRuntimeEventV2 = Schema.Union([
   ProviderRuntimeWarningEvent,
   ProviderRuntimeErrorEvent,
   ProviderRuntimeAdvisorCommentEvent,
+  ProviderRuntimeReviewFindingEvent,
   ProviderRuntimeTtsrTriggeredEvent,
 ]);
 export type ProviderRuntimeEventV2 = typeof ProviderRuntimeEventV2.Type;

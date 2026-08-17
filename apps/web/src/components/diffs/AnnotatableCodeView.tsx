@@ -28,6 +28,8 @@ interface DiffCommentAnnotationEntry {
   range: SelectedLineRange;
   rangeLabel: string;
   text: string;
+  /** Read-only (agent review findings): rendered without delete/actions. */
+  readOnly?: boolean;
 }
 
 interface DiffCommentAnnotationGroup {
@@ -90,6 +92,12 @@ interface AnnotatableCodeViewProps {
     fileKey: string,
     collapsed: boolean,
   ) => ReactNode;
+  /**
+   * Read-only comments to render inline alongside the composer's own, e.g.
+   * agent review findings anchored to the diff. Same anchoring rules as
+   * persisted comments; rendered without delete or edit affordances.
+   */
+  readOnlyComments?: ReadonlyArray<ReviewCommentContext>;
 }
 
 interface DiffSelectionContext {
@@ -106,6 +114,7 @@ export function AnnotatableCodeView({
   viewerRef,
   className,
   renderHeaderPrefix,
+  readOnlyComments = EMPTY_REVIEW_COMMENTS,
 }: AnnotatableCodeViewProps) {
   const addReviewComment = useComposerDraftStore((store) => store.addReviewComment);
   const removeReviewComment = useComposerDraftStore((store) => store.removeReviewComment);
@@ -144,8 +153,29 @@ export function AnnotatableCodeView({
               text: comment.text,
             });
           }, []);
+        const readOnly = readOnlyComments
+          .filter(
+            (comment) =>
+              comment.sectionId === sectionId &&
+              comment.filePath === filePath &&
+              (comment.fenceLanguage ?? "diff") === "diff",
+          )
+          .reduce<DiffCommentLineAnnotation[]>((annotations, comment) => {
+            const range = restoreDiffReviewCommentRange(fileDiff, comment);
+            if (!range) return annotations;
+            return appendAnnotationEntry(annotations, range, {
+              id: comment.id,
+              kind: "comment",
+              range,
+              rangeLabel: comment.rangeLabel,
+              text: comment.text,
+              readOnly: true,
+            });
+          }, []);
         const annotations =
-          draft?.fileKey === fileKey ? [...persisted, draft.annotation] : persisted;
+          draft?.fileKey === fileKey
+            ? [...readOnly, ...persisted, draft.annotation]
+            : [...readOnly, ...persisted];
         return {
           id: fileKey,
           type: "diff",
@@ -156,14 +186,15 @@ export function AnnotatableCodeView({
             `${collapsed ? "1" : "0"}:${annotations
               .flatMap((annotation) =>
                 annotation.metadata.entries.map(
-                  (entry) => `${entry.id}:${entry.rangeLabel}:${entry.text}`,
+                  (entry) =>
+                    `${entry.id}:${entry.readOnly ? "ro" : ""}:${entry.rangeLabel}:${entry.text}`,
                 ),
               )
               .join(":")}`,
           ),
         };
       }),
-    [draft, files, reviewComments, sectionId],
+    [draft, files, readOnlyComments, reviewComments, sectionId],
   );
 
   const removeEntry = useCallback(
@@ -271,7 +302,7 @@ export function AnnotatableCodeView({
                 onTextChange={setDraftText}
                 onCancel={() => removeEntry(entry.id)}
                 onComment={(text) => submitEntry(entry.id, text)}
-                onDelete={() => removeEntry(entry.id)}
+                {...(entry.readOnly ? {} : { onDelete: () => removeEntry(entry.id) })}
               />
             ))}
           </div>

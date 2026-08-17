@@ -28,11 +28,12 @@ import * as ServerConfig from "../config.ts";
 import { collectUint8StreamText } from "../stream/collectUint8StreamText.ts";
 import {
   makeOmpManagedBinary,
+  makeRtkManagedBinary,
   OMP_MANAGED_UPDATE_EXECUTABLE,
   OMP_MANAGED_UPDATE_LOCK_KEY,
   OmpManagedBinaryError,
-} from "./omp/OmpManagedBinary.ts";
-import { makeRtkManagedBinary, RtkManagedBinaryError } from "./omp/RtkManagedBinary.ts";
+  RtkManagedBinaryError,
+} from "./omp/index.ts";
 import { makeProviderMaintenanceCommandCoordinator } from "./providerMaintenanceCommandCoordinator.ts";
 import { enrichProviderSnapshotWithVersionAdvisory } from "./providerMaintenance.ts";
 import type { ProviderMaintenanceCapabilities } from "./providerMaintenance.ts";

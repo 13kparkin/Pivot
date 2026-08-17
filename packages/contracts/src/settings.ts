@@ -111,6 +111,23 @@ export const DEFAULT_ENVIRONMENT_IDENTIFICATION_MODE: EnvironmentIdentificationM
 export const FontFamilyPreference = Schema.String.check(Schema.isMaxLength(200));
 export type FontFamilyPreference = typeof FontFamilyPreference.Type;
 
+/**
+ * Which model-failure and plan-limit events surface as toast notifications.
+ * All default on; the Notifications settings panel toggles them.
+ */
+export const NotificationSettings = Schema.Struct({
+  /** Turn-start and session model failures (existing toasts). */
+  modelFailures: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+  /** Re-notify when the same session error persists across turns (cooldown-gated). */
+  repeatedModelFailures: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+  /** Toast when a plan limit window crosses into warning or exhausted. */
+  planLimitWarnings: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+});
+export type NotificationSettings = typeof NotificationSettings.Type;
+export const DEFAULT_NOTIFICATION_SETTINGS: NotificationSettings = Schema.decodeSync(
+  NotificationSettings,
+)({});
+
 export const ClientSettingsSchema = Schema.Struct({
   confirmThreadArchive: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   confirmThreadDelete: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
@@ -177,6 +194,7 @@ export const ClientSettingsSchema = Schema.Struct({
   // old keys, so everyone, including prior beta opt-outs, resets to the new
   // default sidebar.
   legacySidebarEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  notificationSettings: NotificationSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
   sidebarAutoSettleAfterDays: Schema.NullOr(SidebarAutoSettleAfterDays).pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_SIDEBAR_AUTO_SETTLE_AFTER_DAYS)),
   ),
@@ -667,6 +685,7 @@ export const ClientSettingsPatch = Schema.Struct({
     ),
   ),
   planModeEnabled: Schema.optionalKey(Schema.Boolean),
+  notificationSettings: Schema.optionalKey(NotificationSettings),
   sidebarAutoSettleAfterDays: Schema.optionalKey(Schema.NullOr(SidebarAutoSettleAfterDays)),
   sidebarProjectGroupingMode: Schema.optionalKey(SidebarProjectGroupingMode),
   sidebarProjectGroupingOverrides: Schema.optionalKey(

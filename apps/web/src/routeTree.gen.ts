@@ -19,6 +19,7 @@ import { Route as CapabilitiesIndexRouteImport } from './routes/capabilities.ind
 import { Route as ChatIndexRouteImport } from './routes/_chat.index'
 import { Route as SettingsSourceControlRouteImport } from './routes/settings.source-control'
 import { Route as SettingsProvidersRouteImport } from './routes/settings.providers'
+import { Route as SettingsNotificationsRouteImport } from './routes/settings.notifications'
 import { Route as SettingsKeybindingsRouteImport } from './routes/settings.keybindings'
 import { Route as SettingsGeneralRouteImport } from './routes/settings.general'
 import { Route as SettingsDiagnosticsRouteImport } from './routes/settings.diagnostics'
@@ -30,6 +31,7 @@ import { Route as ConnectCallbackRouteImport } from './routes/connect_.callback'
 import { Route as CapabilitiesSkillsRouteImport } from './routes/capabilities.skills'
 import { Route as CapabilitiesSettingsRouteImport } from './routes/capabilities.settings'
 import { Route as CapabilitiesRulesRouteImport } from './routes/capabilities.rules'
+import { Route as CapabilitiesModelsAndRolesRouteImport } from './routes/capabilities.models-and-roles'
 import { Route as ChatPullRequestsRouteImport } from './routes/_chat.pull-requests'
 import { Route as ChatDraftDraftIdRouteImport } from './routes/_chat.draft.$draftId'
 import { Route as ChatEnvironmentIdThreadIdRouteImport } from './routes/_chat.$environmentId.$threadId'
@@ -81,6 +83,11 @@ const SettingsSourceControlRoute = SettingsSourceControlRouteImport.update({
 const SettingsProvidersRoute = SettingsProvidersRouteImport.update({
   id: '/providers',
   path: '/providers',
+  getParentRoute: () => SettingsRoute,
+} as any)
+const SettingsNotificationsRoute = SettingsNotificationsRouteImport.update({
+  id: '/notifications',
+  path: '/notifications',
   getParentRoute: () => SettingsRoute,
 } as any)
 const SettingsKeybindingsRoute = SettingsKeybindingsRouteImport.update({
@@ -138,6 +145,12 @@ const CapabilitiesRulesRoute = CapabilitiesRulesRouteImport.update({
   path: '/rules',
   getParentRoute: () => CapabilitiesRoute,
 } as any)
+const CapabilitiesModelsAndRolesRoute =
+  CapabilitiesModelsAndRolesRouteImport.update({
+    id: '/models-and-roles',
+    path: '/models-and-roles',
+    getParentRoute: () => CapabilitiesRoute,
+  } as any)
 const ChatPullRequestsRoute = ChatPullRequestsRouteImport.update({
   id: '/pull-requests',
   path: '/pull-requests',
@@ -163,6 +176,7 @@ export interface FileRoutesByFullPath {
   '/settings': typeof SettingsRouteWithChildren
   '/usage': typeof UsageRoute
   '/pull-requests': typeof ChatPullRequestsRoute
+  '/capabilities/models-and-roles': typeof CapabilitiesModelsAndRolesRoute
   '/capabilities/rules': typeof CapabilitiesRulesRoute
   '/capabilities/settings': typeof CapabilitiesSettingsRoute
   '/capabilities/skills': typeof CapabilitiesSkillsRoute
@@ -174,6 +188,7 @@ export interface FileRoutesByFullPath {
   '/settings/diagnostics': typeof SettingsDiagnosticsRoute
   '/settings/general': typeof SettingsGeneralRoute
   '/settings/keybindings': typeof SettingsKeybindingsRoute
+  '/settings/notifications': typeof SettingsNotificationsRoute
   '/settings/providers': typeof SettingsProvidersRoute
   '/settings/source-control': typeof SettingsSourceControlRoute
   '/capabilities/': typeof CapabilitiesIndexRoute
@@ -186,6 +201,7 @@ export interface FileRoutesByTo {
   '/settings': typeof SettingsRouteWithChildren
   '/usage': typeof UsageRoute
   '/pull-requests': typeof ChatPullRequestsRoute
+  '/capabilities/models-and-roles': typeof CapabilitiesModelsAndRolesRoute
   '/capabilities/rules': typeof CapabilitiesRulesRoute
   '/capabilities/settings': typeof CapabilitiesSettingsRoute
   '/capabilities/skills': typeof CapabilitiesSkillsRoute
@@ -197,6 +213,7 @@ export interface FileRoutesByTo {
   '/settings/diagnostics': typeof SettingsDiagnosticsRoute
   '/settings/general': typeof SettingsGeneralRoute
   '/settings/keybindings': typeof SettingsKeybindingsRoute
+  '/settings/notifications': typeof SettingsNotificationsRoute
   '/settings/providers': typeof SettingsProvidersRoute
   '/settings/source-control': typeof SettingsSourceControlRoute
   '/': typeof ChatIndexRoute
@@ -213,6 +230,7 @@ export interface FileRoutesById {
   '/settings': typeof SettingsRouteWithChildren
   '/usage': typeof UsageRoute
   '/_chat/pull-requests': typeof ChatPullRequestsRoute
+  '/capabilities/models-and-roles': typeof CapabilitiesModelsAndRolesRoute
   '/capabilities/rules': typeof CapabilitiesRulesRoute
   '/capabilities/settings': typeof CapabilitiesSettingsRoute
   '/capabilities/skills': typeof CapabilitiesSkillsRoute
@@ -224,6 +242,7 @@ export interface FileRoutesById {
   '/settings/diagnostics': typeof SettingsDiagnosticsRoute
   '/settings/general': typeof SettingsGeneralRoute
   '/settings/keybindings': typeof SettingsKeybindingsRoute
+  '/settings/notifications': typeof SettingsNotificationsRoute
   '/settings/providers': typeof SettingsProvidersRoute
   '/settings/source-control': typeof SettingsSourceControlRoute
   '/_chat/': typeof ChatIndexRoute
@@ -241,6 +260,7 @@ export interface FileRouteTypes {
     | '/settings'
     | '/usage'
     | '/pull-requests'
+    | '/capabilities/models-and-roles'
     | '/capabilities/rules'
     | '/capabilities/settings'
     | '/capabilities/skills'
@@ -252,6 +272,7 @@ export interface FileRouteTypes {
     | '/settings/diagnostics'
     | '/settings/general'
     | '/settings/keybindings'
+    | '/settings/notifications'
     | '/settings/providers'
     | '/settings/source-control'
     | '/capabilities/'
@@ -264,6 +285,7 @@ export interface FileRouteTypes {
     | '/settings'
     | '/usage'
     | '/pull-requests'
+    | '/capabilities/models-and-roles'
     | '/capabilities/rules'
     | '/capabilities/settings'
     | '/capabilities/skills'
@@ -275,6 +297,7 @@ export interface FileRouteTypes {
     | '/settings/diagnostics'
     | '/settings/general'
     | '/settings/keybindings'
+    | '/settings/notifications'
     | '/settings/providers'
     | '/settings/source-control'
     | '/'
@@ -290,6 +313,7 @@ export interface FileRouteTypes {
     | '/settings'
     | '/usage'
     | '/_chat/pull-requests'
+    | '/capabilities/models-and-roles'
     | '/capabilities/rules'
     | '/capabilities/settings'
     | '/capabilities/skills'
@@ -301,6 +325,7 @@ export interface FileRouteTypes {
     | '/settings/diagnostics'
     | '/settings/general'
     | '/settings/keybindings'
+    | '/settings/notifications'
     | '/settings/providers'
     | '/settings/source-control'
     | '/_chat/'
@@ -392,6 +417,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof SettingsProvidersRouteImport
       parentRoute: typeof SettingsRoute
     }
+    '/settings/notifications': {
+      id: '/settings/notifications'
+      path: '/notifications'
+      fullPath: '/settings/notifications'
+      preLoaderRoute: typeof SettingsNotificationsRouteImport
+      parentRoute: typeof SettingsRoute
+    }
     '/settings/keybindings': {
       id: '/settings/keybindings'
       path: '/keybindings'
@@ -469,6 +501,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof CapabilitiesRulesRouteImport
       parentRoute: typeof CapabilitiesRoute
     }
+    '/capabilities/models-and-roles': {
+      id: '/capabilities/models-and-roles'
+      path: '/models-and-roles'
+      fullPath: '/capabilities/models-and-roles'
+      preLoaderRoute: typeof CapabilitiesModelsAndRolesRouteImport
+      parentRoute: typeof CapabilitiesRoute
+    }
     '/_chat/pull-requests': {
       id: '/_chat/pull-requests'
       path: '/pull-requests'
@@ -510,6 +549,7 @@ const ChatRouteChildren: ChatRouteChildren = {
 const ChatRouteWithChildren = ChatRoute._addFileChildren(ChatRouteChildren)
 
 interface CapabilitiesRouteChildren {
+  CapabilitiesModelsAndRolesRoute: typeof CapabilitiesModelsAndRolesRoute
   CapabilitiesRulesRoute: typeof CapabilitiesRulesRoute
   CapabilitiesSettingsRoute: typeof CapabilitiesSettingsRoute
   CapabilitiesSkillsRoute: typeof CapabilitiesSkillsRoute
@@ -517,6 +557,7 @@ interface CapabilitiesRouteChildren {
 }
 
 const CapabilitiesRouteChildren: CapabilitiesRouteChildren = {
+  CapabilitiesModelsAndRolesRoute: CapabilitiesModelsAndRolesRoute,
   CapabilitiesRulesRoute: CapabilitiesRulesRoute,
   CapabilitiesSettingsRoute: CapabilitiesSettingsRoute,
   CapabilitiesSkillsRoute: CapabilitiesSkillsRoute,
@@ -534,6 +575,7 @@ interface SettingsRouteChildren {
   SettingsDiagnosticsRoute: typeof SettingsDiagnosticsRoute
   SettingsGeneralRoute: typeof SettingsGeneralRoute
   SettingsKeybindingsRoute: typeof SettingsKeybindingsRoute
+  SettingsNotificationsRoute: typeof SettingsNotificationsRoute
   SettingsProvidersRoute: typeof SettingsProvidersRoute
   SettingsSourceControlRoute: typeof SettingsSourceControlRoute
 }
@@ -545,6 +587,7 @@ const SettingsRouteChildren: SettingsRouteChildren = {
   SettingsDiagnosticsRoute: SettingsDiagnosticsRoute,
   SettingsGeneralRoute: SettingsGeneralRoute,
   SettingsKeybindingsRoute: SettingsKeybindingsRoute,
+  SettingsNotificationsRoute: SettingsNotificationsRoute,
   SettingsProvidersRoute: SettingsProvidersRoute,
   SettingsSourceControlRoute: SettingsSourceControlRoute,
 }
