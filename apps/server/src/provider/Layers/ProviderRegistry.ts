@@ -54,9 +54,13 @@ import {
 import type { ProviderInstance } from "../ProviderDriver.ts";
 import { makeManualOnlyProviderMaintenanceCapabilities } from "../providerMaintenance.ts";
 import type { ProviderSnapshotSource } from "../builtInProviderCatalog.ts";
-import { OmpAdapter } from "../omp/index.ts";
+import {
+  listOmpLoginProviders,
+  loginOmpProvider,
+  OmpAdapter,
+  OmpLoginError,
+} from "../omp/index.ts";
 import { OmpCapabilitiesError } from "@t3tools/contracts";
-import { listOmpLoginProviders, loginOmpProvider, OmpLoginError } from "../omp/index.ts";
 import * as Crypto from "effect/Crypto";
 import * as Schema from "effect/Schema";
 
