@@ -2,16 +2,13 @@ import {
   CommandId,
   ProviderDriverKind,
   ThreadId,
-  type ModelSelection,
   type OrchestrationEvent,
-  type ProviderInstanceId,
   type ProviderRuntimeEvent,
   type ReviewId,
   type ReviewRun,
   type ReviewRunActivityItem,
   type ReviewRunProgress,
   type ReviewRunVerdict,
-  type RuntimeMode,
   ReviewStartedPayload,
   REVIEW_SESSION_THREAD_ID_PREFIX,
   defaultInstanceIdForDriver,
@@ -23,6 +20,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
+import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
 import * as Schema from "effect/Schema";
@@ -35,7 +33,7 @@ import { ReviewReactor, type ReviewReactorShape } from "../Services/ReviewReacto
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../Services/ProjectionSnapshotQuery.ts";
 import { RuntimeReceiptBus } from "../Services/RuntimeReceiptBus.ts";
-import { reviewPersona } from "../../review/reviewPersona.ts";
+import { reviewFixPersona, reviewPersona } from "../../review/reviewPersona.ts";
 import type { ProjectionRepositoryError } from "../../persistence/Errors.ts";
 import { forkParked } from "../../serverActivation.ts";
 
@@ -53,6 +51,9 @@ const isReviewSessionThreadId = (threadId: string): boolean =>
 const REVIEW_PROGRESS_ACTIVITY_CAP = 5;
 /** Min interval between live `review.progress` events; the fold is cheap, the projection write is not. */
 const REVIEW_PROGRESS_EMIT_MIN_INTERVAL_MS = 1_000;
+
+/** Concurrent review-finding fix sessions; fixes are heavy (full agent turns), so fix-all queues. */
+const MAX_CONCURRENT_FIX_SESSIONS = 2;
 
 /**
  * The provider session for a review runs under a thread id namespaced with
@@ -111,6 +112,14 @@ const make = Effect.gen(function* () {
   // spinner. Emits are throttled to REVIEW_PROGRESS_EMIT_MIN_INTERVAL_MS and
   // flushed on the terminal frame.
   const reviewProgress = yield* Ref.make(new Map<string, ReviewProgressState>());
+
+  // Running review-finding fix sessions, keyed by their provider session
+  // thread id, so their terminal events update the right finding and clean up
+  // the PR worktree. Fix sessions never touch the review progress fold.
+  const fixSessions = yield* Ref.make(
+    new Map<string, { reviewId: ReviewId; findingId: string; workspace: ResolvedWorkspace }>(),
+  );
+  const fixSessionSemaphore = yield* Semaphore.make(MAX_CONCURRENT_FIX_SESSIONS);
 
   const recordReviewActivity = Effect.fn("review.recordReviewActivity")(function* (
     sessionThreadId: string,
@@ -227,6 +236,22 @@ const make = Effect.gen(function* () {
       .pipe(Effect.catch(() => Effect.void));
   });
 
+  const dispatchReviewFindingUpdated = Effect.fn("dispatchReviewFindingUpdated")(function* (
+    reviewId: ReviewId,
+    finding: ReviewRun["findings"][number],
+  ) {
+    const commandId = yield* serverCommandId("review-finding-updated");
+    yield* orchestrationEngine
+      .dispatch({
+        type: "review.finding.updated",
+        commandId,
+        reviewId,
+        finding,
+        createdAt: yield* nowIso,
+      })
+      .pipe(Effect.catch(() => Effect.void));
+  });
+
   const dispatchReviewCompleted = Effect.fn("dispatchReviewCompleted")(function* (
     reviewId: ReviewId,
     completedAt: string,
@@ -300,18 +325,12 @@ const make = Effect.gen(function* () {
     });
   });
 
-  const runReviewInner = Effect.fn("runReview")(function* (payload: ReviewStartedPayload) {
-    const reviewId = payload.reviewId;
-    const run = yield* readReviewRun(reviewId);
-    if (run === null) {
-      return;
-    }
-
-    let workspace: ResolvedWorkspace;
-    let instanceId: ProviderInstanceId;
-    let modelSelection: ModelSelection | undefined;
-    let runtimeMode: RuntimeMode;
-
+  /**
+   * The provider session parameters for a run: workspace, instance, model, and
+   * runtime mode. Shared by review sessions (the review turn) and finding-fix
+   * sessions (the fix turn) so both act on the same real workspace.
+   */
+  const resolveReviewSession = Effect.fn("resolveReviewSession")(function* (run: ReviewRun) {
     if (run.source.kind === "pr") {
       const project = yield* requireSome(
         yield* projectionSnapshotQuery.getProjectShellById(run.projectId as never),
@@ -322,7 +341,7 @@ const make = Effect.gen(function* () {
         reference: `#${run.source.number}`,
         mode: "worktree",
       });
-      workspace =
+      const workspace =
         prepared.worktreePath === null
           ? {
               workspacePath: project.workspaceRoot,
@@ -334,42 +353,56 @@ const make = Effect.gen(function* () {
               repoCwd: project.workspaceRoot,
               removeWorktree: true,
             };
-      instanceId = defaultInstanceIdForDriver(ProviderDriverKind.make("omp"));
-      modelSelection = undefined;
-      runtimeMode = "full-access";
-    } else {
-      const threadId = run.threadRef?.threadId;
-      if (threadId === undefined) {
-        return yield* Effect.fail(
-          new ReviewReactorError({ message: "A local review run has no host thread." }),
-        );
-      }
-      const thread = yield* requireSome(
-        yield* projectionSnapshotQuery.getThreadShellById(threadId),
-        `Review host thread '${threadId}' not found.`,
+      return {
+        workspace,
+        instanceId: defaultInstanceIdForDriver(ProviderDriverKind.make("omp")),
+        modelSelection: undefined,
+        runtimeMode: "full-access" as const,
+      };
+    }
+    const threadId = run.threadRef?.threadId;
+    if (threadId === undefined) {
+      return yield* Effect.fail(
+        new ReviewReactorError({ message: "A local review run has no host thread." }),
       );
-      const project = yield* requireSome(
-        yield* projectionSnapshotQuery.getProjectShellById(thread.projectId),
-        `Review project '${thread.projectId}' not found.`,
+    }
+    const thread = yield* requireSome(
+      yield* projectionSnapshotQuery.getThreadShellById(threadId),
+      `Review host thread '${threadId}' not found.`,
+    );
+    const project = yield* requireSome(
+      yield* projectionSnapshotQuery.getProjectShellById(thread.projectId),
+      `Review project '${thread.projectId}' not found.`,
+    );
+    const workspacePath = resolveThreadWorkspaceCwd({
+      thread: { projectId: thread.projectId, worktreePath: thread.worktreePath },
+      projects: [{ id: project.id, workspaceRoot: project.workspaceRoot }],
+    });
+    if (workspacePath === undefined) {
+      return yield* Effect.fail(
+        new ReviewReactorError({ message: "Review host thread has no workspace." }),
       );
-      const workspacePath = resolveThreadWorkspaceCwd({
-        thread: { projectId: thread.projectId, worktreePath: thread.worktreePath },
-        projects: [{ id: project.id, workspaceRoot: project.workspaceRoot }],
-      });
-      if (workspacePath === undefined) {
-        return yield* Effect.fail(
-          new ReviewReactorError({ message: "Review host thread has no workspace." }),
-        );
-      }
-      workspace = {
+    }
+    return {
+      workspace: {
         workspacePath,
         repoCwd: project.workspaceRoot,
         removeWorktree: false,
-      };
-      instanceId = thread.modelSelection.instanceId;
-      modelSelection = thread.modelSelection;
-      runtimeMode = thread.runtimeMode;
+      },
+      instanceId: thread.modelSelection.instanceId,
+      modelSelection: thread.modelSelection,
+      runtimeMode: thread.runtimeMode,
+    };
+  });
+
+  const runReviewInner = Effect.fn("runReview")(function* (payload: ReviewStartedPayload) {
+    const reviewId = payload.reviewId;
+    const run = yield* readReviewRun(reviewId);
+    if (run === null) {
+      return;
     }
+
+    const { workspace, instanceId, modelSelection, runtimeMode } = yield* resolveReviewSession(run);
 
     const sessionThreadId = reviewSessionThreadId(reviewId);
     yield* Ref.update(reviewWorkspaces, (map) => {
@@ -407,11 +440,96 @@ const make = Effect.gen(function* () {
       }),
     );
 
+  const stopFixSession = Effect.fn("stopFixSession")(function* (sessionThreadId: ThreadId) {
+    yield* providerService
+      .stopSession({ threadId: sessionThreadId })
+      .pipe(Effect.catch(() => Effect.void));
+    const entry = (yield* Ref.get(fixSessions)).get(sessionThreadId);
+    if (entry?.workspace.removeWorktree === true) {
+      yield* gitWorkflowService
+        .removeWorktree({ cwd: entry.workspace.repoCwd, path: entry.workspace.workspacePath })
+        .pipe(Effect.catch(() => Effect.void));
+    }
+    yield* Ref.update(fixSessions, (map) => {
+      const next = new Map(map);
+      next.delete(sessionThreadId);
+      return next;
+    });
+  });
+
+  const markFixFailed = Effect.fn("markFixFailed")(function* (
+    reviewId: ReviewId,
+    findingId: string,
+    errorMessage: string,
+  ) {
+    const run = yield* readReviewRun(reviewId);
+    const finding = run?.findings.find((candidate) => candidate.id === findingId);
+    if (finding !== undefined) {
+      yield* dispatchReviewFindingUpdated(reviewId, {
+        ...finding,
+        fixState: "failed",
+        fixError: errorMessage,
+      });
+    }
+  });
+
+  const runFindingFixInner = Effect.fn("runFindingFix")(function* (
+    reviewId: ReviewId,
+    findingId: string,
+  ) {
+    const run = yield* readReviewRun(reviewId);
+    if (run === null) {
+      return;
+    }
+    const finding = run.findings.find((candidate) => candidate.id === findingId);
+    if (finding === undefined) {
+      return;
+    }
+    yield* dispatchReviewFindingUpdated(reviewId, { ...finding, fixState: "fixing" });
+
+    const { workspace, instanceId, modelSelection } = yield* resolveReviewSession(run);
+    const sessionThreadId = ThreadId.make(`review-fix-${yield* randomUUID}`);
+    yield* Ref.update(fixSessions, (map) => {
+      const next = new Map(map);
+      next.set(sessionThreadId, { reviewId, findingId, workspace });
+      return next;
+    });
+    yield* providerService.startSession(sessionThreadId, {
+      threadId: sessionThreadId,
+      provider: ProviderDriverKind.make("omp"),
+      providerInstanceId: instanceId,
+      cwd: workspace.workspacePath,
+      runtimeMode: "full-access",
+      ...(modelSelection !== undefined ? { modelSelection } : {}),
+    });
+    yield* providerService.sendTurn({
+      threadId: sessionThreadId,
+      input: reviewFixPersona({ workspacePath: workspace.workspacePath, finding }),
+      interactionMode: "default",
+      ...(modelSelection !== undefined ? { modelSelection } : {}),
+    });
+  });
+
+  const runFindingFix = (reviewId: ReviewId, findingId: string) =>
+    fixSessionSemaphore
+      .withPermits(1)(runFindingFixInner(reviewId, findingId))
+      .pipe(
+        Effect.catch((error) => {
+          const message = error instanceof Error ? error.message : String(error);
+          return markFixFailed(reviewId, findingId, message);
+        }),
+        Effect.forkDetach,
+        Effect.asVoid,
+      );
+
   const processDomainEvent = Effect.fn("processReviewDomainEvent")(function* (
     event: OrchestrationEvent,
   ) {
     if (event.type === "review.started") {
       yield* runReview(event.payload);
+    }
+    if (event.type === "review.finding.fix.requested") {
+      yield* runFindingFix(event.payload.reviewId, event.payload.findingId);
     }
   });
 
@@ -421,8 +539,40 @@ const make = Effect.gen(function* () {
     if (!isReviewSessionThreadId(event.threadId)) {
       return;
     }
-    const reviewId = reviewIdFromSessionThreadId(event.threadId);
     const sessionThreadId = ThreadId.make(event.threadId);
+    const fixSession = (yield* Ref.get(fixSessions)).get(sessionThreadId);
+    if (fixSession !== undefined) {
+      // A fix session's only meaningful events are its terminal ones; the
+      // rest (item.started, token usage, task.*) belong to the fix turn, not
+      // the review's progress fold.
+      if (event.type === "turn.completed" || event.type === "turn.aborted") {
+        if (event.type === "turn.aborted") {
+          yield* markFixFailed(
+            fixSession.reviewId,
+            fixSession.findingId,
+            "Fix turn was interrupted.",
+          );
+        } else if (event.payload.state === "failed") {
+          yield* markFixFailed(
+            fixSession.reviewId,
+            fixSession.findingId,
+            event.payload.errorMessage ?? "Fix turn failed.",
+          );
+        } else {
+          const run = yield* readReviewRun(fixSession.reviewId);
+          const finding = run?.findings.find((candidate) => candidate.id === fixSession.findingId);
+          if (finding !== undefined) {
+            yield* dispatchReviewFindingUpdated(fixSession.reviewId, {
+              ...finding,
+              fixState: "fixed",
+            });
+          }
+        }
+        yield* stopFixSession(sessionThreadId);
+      }
+      return;
+    }
+    const reviewId = reviewIdFromSessionThreadId(event.threadId);
     if (event.type === "review.finding") {
       yield* dispatchReviewFindingAdded(reviewId, event.payload);
       return;
@@ -496,6 +646,17 @@ const make = Effect.gen(function* () {
   const reconcileStaleReviewRuns = Effect.fn("review.reconcileStaleReviewRuns")(function* () {
     const model = yield* projectionSnapshotQuery.getCommandReadModel();
     for (const run of model.reviewRuns ?? []) {
+      // Fix sessions never survive a restart either; findings left "fixing"
+      // would spin forever, so fail them the same way running reviews are.
+      for (const finding of run.findings) {
+        if (finding.fixState === "fixing") {
+          yield* dispatchReviewFindingUpdated(run.id, {
+            ...finding,
+            fixState: "failed",
+            fixError: "Fix session was lost before it finished (the server restarted).",
+          });
+        }
+      }
       if (run.status !== "running") {
         continue;
       }
@@ -526,7 +687,7 @@ const make = Effect.gen(function* () {
 
     yield* forkParked(
       Stream.runForEach(orchestrationEngine.streamDomainEvents, (event) => {
-        if (event.type !== "review.started") {
+        if (event.type !== "review.started" && event.type !== "review.finding.fix.requested") {
           return Effect.void;
         }
         return worker.enqueue({ source: "domain", event });

@@ -109,6 +109,14 @@ export const ReviewFindingSeverity = Schema.Literals(["blocking", "should-fix", 
 export type ReviewFindingSeverity = typeof ReviewFindingSeverity.Type;
 
 /**
+ * Where a finding's AI fix stands. `fixing` while a fix subagent is running,
+ * `fixed` once the fix turn completed, `failed` when the fix turn errored
+ * (see `fixError`). Absent for findings nobody asked to fix.
+ */
+export const ReviewFindingFixState = Schema.Literals(["fixing", "fixed", "failed"]);
+export type ReviewFindingFixState = typeof ReviewFindingFixState.Type;
+
+/**
  * One actionable finding from a review run, anchored to a file and line of the
  * diff under review. `line` is null for a file-level finding. `side` matches
  * the existing `PullRequestDiffSide` so findings render through the same
@@ -122,6 +130,8 @@ export const ReviewFinding = Schema.Struct({
   severity: ReviewFindingSeverity,
   message: TrimmedNonEmptyString,
   symbol: Schema.NullOr(TrimmedNonEmptyString),
+  fixState: Schema.optional(ReviewFindingFixState),
+  fixError: Schema.optional(TrimmedNonEmptyString),
 });
 export type ReviewFinding = typeof ReviewFinding.Type;
 

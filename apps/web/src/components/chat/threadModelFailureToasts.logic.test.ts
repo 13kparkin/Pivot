@@ -3,6 +3,7 @@ import type { OrchestrationThreadActivity } from "@t3tools/contracts";
 
 import {
   MODEL_FAILURE_ACTIVITY_KINDS,
+  SESSION_ERROR_REPEAT_COOLDOWN_MS,
   activityFailureDetail,
   activityFailureTitle,
   findNewModelFailureActivities,
@@ -103,6 +104,45 @@ describe("shouldToastSessionError", () => {
         lastActivityFailureDetail: null,
       }),
       false,
+    );
+  });
+
+  it("re-toasts the same error once the cooldown has elapsed", () => {
+    assert.equal(
+      shouldToastSessionError({
+        previousLastError: "usage limit reached",
+        currentLastError: "usage limit reached",
+        lastActivityFailureDetail: null,
+        lastToastAtMs: 1_000,
+        nowMs: 1_000 + SESSION_ERROR_REPEAT_COOLDOWN_MS,
+      }),
+      true,
+    );
+  });
+
+  it("does not re-toast the same error inside the cooldown", () => {
+    assert.equal(
+      shouldToastSessionError({
+        previousLastError: "usage limit reached",
+        currentLastError: "usage limit reached",
+        lastActivityFailureDetail: null,
+        lastToastAtMs: 1_000,
+        nowMs: 1_000 + SESSION_ERROR_REPEAT_COOLDOWN_MS - 1,
+      }),
+      false,
+    );
+  });
+
+  it("a new error toasts immediately even right after a previous toast", () => {
+    assert.equal(
+      shouldToastSessionError({
+        previousLastError: "usage limit reached",
+        currentLastError: "network error",
+        lastActivityFailureDetail: null,
+        lastToastAtMs: 1_000,
+        nowMs: 1_000,
+      }),
+      true,
     );
   });
 

@@ -954,6 +954,22 @@ const ReviewFindingAddedCommand = Schema.Struct({
   createdAt: IsoDateTime,
 });
 
+const ReviewFindingFixCommand = Schema.Struct({
+  type: Schema.Literal("review.finding.fix"),
+  commandId: CommandId,
+  reviewId: ReviewId,
+  findingId: TrimmedNonEmptyString,
+  createdAt: IsoDateTime,
+});
+
+const ReviewFindingUpdatedCommand = Schema.Struct({
+  type: Schema.Literal("review.finding.updated"),
+  commandId: CommandId,
+  reviewId: ReviewId,
+  finding: ReviewFinding,
+  createdAt: IsoDateTime,
+});
+
 const ReviewCompletedCommand = Schema.Struct({
   type: Schema.Literal("review.completed"),
   commandId: CommandId,
@@ -1005,6 +1021,7 @@ const DispatchableClientOrchestrationCommand = Schema.Union([
   ThreadCheckpointRevertCommand,
   ThreadSessionStopCommand,
   ReviewStartCommand,
+  ReviewFindingFixCommand,
 ]);
 export type DispatchableClientOrchestrationCommand =
   typeof DispatchableClientOrchestrationCommand.Type;
@@ -1034,6 +1051,7 @@ export const ClientOrchestrationCommand = Schema.Union([
   ThreadCheckpointRevertCommand,
   ThreadSessionStopCommand,
   ReviewStartCommand,
+  ReviewFindingFixCommand,
 ]);
 export type ClientOrchestrationCommand = typeof ClientOrchestrationCommand.Type;
 
@@ -1121,6 +1139,8 @@ const InternalOrchestrationCommand = Schema.Union([
   ThreadRevertCompleteCommand,
   ThreadTitleRegenerationCompleteCommand,
   ReviewFindingAddedCommand,
+  ReviewFindingFixCommand,
+  ReviewFindingUpdatedCommand,
   ReviewProgressCommand,
   ReviewCompletedCommand,
   ReviewFailedCommand,
@@ -1165,6 +1185,8 @@ export const OrchestrationEventType = Schema.Literals([
   "thread.activity-appended",
   "review.started",
   "review.finding.added",
+  "review.finding.fix.requested",
+  "review.finding.updated",
   "review.progress",
   "review.completed",
   "review.failed",
@@ -1420,6 +1442,18 @@ export const ReviewFindingAddedPayload = Schema.Struct({
 });
 export type ReviewFindingAddedPayload = typeof ReviewFindingAddedPayload.Type;
 
+export const ReviewFindingFixRequestedPayload = Schema.Struct({
+  reviewId: ReviewId,
+  findingId: TrimmedNonEmptyString,
+});
+export type ReviewFindingFixRequestedPayload = typeof ReviewFindingFixRequestedPayload.Type;
+
+export const ReviewFindingUpdatedPayload = Schema.Struct({
+  reviewId: ReviewId,
+  finding: ReviewFinding,
+});
+export type ReviewFindingUpdatedPayload = typeof ReviewFindingUpdatedPayload.Type;
+
 export const ReviewProgressPayload = Schema.Struct({
   reviewId: ReviewId,
   progress: ReviewRunProgress,
@@ -1618,6 +1652,16 @@ export const OrchestrationEvent = Schema.Union([
     ...EventBaseFields,
     type: Schema.Literal("review.finding.added"),
     payload: ReviewFindingAddedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("review.finding.fix.requested"),
+    payload: ReviewFindingFixRequestedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("review.finding.updated"),
+    payload: ReviewFindingUpdatedPayload,
   }),
   Schema.Struct({
     ...EventBaseFields,

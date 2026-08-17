@@ -110,19 +110,55 @@ export function ReviewRunPanel({
     findings: run.findings,
     files,
   });
+  const coverageStrip =
+    files.length > 0 && (coverage.covered.length > 0 || coverage.missing.length > 0) ? (
+      <div className="border-b border-border/60 bg-muted/30 px-3 py-1.5">
+        <div className="flex items-center justify-between text-[11px]">
+          <span className="font-medium uppercase tracking-wider text-muted-foreground/70">
+            Coverage
+          </span>
+          <span className="tabular-nums text-muted-foreground/70">
+            {coverage.covered.length}/{files.length} files
+          </span>
+        </div>
+        <ul className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5">
+          {files.map(({ filePath }) => {
+            const covered = coverage.covered.includes(filePath);
+            return (
+              <li
+                key={filePath}
+                className={`flex min-w-0 items-center gap-1 font-mono text-[11px] ${
+                  covered ? "text-muted-foreground/70" : "font-medium text-amber-500"
+                }`}
+              >
+                {covered ? (
+                  <CheckIcon className="size-2.5 shrink-0 text-emerald-500" />
+                ) : (
+                  <TriangleAlertIcon className="size-2.5 shrink-0 text-amber-500" />
+                )}
+                <span className="truncate">{filePath}</span>
+              </li>
+            );
+          })}
+        </ul>
+      </div>
+    ) : null;
 
   if (visibleFindings.length === 0) {
     return (
-      <div className="flex items-center gap-2 rounded-lg border border-border/60 bg-muted/30 px-3 py-2 text-xs">
-        <CheckIcon className="size-3.5 shrink-0 text-emerald-500" />
-        <span className="font-medium text-foreground">
-          {run.findings.length > 0
-            ? "All findings dismissed."
-            : "No issues found — this review is clean."}
-        </span>
-        {run.summary ? (
-          <span className="min-w-0 truncate text-muted-foreground">{run.summary}</span>
-        ) : null}
+      <div className="flex max-h-72 flex-col overflow-hidden rounded-lg border border-border/60">
+        {coverageStrip}
+        <div className="flex items-center gap-2 px-3 py-2 text-xs">
+          <CheckIcon className="size-3.5 shrink-0 text-emerald-500" />
+          <span className="font-medium text-foreground">
+            {run.findings.length > 0
+              ? "All findings dismissed."
+              : "No issues found — this review is clean."}
+          </span>
+          {run.summary ? (
+            <span className="min-w-0 truncate text-muted-foreground">{run.summary}</span>
+          ) : null}
+        </div>
       </div>
     );
   }
@@ -148,38 +184,7 @@ export function ReviewRunPanel({
           ) : null}
         </div>
       ) : null}
-      {files.length > 0 && (coverage.covered.length > 0 || coverage.missing.length > 0) ? (
-        <div className="border-b border-border/60 bg-muted/30 px-3 py-1.5">
-          <div className="flex items-center justify-between text-[11px]">
-            <span className="font-medium uppercase tracking-wider text-muted-foreground/70">
-              Coverage
-            </span>
-            <span className="tabular-nums text-muted-foreground/70">
-              {coverage.covered.length}/{files.length} files
-            </span>
-          </div>
-          <ul className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5">
-            {files.map(({ filePath }) => {
-              const covered = coverage.covered.includes(filePath);
-              return (
-                <li
-                  key={filePath}
-                  className={`flex min-w-0 items-center gap-1 font-mono text-[11px] ${
-                    covered ? "text-muted-foreground/70" : "font-medium text-amber-500"
-                  }`}
-                >
-                  {covered ? (
-                    <CheckIcon className="size-2.5 shrink-0 text-emerald-500" />
-                  ) : (
-                    <TriangleAlertIcon className="size-2.5 shrink-0 text-amber-500" />
-                  )}
-                  <span className="truncate">{filePath}</span>
-                </li>
-              );
-            })}
-          </ul>
-        </div>
-      ) : null}
+      {coverageStrip}
       <div className="flex items-center justify-between border-b border-border/60 bg-muted/30 px-3 py-1.5 text-[11px] font-medium uppercase tracking-wider text-muted-foreground/70">
         <span>Review findings</span>
         <span>{visibleFindings.length} total</span>

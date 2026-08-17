@@ -49,24 +49,43 @@ export function findNewModelFailureActivities(
 }
 
 /**
+ * Minimum gap between toasts for the SAME session error string. Persistent
+ * failures (quota exhaustion) repeat every turn; without a cooldown they would
+ * toast once then be suppressed forever by the equality check below.
+ */
+export const SESSION_ERROR_REPEAT_COOLDOWN_MS = 5 * 60 * 1000;
+
+/**
  * Whether a session-level error (a turn that failed mid-run) deserves a new
- * toast: it must be a new error string, and it must not duplicate the detail
- * of a turn-start failure activity already toasted for the same thread (the
- * server mirrors the activity detail into `session.lastError`).
+ * toast: a new error string toasts immediately; the SAME error string
+ * re-toasts only after {@link SESSION_ERROR_REPEAT_COOLDOWN_MS} has elapsed
+ * since the last toast for it. It must never duplicate the detail of a
+ * turn-start failure activity already toasted for the same thread (the server
+ * mirrors the activity detail into `session.lastError`).
  */
 export function shouldToastSessionError(input: {
   readonly previousLastError: string | null;
   readonly currentLastError: string | null;
   readonly lastActivityFailureDetail: string | null;
+  /** When the same error was last toasted, or null if never toasted. */
+  readonly lastToastAtMs?: number | null;
+  readonly nowMs?: number;
 }): boolean {
   if (input.currentLastError === null || input.currentLastError.length === 0) {
-    return false;
-  }
-  if (input.previousLastError === input.currentLastError) {
     return false;
   }
   if (input.currentLastError === input.lastActivityFailureDetail) {
     return false;
   }
-  return true;
+  if (input.previousLastError !== input.currentLastError) {
+    return true;
+  }
+  // Same error again: only re-toast after the cooldown, and only if it was
+  // actually toasted before (an error already present at baseline stays quiet).
+  const lastToastAtMs = input.lastToastAtMs ?? null;
+  if (lastToastAtMs === null) {
+    return false;
+  }
+  const nowMs = input.nowMs ?? Date.now();
+  return nowMs - lastToastAtMs >= SESSION_ERROR_REPEAT_COOLDOWN_MS;
 }

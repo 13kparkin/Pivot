@@ -12,6 +12,7 @@ import {
   ReviewCompletedPayload,
   ReviewFailedPayload,
   ReviewFindingAddedPayload,
+  ReviewFindingUpdatedPayload,
   ReviewProgressPayload,
   ReviewStartedPayload,
 } from "@t3tools/contracts";
@@ -843,10 +844,28 @@ export function projectEvent(
         Effect.map((payload) => ({
           ...nextBase,
           reviewRuns: (nextBase.reviewRuns ?? []).map((run) =>
-            run.id === payload.reviewId && !run.findings.some((f) => f.id === payload.finding.id)
+            run.id === payload.reviewId
               ? {
                   ...run,
                   findings: [...run.findings, payload.finding],
+                  updatedAt: event.occurredAt,
+                }
+              : run,
+          ),
+        })),
+      );
+
+    case "review.finding.updated":
+      return decodeForEvent(ReviewFindingUpdatedPayload, event.payload, event.type, "payload").pipe(
+        Effect.map((payload) => ({
+          ...nextBase,
+          reviewRuns: (nextBase.reviewRuns ?? []).map((run) =>
+            run.id === payload.reviewId
+              ? {
+                  ...run,
+                  findings: run.findings.map((finding) =>
+                    finding.id === payload.finding.id ? payload.finding : finding,
+                  ),
                   updatedAt: event.occurredAt,
                 }
               : run,

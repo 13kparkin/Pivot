@@ -5,6 +5,7 @@ import type { ScopedThreadRef } from "@t3tools/contracts";
 import { scopedThreadKey } from "@t3tools/client-runtime/environment";
 
 import { useThreadActivities, useThreadSession, useThreadStatus } from "~/state/entities";
+import { usePrimarySettings } from "~/hooks/useSettings";
 import { stackedThreadToast, toastManager } from "../ui/toast";
 import {
   activityFailureDetail,
@@ -20,6 +21,8 @@ interface ThreadFailureToastMemory {
   /** Detail of the last turn-start failure activity toasted, so the mirrored
    *  `session.lastError` does not produce a duplicate toast. */
   lastActivityFailureDetail: string | null;
+  /** When the current session error was last toasted (cooldown re-notify). */
+  lastSessionErrorToastAt: number | null;
   /** Whether the last observed status was "live" (streaming). */
   live: boolean;
 }
@@ -39,9 +42,15 @@ export function ThreadModelFailureToasts({ threadRef }: { threadRef: ScopedThrea
   const status = useThreadStatus(threadRef);
   const activities = useThreadActivities(threadRef);
   const session = useThreadSession(threadRef);
+  const notificationSettings = usePrimarySettings((settings) => settings.notificationSettings);
 
   useEffect(() => {
     if (threadRef === null) {
+      return;
+    }
+    // The "model failures" toggle gates every toast this component fires;
+    // memory is untouched while off so re-enabling re-baselines quietly.
+    if (!notificationSettings.modelFailures) {
       return;
     }
     const threadKey = scopedThreadKey(threadRef);
@@ -58,6 +67,7 @@ export function ThreadModelFailureToasts({ threadRef }: { threadRef: ScopedThrea
         seenActivityIds: new Set(activities.map((activity) => activity.id)),
         previousLastError: lastError,
         lastActivityFailureDetail: null,
+        lastSessionErrorToastAt: null,
         live: isLive,
       });
       return;
@@ -98,8 +108,14 @@ export function ThreadModelFailureToasts({ threadRef }: { threadRef: ScopedThrea
         previousLastError: memory.previousLastError,
         currentLastError: lastError,
         lastActivityFailureDetail: memory.lastActivityFailureDetail,
+        // Cooldown re-notify is its own toggle; disabled means a persistent
+        // error toasts only on its first occurrence.
+        lastToastAtMs: notificationSettings.repeatedModelFailures
+          ? memory.lastSessionErrorToastAt
+          : null,
       })
     ) {
+      memory.lastSessionErrorToastAt = Date.now();
       toastManager.add(
         stackedThreadToast({
           type: "error",
@@ -111,7 +127,7 @@ export function ThreadModelFailureToasts({ threadRef }: { threadRef: ScopedThrea
     }
     memory.previousLastError = lastError;
     memory.live = isLive;
-  }, [activities, session, status, threadRef]);
+  }, [activities, notificationSettings, session, status, threadRef]);
 
   return null;
 }

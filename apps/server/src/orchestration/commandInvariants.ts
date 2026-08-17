@@ -6,6 +6,7 @@ import type {
   OrchestrationThread,
   ProjectId,
   ReviewId,
+  ReviewFinding,
   ReviewRun,
   ReviewSource,
   ScopedThreadRef,
@@ -273,6 +274,25 @@ export function requireReviewRunning(input: {
     invariantError(
       input.command.type,
       `Review '${input.reviewId}' is not running and cannot handle command '${input.command.type}'.`,
+    ),
+  );
+}
+
+export function requireReviewFinding(input: {
+  readonly readModel: OrchestrationReadModel;
+  readonly command: OrchestrationCommand;
+  readonly reviewId: ReviewId;
+  readonly findingId: string;
+}): Effect.Effect<ReviewFinding, OrchestrationCommandInvariantError> {
+  const run = findReviewById(input.readModel, input.reviewId);
+  const finding = run?.findings.find((candidate) => candidate.id === input.findingId);
+  if (run !== undefined && finding !== undefined) {
+    return Effect.succeed(finding);
+  }
+  return Effect.fail(
+    invariantError(
+      input.command.type,
+      `Review '${input.reviewId}' has no finding '${input.findingId}'.`,
     ),
   );
 }
