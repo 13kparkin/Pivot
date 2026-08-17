@@ -80,12 +80,13 @@ export function deriveDiffEmptyState(input: {
   readonly hasTurnSummaries: boolean;
   readonly isLoadingPatch: boolean;
   readonly hasResolvedPatch: boolean;
-  readonly hasNetChanges: boolean;
+  /** The resolved patch rendered no net changes (empty). */
+  readonly patchIsEmpty: boolean;
 }): DiffEmptyState {
   if (input.scopeKind === "turn" && !input.hasTurnSummaries) {
     return "no-completed-turns";
   }
-  if (input.hasResolvedPatch && !input.hasNetChanges) {
+  if (input.hasResolvedPatch && input.patchIsEmpty) {
     return "no-net-changes";
   }
   if (!input.hasResolvedPatch && !input.isLoadingPatch) {

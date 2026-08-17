@@ -482,7 +482,7 @@ export default function DiffPanel({
     hasTurnSummaries: orderedTurnDiffSummaries.length > 0,
     isLoadingPatch: isLoadingSelectedPatch,
     hasResolvedPatch,
-    hasNetChanges: hasNoNetChanges,
+    patchIsEmpty: hasNoNetChanges,
   });
   const renderablePatch = useMemo(
     () =>

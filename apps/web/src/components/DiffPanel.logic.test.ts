@@ -93,7 +93,7 @@ describe("deriveDiffEmptyState", () => {
         hasTurnSummaries: false,
         isLoadingPatch: false,
         hasResolvedPatch: false,
-        hasNetChanges: false,
+        patchIsEmpty: false,
       }),
     ).toBe("no-completed-turns");
   });
@@ -105,7 +105,7 @@ describe("deriveDiffEmptyState", () => {
         hasTurnSummaries: true,
         isLoadingPatch: true,
         hasResolvedPatch: false,
-        hasNetChanges: false,
+        patchIsEmpty: false,
       }),
     ).toBe("loading");
   });
@@ -117,7 +117,7 @@ describe("deriveDiffEmptyState", () => {
         hasTurnSummaries: true,
         isLoadingPatch: false,
         hasResolvedPatch: true,
-        hasNetChanges: false,
+        patchIsEmpty: true,
       }),
     ).toBe("no-net-changes");
   });
@@ -129,8 +129,20 @@ describe("deriveDiffEmptyState", () => {
         hasTurnSummaries: true,
         isLoadingPatch: false,
         hasResolvedPatch: false,
-        hasNetChanges: false,
+        patchIsEmpty: false,
       }),
     ).toBe("no-patch");
+  });
+
+  it("has no empty state when a resolved patch contains changes", () => {
+    expect(
+      deriveDiffEmptyState({
+        scopeKind: "working-tree",
+        hasTurnSummaries: true,
+        isLoadingPatch: false,
+        hasResolvedPatch: true,
+        patchIsEmpty: false,
+      }),
+    ).toBeNull();
   });
 });
