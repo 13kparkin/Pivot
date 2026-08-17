@@ -2,7 +2,7 @@
 // this file; code inside the module imports concrete files. Re-exports only.
 export { OmpAdapter } from "./OmpAdapter.ts";
 export { OmpCapabilitiesService } from "./OmpCapabilitiesService.ts";
-export { OmpRpcRuntime } from "./OmpRpcRuntime.ts";
+export { OmpRpcRuntime, OmpSpawnError } from "./OmpRpcRuntime.ts";
 export { OmpConfigStore, syncOmpSettingsToConfigStore } from "./OmpConfigStore.ts";
 export { enrichOmpManagedBundleVersionAdvisory } from "./OmpManagedBundleAdvisory.ts";
 export { OmpLoginError, listOmpLoginProviders, loginOmpProvider } from "./OmpLogin.ts";
