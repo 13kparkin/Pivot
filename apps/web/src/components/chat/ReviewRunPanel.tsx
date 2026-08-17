@@ -110,8 +110,6 @@ export function ReviewRunPanel({
     findings: run.findings,
     files,
   });
-  const outdatedIds = new Set(coverage.outdatedFindings.map((finding) => finding.id));
-  const coveredSet = new Set(coverage.covered);
 
   if (visibleFindings.length === 0) {
     return (
@@ -161,23 +159,24 @@ export function ReviewRunPanel({
             </span>
           </div>
           <ul className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5">
-            {files.map(({ filePath }) => (
-              <li
-                key={filePath}
-                className={`flex min-w-0 items-center gap-1 font-mono text-[11px] ${
-                  coveredSet.has(filePath)
-                    ? "text-muted-foreground/70"
-                    : "font-medium text-amber-500"
-                }`}
-              >
-                {coveredSet.has(filePath) ? (
-                  <CheckIcon className="size-2.5 shrink-0 text-emerald-500" />
-                ) : (
-                  <TriangleAlertIcon className="size-2.5 shrink-0 text-amber-500" />
-                )}
-                <span className="truncate">{filePath}</span>
-              </li>
-            ))}
+            {files.map(({ filePath }) => {
+              const covered = coverage.covered.includes(filePath);
+              return (
+                <li
+                  key={filePath}
+                  className={`flex min-w-0 items-center gap-1 font-mono text-[11px] ${
+                    covered ? "text-muted-foreground/70" : "font-medium text-amber-500"
+                  }`}
+                >
+                  {covered ? (
+                    <CheckIcon className="size-2.5 shrink-0 text-emerald-500" />
+                  ) : (
+                    <TriangleAlertIcon className="size-2.5 shrink-0 text-amber-500" />
+                  )}
+                  <span className="truncate">{filePath}</span>
+                </li>
+              );
+            })}
           </ul>
         </div>
       ) : null}
@@ -198,7 +197,7 @@ export function ReviewRunPanel({
                 >
                   {reviewSeverityLabel(finding.severity)}
                 </span>
-                {outdatedIds.has(finding.id) ? (
+                {coverage.outdatedFindings.some((outdated) => outdated.id === finding.id) ? (
                   <span className="ml-2 rounded-sm bg-amber-500/15 px-1 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-500">
                     Outdated
                   </span>
