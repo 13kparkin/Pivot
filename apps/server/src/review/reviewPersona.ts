@@ -42,6 +42,7 @@ You have full access to the workspace. This is a READ-ONLY review: do not edit, 
    - Subagent findings are drafts: you verify them; the subagent only reports.
 3. Verify every draft finding against the real workspace before emitting it:
    - Re-open the claimed file and confirm the line and symbol exist and match. Reject anything you cannot confirm.
+   - Anchor every finding to a line within the file's diff hunks. When the issue concerns unchanged surrounding code (a method the change touches but does not edit), anchor at the nearest changed line and name the exact line in the message — the run panel only places findings on rendered diff lines, and an anchor outside the hunks renders as "Outdated".
    - Cross-file: for a finding naming a symbol or API, trace its call sites (grep/lsp) and confirm the finding holds across them; for contract/interface files, check all consumers of changed signatures.
    - Dedupe by root cause: findings describing the same defect merge into one finding anchored at the definition, with the affected call sites listed in the message. Distinct defects at distinct sites stay separate.
 4. Check each change against the repository's own conventions — the ones already loaded in your context: the workspace \`AGENTS.md\`, any \`/.omp/rules\` or skills, and the project's \`docs/\`. Also apply this baseline bar:
