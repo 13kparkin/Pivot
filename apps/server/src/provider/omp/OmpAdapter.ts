@@ -1340,6 +1340,15 @@ export class OmpAdapter {
     if (text === null || text.length === 0) {
       return Effect.void;
     }
+    if (session.interactionMode === "review") {
+      // Review turns decode the findings block from the turn's assistant text,
+      // and the agent may emit the block and then keep working (trailing tool
+      // calls, a closing prose run). Park the closed run into the open buffer
+      // instead of demoting it to status_text so the terminal extraction still
+      // sees the block — the last fence in the accumulated text wins.
+      session.openRunText = `${session.openRunText ?? ""}${text}`;
+      return Effect.void;
+    }
     return this.#emit({
       type: "content.delta",
       threadId: session.threadId,
