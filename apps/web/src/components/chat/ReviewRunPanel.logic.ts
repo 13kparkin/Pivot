@@ -24,8 +24,8 @@ const IN_PROGRESS_WINDOW = 3;
  * Derive each changed file's review-progress state from the run's live
  * activity and findings. A file is `done` once a finding lands for it, or —
  * once the run completes — when the `filesReviewed` ledger names it. It is
- * `in-progress` while recent activity (a read/grep targeting it, or a
- * subagent description naming it) points at it, and `pending` otherwise.
+ * `in-progress` while recent activity names it — a read/grep target, a bash
+ * command diffing it, or a subagent description — and `pending` otherwise.
  * Done files never revert, so the list settles into the coverage ledger at
  * completion.
  */
