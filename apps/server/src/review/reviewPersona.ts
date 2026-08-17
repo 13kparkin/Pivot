@@ -99,38 +99,3 @@ function describeSource(source: ReviewSource): string {
       return `pull request ${source.repository}#${source.number} on ${source.host}`;
   }
 }
-
-/**
- * The turn input for a review-finding fix session. Unlike the review persona
- * this is an EDITING task: the agent opens the file, applies the minimal
- * change that resolves the finding, and reports what it did. Runs in default
- * interaction mode (no findings block expected).
- */
-export function reviewFixPersona(input: {
-  readonly workspacePath: string;
-  readonly finding: {
-    readonly file: string;
-    readonly line: number | null;
-    readonly severity: string;
-    readonly message: string;
-    readonly symbol: string | null;
-  };
-}): string {
-  const { finding } = input;
-  return `You are fixing one code review finding in the Pivot codebase.
-
-## Workspace
-- Workspace: ${input.workspacePath}
-
-## Finding to fix
-- File: ${finding.file}
-- Line: ${finding.line === null ? "(file-level)" : String(finding.line)}
-- Severity: ${finding.severity}
-- ${finding.symbol === null ? "" : `Symbol: ${finding.symbol}\n`}Message: ${finding.message}
-
-## Task
-1. Open the file and locate the issue described by the finding.
-2. Apply the minimal change that resolves it. Do not refactor unrelated code, and do not touch other findings.
-3. Verify the change is coherent (types/build/tests where practical).
-4. End with one or two sentences: what you changed and why it resolves the finding.`;
-}

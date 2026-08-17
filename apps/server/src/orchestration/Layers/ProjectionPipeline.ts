@@ -1661,25 +1661,6 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
           });
           return;
         }
-        case "review.finding.updated": {
-          const existing = yield* projectionReviewRunRepository.getById({
-            reviewId: event.payload.reviewId,
-          });
-          if (Option.isNone(existing)) {
-            return;
-          }
-          const run = existing.value;
-          yield* projectionReviewRunRepository.upsert({
-            ...run,
-            findings: run.findings.some((entry) => entry.id === event.payload.finding.id)
-              ? run.findings.map((entry) =>
-                  entry.id === event.payload.finding.id ? event.payload.finding : entry,
-                )
-              : run.findings,
-            updatedAt: event.occurredAt,
-          });
-          return;
-        }
         case "review.progress": {
           const existing = yield* projectionReviewRunRepository.getById({
             reviewId: event.payload.reviewId,

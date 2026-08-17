@@ -20,7 +20,6 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
-import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
 import * as Schema from "effect/Schema";
@@ -33,7 +32,7 @@ import { ReviewReactor, type ReviewReactorShape } from "../Services/ReviewReacto
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../Services/ProjectionSnapshotQuery.ts";
 import { RuntimeReceiptBus } from "../Services/RuntimeReceiptBus.ts";
-import { reviewFixPersona, reviewPersona } from "../../review/reviewPersona.ts";
+import { reviewPersona } from "../../review/reviewPersona.ts";
 import type { ProjectionRepositoryError } from "../../persistence/Errors.ts";
 import { forkParked } from "../../serverActivation.ts";
 
@@ -51,9 +50,6 @@ const isReviewSessionThreadId = (threadId: string): boolean =>
 const REVIEW_PROGRESS_ACTIVITY_CAP = 5;
 /** Min interval between live `review.progress` events; the fold is cheap, the projection write is not. */
 const REVIEW_PROGRESS_EMIT_MIN_INTERVAL_MS = 1_000;
-
-/** Concurrent review-finding fix sessions; fixes are heavy (full agent turns), so fix-all queues. */
-const MAX_CONCURRENT_FIX_SESSIONS = 2;
 
 /**
  * The provider session for a review runs under a thread id namespaced with
@@ -112,14 +108,6 @@ const make = Effect.gen(function* () {
   // spinner. Emits are throttled to REVIEW_PROGRESS_EMIT_MIN_INTERVAL_MS and
   // flushed on the terminal frame.
   const reviewProgress = yield* Ref.make(new Map<string, ReviewProgressState>());
-
-  // Running review-finding fix sessions, keyed by their provider session
-  // thread id, so their terminal events update the right finding and clean up
-  // the PR worktree. Fix sessions never touch the review progress fold.
-  const fixSessions = yield* Ref.make(
-    new Map<string, { reviewId: ReviewId; findingId: string; workspace: ResolvedWorkspace }>(),
-  );
-  const fixSessionSemaphore = yield* Semaphore.make(MAX_CONCURRENT_FIX_SESSIONS);
 
   const recordReviewActivity = Effect.fn("review.recordReviewActivity")(function* (
     sessionThreadId: string,
@@ -228,22 +216,6 @@ const make = Effect.gen(function* () {
     yield* orchestrationEngine
       .dispatch({
         type: "review.finding.added",
-        commandId,
-        reviewId,
-        finding,
-        createdAt: yield* nowIso,
-      })
-      .pipe(Effect.catch(() => Effect.void));
-  });
-
-  const dispatchReviewFindingUpdated = Effect.fn("dispatchReviewFindingUpdated")(function* (
-    reviewId: ReviewId,
-    finding: ReviewRun["findings"][number],
-  ) {
-    const commandId = yield* serverCommandId("review-finding-updated");
-    yield* orchestrationEngine
-      .dispatch({
-        type: "review.finding.updated",
         commandId,
         reviewId,
         finding,
@@ -440,96 +412,11 @@ const make = Effect.gen(function* () {
       }),
     );
 
-  const stopFixSession = Effect.fn("stopFixSession")(function* (sessionThreadId: ThreadId) {
-    yield* providerService
-      .stopSession({ threadId: sessionThreadId })
-      .pipe(Effect.catch(() => Effect.void));
-    const entry = (yield* Ref.get(fixSessions)).get(sessionThreadId);
-    if (entry?.workspace.removeWorktree === true) {
-      yield* gitWorkflowService
-        .removeWorktree({ cwd: entry.workspace.repoCwd, path: entry.workspace.workspacePath })
-        .pipe(Effect.catch(() => Effect.void));
-    }
-    yield* Ref.update(fixSessions, (map) => {
-      const next = new Map(map);
-      next.delete(sessionThreadId);
-      return next;
-    });
-  });
-
-  const markFixFailed = Effect.fn("markFixFailed")(function* (
-    reviewId: ReviewId,
-    findingId: string,
-    errorMessage: string,
-  ) {
-    const run = yield* readReviewRun(reviewId);
-    const finding = run?.findings.find((candidate) => candidate.id === findingId);
-    if (finding !== undefined) {
-      yield* dispatchReviewFindingUpdated(reviewId, {
-        ...finding,
-        fixState: "failed",
-        fixError: errorMessage,
-      });
-    }
-  });
-
-  const runFindingFixInner = Effect.fn("runFindingFix")(function* (
-    reviewId: ReviewId,
-    findingId: string,
-  ) {
-    const run = yield* readReviewRun(reviewId);
-    if (run === null) {
-      return;
-    }
-    const finding = run.findings.find((candidate) => candidate.id === findingId);
-    if (finding === undefined) {
-      return;
-    }
-    yield* dispatchReviewFindingUpdated(reviewId, { ...finding, fixState: "fixing" });
-
-    const { workspace, instanceId, modelSelection } = yield* resolveReviewSession(run);
-    const sessionThreadId = ThreadId.make(`review-fix-${yield* randomUUID}`);
-    yield* Ref.update(fixSessions, (map) => {
-      const next = new Map(map);
-      next.set(sessionThreadId, { reviewId, findingId, workspace });
-      return next;
-    });
-    yield* providerService.startSession(sessionThreadId, {
-      threadId: sessionThreadId,
-      provider: ProviderDriverKind.make("omp"),
-      providerInstanceId: instanceId,
-      cwd: workspace.workspacePath,
-      runtimeMode: "full-access",
-      ...(modelSelection !== undefined ? { modelSelection } : {}),
-    });
-    yield* providerService.sendTurn({
-      threadId: sessionThreadId,
-      input: reviewFixPersona({ workspacePath: workspace.workspacePath, finding }),
-      interactionMode: "default",
-      ...(modelSelection !== undefined ? { modelSelection } : {}),
-    });
-  });
-
-  const runFindingFix = (reviewId: ReviewId, findingId: string) =>
-    fixSessionSemaphore
-      .withPermits(1)(runFindingFixInner(reviewId, findingId))
-      .pipe(
-        Effect.catch((error) => {
-          const message = error instanceof Error ? error.message : String(error);
-          return markFixFailed(reviewId, findingId, message);
-        }),
-        Effect.forkDetach,
-        Effect.asVoid,
-      );
-
   const processDomainEvent = Effect.fn("processReviewDomainEvent")(function* (
     event: OrchestrationEvent,
   ) {
     if (event.type === "review.started") {
       yield* runReview(event.payload);
-    }
-    if (event.type === "review.finding.fix.requested") {
-      yield* runFindingFix(event.payload.reviewId, event.payload.findingId);
     }
   });
 
@@ -539,40 +426,8 @@ const make = Effect.gen(function* () {
     if (!isReviewSessionThreadId(event.threadId)) {
       return;
     }
-    const sessionThreadId = ThreadId.make(event.threadId);
-    const fixSession = (yield* Ref.get(fixSessions)).get(sessionThreadId);
-    if (fixSession !== undefined) {
-      // A fix session's only meaningful events are its terminal ones; the
-      // rest (item.started, token usage, task.*) belong to the fix turn, not
-      // the review's progress fold.
-      if (event.type === "turn.completed" || event.type === "turn.aborted") {
-        if (event.type === "turn.aborted") {
-          yield* markFixFailed(
-            fixSession.reviewId,
-            fixSession.findingId,
-            "Fix turn was interrupted.",
-          );
-        } else if (event.payload.state === "failed") {
-          yield* markFixFailed(
-            fixSession.reviewId,
-            fixSession.findingId,
-            event.payload.errorMessage ?? "Fix turn failed.",
-          );
-        } else {
-          const run = yield* readReviewRun(fixSession.reviewId);
-          const finding = run?.findings.find((candidate) => candidate.id === fixSession.findingId);
-          if (finding !== undefined) {
-            yield* dispatchReviewFindingUpdated(fixSession.reviewId, {
-              ...finding,
-              fixState: "fixed",
-            });
-          }
-        }
-        yield* stopFixSession(sessionThreadId);
-      }
-      return;
-    }
     const reviewId = reviewIdFromSessionThreadId(event.threadId);
+    const sessionThreadId = ThreadId.make(event.threadId);
     if (event.type === "review.finding") {
       yield* dispatchReviewFindingAdded(reviewId, event.payload);
       return;
@@ -646,17 +501,6 @@ const make = Effect.gen(function* () {
   const reconcileStaleReviewRuns = Effect.fn("review.reconcileStaleReviewRuns")(function* () {
     const model = yield* projectionSnapshotQuery.getCommandReadModel();
     for (const run of model.reviewRuns ?? []) {
-      // Fix sessions never survive a restart either; findings left "fixing"
-      // would spin forever, so fail them the same way running reviews are.
-      for (const finding of run.findings) {
-        if (finding.fixState === "fixing") {
-          yield* dispatchReviewFindingUpdated(run.id, {
-            ...finding,
-            fixState: "failed",
-            fixError: "Fix session was lost before it finished (the server restarted).",
-          });
-        }
-      }
       if (run.status !== "running") {
         continue;
       }
@@ -687,7 +531,7 @@ const make = Effect.gen(function* () {
 
     yield* forkParked(
       Stream.runForEach(orchestrationEngine.streamDomainEvents, (event) => {
-        if (event.type !== "review.started" && event.type !== "review.finding.fix.requested") {
+        if (event.type !== "review.started") {
           return Effect.void;
         }
         return worker.enqueue({ source: "domain", event });

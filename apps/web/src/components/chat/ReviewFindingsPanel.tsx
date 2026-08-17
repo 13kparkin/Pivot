@@ -2,17 +2,21 @@
 
 import { useEffect, useRef, useState } from "react";
 import type { FileDiffMetadata } from "@pierre/diffs";
-import type { EnvironmentId, ReviewFindingSeverity, ReviewId } from "@t3tools/contracts";
-import { CheckIcon, LoaderIcon, Trash2Icon, WandSparklesIcon } from "lucide-react";
-
 import {
-  dismissFinding,
-  reviewCommands,
-  useDismissedFindingIds,
-  useReviewRun,
-} from "../../state/reviewRuns";
+  DEFAULT_PROVIDER_INTERACTION_MODE,
+  DEFAULT_RUNTIME_MODE,
+  type EnvironmentId,
+  type ReviewFinding,
+  type ReviewFindingSeverity,
+  type ReviewId,
+} from "@t3tools/contracts";
+import { CheckIcon, Trash2Icon, WandSparklesIcon } from "lucide-react";
+
+import { dismissFinding, useDismissedFindingIds, useReviewRun } from "../../state/reviewRuns";
 import { isFindingPlaceable, reviewSeverityLabel } from "../../lib/reviewFindings";
 import { useAtomCommand } from "../../state/use-atom-command";
+import { threadEnvironment } from "../../state/threads";
+import { newMessageId } from "~/lib/utils";
 
 const SEVERITY_CLASS: Record<ReviewFindingSeverity, string> = {
   blocking: "text-red-500",
@@ -32,12 +36,30 @@ function readInitialHeight(): number {
   return 220;
 }
 
+/** The thread-turn prompt that asks the agent to apply a finding's fix. */
+function buildFixPrompt(finding: ReviewFinding): string {
+  return [
+    "Fix one code review finding in this workspace.",
+    `File: ${finding.file}`,
+    `Line: ${finding.line === null ? "(file-level)" : String(finding.line)}`,
+    `Severity: ${finding.severity}`,
+    finding.symbol === null ? null : `Symbol: ${finding.symbol}`,
+    `Finding: ${finding.message}`,
+    "Apply the minimal change that resolves it. Do not refactor unrelated code. " +
+      "Verify the change is coherent.",
+  ]
+    .filter((line): line is string => line !== null)
+    .join("\n");
+}
+
 /**
  * The review's findings as a height-resizable section above the diff: a
- * header ("Review findings", verdict, count, Fix all with AI), one row per
- * finding with a per-finding "Fix with AI" action (a fix subagent edits the
- * workspace), and a drag handle on the bottom edge. Unplaceable findings keep
- * their Outdated badge; file-level findings stay unbadged.
+ * header ("Review findings", verdict, count, Fix all with AI) and one row per
+ * finding with a per-finding "Fix with AI" action that starts a thread turn
+ * (so the fix is a normal, visible, stoppable agent run in the review's host
+ * thread). Unplaceable findings keep their Outdated badge; file-level findings
+ * stay unbadged. Fix actions need a host thread, so PR-originated reviews
+ * (no threadRef) show the findings without fix buttons.
  */
 export function ReviewFindingsPanel({
   environmentId,
@@ -51,12 +73,17 @@ export function ReviewFindingsPanel({
   const run = useReviewRun(environmentId, reviewId);
   const dismissed = useDismissedFindingIds(reviewId);
   const [height, setHeight] = useState(readInitialHeight);
+  const [dispatchedFindingIds, setDispatchedFindingIds] = useState<ReadonlySet<string>>(new Set());
   const dragRef = useRef<{ startY: number; startHeight: number } | null>(null);
-  const fixFinding = useAtomCommand(reviewCommands.fix, { reportFailure: false });
+  const startThreadTurn = useAtomCommand(threadEnvironment.startTurn, { reportFailure: false });
 
   useEffect(() => {
     localStorage.setItem(HEIGHT_STORAGE_KEY, String(height));
   }, [height]);
+
+  useEffect(() => {
+    setDispatchedFindingIds(new Set());
+  }, [reviewId]);
 
   const onResizePointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
     dragRef.current = { startY: event.clientY, startHeight: height };
@@ -89,41 +116,40 @@ export function ReviewFindingsPanel({
     return null;
   }
 
-  const visibleFindings = run.findings.filter((finding) => !dismissed.has(finding.id));
-  const anyFixing = run.findings.some((finding) => finding.fixState === "fixing");
-  const fixableFindings = run.findings.filter((finding) => finding.fixState !== "fixed");
+  const threadId = run.threadRef?.threadId ?? null;
+  const canFix = environmentId !== null && threadId !== null;
+
+  const dispatchFix = (finding: ReviewFinding) => {
+    if (!canFix || threadId === null || dispatchedFindingIds.has(finding.id)) {
+      return;
+    }
+    setDispatchedFindingIds((previous) => new Set(previous).add(finding.id));
+    void startThreadTurn({
+      environmentId,
+      input: {
+        threadId,
+        message: {
+          messageId: newMessageId(),
+          role: "user",
+          text: buildFixPrompt(finding),
+          attachments: [],
+        },
+        runtimeMode: DEFAULT_RUNTIME_MODE,
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        titleSeed: "Fix review finding",
+        createdAt: new Date().toISOString(),
+      },
+    });
+  };
 
   const fixAll = () => {
-    if (environmentId === null) {
-      return;
-    }
-    for (const finding of fixableFindings) {
-      if (finding.fixState !== "fixing") {
-        void fixFinding({
-          environmentId,
-          input: { reviewId: run.id, findingId: finding.id },
-        });
-      }
+    for (const finding of run.findings) {
+      dispatchFix(finding);
     }
   };
 
-  const fixOne = (findingId: string) => {
-    if (environmentId === null) {
-      return;
-    }
-    void fixFinding({ environmentId, input: { reviewId: run.id, findingId } });
-  };
-
-  const FixAllButton = (
-    <button
-      type="button"
-      className="shrink-0 rounded-md border border-border/70 bg-background px-2 py-1 text-[11px] font-medium text-foreground/80 transition-colors hover:bg-accent disabled:pointer-events-none disabled:opacity-50"
-      onClick={fixAll}
-      disabled={anyFixing || fixableFindings.length === 0}
-    >
-      Fix all with AI
-    </button>
-  );
+  const visibleFindings = run.findings.filter((finding) => !dismissed.has(finding.id));
+  const allDispatched = run.findings.every((finding) => dispatchedFindingIds.has(finding.id));
 
   return (
     <div className="flex shrink-0 flex-col border-b border-border/60" style={{ height }}>
@@ -145,7 +171,16 @@ export function ReviewFindingsPanel({
         <span className="ml-auto shrink-0 text-[11px] tabular-nums text-muted-foreground/70">
           {visibleFindings.length} total
         </span>
-        {FixAllButton}
+        {canFix ? (
+          <button
+            type="button"
+            className="shrink-0 rounded-md border border-border/70 bg-background px-2 py-1 text-[11px] font-medium text-foreground/80 transition-colors hover:bg-accent disabled:pointer-events-none disabled:opacity-50"
+            onClick={fixAll}
+            disabled={allDispatched || run.findings.length === 0}
+          >
+            Fix all with AI
+          </button>
+        ) : null}
       </div>
       <div className="flex min-h-0 flex-1 flex-col gap-1.5 overflow-y-auto p-2">
         {visibleFindings.length === 0 ? (
@@ -184,35 +219,22 @@ export function ReviewFindingsPanel({
                   </span>
                 </div>
                 <div className="flex shrink-0 items-center gap-1">
-                  {finding.fixState === "fixed" ? (
-                    <span className="flex items-center gap-1 text-[11px] font-medium text-emerald-500">
-                      <CheckIcon className="size-3" />
-                      Fixed
-                    </span>
-                  ) : (
-                    <button
-                      type="button"
-                      className="flex items-center gap-1 rounded-md border border-border/70 bg-background px-1.5 py-0.5 text-[11px] font-medium text-foreground/80 transition-colors hover:bg-accent disabled:pointer-events-none disabled:opacity-50"
-                      onClick={() => fixOne(finding.id)}
-                      disabled={finding.fixState === "fixing"}
-                      title={
-                        finding.fixState === "failed"
-                          ? (finding.fixError ?? "Fix failed.")
-                          : undefined
-                      }
-                    >
-                      {finding.fixState === "fixing" ? (
-                        <LoaderIcon className="size-3 animate-spin" />
-                      ) : (
+                  {canFix ? (
+                    dispatchedFindingIds.has(finding.id) ? (
+                      <span className="flex items-center gap-1 text-[11px] font-medium text-muted-foreground">
+                        Fix started
+                      </span>
+                    ) : (
+                      <button
+                        type="button"
+                        className="flex items-center gap-1 rounded-md border border-border/70 bg-background px-1.5 py-0.5 text-[11px] font-medium text-foreground/80 transition-colors hover:bg-accent"
+                        onClick={() => dispatchFix(finding)}
+                      >
                         <WandSparklesIcon className="size-3" />
-                      )}
-                      {finding.fixState === "fixing"
-                        ? "Fixing…"
-                        : finding.fixState === "failed"
-                          ? "Retry fix"
-                          : "Fix with AI"}
-                    </button>
-                  )}
+                        Fix with AI
+                      </button>
+                    )
+                  ) : null}
                   <button
                     type="button"
                     className="shrink-0 rounded p-0.5 text-muted-foreground/60 transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
@@ -224,11 +246,6 @@ export function ReviewFindingsPanel({
                 </div>
               </div>
               <p className="mt-1 text-xs leading-relaxed text-foreground/90">{finding.message}</p>
-              {finding.fixState === "failed" && finding.fixError ? (
-                <p className="mt-1 truncate text-[11px] text-amber-500" title={finding.fixError}>
-                  {finding.fixError}
-                </p>
-              ) : null}
             </div>
           ))
         )}

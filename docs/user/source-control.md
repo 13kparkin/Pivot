@@ -51,7 +51,7 @@ Pivot works with the platforms your team already uses:
 - **Review this PR** in the pull request's actions menu reviews the open pull request; the **Review** button in a thread's diff view reviews the working tree or branch changes you are looking at
 - Findings are advisory — nothing is ever blocked — and each one can be dismissed or fixed in a thread
 - The review is read-only: it never edits, commits, or opens anything
-- When the review finishes, the findings section lists every finding with a **Fix with AI** action (and **Fix all with AI** in the header) that runs an agent to apply the fix in your workspace
+- When the review finishes, the findings section lists every finding with a **Fix with AI** action (and **Fix all with AI** in the header) that starts an agent turn in the review's thread to apply the fix in your workspace
 - A finding whose code changed out from under it after the review (the line is no longer part of the diff) is marked **Outdated** instead of being silently dropped; file-level findings with no specific line stay unmarked
 
 **Fix what you wrote, in place**

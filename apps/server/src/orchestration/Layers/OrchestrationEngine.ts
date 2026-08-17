@@ -65,8 +65,6 @@ function commandToAggregateRef(command: OrchestrationCommand): {
       };
     case "review.start":
     case "review.finding.added":
-    case "review.finding.fix":
-    case "review.finding.updated":
     case "review.progress":
     case "review.completed":
     case "review.failed":

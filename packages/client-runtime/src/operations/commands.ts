@@ -52,7 +52,6 @@ export type RespondToThreadUserInputInput = CommandInput<"thread.user-input.resp
 export type RevertThreadCheckpointInput = CommandInput<"thread.checkpoint.revert">;
 export type StopThreadSessionInput = CommandInput<"thread.session.stop">;
 export type StartReviewInput = CommandInput<"review.start">;
-export type FixReviewFindingInput = CommandInput<"review.finding.fix">;
 
 type DispatchTag = typeof ORCHESTRATION_WS_METHODS.dispatchCommand;
 type CommandEffect = Effect.Effect<
@@ -139,18 +138,6 @@ export const startReview: (input: StartReviewInput) => CommandEffect = Effect.fn
   return yield* dispatch({
     ...input,
     type: "review.start",
-    commandId: metadata.commandId,
-    createdAt: metadata.createdAt,
-  });
-});
-
-export const fixReviewFinding: (input: FixReviewFindingInput) => CommandEffect = Effect.fn(
-  "EnvironmentCommands.fixReviewFinding",
-)(function* (input) {
-  const metadata = yield* timestampedCommandMetadata(input);
-  return yield* dispatch({
-    ...input,
-    type: "review.finding.fix",
     commandId: metadata.commandId,
     createdAt: metadata.createdAt,
   });

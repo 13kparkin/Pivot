@@ -17,7 +17,6 @@ import {
   requireProject,
   requireProjectAbsent,
   requireReviewAbsent,
-  requireReviewFinding,
   requireReviewRunning,
   requireThread,
   requireThreadArchived,
@@ -1441,50 +1440,6 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           commandId: command.commandId,
         })),
         type: "review.finding.added",
-        payload: {
-          reviewId: command.reviewId,
-          finding: command.finding,
-        },
-      };
-    }
-
-    case "review.finding.fix": {
-      yield* requireReviewFinding({
-        readModel,
-        command,
-        reviewId: command.reviewId,
-        findingId: command.findingId,
-      });
-      return {
-        ...(yield* withEventBase({
-          aggregateKind: "thread",
-          aggregateId: ThreadId.make(command.reviewId),
-          occurredAt: command.createdAt,
-          commandId: command.commandId,
-        })),
-        type: "review.finding.fix.requested",
-        payload: {
-          reviewId: command.reviewId,
-          findingId: command.findingId,
-        },
-      };
-    }
-
-    case "review.finding.updated": {
-      yield* requireReviewFinding({
-        readModel,
-        command,
-        reviewId: command.reviewId,
-        findingId: command.finding.id,
-      });
-      return {
-        ...(yield* withEventBase({
-          aggregateKind: "thread",
-          aggregateId: ThreadId.make(command.reviewId),
-          occurredAt: command.createdAt,
-          commandId: command.commandId,
-        })),
-        type: "review.finding.updated",
         payload: {
           reviewId: command.reviewId,
           finding: command.finding,
