@@ -38,6 +38,44 @@ function findingLineRange(finding: ReviewFinding): SelectedLineRange | null {
  * the finding's side. Shared by the mapper (placement) and the run panel
  * (outdated badge).
  */
+/**
+ * The diff comment a finding resolves to, or null when the mapper would not
+ * place it (no line, file not in the rendered diff, or the line is not in a
+ * rendered hunk on the finding's side). Shared by the mapper (placement) and
+ * the run panel (outdated badge).
+ */
+function resolveFindingComment(
+  finding: ReviewFinding,
+  files: ReadonlyArray<{
+    readonly fileDiff: FileDiffMetadata;
+    readonly filePath: string;
+  }>,
+  section: { readonly sectionId: string; readonly sectionTitle: string },
+): ReviewCommentContext | null {
+  const range = findingLineRange(finding);
+  if (range === null) {
+    return null;
+  }
+  const file = files.find((candidate) => candidate.filePath === finding.file);
+  if (file === undefined) {
+    return null;
+  }
+  return buildDiffReviewComment({
+    id: finding.id,
+    sectionId: section.sectionId,
+    sectionTitle: section.sectionTitle,
+    filePath: finding.file,
+    fileDiff: file.fileDiff,
+    range,
+    text: reviewFindingBody(finding),
+  });
+}
+
+/**
+ * Whether the diff-comment mapper would place a finding: it has a line, names
+ * a file in the rendered diff, and the line resolves to a rendered hunk on
+ * the finding's side.
+ */
 export function isFindingPlaceable(
   finding: ReviewFinding,
   files: ReadonlyArray<{
@@ -45,25 +83,7 @@ export function isFindingPlaceable(
     readonly filePath: string;
   }>,
 ): boolean {
-  const range = findingLineRange(finding);
-  if (range === null) {
-    return false;
-  }
-  const file = files.find((candidate) => candidate.filePath === finding.file);
-  if (file === undefined) {
-    return false;
-  }
-  return (
-    buildDiffReviewComment({
-      id: finding.id,
-      sectionId: "",
-      sectionTitle: "",
-      filePath: finding.file,
-      fileDiff: file.fileDiff,
-      range,
-      text: "",
-    }) !== null
-  );
+  return resolveFindingComment(finding, files, { sectionId: "", sectionTitle: "" }) !== null;
 }
 
 /**
@@ -84,25 +104,7 @@ export function reviewFindingsToDiffComments(input: {
 }): ReadonlyArray<ReviewCommentContext> {
   const comments: ReviewCommentContext[] = [];
   for (const finding of input.findings) {
-    if (!isFindingPlaceable(finding, input.files)) {
-      continue;
-    }
-    const range = findingLineRange(finding);
-    const file = input.files.find((candidate) => candidate.filePath === finding.file);
-    // isFindingPlaceable already confirmed both; the guards keep the types
-    // sound without casts and never fire.
-    if (range === null || file === undefined) {
-      continue;
-    }
-    const comment = buildDiffReviewComment({
-      id: finding.id,
-      sectionId: input.sectionId,
-      sectionTitle: input.sectionTitle,
-      filePath: finding.file,
-      fileDiff: file.fileDiff,
-      range,
-      text: reviewFindingBody(finding),
-    });
+    const comment = resolveFindingComment(finding, input.files, input);
     if (comment !== null) {
       comments.push(comment);
     }
