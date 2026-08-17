@@ -8,11 +8,15 @@ import {
   type ProviderRuntimeEvent,
   type ReviewId,
   type ReviewRun,
+  type ReviewRunActivityItem,
+  type ReviewRunProgress,
+  type ReviewRunVerdict,
   type RuntimeMode,
   ReviewStartedPayload,
   REVIEW_SESSION_THREAD_ID_PREFIX,
   defaultInstanceIdForDriver,
 } from "@t3tools/contracts";
+import * as Clock from "effect/Clock";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -45,6 +49,30 @@ const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
 const isReviewSessionThreadId = (threadId: string): boolean =>
   threadId.startsWith(REVIEW_SESSION_THREAD_ID_PREFIX);
 
+/** Most recent tool calls kept per review, newest last. */
+const REVIEW_PROGRESS_ACTIVITY_CAP = 5;
+/** Min interval between live `review.progress` events; the fold is cheap, the projection write is not. */
+const REVIEW_PROGRESS_EMIT_MIN_INTERVAL_MS = 1_000;
+
+/**
+ * The provider session for a review runs under a thread id namespaced with
+ * `review-`: `ProviderRuntimeIngestion` skips those events and this reactor
+ * consumes them. Client-generated review ids are bare UUIDs, so the namespace
+ * is applied here. Idempotent for ids that already carry it.
+ */
+const reviewSessionThreadId = (reviewId: ReviewId): ThreadId =>
+  ThreadId.make(
+    reviewId.startsWith(REVIEW_SESSION_THREAD_ID_PREFIX)
+      ? reviewId
+      : `${REVIEW_SESSION_THREAD_ID_PREFIX}${reviewId}`,
+  );
+
+/** The reverse of `reviewSessionThreadId`: the run's own id from its session. */
+const reviewIdFromSessionThreadId = (threadId: string): ReviewId =>
+  threadId.startsWith(REVIEW_SESSION_THREAD_ID_PREFIX)
+    ? (threadId.slice(REVIEW_SESSION_THREAD_ID_PREFIX.length) as ReviewId)
+    : (threadId as ReviewId);
+
 interface ResolvedWorkspace {
   readonly workspacePath: string;
   /** The repository the workspace lives under; used to remove a PR worktree. */
@@ -71,6 +99,100 @@ const make = Effect.gen(function* () {
   // Workspaces of running review sessions, keyed by the review session thread
   // id, so a terminal run can remove its PR worktree.
   const reviewWorkspaces = yield* Ref.make(new Map<string, ResolvedWorkspace>());
+
+  interface ReviewProgressState {
+    readonly activity: ReadonlyArray<ReviewRunActivityItem>;
+    readonly tokensUsed: number;
+    readonly lastEmitAtMs: number;
+  }
+
+  // Live activity of running review sessions, keyed by the session thread id,
+  // so the client can show what the review agent is doing instead of a bare
+  // spinner. Emits are throttled to REVIEW_PROGRESS_EMIT_MIN_INTERVAL_MS and
+  // flushed on the terminal frame.
+  const reviewProgress = yield* Ref.make(new Map<string, ReviewProgressState>());
+
+  const recordReviewActivity = Effect.fn("review.recordReviewActivity")(function* (
+    sessionThreadId: string,
+    item: ReviewRunActivityItem,
+  ) {
+    yield* Ref.update(reviewProgress, (map) => {
+      const next = new Map(map);
+      const current = next.get(sessionThreadId) ?? {
+        activity: [],
+        tokensUsed: 0,
+        lastEmitAtMs: 0,
+      };
+      next.set(sessionThreadId, {
+        ...current,
+        activity: [...current.activity, item].slice(-REVIEW_PROGRESS_ACTIVITY_CAP),
+      });
+      return next;
+    });
+  });
+
+  const recordReviewTokens = Effect.fn("review.recordReviewTokens")(function* (
+    sessionThreadId: string,
+    tokensUsed: number,
+  ) {
+    yield* Ref.update(reviewProgress, (map) => {
+      const next = new Map(map);
+      const current = next.get(sessionThreadId) ?? {
+        activity: [],
+        tokensUsed: 0,
+        lastEmitAtMs: 0,
+      };
+      next.set(sessionThreadId, { ...current, tokensUsed });
+      return next;
+    });
+  });
+
+  const dispatchReviewProgress = Effect.fn("dispatchReviewProgress")(function* (
+    sessionThreadId: string,
+    force: boolean,
+  ) {
+    const state = (yield* Ref.get(reviewProgress)).get(sessionThreadId);
+    if (state === undefined) {
+      return;
+    }
+    const now = yield* Clock.currentTimeMillis;
+    if (!force && now - state.lastEmitAtMs < REVIEW_PROGRESS_EMIT_MIN_INTERVAL_MS) {
+      return;
+    }
+    yield* Ref.update(reviewProgress, (map) => {
+      const next = new Map(map);
+      const current = next.get(sessionThreadId);
+      if (current !== undefined) {
+        next.set(sessionThreadId, { ...current, lastEmitAtMs: now });
+      }
+      return next;
+    });
+    const progress: ReviewRunProgress = {
+      activity: [...state.activity],
+      tokensUsed: state.tokensUsed,
+    };
+    const commandId = yield* serverCommandId("review-progress");
+    const createdAt = yield* nowIso;
+    yield* orchestrationEngine
+      .dispatch({
+        type: "review.progress",
+        commandId,
+        reviewId: reviewIdFromSessionThreadId(sessionThreadId),
+        progress,
+        createdAt,
+      })
+      .pipe(Effect.catch(() => Effect.void));
+  });
+
+  const clearReviewProgress = Effect.fn("review.clearReviewProgress")(function* (
+    sessionThreadId: string,
+  ) {
+    yield* Ref.update(reviewProgress, (map) => {
+      const next = new Map(map);
+      next.delete(sessionThreadId);
+      return next;
+    });
+  });
 
   const requireSome = <A>(
     value: Option.Option<A>,
@@ -108,6 +230,9 @@ const make = Effect.gen(function* () {
   const dispatchReviewCompleted = Effect.fn("dispatchReviewCompleted")(function* (
     reviewId: ReviewId,
     completedAt: string,
+    verdict?: ReviewRunVerdict,
+    summary?: string,
+    filesReviewed?: ReadonlyArray<string>,
   ) {
     const commandId = yield* serverCommandId("review-completed");
     yield* orchestrationEngine
@@ -116,6 +241,9 @@ const make = Effect.gen(function* () {
         commandId,
         reviewId,
         completedAt,
+        ...(verdict === undefined ? {} : { verdict }),
+        ...(summary === undefined ? {} : { summary }),
+        ...(filesReviewed === undefined ? {} : { filesReviewed }),
       })
       .pipe(Effect.catch(() => Effect.void));
     yield* receiptBus.publish({
@@ -243,7 +371,7 @@ const make = Effect.gen(function* () {
       runtimeMode = thread.runtimeMode;
     }
 
-    const sessionThreadId = ThreadId.make(reviewId);
+    const sessionThreadId = reviewSessionThreadId(reviewId);
     yield* Ref.update(reviewWorkspaces, (map) => {
       const next = new Map(map);
       next.set(sessionThreadId, workspace);
@@ -274,7 +402,7 @@ const make = Effect.gen(function* () {
           Effect.flatMap((occurredAt) =>
             dispatchReviewFailed(payload.reviewId, message, occurredAt),
           ),
-          Effect.tap(() => finalizeReview(ThreadId.make(payload.reviewId))),
+          Effect.tap(() => finalizeReview(reviewSessionThreadId(payload.reviewId))),
         );
       }),
     );
@@ -293,29 +421,91 @@ const make = Effect.gen(function* () {
     if (!isReviewSessionThreadId(event.threadId)) {
       return;
     }
-    const reviewId = event.threadId as unknown as ReviewId;
+    const reviewId = reviewIdFromSessionThreadId(event.threadId);
     const sessionThreadId = ThreadId.make(event.threadId);
     if (event.type === "review.finding") {
       yield* dispatchReviewFindingAdded(reviewId, event.payload);
       return;
     }
+    if (event.type === "item.started") {
+      const payload = event.payload;
+      yield* recordReviewActivity(sessionThreadId, {
+        kind: payload.title ?? payload.itemType,
+        title: payload.detail ?? payload.title ?? payload.itemType,
+        at: event.createdAt,
+      });
+      yield* dispatchReviewProgress(sessionThreadId, false);
+      return;
+    }
+    if (event.type === "task.started") {
+      // Review-session subagents (the orchestrator's per-file passes) surface
+      // in the live progress so the run strip shows the fan-out, not just the
+      // orchestrator's own tool calls. task.progress/task.completed are
+      // higher-frequency and add nothing the strip renders, so they stay out.
+      yield* recordReviewActivity(sessionThreadId, {
+        kind: "subagent",
+        title: event.payload.description ?? "subagent",
+        at: event.createdAt,
+      });
+      yield* dispatchReviewProgress(sessionThreadId, false);
+      return;
+    }
+    if (event.type === "thread.token-usage.updated") {
+      yield* recordReviewTokens(sessionThreadId, event.payload.usage.usedTokens);
+      yield* dispatchReviewProgress(sessionThreadId, false);
+      return;
+    }
     if (event.type === "turn.completed") {
+      // Flush the accumulated progress so the client's last frame shows the
+      // final activity before the terminal state lands.
+      yield* dispatchReviewProgress(sessionThreadId, true);
+      yield* clearReviewProgress(sessionThreadId);
       if (event.payload.state === "failed") {
         yield* dispatchReviewFailed(reviewId, event.payload.errorMessage ?? null, event.createdAt);
       } else {
-        yield* dispatchReviewCompleted(reviewId, event.createdAt);
+        yield* dispatchReviewCompleted(
+          reviewId,
+          event.createdAt,
+          event.payload.verdict,
+          event.payload.summary,
+          event.payload.filesReviewed,
+        );
       }
       yield* finalizeReview(sessionThreadId);
       return;
     }
     if (event.type === "turn.aborted") {
+      yield* dispatchReviewProgress(sessionThreadId, true);
+      yield* clearReviewProgress(sessionThreadId);
       yield* dispatchReviewFailed(reviewId, "Review turn was interrupted.", event.createdAt);
       yield* finalizeReview(sessionThreadId);
+      return;
     }
   });
 
   const processInput = (input: ReactorInput) =>
     input.source === "domain" ? processDomainEvent(input.event) : processRuntimeEvent(input.event);
+
+  /**
+   * Provider sessions never survive a server restart, so a review still marked
+   * "running" at boot can never finish: its session is gone and nothing will
+   * re-drive it. Fail it so the change's review slot frees up instead of
+   * rejecting every new `review.start` with "already running" (the decider's
+   * active-review conflict check is keyed on the running run).
+   */
+  const reconcileStaleReviewRuns = Effect.fn("review.reconcileStaleReviewRuns")(function* () {
+    const model = yield* projectionSnapshotQuery.getCommandReadModel();
+    for (const run of model.reviewRuns ?? []) {
+      if (run.status !== "running") {
+        continue;
+      }
+      yield* dispatchReviewFailed(
+        run.id,
+        "Review session was lost before it finished (the server restarted).",
+        yield* nowIso,
+      );
+    }
+  });
 
   const processInputSafely = (input: ReactorInput) =>
     processInput(input).pipe(
@@ -331,6 +521,9 @@ const make = Effect.gen(function* () {
   const worker = yield* makeDrainableWorker(processInputSafely);
 
   const start: ReviewReactorShape["start"] = Effect.fn("start")(function* () {
+    // Best-effort: a failed read at boot must not block the reactor.
+    yield* reconcileStaleReviewRuns().pipe(Effect.catch(() => Effect.void));
+
     yield* forkParked(
       Stream.runForEach(orchestrationEngine.streamDomainEvents, (event) => {
         if (event.type !== "review.started") {
@@ -345,6 +538,9 @@ const make = Effect.gen(function* () {
         if (
           !isReviewSessionThreadId(event.threadId) ||
           (event.type !== "review.finding" &&
+            event.type !== "item.started" &&
+            event.type !== "task.started" &&
+            event.type !== "thread.token-usage.updated" &&
             event.type !== "turn.completed" &&
             event.type !== "turn.aborted")
         ) {

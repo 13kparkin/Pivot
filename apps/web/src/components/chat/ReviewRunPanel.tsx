@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import type { EnvironmentId, ReviewFindingSeverity, ReviewId } from "@t3tools/contracts";
 import { CheckIcon, LoaderIcon, Trash2Icon, TriangleAlertIcon } from "lucide-react";
 
@@ -12,10 +13,32 @@ const SEVERITY_CLASS: Record<ReviewFindingSeverity, string> = {
   nit: "text-muted-foreground",
 };
 
+function formatElapsed(totalSeconds: number): string {
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${minutes}:${seconds.toString().padStart(2, "0")}`;
+}
+
+function useElapsedSeconds(since: string | null): number {
+  const [elapsed, setElapsed] = useState(0);
+  useEffect(() => {
+    if (since === null) {
+      return;
+    }
+    const startedAt = Date.parse(since);
+    const tick = () => setElapsed(Math.max(0, Math.floor((Date.now() - startedAt) / 1_000)));
+    tick();
+    const id = window.setInterval(tick, 1_000);
+    return () => window.clearInterval(id);
+  }, [since]);
+  return elapsed;
+}
+
 /**
  * The review run's live status in the thread diff view: a spinner while it
- * runs (with a running finding count), the findings once it completes, or an
- * error when it fails. Renders nothing while idle (no review started).
+ * runs (with a live activity feed from the server), the findings once it
+ * completes, or an error when it fails. Renders nothing while idle (no review
+ * started).
  */
 export function ReviewRunPanel({
   environmentId,
@@ -26,20 +49,39 @@ export function ReviewRunPanel({
 }) {
   const run = useReviewRun(environmentId, reviewId);
   const dismissed = useDismissedFindingIds(reviewId);
+  const elapsedSeconds = useElapsedSeconds(run?.createdAt ?? null);
 
   if (run === null) {
     return null;
   }
 
   if (run.status === "running") {
+    const progress = run.progress;
+    const lastActivity = progress?.activity.at(-1) ?? null;
+    const filesRead = progress?.activity.filter((item) => item.kind === "read").length ?? 0;
     return (
-      <div className="flex items-center gap-2 rounded-lg border border-border/60 bg-muted/30 px-3 py-2 text-xs">
-        <LoaderIcon className="size-3.5 shrink-0 animate-spin text-muted-foreground" />
-        <span className="font-medium text-foreground">Reviewing changes…</span>
-        {run.findings.length > 0 ? (
-          <span className="text-muted-foreground">
-            {run.findings.length} {run.findings.length === 1 ? "finding" : "findings"} so far
+      <div className="flex flex-col gap-1 rounded-lg border border-border/60 bg-muted/30 px-3 py-2 text-xs">
+        <div className="flex items-center gap-2">
+          <LoaderIcon className="size-3.5 shrink-0 animate-spin text-muted-foreground" />
+          <span className="font-medium text-foreground">Reviewing changes…</span>
+          <span className="ml-auto text-muted-foreground tabular-nums">
+            {formatElapsed(elapsedSeconds)}
           </span>
+        </div>
+        {lastActivity ? (
+          <div className="flex min-w-0 items-center gap-2 text-muted-foreground">
+            <span className="size-1 shrink-0 rounded-full bg-current" />
+            <span className="min-w-0 truncate">
+              <span className="font-medium text-foreground/80">{lastActivity.kind}</span>{" "}
+              {lastActivity.title}
+            </span>
+          </div>
+        ) : null}
+        {progress && (filesRead > 0 || progress.tokensUsed > 0) ? (
+          <div className="text-muted-foreground/80">
+            {filesRead > 0 ? `${filesRead} ${filesRead === 1 ? "file" : "files"} read · ` : ""}
+            {progress.tokensUsed > 0 ? `${Math.round(progress.tokensUsed / 1_000)}k tokens` : ""}
+          </div>
         ) : null}
       </div>
     );
@@ -68,12 +110,34 @@ export function ReviewRunPanel({
             ? "All findings dismissed."
             : "No issues found — this review is clean."}
         </span>
+        {run.summary ? (
+          <span className="min-w-0 truncate text-muted-foreground">{run.summary}</span>
+        ) : null}
       </div>
     );
   }
 
   return (
     <div className="flex max-h-72 flex-col overflow-hidden rounded-lg border border-border/60">
+      {run.verdict ? (
+        <div
+          className={`flex items-center gap-2 border-b border-border/60 px-3 py-2 text-xs ${
+            run.verdict === "approve" ? "bg-emerald-500/8" : "bg-amber-500/8"
+          }`}
+        >
+          {run.verdict === "approve" ? (
+            <CheckIcon className="size-3.5 shrink-0 text-emerald-500" />
+          ) : (
+            <TriangleAlertIcon className="size-3.5 shrink-0 text-amber-500" />
+          )}
+          <span className="font-medium text-foreground">
+            {run.verdict === "approve" ? "Approved" : "Changes requested"}
+          </span>
+          {run.summary ? (
+            <span className="min-w-0 truncate text-muted-foreground">{run.summary}</span>
+          ) : null}
+        </div>
+      ) : null}
       <div className="flex items-center justify-between border-b border-border/60 bg-muted/30 px-3 py-1.5 text-[11px] font-medium uppercase tracking-wider text-muted-foreground/70">
         <span>Review findings</span>
         <span>{visibleFindings.length} total</span>

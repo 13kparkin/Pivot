@@ -1,6 +1,9 @@
 import { scopedThreadKey, scopeProjectRef } from "@t3tools/client-runtime/environment";
 import { useNavigate } from "@tanstack/react-router";
-import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
+import {
+  isAtomCommandInterrupted,
+  squashAtomCommandFailure,
+} from "@t3tools/client-runtime/state/runtime";
 import type {
   EnvironmentId,
   PullRequestAction,
@@ -99,7 +102,7 @@ import {
   MenuTrigger,
 } from "../ui/menu";
 import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
-import { toastManager } from "../ui/toast";
+import { stackedThreadToast, toastManager } from "../ui/toast";
 import { PullRequestDetailGhost, PullRequestTimelineGhost } from "./PullRequestGhosts";
 import { PullRequestActivityUnavailableState } from "./PullRequestActivityUnavailableState";
 import { DiffPanelLoadingState } from "../DiffPanelShell";
@@ -483,6 +486,22 @@ export function PullRequestDetailPanel({
   const startReview = useAtomCommand(reviewCommands.start, { reportFailure: false });
   const [reviewId, setReviewId] = useState<ReviewId | null>(null);
   const reviewRun = useReviewRun(environmentId, reviewId);
+  // The review actually running for this pull request, tracked independently of
+  // the displayed `reviewId` so the menu stays disabled while a review runs
+  // even before its first frame arrives or after the id was replaced.
+  const [startedReviewId, setStartedReviewId] = useState<ReviewId | null>(null);
+  const [startPending, setStartPending] = useState(false);
+  const startedReviewRun = useReviewRun(environmentId, startedReviewId);
+  const reviewRunning =
+    startPending || startedReviewRun?.status === "running" || reviewRun?.status === "running";
+
+  // Release the menu once the started review reaches a terminal state so a
+  // fresh review can start.
+  useEffect(() => {
+    if (startedReviewRun !== null && startedReviewRun.status !== "running") {
+      setStartedReviewId(null);
+    }
+  }, [startedReviewRun]);
   const dismissedFindingIds = useDismissedFindingIds(reviewId);
   const { copyToClipboard: copyBranchToClipboard, isCopied: isBranchCopied } = useCopyToClipboard({
     target: "branch name",
@@ -801,6 +820,7 @@ export function PullRequestDetailPanel({
     if (!detail) return;
     const nextReviewId = ReviewId.make(randomUUID());
     setReviewId(nextReviewId);
+    setStartPending(true);
     void startReview({
       environmentId,
       input: {
@@ -815,6 +835,23 @@ export function PullRequestDetailPanel({
         threadRef: null,
         projectId: reference.projectId,
       },
+    }).then((result) => {
+      setStartPending(false);
+      if (result._tag === "Success") {
+        setStartedReviewId(nextReviewId);
+        return;
+      }
+      if (!isAtomCommandInterrupted(result)) {
+        const error = squashAtomCommandFailure(result);
+        toastManager.add(
+          stackedThreadToast({
+            type: "error",
+            title: "Review failed to start",
+            description:
+              error instanceof Error ? error.message : "The review could not be started.",
+          }),
+        );
+      }
     });
   };
 
@@ -1206,11 +1243,11 @@ export function PullRequestDetailPanel({
                 </MenuTrigger>
                 <MenuPopup align="end" side="bottom" className="min-w-72">
                   <MenuItem
-                    disabled={detailQuery.isPending || reviewRun?.status === "running"}
+                    disabled={detailQuery.isPending || reviewRunning}
                     onClick={handleReview}
                   >
                     <ShieldCheckIcon className="size-3.5" />
-                    {reviewRun?.status === "running" ? "Reviewing…" : "Review this PR"}
+                    {reviewRunning ? "Reviewing…" : "Review this PR"}
                   </MenuItem>
                   <MenuItem disabled={detailQuery.isPending} onClick={() => void refreshFromHost()}>
                     <RefreshCwIcon className="size-3.5" />

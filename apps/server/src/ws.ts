@@ -1450,6 +1450,7 @@ const makeWsRpcLayer = (
                 event.aggregateKind === "thread" &&
                 (event.type === "review.started" ||
                   event.type === "review.finding.added" ||
+                  event.type === "review.progress" ||
                   event.type === "review.completed" ||
                   event.type === "review.failed") &&
                 (event.payload as { reviewId?: string }).reviewId === input.reviewId;

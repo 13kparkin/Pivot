@@ -72,9 +72,12 @@ import {
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
 import { useEnvironmentQuery } from "../state/query";
 import { useAtomCommand } from "../state/use-atom-command";
+import { stackedThreadToast, toastManager } from "./ui/toast";
 import { serverEnvironment } from "../state/server";
 import { reviewEnvironment } from "../state/review";
 import { reviewCommands } from "../state/reviewRuns";
+import { reviewFindingsToDiffComments } from "../lib/reviewFindings";
+import type { ReviewCommentContext } from "~/reviewCommentContext";
 import {
   useReviewFallbackModelLabel,
   useReviewModelConfigured,
@@ -96,6 +99,7 @@ interface CollapsedDiffFilesState {
 }
 
 const EMPTY_COLLAPSED_DIFF_FILE_KEYS: ReadonlySet<string> = new Set();
+const EMPTY_FINDING_COMMENTS: ReadonlyArray<ReviewCommentContext> = [];
 
 interface DiffPanelProps {
   mode?: DiffPanelMode;
@@ -160,11 +164,30 @@ export default function DiffPanel({
   const [reviewId, setReviewId] = useState<ReviewId | null>(null);
   const [confirmDefaultModel, setConfirmDefaultModel] = useState(false);
   const activeReviewRun = useReviewRun(activeThread?.environmentId ?? null, reviewId);
-  const reviewRunning = activeReviewRun?.status === "running";
+  // The review actually running for this thread, tracked independently of the
+  // displayed `reviewId`: between the start click and the first run frame, and
+  // after a start replaces the id, the displayed run alone would leave the
+  // review button enabled while a review is still running (the server rejects
+  // a second start, but the user gets a dead click).
+  const [startedReviewId, setStartedReviewId] = useState<ReviewId | null>(null);
+  const [startPending, setStartPending] = useState(false);
+  const startedReviewRun = useReviewRun(activeThread?.environmentId ?? null, startedReviewId);
+  const reviewRunning =
+    startPending || startedReviewRun?.status === "running" || activeReviewRun?.status === "running";
+
+  // Release the button once the started review reaches a terminal state so a
+  // fresh review can start.
+  useEffect(() => {
+    if (startedReviewRun !== null && startedReviewRun.status !== "running") {
+      setStartedReviewId(null);
+    }
+  }, [startedReviewRun]);
+
   const runReview = () => {
     if (!activeThread || activeProjectId === null) return;
     const nextReviewId = ReviewId.make(randomUUID());
     setReviewId(nextReviewId);
+    setStartPending(true);
     void startReview({
       environmentId: activeThread.environmentId,
       input: {
@@ -180,6 +203,23 @@ export default function DiffPanel({
         },
         projectId: activeProjectId,
       },
+    }).then((result) => {
+      setStartPending(false);
+      if (result._tag === "Success") {
+        setStartedReviewId(nextReviewId);
+        return;
+      }
+      if (!isAtomCommandInterrupted(result)) {
+        const error = squashAtomCommandFailure(result);
+        toastManager.add(
+          stackedThreadToast({
+            type: "error",
+            title: "Review failed to start",
+            description:
+              error instanceof Error ? error.message : "The review could not be started.",
+          }),
+        );
+      }
     });
   };
 
@@ -465,6 +505,24 @@ export default function DiffPanel({
         };
       }),
     [collapsedDiffFileKeys, renderableFileEntries],
+  );
+  // Review findings render as GitHub-style inline comments on the diff, like
+  // the PR code view does for host review threads. They anchor to the
+  // reviewed git scope only: a turn diff shows different content, so findings
+  // stay in the run panel's list there. Findings that cannot be placed (no
+  // line, file not in the diff, line outside a rendered hunk) also stay in
+  // the list.
+  const reviewFindingComments = useMemo(
+    () =>
+      activeReviewRun === null || selectedTurnId !== null
+        ? EMPTY_FINDING_COMMENTS
+        : reviewFindingsToDiffComments({
+            findings: activeReviewRun.findings,
+            files: codeViewFiles,
+            sectionId: reviewSectionId,
+            sectionTitle: reviewSectionTitle,
+          }),
+    [activeReviewRun, codeViewFiles, reviewSectionId, reviewSectionTitle, selectedTurnId],
   );
   const diffFileKeys = useMemo(() => codeViewFiles.map((file) => file.fileKey), [codeViewFiles]);
   const allDiffFilesCollapsed = areAllDiffFilesCollapsed(diffFileKeys, collapsedDiffFileKeys);
@@ -983,6 +1041,7 @@ export default function DiffPanel({
                   sectionId={reviewSectionId}
                   sectionTitle={reviewSectionTitle}
                   composerDraftTarget={composerDraftTarget}
+                  readOnlyComments={reviewFindingComments}
                   renderHeaderPrefix={(fileDiff, fileKey, collapsed) => {
                     const filePath = resolveFileDiffPath(fileDiff);
                     return (

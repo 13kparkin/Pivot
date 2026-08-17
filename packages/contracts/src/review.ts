@@ -1,7 +1,13 @@
 import * as Schema from "effect/Schema";
 
 import { TrimmedNonEmptyString } from "./baseSchemas.ts";
-import { EnvironmentId, IsoDateTime, PositiveInt, ProjectId } from "./baseSchemas.ts";
+import {
+  EnvironmentId,
+  IsoDateTime,
+  NonNegativeInt,
+  PositiveInt,
+  ProjectId,
+} from "./baseSchemas.ts";
 import { ScopedThreadRef } from "./environment.ts";
 import { PullRequestDiffSide } from "./pullRequest.ts";
 import { GitCommandError } from "./git.ts";
@@ -123,6 +129,33 @@ export const ReviewRunStatus = Schema.Literals(["running", "completed", "failed"
 export type ReviewRunStatus = typeof ReviewRunStatus.Type;
 
 /**
+ * The review agent's overall assessment, emitted in the findings block.
+ * `approve` means no blocking issues; `request-changes` means blocking issues
+ * were found. Mirrors the decision shape of omp's own review workflow.
+ */
+export const ReviewRunVerdict = Schema.Literals(["approve", "request-changes"]);
+export type ReviewRunVerdict = typeof ReviewRunVerdict.Type;
+
+/**
+ * One live progress entry for a running review: a tool the agent invoked
+ * (`read`, `grep`, `bash`, …) and what it targeted. Streamed to the client so
+ * a long review shows its activity instead of a bare spinner.
+ */
+export const ReviewRunActivityItem = Schema.Struct({
+  kind: TrimmedNonEmptyString,
+  title: TrimmedNonEmptyString,
+  at: IsoDateTime,
+});
+export type ReviewRunActivityItem = typeof ReviewRunActivityItem.Type;
+
+export const ReviewRunProgress = Schema.Struct({
+  /** Most recent tool calls, newest last; the server keeps a small cap. */
+  activity: Schema.Array(ReviewRunActivityItem),
+  tokensUsed: NonNegativeInt,
+});
+export type ReviewRunProgress = typeof ReviewRunProgress.Type;
+
+/**
  * Read-model view of one review run: its source, its status, and the findings
  * produced so far. Findings stream in while the run is `running`.
  */
@@ -131,6 +164,23 @@ export const ReviewRun = Schema.Struct({
   source: ReviewSource,
   status: ReviewRunStatus,
   findings: Schema.Array(ReviewFinding),
+  /**
+   * Live agent activity while the run is `running`. Optional so runs persisted
+   * before the field existed still decode.
+   */
+  progress: Schema.optional(ReviewRunProgress),
+  /**
+   * The agent's overall assessment, present once the run completes. Optional
+   * so runs completed before the field existed still decode.
+   */
+  verdict: Schema.optional(ReviewRunVerdict),
+  summary: Schema.optional(TrimmedNonEmptyString),
+  /**
+   * The changed-file coverage ledger: every file the review actually covered,
+   * or a subset with the rest intentionally skipped. Optional so runs
+   * completed before the field existed still decode.
+   */
+  filesReviewed: Schema.optional(Schema.Array(TrimmedNonEmptyString)),
   /**
    * The thread this review was started from, when it was. Absent for a review
    * started from the Pull Requests page. A review run is never a thread turn;

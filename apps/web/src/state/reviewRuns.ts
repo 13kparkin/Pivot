@@ -4,17 +4,17 @@ import { createReviewCommandsAtoms } from "@t3tools/client-runtime/state/review-
 import type { EnvironmentId, ModelSelection, ReviewId, ReviewRun } from "@t3tools/contracts";
 import * as Option from "effect/Option";
 import { AsyncResult, Atom } from "effect/unstable/reactivity";
-import { useSyncExternalStore } from "react";
+import { useEffect, useMemo, useSyncExternalStore } from "react";
 
 import { connectionAtomRuntime } from "../connection/runtime";
 import { serverEnvironment } from "./server";
 import { modelRolesFromSettingsEntries } from "../components/capabilities/CapabilitiesModelsRolesPanel.logic";
-import { useMemo } from "react";
 import { usePrimarySettings } from "../hooks/useSettings";
 import { primaryServerProvidersAtom } from "./server";
 import { resolveAppModelSelectionState } from "../modelSelection";
 import { deriveProviderInstanceEntries } from "../providerInstances";
 import { getDisplayModelName } from "../components/chat/providerIconUtils";
+import { stackedThreadToast, toastManager } from "../components/ui/toast";
 
 const EMPTY_CAPABILITIES_SNAPSHOT_ATOM = Atom.make(AsyncResult.initial<never, never>(false)).pipe(
   Atom.withLabel("web:review:capabilities-snapshot:empty"),
@@ -53,18 +53,39 @@ export function isFindingDismissed(reviewId: ReviewId, findingId: string): boole
   return dismissed.has(dismissalKey(reviewId, findingId));
 }
 
+// The snapshot returned by `useSyncExternalStore` must be referentially stable
+// until the underlying store changes: `dismissed` is replaced wholesale on
+// dismiss, so caching keyed on (dismissed reference, reviewId) yields a stable
+// set between mutations. A fresh Set per call would never compare equal and
+// React would force-re-render forever ("Maximum update depth exceeded").
+let dismissedSnapshotCache: {
+  readonly dismissedRef: typeof dismissed;
+  readonly reviewId: ReviewId;
+  readonly ids: ReadonlySet<string>;
+} | null = null;
+
 export function useDismissedFindingIds(reviewId: ReviewId | null): ReadonlySet<string> {
-  if (reviewId === null) {
-    return EMPTY_DISMISSED;
-  }
+  // Hooks are unconditional: `reviewId` flips null → set when a review starts,
+  // and a conditional hook would shift every hook after it in the calling
+  // component (React's per-fiber hook array no longer aligns → TypeError).
   return useSyncExternalStore(
     (onStoreChange) => {
+      if (reviewId === null) {
+        return () => {};
+      }
       dismissalListeners.add(onStoreChange);
       return () => {
         dismissalListeners.delete(onStoreChange);
       };
     },
     () => {
+      if (reviewId === null) {
+        return EMPTY_DISMISSED;
+      }
+      const cache = dismissedSnapshotCache;
+      if (cache !== null && cache.dismissedRef === dismissed && cache.reviewId === reviewId) {
+        return cache.ids;
+      }
       const prefix = `${reviewId}:`;
       const ids = new Set<string>();
       for (const key of dismissed) {
@@ -72,35 +93,69 @@ export function useDismissedFindingIds(reviewId: ReviewId | null): ReadonlySet<s
           ids.add(key.slice(prefix.length));
         }
       }
+      dismissedSnapshotCache = { dismissedRef: dismissed, reviewId, ids };
       return ids;
     },
   );
 }
 
+// Review ids are client-generated and unique per run (`ReviewId.make(randomUUID())`),
+// so one module-level set is enough to fire the failure toast exactly once,
+// even if the panel unmounts and remounts while the run is already failed.
+const reviewFailureToastShown = new Set<ReviewId>();
+
+// Stable atom for a null review id so `useReviewRun` keeps a constant hook
+// count when `reviewId` flips null → set (the review-start click). A
+// conditional hook there shifts every hook after it in the calling component
+// and crashes React's `areHookInputsEqual` with an undefined deps array.
+const EMPTY_REVIEW_RUN_STREAM_ATOM = Atom.make(AsyncResult.initial<never, never>(false)).pipe(
+  Atom.withLabel("web:review:run-subscription:empty"),
+);
+
 /**
  * The latest ReviewRun for a review id, null when none is known yet. Subscribes
  * to `orchestration.subscribeReviewRun` so findings stream in live while the
- * run is `running`.
+ * run is `running`. A run that ends in `failed` (a model usage-limit or any
+ * other provider error) surfaces as an error toast, not just the inline
+ * "Review failed" strip in the diff panel.
  */
 export function useReviewRun(
   environmentId: EnvironmentId | null,
   reviewId: ReviewId | null,
 ): ReviewRun | null {
-  if (reviewId === null || environmentId === null) {
-    return null;
-  }
-  const atom = reviewRunsStore.subscribe({
-    environmentId,
-    input: { reviewId },
-  });
+  const atom =
+    reviewId === null || environmentId === null
+      ? EMPTY_REVIEW_RUN_STREAM_ATOM
+      : reviewRunsStore.subscribe({
+          environmentId,
+          input: { reviewId },
+        });
   const result = useAtomValue(atom);
   const item = Option.getOrNull(AsyncResult.value(result)) as
     | import("@t3tools/contracts").OrchestrationReviewRunStreamItem
     | null;
-  if (item === null || item.kind !== "review-run-updated") {
-    return null;
-  }
-  return item.review;
+  const run = item === null || item.kind !== "review-run-updated" ? null : item.review;
+
+  useEffect(() => {
+    if (
+      run === null ||
+      reviewId === null ||
+      run.status !== "failed" ||
+      reviewFailureToastShown.has(reviewId)
+    ) {
+      return;
+    }
+    reviewFailureToastShown.add(reviewId);
+    toastManager.add(
+      stackedThreadToast({
+        type: "error",
+        title: "Review failed",
+        description: run.errorMessage ?? "The review could not be completed.",
+      }),
+    );
+  }, [reviewId, run]);
+
+  return run;
 }
 
 /**

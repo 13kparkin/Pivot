@@ -1447,6 +1447,23 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       };
     }
 
+    case "review.progress": {
+      yield* requireReviewRunning({ readModel, command, reviewId: command.reviewId });
+      return {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: ThreadId.make(command.reviewId),
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        })),
+        type: "review.progress",
+        payload: {
+          reviewId: command.reviewId,
+          progress: command.progress,
+        },
+      };
+    }
+
     case "review.completed": {
       yield* requireReviewRunning({ readModel, command, reviewId: command.reviewId });
       return {
@@ -1460,6 +1477,9 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         payload: {
           reviewId: command.reviewId,
           completedAt: command.completedAt,
+          ...(command.verdict !== undefined ? { verdict: command.verdict } : {}),
+          ...(command.summary !== undefined ? { summary: command.summary } : {}),
+          ...(command.filesReviewed !== undefined ? { filesReviewed: command.filesReviewed } : {}),
         },
       };
     }

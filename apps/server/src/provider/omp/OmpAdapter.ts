@@ -43,6 +43,7 @@ import {
   PositiveInt,
   ReviewFinding,
   ReviewFindingSeverity,
+  ReviewRunVerdict,
   TrimmedNonEmptyString,
   type ThreadId,
   TurnId,
@@ -102,6 +103,9 @@ type ReviewFindingInput = typeof ReviewFindingInputSchema.Type;
 
 const ReviewFindingsBlockSchema = Schema.Struct({
   findings: Schema.Array(ReviewFindingInputSchema),
+  verdict: Schema.optional(ReviewRunVerdict),
+  summary: Schema.optional(TrimmedNonEmptyString),
+  filesReviewed: Schema.optional(Schema.Array(TrimmedNonEmptyString)),
 });
 
 const decodeReviewFindingsBlock = Schema.decodeUnknownOption(ReviewFindingsBlockSchema);
@@ -1397,7 +1401,14 @@ export class OmpAdapter {
           turnId,
           payload:
             outcome._tag === "ok"
-              ? { state: "completed" }
+              ? {
+                  state: "completed",
+                  ...(outcome.verdict === undefined ? {} : { verdict: outcome.verdict }),
+                  ...(outcome.summary === undefined ? {} : { summary: outcome.summary }),
+                  ...(outcome.filesReviewed === undefined
+                    ? {}
+                    : { filesReviewed: outcome.filesReviewed }),
+                }
               : { state: "failed", errorMessage: outcome.errorMessage },
         });
       } else {
@@ -1418,9 +1429,12 @@ export class OmpAdapter {
     });
   }
 
-  #extractReviewFindings(
-    runText: string | null,
-  ): Effect.Effect<ReadonlyArray<ReviewFinding> | null> {
+  #extractReviewFindings(runText: string | null): Effect.Effect<{
+    readonly findings: ReadonlyArray<ReviewFinding>;
+    readonly verdict?: ReviewRunVerdict;
+    readonly summary?: string;
+    readonly filesReviewed?: ReadonlyArray<string>;
+  } | null> {
     return Effect.gen({ self: this }, function* () {
       if (runText === null || runText.length === 0) {
         return null;
@@ -1452,7 +1466,13 @@ export class OmpAdapter {
       for (const entry of decoded.value.findings as ReadonlyArray<ReviewFindingInput>) {
         findings.push({ id: `finding-${yield* this.#randomUUID}`, ...entry });
       }
-      return findings;
+      const { verdict, summary, filesReviewed } = decoded.value;
+      return {
+        findings,
+        ...(verdict === undefined ? {} : { verdict }),
+        ...(summary === undefined ? {} : { summary }),
+        ...(filesReviewed === undefined ? {} : { filesReviewed }),
+      };
     });
   }
 
@@ -1461,17 +1481,23 @@ export class OmpAdapter {
     turnId: TurnId | undefined,
     runText: string | null,
   ): Effect.Effect<
-    { readonly _tag: "ok" } | { readonly _tag: "error"; readonly errorMessage: string }
+    | {
+        readonly _tag: "ok";
+        readonly verdict?: ReviewRunVerdict;
+        readonly summary?: string;
+        readonly filesReviewed?: ReadonlyArray<string>;
+      }
+    | { readonly _tag: "error"; readonly errorMessage: string }
   > {
     return Effect.gen({ self: this }, function* () {
-      const findings = yield* this.#extractReviewFindings(runText);
-      if (findings === null) {
+      const extracted = yield* this.#extractReviewFindings(runText);
+      if (extracted === null) {
         return {
           _tag: "error",
           errorMessage: "Review run finished without a parseable findings block.",
         } as const;
       }
-      for (const finding of findings) {
+      for (const finding of extracted.findings) {
         yield* this.#emit({
           type: "review.finding",
           threadId: session.threadId,
@@ -1479,7 +1505,14 @@ export class OmpAdapter {
           payload: finding,
         });
       }
-      return { _tag: "ok" } as const;
+      return {
+        _tag: "ok",
+        ...(extracted.verdict === undefined ? {} : { verdict: extracted.verdict }),
+        ...(extracted.summary === undefined ? {} : { summary: extracted.summary }),
+        ...(extracted.filesReviewed === undefined
+          ? {}
+          : { filesReviewed: extracted.filesReviewed }),
+      } as const;
     });
   }
 

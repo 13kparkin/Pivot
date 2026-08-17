@@ -14,7 +14,7 @@ import {
   TurnId,
 } from "./baseSchemas.ts";
 import { ProviderInstanceId, ProviderDriverKind } from "./providerInstance.ts";
-import { ReviewFinding } from "./review.ts";
+import { ReviewFinding, ReviewRunVerdict } from "./review.ts";
 
 const TrimmedNonEmptyStringSchema = TrimmedNonEmptyString;
 const UnknownRecordSchema = Schema.Record(Schema.String, Schema.Unknown);
@@ -382,6 +382,11 @@ const TurnCompletedPayload = Schema.Struct({
   modelUsage: Schema.optional(UnknownRecordSchema),
   totalCostUsd: Schema.optional(Schema.Number),
   errorMessage: Schema.optional(TrimmedNonEmptyStringSchema),
+  // Review mode: the agent's overall assessment from the findings block.
+  verdict: Schema.optional(ReviewRunVerdict),
+  summary: Schema.optional(TrimmedNonEmptyStringSchema),
+  // Review mode: the changed-file coverage ledger from the findings block.
+  filesReviewed: Schema.optional(Schema.Array(TrimmedNonEmptyStringSchema)),
 });
 export type TurnCompletedPayload = typeof TurnCompletedPayload.Type;
 

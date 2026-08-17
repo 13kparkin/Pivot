@@ -34,18 +34,18 @@ export function ReviewModelConfirmDialog({
       <DialogPopup className="max-w-md">
         <DialogHeader>
           <DialogTitle>Use your default model?</DialogTitle>
+          <DialogDescription>
+            No review model is set, so this review will run on your current model
+            {defaultModelLabel ? (
+              <>
+                {" "}
+                — <span className="font-medium text-foreground">{defaultModelLabel}</span>
+              </>
+            ) : null}
+            . You can proceed with it, or set a dedicated review model under Settings → Capabilities
+            → Models &amp; Roles first.
+          </DialogDescription>
         </DialogHeader>
-        <DialogDescription>
-          No review model is set, so this review will run on your current model
-          {defaultModelLabel ? (
-            <>
-              {" "}
-              — <span className="font-medium text-foreground">{defaultModelLabel}</span>
-            </>
-          ) : null}
-          . You can proceed with it, or set a dedicated review model under Settings → Capabilities →
-          Models &amp; Roles first.
-        </DialogDescription>
         <DialogFooter>
           <Button type="button" variant="ghost" size="sm" onClick={() => onOpenChange(false)}>
             Cancel

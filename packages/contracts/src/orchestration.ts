@@ -23,7 +23,14 @@ import {
   TurnId,
 } from "./baseSchemas.ts";
 import { ProviderInstanceId } from "./providerInstance.ts";
-import { ReviewFinding, ReviewId, ReviewRun, ReviewSource } from "./review.ts";
+import {
+  ReviewFinding,
+  ReviewId,
+  ReviewRun,
+  ReviewRunProgress,
+  ReviewRunVerdict,
+  ReviewSource,
+} from "./review.ts";
 
 export const ORCHESTRATION_WS_METHODS = {
   dispatchCommand: "orchestration.dispatchCommand",
@@ -952,6 +959,17 @@ const ReviewCompletedCommand = Schema.Struct({
   commandId: CommandId,
   reviewId: ReviewId,
   completedAt: IsoDateTime,
+  verdict: Schema.optional(ReviewRunVerdict),
+  summary: Schema.optional(TrimmedNonEmptyString),
+  filesReviewed: Schema.optional(Schema.Array(TrimmedNonEmptyString)),
+});
+
+const ReviewProgressCommand = Schema.Struct({
+  type: Schema.Literal("review.progress"),
+  commandId: CommandId,
+  reviewId: ReviewId,
+  progress: ReviewRunProgress,
+  createdAt: IsoDateTime,
 });
 
 const ReviewFailedCommand = Schema.Struct({
@@ -1103,6 +1121,7 @@ const InternalOrchestrationCommand = Schema.Union([
   ThreadRevertCompleteCommand,
   ThreadTitleRegenerationCompleteCommand,
   ReviewFindingAddedCommand,
+  ReviewProgressCommand,
   ReviewCompletedCommand,
   ReviewFailedCommand,
 ]);
@@ -1146,6 +1165,7 @@ export const OrchestrationEventType = Schema.Literals([
   "thread.activity-appended",
   "review.started",
   "review.finding.added",
+  "review.progress",
   "review.completed",
   "review.failed",
 ]);
@@ -1400,9 +1420,18 @@ export const ReviewFindingAddedPayload = Schema.Struct({
 });
 export type ReviewFindingAddedPayload = typeof ReviewFindingAddedPayload.Type;
 
+export const ReviewProgressPayload = Schema.Struct({
+  reviewId: ReviewId,
+  progress: ReviewRunProgress,
+});
+export type ReviewProgressPayload = typeof ReviewProgressPayload.Type;
+
 export const ReviewCompletedPayload = Schema.Struct({
   reviewId: ReviewId,
   completedAt: IsoDateTime,
+  verdict: Schema.optional(ReviewRunVerdict),
+  summary: Schema.optional(TrimmedNonEmptyString),
+  filesReviewed: Schema.optional(Schema.Array(TrimmedNonEmptyString)),
 });
 export type ReviewCompletedPayload = typeof ReviewCompletedPayload.Type;
 
@@ -1589,6 +1618,11 @@ export const OrchestrationEvent = Schema.Union([
     ...EventBaseFields,
     type: Schema.Literal("review.finding.added"),
     payload: ReviewFindingAddedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("review.progress"),
+    payload: ReviewProgressPayload,
   }),
   Schema.Struct({
     ...EventBaseFields,

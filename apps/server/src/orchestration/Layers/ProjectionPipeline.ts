@@ -1630,6 +1630,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             source: event.payload.source,
             status: "running",
             findings: [],
+            progress: { activity: [], tokensUsed: 0 },
             threadRef: event.payload.threadRef,
             environmentId: event.payload.environmentId,
             projectId: event.payload.projectId,
@@ -1660,6 +1661,20 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
           });
           return;
         }
+        case "review.progress": {
+          const existing = yield* projectionReviewRunRepository.getById({
+            reviewId: event.payload.reviewId,
+          });
+          if (Option.isNone(existing)) {
+            return;
+          }
+          yield* projectionReviewRunRepository.upsert({
+            ...existing.value,
+            progress: event.payload.progress,
+            updatedAt: event.occurredAt,
+          });
+          return;
+        }
         case "review.completed": {
           const existing = yield* projectionReviewRunRepository.getById({
             reviewId: event.payload.reviewId,
@@ -1671,6 +1686,11 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             ...existing.value,
             status: "completed",
             completedAt: event.payload.completedAt,
+            ...(event.payload.verdict !== undefined ? { verdict: event.payload.verdict } : {}),
+            ...(event.payload.summary !== undefined ? { summary: event.payload.summary } : {}),
+            ...(event.payload.filesReviewed !== undefined
+              ? { filesReviewed: event.payload.filesReviewed }
+              : {}),
             updatedAt: event.occurredAt,
           });
           return;

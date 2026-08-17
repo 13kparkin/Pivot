@@ -12,6 +12,7 @@ import {
   ReviewCompletedPayload,
   ReviewFailedPayload,
   ReviewFindingAddedPayload,
+  ReviewProgressPayload,
   ReviewStartedPayload,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
@@ -818,6 +819,7 @@ export function projectEvent(
             source: payload.source,
             status: "running",
             findings: [],
+            progress: { activity: [], tokensUsed: 0 },
             threadRef: payload.threadRef,
             environmentId: payload.environmentId,
             projectId: payload.projectId,
@@ -852,6 +854,22 @@ export function projectEvent(
         })),
       );
 
+    case "review.progress":
+      return decodeForEvent(ReviewProgressPayload, event.payload, event.type, "payload").pipe(
+        Effect.map((payload) => ({
+          ...nextBase,
+          reviewRuns: (nextBase.reviewRuns ?? []).map((run) =>
+            run.id === payload.reviewId
+              ? {
+                  ...run,
+                  progress: payload.progress,
+                  updatedAt: event.occurredAt,
+                }
+              : run,
+          ),
+        })),
+      );
+
     case "review.completed":
       return decodeForEvent(ReviewCompletedPayload, event.payload, event.type, "payload").pipe(
         Effect.map((payload) => ({
@@ -862,6 +880,11 @@ export function projectEvent(
                   ...run,
                   status: "completed",
                   completedAt: payload.completedAt,
+                  ...(payload.verdict !== undefined ? { verdict: payload.verdict } : {}),
+                  ...(payload.summary !== undefined ? { summary: payload.summary } : {}),
+                  ...(payload.filesReviewed !== undefined
+                    ? { filesReviewed: payload.filesReviewed }
+                    : {}),
                   updatedAt: event.occurredAt,
                 }
               : run,

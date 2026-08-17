@@ -5,6 +5,7 @@ import {
   ProviderDriverKind,
   ProviderInstanceId,
   ReviewId,
+  RuntimeTaskId,
   ThreadId,
   TurnId,
   type ProviderRuntimeEvent,
@@ -325,6 +326,19 @@ describe("ReviewReactor", () => {
     let run = (await h.readReviewRuns()).find((entry) => entry.id === reviewId);
     expect(run?.progress?.activity[0]).toMatchObject({ kind: "read", title: "README.md" });
 
+    // Review-session subagents (the orchestrator's per-file passes) fold into
+    // the same live progress strip. The entry lands inside the throttle window,
+    // so it surfaces on the terminal flush alongside the token total.
+    h.provider.emit({
+      type: "task.started",
+      eventId: "evt-progress-3" as never,
+      provider: ProviderDriverKind.make("omp"),
+      threadId: ThreadId.make(`review-${reviewId}`),
+      createdAt: NOW,
+      turnId: TurnId.make("turn-1"),
+      payload: { taskId: RuntimeTaskId.make("task-1"), description: "review src/a.ts" },
+    });
+
     h.provider.emit({
       type: "review.finding",
       eventId: "evt-1" as never,
@@ -370,8 +384,13 @@ describe("ReviewReactor", () => {
     expect(run?.summary).toBe("The change needs work.");
     expect(run?.filesReviewed).toEqual(["README.md"]);
     // Token usage landed inside the throttle window and is flushed with the
-    // terminal frame.
+    // terminal frame, which also carries the subagent fold.
     expect(run?.progress?.tokensUsed).toBe(42_000);
+    expect(run?.progress?.activity.some((item) => item.kind === "subagent")).toBe(true);
+    expect(run?.progress?.activity.at(-1)).toMatchObject({
+      kind: "subagent",
+      title: "review src/a.ts",
+    });
     expect(h.provider.stoppedSessions).toContain(ThreadId.make(`review-${reviewId}`));
   });
 

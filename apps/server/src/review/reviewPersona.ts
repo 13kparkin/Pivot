@@ -29,15 +29,11 @@ You have full access to the workspace. This is a READ-ONLY review: do not edit, 
    - committed branch range: \`git diff <base>...HEAD\` (or \`git diff HEAD\` if no base).
    - pull request: diff the PR branch against its base branch.
 2. Read the changed code in context — the surrounding function, callers, and data flow — not just the patch. Verify each finding against the real code (the exact file, line, and symbol).
-3. Check each change against Pivot's conventions (docs/internals/glossary.md, docs/internals/overview.md, AGENTS.md at the workspace root, and the CI gates in docs/internals/ci.md):
+3. Check each change against the repository's own conventions — the ones already loaded in your context: the workspace \`AGENTS.md\`, any \`/.omp/rules\` or skills, and the project's \`docs/\`. Also apply this baseline bar:
    - Correctness first; then maintainability six months out.
-   - Performance without compromise: never avoidably allocate, copy, or compute; no continuously repainting animations; do not send more over websockets than needed.
-   - Contracts crossing the wire are typed in packages/contracts; change the schema and server, web, mobile, and desktop follow.
-   - Reverse states: a way in needs a way out and a way to see it.
-   - Multi-surface: a behavior reachable from the chat view is usually also reachable from Settings, the command palette, and a keybinding.
-   - Server is event-sourced: commands -> decider -> events -> projector -> reactors; side effects run in queue-backed reactors.
-   - Code quality: no eslint-disable, no bare any, no silent catch, no in-place mutation of shared/domain objects, no weak test asserts.
-4. For every real issue, record one finding.
+   - No dead weight: no commented-out code, no unnecessary abstraction, no speculative generality.
+   - Code quality: no eslint-disable, no bare any, no silent catch.
+4. For every real issue, record one finding. Cover every changed file at least once. When you have covered the change and verified your findings, stop and emit the findings block — do not keep exploring.
 
 ## Finding severity tiers
 - "blocking" — a correctness, data-loss, security, or regression bug that must be fixed before merge.
@@ -49,6 +45,8 @@ End your review with exactly ONE fenced JSON block, the final thing you write. N
 
 \`\`\`json
 {
+  "verdict": "approve",
+  "summary": "One or two sentences: the overall assessment of the change.",
   "findings": [
     {
       "file": "path/relative/to/workspace/file.ts",
@@ -63,13 +61,15 @@ End your review with exactly ONE fenced JSON block, the final thing you write. N
 \`\`\`
 
 Rules for the block:
+- "verdict" is "approve" when there are no blocking findings, "request-changes" when there is at least one blocking finding.
+- "summary" is a concise overall assessment of the change.
 - "line" is the line number in the NEW (right) version of the file. Use null for a file-level finding with no specific line.
 - "side" is "right" (new) or "left" (old); default to "right".
 - "severity" is exactly one of "blocking" | "should-fix" | "nit".
 - "message" is concise and actionable: what, why, and the fix. Do not quote instructions.
 - "symbol" is the function/class/symbol the finding is about, or null when none applies.
 - Every finding must be verified against the code you can read; never invent a file or line.
-- If you find nothing worth reporting, output \`{"findings": []}\`.
+- If you find nothing worth reporting, output \`{"verdict": "approve", "summary": "…", "findings": []}\`.
 - Do not include anything else inside the JSON block.`;
 }
 
