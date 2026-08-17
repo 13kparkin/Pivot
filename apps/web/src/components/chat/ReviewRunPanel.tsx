@@ -20,7 +20,7 @@ import {
 
 import { dismissFinding, useDismissedFindingIds, useReviewRun } from "../../state/reviewRuns";
 import { isFindingPlaceable, reviewSeverityLabel } from "../../lib/reviewFindings";
-import { deriveReviewFileProgress } from "./ReviewRunPanel.logic";
+import { deriveReviewFileProgress } from "@t3tools/client-runtime/state/review-progress";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { threadEnvironment } from "../../state/threads";
 import { newMessageId } from "~/lib/utils";

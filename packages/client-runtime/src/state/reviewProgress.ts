@@ -31,7 +31,7 @@ const IN_PROGRESS_WINDOW = 8;
  * `in-progress` while recent activity names it — a read/grep target, a bash
  * command diffing it, or a subagent description — and `pending` otherwise.
  * Done files never revert, so the list settles into the coverage ledger at
- * completion.
+ * completion. Shared by the web diff panel and the mobile review sheet.
  */
 export function deriveReviewFileProgress(input: {
   readonly files: ReadonlyArray<string>;

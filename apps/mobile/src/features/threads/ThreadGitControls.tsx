@@ -95,6 +95,8 @@ type ThreadGitControlsProps = ThreadGitMenuProps & {
     readonly accessibilityLabel: string;
     readonly onPress: () => void;
   };
+  /** Opens the agent review sheet (working-tree review of this thread). */
+  readonly onOpenReview?: () => void;
   readonly canOpenTerminal: boolean;
   readonly canOpenFiles: boolean;
   readonly projectScripts: ReadonlyArray<ProjectScript>;
@@ -421,6 +423,14 @@ export function ThreadGitControls(props: ThreadGitControlsProps) {
           accessibilityLabel={props.auxiliaryPaneControl.accessibilityLabel}
           icon="sidebar.right"
           onPress={props.auxiliaryPaneControl.onPress}
+          separateBackground
+        />
+      ) : null}
+      {showActionControls && props.onOpenReview ? (
+        <NativeHeaderToolbar.Button
+          accessibilityLabel="Review changes"
+          icon="doc.text.magnifyingglass"
+          onPress={props.onOpenReview}
           separateBackground
         />
       ) : null}

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { deriveReviewFileProgress } from "./ReviewRunPanel.logic";
+import { deriveReviewFileProgress } from "./reviewProgress.ts";
 
 const FILES = ["src/a.ts", "src/b.ts", "src/c.ts"];
 
