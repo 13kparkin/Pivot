@@ -55,9 +55,7 @@ export function ReviewFindingsPanel({
   const fixFinding = useAtomCommand(reviewCommands.fix, { reportFailure: false });
 
   useEffect(() => {
-    if (height !== readInitialHeight()) {
-      localStorage.setItem(HEIGHT_STORAGE_KEY, String(height));
-    }
+    localStorage.setItem(HEIGHT_STORAGE_KEY, String(height));
   }, [height]);
 
   const onResizePointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
