@@ -23,7 +23,7 @@
  * @module provider/omp/OmpAdapter
  */
 import { ReviewBlockDecoder } from "./ReviewBlockDecoder.ts";
-import { OmpToolPresentation } from "./OmpToolPresentation.ts";
+import { OmpToolPresentation, formatOmpToolOutputText } from "./OmpToolPresentation.ts";
 import {
   type ApprovalRequestId,
   EventId,
@@ -1228,7 +1228,7 @@ export class OmpAdapter {
     if (typeof frame.toolCallId !== "string") {
       return Effect.void;
     }
-    const delta = this.#toolPresentation.formatOutputText(frame.partialResult);
+    const delta = formatOmpToolOutputText(frame.partialResult);
     if (delta.length === 0) {
       return Effect.void;
     }

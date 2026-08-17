@@ -71,7 +71,7 @@ function extractOmpToolPath(args: unknown): string | undefined {
 }
 
 /** Unwrap omp AgentToolResult `{ content: [{ type:"text", text }] }` to plain text. */
-function formatOmpToolOutputText(value: unknown): string {
+export function formatOmpToolOutputText(value: unknown): string {
   if (value === undefined || value === null) {
     return "";
   }
@@ -123,11 +123,6 @@ export interface OmpToolCallPresentation {
  * path), and the structured data payload.
  */
 export class OmpToolPresentation {
-  /** Unwrap omp AgentToolResult / partial-result text to plain output text. */
-  formatOutputText(value: unknown): string {
-    return formatOmpToolOutputText(value);
-  }
-
   present(input: {
     readonly toolCallId: string;
     readonly toolName: string;
