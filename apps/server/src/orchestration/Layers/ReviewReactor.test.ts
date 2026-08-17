@@ -274,7 +274,10 @@ describe("ReviewReactor", () => {
 
   it("runs a working-tree review end to end and records findings", async () => {
     const h = await createHarness();
-    const reviewId = ReviewId.make("review-1");
+    // Production review ids are bare UUIDs; the reactor namespaces the
+    // provider session thread id with `review-` so ingestion skips its
+    // events and this reactor consumes them.
+    const reviewId = ReviewId.make("6b8f4a1e-9c2d-4f3a-8b7e-1d2c3a4b5c6d");
 
     await Effect.runPromise(
       h.engine.dispatch({
@@ -291,16 +294,42 @@ describe("ReviewReactor", () => {
 
     await waitForCondition(async () => h.provider.sendTurns.length === 1, "review sendTurn issued");
     expect(h.provider.startSessions.length).toBe(1);
-    expect(h.provider.startSessions[0]?.threadId).toBe(ThreadId.make(reviewId));
+    expect(h.provider.startSessions[0]?.threadId).toBe(ThreadId.make(`review-${reviewId}`));
     expect(h.provider.startSessions[0]?.cwd).toBe(h.cwd);
     expect(h.provider.sendTurns[0]?.interactionMode).toBe("review");
     expect(h.provider.sendTurns[0]?.input ?? "").toContain("senior code reviewer");
+
+    // The agent's live tool calls stream into the run's progress.
+    h.provider.emit({
+      type: "item.started",
+      eventId: "evt-progress-1" as never,
+      provider: ProviderDriverKind.make("omp"),
+      threadId: ThreadId.make(`review-${reviewId}`),
+      createdAt: NOW,
+      turnId: TurnId.make("turn-1"),
+      payload: { itemType: "dynamic_tool_call", title: "read", detail: "README.md" },
+    });
+    h.provider.emit({
+      type: "thread.token-usage.updated",
+      eventId: "evt-progress-2" as never,
+      provider: ProviderDriverKind.make("omp"),
+      threadId: ThreadId.make(`review-${reviewId}`),
+      createdAt: NOW,
+      turnId: TurnId.make("turn-1"),
+      payload: { usage: { usedTokens: 42_000 } },
+    });
+    await waitForCondition(async () => {
+      const runs = await h.readReviewRuns();
+      return runs.find((entry) => entry.id === reviewId)?.progress?.activity.length === 1;
+    }, "review progress recorded");
+    let run = (await h.readReviewRuns()).find((entry) => entry.id === reviewId);
+    expect(run?.progress?.activity[0]).toMatchObject({ kind: "read", title: "README.md" });
 
     h.provider.emit({
       type: "review.finding",
       eventId: "evt-1" as never,
       provider: ProviderDriverKind.make("omp"),
-      threadId: ThreadId.make(reviewId),
+      threadId: ThreadId.make(`review-${reviewId}`),
       createdAt: NOW,
       turnId: TurnId.make("turn-1"),
       payload: {
@@ -317,10 +346,15 @@ describe("ReviewReactor", () => {
       type: "turn.completed",
       eventId: "evt-2" as never,
       provider: ProviderDriverKind.make("omp"),
-      threadId: ThreadId.make(reviewId),
+      threadId: ThreadId.make(`review-${reviewId}`),
       createdAt: NOW,
       turnId: TurnId.make("turn-1"),
-      payload: { state: "completed" },
+      payload: {
+        state: "completed",
+        verdict: "request-changes",
+        summary: "The change needs work.",
+        filesReviewed: ["README.md"],
+      },
     });
 
     await waitForCondition(async () => {
@@ -328,16 +362,22 @@ describe("ReviewReactor", () => {
       return runs.some((run) => run.id === reviewId && run.status === "completed");
     }, "review run completed");
     const runs = await h.readReviewRuns();
-    const run = runs.find((entry) => entry.id === reviewId);
+    run = runs.find((entry) => entry.id === reviewId);
     expect(run?.status).toBe("completed");
     expect(run?.findings).toHaveLength(1);
     expect(run?.findings[0]?.file).toBe("README.md");
-    expect(h.provider.stoppedSessions).toContain(ThreadId.make(reviewId));
+    expect(run?.verdict).toBe("request-changes");
+    expect(run?.summary).toBe("The change needs work.");
+    expect(run?.filesReviewed).toEqual(["README.md"]);
+    // Token usage landed inside the throttle window and is flushed with the
+    // terminal frame.
+    expect(run?.progress?.tokensUsed).toBe(42_000);
+    expect(h.provider.stoppedSessions).toContain(ThreadId.make(`review-${reviewId}`));
   });
 
   it("fails the review when the turn fails", async () => {
     const h = await createHarness();
-    const reviewId = ReviewId.make("review-fail");
+    const reviewId = ReviewId.make("8a4f2c6e-3b7d-4e9a-a1c5-6f8d2e4b9a7c");
 
     await Effect.runPromise(
       h.engine.dispatch({
@@ -357,7 +397,7 @@ describe("ReviewReactor", () => {
       type: "turn.completed",
       eventId: "evt-3" as never,
       provider: ProviderDriverKind.make("omp"),
-      threadId: ThreadId.make(reviewId),
+      threadId: ThreadId.make(`review-${reviewId}`),
       createdAt: NOW,
       turnId: TurnId.make("turn-1"),
       payload: { state: "failed", errorMessage: "Findings JSON was malformed" },

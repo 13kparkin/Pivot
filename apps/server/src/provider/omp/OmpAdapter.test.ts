@@ -2112,6 +2112,34 @@ describe("OmpAdapter review mode", () => {
     }),
   );
 
+  it.effect("carries filesReviewed on turn.completed when the block lists reviewed files", () =>
+    Effect.gen(function* () {
+      const fake = new FakeOmpRpc();
+      const adapter = new OmpAdapter(fake, testRandomUUID, {
+        resolveRoleModel: () => Effect.succeed(undefined),
+      });
+      const eventsFiber = yield* collectUntilTurnCompleted(adapter.streamEvents).pipe(
+        Effect.forkChild,
+      );
+      yield* adapter.startSession(startInput);
+      yield* adapter.sendTurn({
+        threadId: THREAD_ID,
+        input: "review it",
+        interactionMode: "review",
+      });
+      yield* feedAssistantText(
+        fake,
+        '```json\n{"findings":[],"verdict":"approve","summary":"Clean.","filesReviewed":["src/a.ts","src/b.ts"]}\n```',
+      );
+      yield* fake.offer(THREAD_ID, { type: "agent_end", messages: [], isTerminal: true });
+      const events = yield* Fiber.join(eventsFiber);
+
+      const completed = events.filter((event) => event.type === "turn.completed");
+      NodeAssert.equal(completed.length, 1);
+      NodeAssert.deepEqual(completed[0]?.payload.filesReviewed, ["src/a.ts", "src/b.ts"]);
+    }),
+  );
+
   it.effect("defaults side and severity when a finding omits them", () =>
     Effect.gen(function* () {
       const fake = new FakeOmpRpc();
