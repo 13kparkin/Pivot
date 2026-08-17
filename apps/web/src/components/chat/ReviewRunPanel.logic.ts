@@ -17,8 +17,12 @@ function matchesRosterPath(target: string, path: string): boolean {
   return target === path || target.endsWith(`/${path}`);
 }
 
-/** How many of the most recent activity items count as "currently working on". */
-const IN_PROGRESS_WINDOW = 3;
+/**
+ * How many of the most recent activity items count as "currently working on".
+ * Matches the persona's ~8 concurrent review subagents, so a fan-out doesn't
+ * leave started files off the spinner.
+ */
+const IN_PROGRESS_WINDOW = 8;
 
 /**
  * Derive each changed file's review-progress state from the run's live
