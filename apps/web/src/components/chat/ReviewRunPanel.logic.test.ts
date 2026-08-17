@@ -1,42 +1,12 @@
-import type { FileDiffMetadata } from "@pierre/diffs";
 import { describe, expect, it } from "vite-plus/test";
 
-import { deriveReviewRunCoverage } from "./ReviewRunPanel.logic";
+import { deriveReviewFileProgress } from "./ReviewRunPanel.logic";
 
-function fileDiff(): FileDiffMetadata {
-  // New-file lines 1 (context) and 2-3 (additions); old-file lines 1 (context)
-  // and 2 (deletion).
-  return {
-    type: "change",
-    prevName: "a/src/a.ts",
-    name: "b/src/a.ts",
-    additions: 2,
-    deletions: 1,
-    additionLines: ["context-1", "added-2", "added-3"],
-    deletionLines: ["unused-context-1", "removed-old-2"],
-    hunks: [
-      {
-        deletionStart: 1,
-        deletionLineIndex: 0,
-        additionStart: 1,
-        additionLineIndex: 0,
-        hunkContent: [
-          { type: "context", lines: 1 },
-          { type: "change", deletions: 1, additions: 2 },
-        ],
-      },
-    ],
-  } as unknown as FileDiffMetadata;
-}
-
-const files = [
-  { fileDiff: fileDiff(), filePath: "src/a.ts" },
-  { fileDiff: fileDiff(), filePath: "src/b.ts" },
-];
+const FILES = ["src/a.ts", "src/b.ts", "src/c.ts"];
 
 function finding(
-  overrides: Partial<Parameters<typeof deriveReviewRunCoverage>[0]["findings"][number]> = {},
-): Parameters<typeof deriveReviewRunCoverage>[0]["findings"][number] {
+  overrides: Partial<Parameters<typeof deriveReviewFileProgress>[0]["findings"][number]> = {},
+): Parameters<typeof deriveReviewFileProgress>[0]["findings"][number] {
   return {
     id: "finding-1",
     file: "src/a.ts",
@@ -46,43 +16,86 @@ function finding(
     message: "Inline the single-use helper.",
     symbol: "doThing",
     ...overrides,
-  } as Parameters<typeof deriveReviewRunCoverage>[0]["findings"][number];
+  } as Parameters<typeof deriveReviewFileProgress>[0]["findings"][number];
 }
 
-describe("deriveReviewRunCoverage", () => {
-  it("covers filesReviewed entries that are in the rendered diff", () => {
-    const view = deriveReviewRunCoverage({
-      filesReviewed: ["src/a.ts", "src/gone.ts"],
+describe("deriveReviewFileProgress", () => {
+  it("starts every file pending", () => {
+    const states = deriveReviewFileProgress({
+      files: FILES,
+      activity: [],
       findings: [],
-      files,
+      filesReviewed: undefined,
+      status: "running",
     });
-    expect(view.covered).toEqual(["src/a.ts"]);
+    expect([...states.values()]).toEqual(["pending", "pending", "pending"]);
   });
 
-  it("flags rendered files missing from filesReviewed", () => {
-    const view = deriveReviewRunCoverage({
-      filesReviewed: ["src/a.ts"],
+  it("marks the file of an arriving finding done", () => {
+    const states = deriveReviewFileProgress({
+      files: FILES,
+      activity: [],
+      findings: [finding()],
+      filesReviewed: undefined,
+      status: "running",
+    });
+    expect(states.get("src/a.ts")).toBe("done");
+  });
+
+  it("marks ledger files done on completion", () => {
+    const states = deriveReviewFileProgress({
+      files: FILES,
+      activity: [],
       findings: [],
-      files,
+      filesReviewed: ["src/a.ts", "src/b.ts"],
+      status: "completed",
     });
-    expect(view.missing).toEqual(["src/b.ts"]);
+    expect(states.get("src/a.ts")).toBe("done");
+    expect(states.get("src/b.ts")).toBe("done");
+    expect(states.get("src/c.ts")).toBe("pending");
   });
 
-  it("treats an absent filesReviewed as covering nothing", () => {
-    const view = deriveReviewRunCoverage({ filesReviewed: undefined, findings: [], files });
-    expect(view.covered).toEqual([]);
-    expect(view.missing).toEqual(["src/a.ts", "src/b.ts"]);
-  });
-
-  it("marks findings with a rejected line as outdated, not file-level findings", () => {
-    const view = deriveReviewRunCoverage({
+  it("ignores the ledger while the run is still going", () => {
+    const states = deriveReviewFileProgress({
+      files: FILES,
+      activity: [],
+      findings: [],
       filesReviewed: ["src/a.ts"],
-      findings: [
-        finding({ id: "finding-1", line: 99 }),
-        finding({ id: "finding-2", file: "src/b.ts", line: null }),
-      ],
-      files,
+      status: "running",
     });
-    expect(view.outdatedFindings.map((entry) => entry.id)).toEqual(["finding-1"]);
+    expect(states.get("src/a.ts")).toBe("pending");
+  });
+
+  it("marks the file of a recent read activity in-progress, stripping selectors", () => {
+    const states = deriveReviewFileProgress({
+      files: FILES,
+      activity: [{ kind: "read", title: "src/b.ts:12-20:raw" }],
+      findings: [],
+      filesReviewed: undefined,
+      status: "running",
+    });
+    expect(states.get("src/b.ts")).toBe("in-progress");
+  });
+
+  it("keeps done files done when activity names them again", () => {
+    const states = deriveReviewFileProgress({
+      files: FILES,
+      activity: [{ kind: "read", title: "src/a.ts" }],
+      findings: [finding()],
+      filesReviewed: undefined,
+      status: "running",
+    });
+    expect(states.get("src/a.ts")).toBe("done");
+  });
+
+  it("marks roster files named in a subagent description in-progress", () => {
+    const states = deriveReviewFileProgress({
+      files: FILES,
+      activity: [{ kind: "subagent", title: "review src/c.ts" }],
+      findings: [],
+      filesReviewed: undefined,
+      status: "running",
+    });
+    expect(states.get("src/c.ts")).toBe("in-progress");
   });
 });

@@ -85,7 +85,7 @@ import {
 } from "../state/reviewRuns";
 import { ReviewRunPanel } from "./chat/ReviewRunPanel";
 import { ReviewModelConfirmDialog } from "./chat/ReviewModelConfirmDialog";
-import { ReviewId } from "@t3tools/contracts";
+import { ReviewId, type ReviewFinding } from "@t3tools/contracts";
 import { vcsEnvironment } from "../state/vcs";
 import { buildBaseRefChoices, filterBaseRefChoices } from "../lib/baseRefChoices";
 import { createGitDiffFileContentsLoader } from "../lib/diffFileContents";
@@ -563,6 +563,27 @@ export default function DiffPanel({
     },
     [activeCwd, openInPreferredEditor, routeThreadRef],
   );
+
+  // GitHub-comment style: jump the diff to a review finding's line.
+  const handleSelectFinding = useCallback(
+    (finding: ReviewFinding) => {
+      if (finding.line === null) {
+        return;
+      }
+      const file = codeViewFiles.find((candidate) => candidate.filePath === finding.file);
+      if (file === undefined) {
+        return;
+      }
+      codeViewRef.current?.scrollTo({
+        type: "line",
+        id: file.fileKey,
+        lineNumber: finding.line,
+        side: finding.side === "left" ? "deletions" : "additions",
+        align: "center",
+      });
+    },
+    [codeViewFiles],
+  );
   const toggleDiffFileCollapsed = useCallback(
     (fileKey: string) => {
       setCollapsedDiffFiles((current) => {
@@ -964,6 +985,7 @@ export default function DiffPanel({
               environmentId={activeThread?.environmentId ?? null}
               reviewId={reviewId}
               files={codeViewFiles.map(({ fileDiff, filePath }) => ({ fileDiff, filePath }))}
+              onSelectFinding={handleSelectFinding}
             />
           ) : null}
           <div className="diff-panel-viewport flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
