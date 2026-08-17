@@ -19,8 +19,8 @@ import {
 } from "lucide-react";
 
 import { dismissFinding, useDismissedFindingIds, useReviewRun } from "../../state/reviewRuns";
-import { reviewSeverityLabel } from "../../lib/reviewFindings";
-import { deriveReviewRunCoverage } from "./ReviewRunPanel.logic";
+import { isFindingPlaceable, reviewSeverityLabel } from "../../lib/reviewFindings";
+import { deriveReviewFileProgress } from "./ReviewRunPanel.logic";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { threadEnvironment } from "../../state/threads";
 import { newMessageId } from "~/lib/utils";
@@ -81,25 +81,28 @@ function buildFixPrompt(finding: ReviewFinding): string {
 }
 
 /**
- * The review run's live status in the thread diff view: a spinner while it
- * runs (with a live activity feed from the server), the findings once it
- * completes, or an error when it fails. The completed card shows the verdict,
- * the coverage checklist, and the findings — each with a "Fix with AI" action
- * (and "Fix all with AI" in the header) that starts a thread turn in the
- * review's host thread, so the fix is a normal, visible, stoppable agent run.
- * The card's height is user-resizable via the bottom drag handle. Fix actions
- * need a host thread, so PR-originated reviews (no threadRef) show findings
- * without fix buttons.
+ * The review run in the thread diff view. While it runs: a "Reviewing
+ * changes…" header with the elapsed timer, and a per-file progress roster —
+ * each changed file shows a spinner while the agent is on it, a green check
+ * once it is done, and the findings for that file appear under it as they
+ * arrive. The same roster stays after completion (all files checked), with
+ * "Fix with AI" per finding and "Fix all with AI" in the verdict header.
+ * Clicking a finding calls `onSelectFinding` so the host can jump the diff to
+ * the finding's line. The card's height is user-resizable via the bottom drag
+ * handle.
  */
 export function ReviewRunPanel({
   environmentId,
   reviewId,
   files,
+  onSelectFinding,
 }: {
   environmentId: EnvironmentId | null;
   reviewId: ReviewId | null;
   /** The rendered diff files the review is checked against. */
   files: ReadonlyArray<{ readonly fileDiff: FileDiffMetadata; readonly filePath: string }>;
+  /** Jump the diff to a finding's line (GitHub-comment style). */
+  onSelectFinding?: (finding: ReviewFinding) => void;
 }) {
   const run = useReviewRun(environmentId, reviewId);
   const dismissed = useDismissedFindingIds(reviewId);
@@ -148,38 +151,6 @@ export function ReviewRunPanel({
     return null;
   }
 
-  if (run.status === "running") {
-    const progress = run.progress;
-    const lastActivity = progress?.activity.at(-1) ?? null;
-    const filesRead = progress?.activity.filter((item) => item.kind === "read").length ?? 0;
-    return (
-      <div className="flex flex-col gap-1 rounded-lg border border-border/60 bg-muted/30 px-3 py-2 text-xs">
-        <div className="flex items-center gap-2">
-          <LoaderIcon className="size-3.5 shrink-0 animate-spin text-muted-foreground" />
-          <span className="font-medium text-foreground">Reviewing changes…</span>
-          <span className="ml-auto text-muted-foreground tabular-nums">
-            {formatElapsed(elapsedSeconds)}
-          </span>
-        </div>
-        {lastActivity ? (
-          <div className="flex min-w-0 items-center gap-2 text-muted-foreground">
-            <span className="size-1 shrink-0 rounded-full bg-current" />
-            <span className="min-w-0 truncate">
-              <span className="font-medium text-foreground/80">{lastActivity.kind}</span>{" "}
-              {lastActivity.title}
-            </span>
-          </div>
-        ) : null}
-        {progress && (filesRead > 0 || progress.tokensUsed > 0) ? (
-          <div className="text-muted-foreground/80">
-            {filesRead > 0 ? `${filesRead} ${filesRead === 1 ? "file" : "files"} read · ` : ""}
-            {progress.tokensUsed > 0 ? `${Math.round(progress.tokensUsed / 1_000)}k tokens` : ""}
-          </div>
-        ) : null}
-      </div>
-    );
-  }
-
   if (run.status === "failed") {
     return (
       <div className="flex items-center gap-2 rounded-lg border border-border/60 bg-muted/30 px-3 py-2 text-xs">
@@ -194,6 +165,14 @@ export function ReviewRunPanel({
 
   const threadId = run.threadRef?.threadId ?? null;
   const canFix = environmentId !== null && threadId !== null;
+  const roster = files.map((file) => file.filePath);
+  const states = deriveReviewFileProgress({
+    files: roster,
+    activity: run.progress?.activity,
+    findings: run.findings,
+    filesReviewed: run.filesReviewed,
+    status: run.status,
+  });
 
   const dispatchFix = (finding: ReviewFinding) => {
     if (!canFix || threadId === null || dispatchedFindingIds.has(finding.id)) {
@@ -224,71 +203,20 @@ export function ReviewRunPanel({
     }
   };
 
-  const visibleFindings = run.findings.filter((finding) => !dismissed.has(finding.id));
-  const coverage = deriveReviewRunCoverage({
-    filesReviewed: run.filesReviewed,
-    findings: run.findings,
-    files,
-  });
-  const coverageStrip =
-    files.length > 0 && (coverage.covered.length > 0 || coverage.missing.length > 0) ? (
-      <div className="border-b border-border/60 bg-muted/30 px-3 py-1.5">
-        <div className="flex items-center justify-between text-[11px]">
-          <span className="font-medium uppercase tracking-wider text-muted-foreground/70">
-            Coverage
-          </span>
-          <span className="tabular-nums text-muted-foreground/70">
-            {coverage.covered.length}/{files.length} files
-          </span>
-        </div>
-        <ul className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5">
-          {files.map(({ filePath }) => {
-            const covered = coverage.covered.includes(filePath);
-            return (
-              <li
-                key={filePath}
-                className={`flex min-w-0 items-center gap-1 font-mono text-[11px] ${
-                  covered ? "text-muted-foreground/70" : "font-medium text-amber-500"
-                }`}
-              >
-                {covered ? (
-                  <CheckIcon className="size-2.5 shrink-0 text-emerald-500" />
-                ) : (
-                  <TriangleAlertIcon className="size-2.5 shrink-0 text-amber-500" />
-                )}
-                <span className="truncate">{filePath}</span>
-              </li>
-            );
-          })}
-        </ul>
-      </div>
-    ) : null;
-
-  if (visibleFindings.length === 0) {
-    return (
-      <div className="flex max-h-72 flex-col overflow-hidden rounded-lg border border-border/60">
-        {coverageStrip}
-        <div className="flex items-center gap-2 px-3 py-2 text-xs">
-          <CheckIcon className="size-3.5 shrink-0 text-emerald-500" />
-          <span className="font-medium text-foreground">
-            {run.findings.length > 0
-              ? "All findings dismissed."
-              : "No issues found — this review is clean."}
-          </span>
-          {run.summary ? (
-            <span className="min-w-0 truncate text-muted-foreground">{run.summary}</span>
-          ) : null}
-        </div>
-      </div>
-    );
-  }
-
   return (
     <div
       className="flex flex-col overflow-hidden rounded-lg border border-border/60"
       style={{ height }}
     >
-      {run.verdict ? (
+      {run.status === "running" ? (
+        <div className="flex items-center gap-2 border-b border-border/60 bg-muted/30 px-3 py-2 text-xs">
+          <LoaderIcon className="size-3.5 shrink-0 animate-spin text-muted-foreground" />
+          <span className="font-medium text-foreground">Reviewing changes…</span>
+          <span className="ml-auto text-muted-foreground tabular-nums">
+            {formatElapsed(elapsedSeconds)}
+          </span>
+        </div>
+      ) : (
         <div
           className={`flex items-center gap-2 border-b border-border/60 px-3 py-2 text-xs ${
             run.verdict === "approve" ? "bg-emerald-500/8" : "bg-amber-500/8"
@@ -305,17 +233,10 @@ export function ReviewRunPanel({
           {run.summary ? (
             <span className="min-w-0 truncate text-muted-foreground">{run.summary}</span>
           ) : null}
-        </div>
-      ) : null}
-      {coverageStrip}
-      <div className="flex items-center justify-between border-b border-border/60 bg-muted/30 px-3 py-1.5 text-[11px] font-medium uppercase tracking-wider text-muted-foreground/70">
-        <span>Review findings</span>
-        <span className="flex items-center gap-2">
-          <span className="tabular-nums">{visibleFindings.length} total</span>
           {canFix ? (
             <button
               type="button"
-              className="shrink-0 rounded-md border border-border/70 bg-background px-2 py-0.5 text-[11px] font-medium normal-case tracking-normal text-foreground/80 transition-colors hover:bg-accent disabled:pointer-events-none disabled:opacity-50"
+              className="ml-auto shrink-0 rounded-md border border-border/70 bg-background px-2 py-0.5 text-[11px] font-medium text-foreground/80 transition-colors hover:bg-accent disabled:pointer-events-none disabled:opacity-50"
               onClick={fixAll}
               disabled={
                 run.findings.length === 0 ||
@@ -325,61 +246,105 @@ export function ReviewRunPanel({
               Fix all with AI
             </button>
           ) : null}
-        </span>
-      </div>
-      <div className="flex min-h-0 flex-1 flex-col gap-1.5 overflow-y-auto p-2">
-        {visibleFindings.map((finding) => (
-          <div
-            key={finding.id}
-            className="rounded-md border border-border/60 bg-background px-3 py-2"
-          >
-            <div className="flex items-start justify-between gap-2">
-              <div className="min-w-0">
-                <span
-                  className={`text-[11px] font-semibold uppercase tracking-wide ${SEVERITY_CLASS[finding.severity]}`}
-                >
-                  {reviewSeverityLabel(finding.severity)}
-                </span>
-                {coverage.outdatedFindings.some((outdated) => outdated.id === finding.id) ? (
-                  <span className="ml-2 rounded-sm bg-amber-500/15 px-1 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-500">
-                    Outdated
-                  </span>
-                ) : null}
-                <span className="ml-2 font-mono text-[11px] text-muted-foreground/70">
-                  {finding.file}
-                  {finding.line !== null ? `:${finding.line}` : ""}
-                </span>
-              </div>
-              <div className="flex shrink-0 items-center gap-1">
-                {canFix ? (
-                  dispatchedFindingIds.has(finding.id) ? (
-                    <span className="text-[11px] font-medium text-muted-foreground">
-                      Fix started
-                    </span>
+        </div>
+      )}
+      <div className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto p-2">
+        {roster.length === 0 ? (
+          <div className="px-1 py-1 text-xs text-muted-foreground/70">
+            No changed files in this diff.
+          </div>
+        ) : (
+          roster.map((filePath) => {
+            const state = states.get(filePath) ?? "pending";
+            const fileFindings = run.findings.filter(
+              (finding) => finding.file === filePath && !dismissed.has(finding.id),
+            );
+            return (
+              <div key={filePath} className="mb-1">
+                <div className="flex items-center gap-2 rounded-md px-2 py-1 hover:bg-accent/40">
+                  {state === "in-progress" ? (
+                    <LoaderIcon className="size-3.5 shrink-0 animate-spin text-muted-foreground" />
+                  ) : state === "done" ? (
+                    <CheckIcon className="size-3.5 shrink-0 text-emerald-500" />
                   ) : (
+                    <span className="size-3.5 shrink-0 rounded-full border border-border/60" />
+                  )}
+                  <span
+                    className={`min-w-0 truncate font-mono text-xs ${
+                      state === "pending" ? "text-muted-foreground/60" : "text-foreground/90"
+                    }`}
+                  >
+                    {filePath}
+                  </span>
+                  {fileFindings.length > 0 ? (
+                    <span className="ml-auto shrink-0 text-[11px] tabular-nums text-muted-foreground/70">
+                      {fileFindings.length} {fileFindings.length === 1 ? "finding" : "findings"}
+                    </span>
+                  ) : null}
+                </div>
+                {fileFindings.map((finding) => (
+                  <div
+                    key={finding.id}
+                    className="ml-5 mt-0.5 rounded-md border border-border/60 bg-background px-2 py-1.5"
+                  >
                     <button
                       type="button"
-                      className="flex items-center gap-1 rounded-md border border-border/70 bg-background px-1.5 py-0.5 text-[11px] font-medium text-foreground/80 transition-colors hover:bg-accent"
-                      onClick={() => dispatchFix(finding)}
+                      className="block w-full text-left"
+                      onClick={() => onSelectFinding?.(finding)}
+                      disabled={onSelectFinding === undefined}
                     >
-                      <WandSparklesIcon className="size-3" />
-                      Fix with AI
+                      <span className="flex items-center gap-2">
+                        <span
+                          className={`shrink-0 text-[11px] font-semibold uppercase tracking-wide ${SEVERITY_CLASS[finding.severity]}`}
+                        >
+                          {reviewSeverityLabel(finding.severity)}
+                        </span>
+                        {isFindingPlaceable(finding, files) ? null : finding.line !== null ? (
+                          <span className="shrink-0 rounded-sm bg-amber-500/15 px-1 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-500">
+                            Outdated
+                          </span>
+                        ) : null}
+                        <span className="truncate font-mono text-[11px] text-muted-foreground/70">
+                          {finding.file}
+                          {finding.line !== null ? `:${finding.line}` : ""}
+                        </span>
+                      </span>
+                      <p className="mt-1 text-xs leading-relaxed text-foreground/90">
+                        {finding.message}
+                      </p>
                     </button>
-                  )
-                ) : null}
-                <button
-                  type="button"
-                  className="shrink-0 rounded p-0.5 text-muted-foreground/60 transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                  aria-label={`Dismiss finding in ${finding.file}`}
-                  onClick={() => dismissFinding(run.id, finding.id)}
-                >
-                  <Trash2Icon className="size-3" />
-                </button>
+                    {canFix ? (
+                      <div className="mt-1 flex items-center gap-1">
+                        {dispatchedFindingIds.has(finding.id) ? (
+                          <span className="text-[11px] font-medium text-muted-foreground">
+                            Fix started
+                          </span>
+                        ) : (
+                          <button
+                            type="button"
+                            className="flex items-center gap-1 rounded-md border border-border/70 bg-background px-1.5 py-0.5 text-[11px] font-medium text-foreground/80 transition-colors hover:bg-accent"
+                            onClick={() => dispatchFix(finding)}
+                          >
+                            <WandSparklesIcon className="size-3" />
+                            Fix with AI
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          className="shrink-0 rounded p-0.5 text-muted-foreground/60 transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                          aria-label={`Dismiss finding in ${finding.file}`}
+                          onClick={() => dismissFinding(run.id, finding.id)}
+                        >
+                          <Trash2Icon className="size-3" />
+                        </button>
+                      </div>
+                    ) : null}
+                  </div>
+                ))}
               </div>
-            </div>
-            <p className="mt-1 text-xs leading-relaxed text-foreground/90">{finding.message}</p>
-          </div>
-        ))}
+            );
+          })
+        )}
       </div>
       <div
         role="separator"

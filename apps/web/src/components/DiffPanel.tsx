@@ -24,6 +24,7 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useOpenInPreferredEditor } from "../editorPreferences";
+import type { FileDiffMetadata } from "@pierre/diffs";
 import { type DraftId } from "../composerDraftStore";
 import { openDiffFilePrimaryAction } from "../diffFileActions";
 import { useCheckpointDiff } from "~/lib/checkpointDiffState";
@@ -85,7 +86,7 @@ import {
 } from "../state/reviewRuns";
 import { ReviewRunPanel } from "./chat/ReviewRunPanel";
 import { ReviewModelConfirmDialog } from "./chat/ReviewModelConfirmDialog";
-import { ReviewId } from "@t3tools/contracts";
+import { ReviewId, type ReviewFinding } from "@t3tools/contracts";
 import { vcsEnvironment } from "../state/vcs";
 import { buildBaseRefChoices, filterBaseRefChoices } from "../lib/baseRefChoices";
 import { createGitDiffFileContentsLoader } from "../lib/diffFileContents";
@@ -506,6 +507,25 @@ export default function DiffPanel({
       }),
     [collapsedDiffFileKeys, renderableFileEntries],
   );
+  // Freeze the roster for the review run: the diff preview may refresh (or
+  // briefly empty) mid-run; the review panel must keep showing the same files
+  // for the whole run instead of flickering with the preview.
+  const [reviewRosterFiles, setReviewRosterFiles] = useState<
+    ReadonlyArray<{ readonly fileDiff: FileDiffMetadata; readonly filePath: string }>
+  >([]);
+  useEffect(() => {
+    setReviewRosterFiles([]);
+    if (reviewId !== null) {
+      setReviewRosterFiles(codeViewFiles.map(({ fileDiff, filePath }) => ({ fileDiff, filePath })));
+    }
+    // Capture once per run; the preview may not be ready at start.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reviewId]);
+  useEffect(() => {
+    if (reviewId !== null && reviewRosterFiles.length === 0 && codeViewFiles.length > 0) {
+      setReviewRosterFiles(codeViewFiles.map(({ fileDiff, filePath }) => ({ fileDiff, filePath })));
+    }
+  }, [reviewId, reviewRosterFiles.length, codeViewFiles]);
   // Review findings render as GitHub-style inline comments on the diff, like
   // the PR code view does for host review threads. They anchor to the
   // reviewed git scope only: a turn diff shows different content, so findings
@@ -562,6 +582,27 @@ export default function DiffPanel({
       });
     },
     [activeCwd, openInPreferredEditor, routeThreadRef],
+  );
+
+  // GitHub-comment style: jump the diff to a review finding's line.
+  const handleSelectFinding = useCallback(
+    (finding: ReviewFinding) => {
+      if (finding.line === null) {
+        return;
+      }
+      const file = codeViewFiles.find((candidate) => candidate.filePath === finding.file);
+      if (file === undefined) {
+        return;
+      }
+      codeViewRef.current?.scrollTo({
+        type: "line",
+        id: file.fileKey,
+        lineNumber: finding.line,
+        side: finding.side === "left" ? "deletions" : "additions",
+        align: "center",
+      });
+    },
+    [codeViewFiles],
   );
   const toggleDiffFileCollapsed = useCallback(
     (fileKey: string) => {
@@ -963,7 +1004,12 @@ export default function DiffPanel({
             <ReviewRunPanel
               environmentId={activeThread?.environmentId ?? null}
               reviewId={reviewId}
-              files={codeViewFiles.map(({ fileDiff, filePath }) => ({ fileDiff, filePath }))}
+              files={
+                reviewId !== null && reviewRosterFiles.length > 0
+                  ? reviewRosterFiles
+                  : codeViewFiles.map(({ fileDiff, filePath }) => ({ fileDiff, filePath }))
+              }
+              onSelectFinding={handleSelectFinding}
             />
           ) : null}
           <div className="diff-panel-viewport flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
