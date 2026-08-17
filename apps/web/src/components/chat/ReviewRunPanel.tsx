@@ -276,6 +276,11 @@ export function ReviewRunPanel({
                   >
                     {filePath}
                   </span>
+                  {fileFindings.length > 0 ? (
+                    <span className="ml-auto shrink-0 text-[11px] tabular-nums text-muted-foreground/70">
+                      {fileFindings.length} {fileFindings.length === 1 ? "finding" : "findings"}
+                    </span>
+                  ) : null}
                 </div>
                 {fileFindings.map((finding) => (
                   <div

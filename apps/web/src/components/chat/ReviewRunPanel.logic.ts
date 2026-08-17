@@ -5,10 +5,16 @@ export type ReviewFileProgressState = "pending" | "in-progress" | "done";
 /**
  * Normalize an activity target to a workspace path: strip the `:line`,
  * `:start-end`, or `:raw` selectors appended to read targets
- * (`src/a.ts:12-20:raw` → `src/a.ts`).
+ * (`src/a.ts:12-20:raw` → `src/a.ts`). Targets may be absolute
+ * (`/home/…/repo/src/a.ts:12-20:raw`), so matching below is by suffix.
  */
 function normalizeActivityTarget(title: string): string {
   return title.replace(/:\d+(?:-\d+)?(?::raw)?$/u, "");
+}
+
+/** Whether a normalized target names a roster path, relative or absolute. */
+function matchesRosterPath(target: string, path: string): boolean {
+  return target === path || target.endsWith(`/${path}`);
 }
 
 /** How many of the most recent activity items count as "currently working on". */
@@ -44,15 +50,17 @@ export function deriveReviewFileProgress(input: {
   }
   for (const item of (input.activity ?? []).slice(-IN_PROGRESS_WINDOW)) {
     const target = normalizeActivityTarget(item.title);
-    if (states.get(target) === "pending") {
-      states.set(target, "in-progress");
-      continue;
-    }
     if (item.kind === "subagent") {
       for (const file of input.files) {
         if (states.get(file) === "pending" && item.title.includes(file)) {
           states.set(file, "in-progress");
         }
+      }
+      continue;
+    }
+    for (const file of input.files) {
+      if (states.get(file) === "pending" && matchesRosterPath(target, file)) {
+        states.set(file, "in-progress");
       }
     }
   }

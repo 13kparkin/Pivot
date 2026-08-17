@@ -77,6 +77,17 @@ describe("deriveReviewFileProgress", () => {
     expect(states.get("src/b.ts")).toBe("in-progress");
   });
 
+  it("matches absolute activity targets by suffix", () => {
+    const states = deriveReviewFileProgress({
+      files: FILES,
+      activity: [{ kind: "read", title: "/home/dev/repo/apps/src/b.ts:12-20:raw" }],
+      findings: [],
+      filesReviewed: undefined,
+      status: "running",
+    });
+    expect(states.get("src/b.ts")).toBe("in-progress");
+  });
+
   it("keeps done files done when activity names them again", () => {
     const states = deriveReviewFileProgress({
       files: FILES,
