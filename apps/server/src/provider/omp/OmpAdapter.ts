@@ -23,7 +23,7 @@
  * @module provider/omp/OmpAdapter
  */
 import { ReviewBlockDecoder } from "./ReviewBlockDecoder.ts";
-import { OmpToolPresentation, formatOmpToolOutputText } from "./OmpToolPresentation.ts";
+import { formatOmpToolOutputText, OmpToolPresentation } from "./OmpToolPresentation.ts";
 import {
   type ApprovalRequestId,
   EventId,
@@ -39,6 +39,7 @@ import {
   type ServerProviderModel,
   type ServerProviderSlashCommand,
   ProviderDriverKind,
+  ReviewFileLineCoverage,
   RuntimeTaskId,
   type RuntimeMode,
   type ProviderTurnInteractionMode,
@@ -1402,6 +1403,9 @@ export class OmpAdapter {
                   ...(outcome.filesReviewed === undefined
                     ? {}
                     : { filesReviewed: outcome.filesReviewed }),
+                  ...(outcome.lineCoverage === undefined
+                    ? {}
+                    : { lineCoverage: outcome.lineCoverage }),
                 }
               : { state: "failed", errorMessage: outcome.errorMessage },
         });
@@ -1428,6 +1432,7 @@ export class OmpAdapter {
     readonly verdict?: ReviewRunVerdict;
     readonly summary?: string;
     readonly filesReviewed?: ReadonlyArray<string>;
+    readonly lineCoverage?: ReadonlyArray<ReviewFileLineCoverage>;
   } | null> {
     return Effect.gen({ self: this }, function* () {
       const decoded = this.#reviewBlockDecoder.decode(runText);
@@ -1443,6 +1448,7 @@ export class OmpAdapter {
         ...(decoded.verdict === undefined ? {} : { verdict: decoded.verdict }),
         ...(decoded.summary === undefined ? {} : { summary: decoded.summary }),
         ...(decoded.filesReviewed === undefined ? {} : { filesReviewed: decoded.filesReviewed }),
+        ...(decoded.coverage === undefined ? {} : { lineCoverage: decoded.coverage }),
       };
     });
   }
@@ -1457,6 +1463,7 @@ export class OmpAdapter {
         readonly verdict?: ReviewRunVerdict;
         readonly summary?: string;
         readonly filesReviewed?: ReadonlyArray<string>;
+        readonly lineCoverage?: ReadonlyArray<ReviewFileLineCoverage>;
       }
     | { readonly _tag: "error"; readonly errorMessage: string }
   > {
@@ -1483,6 +1490,7 @@ export class OmpAdapter {
         ...(extracted.filesReviewed === undefined
           ? {}
           : { filesReviewed: extracted.filesReviewed }),
+        ...(extracted.lineCoverage === undefined ? {} : { lineCoverage: extracted.lineCoverage }),
       } as const;
     });
   }

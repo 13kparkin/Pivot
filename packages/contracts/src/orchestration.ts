@@ -24,6 +24,7 @@ import {
 } from "./baseSchemas.ts";
 import { ProviderInstanceId } from "./providerInstance.ts";
 import {
+  ReviewFileLineCoverage,
   ReviewFinding,
   ReviewId,
   ReviewRun,
@@ -962,6 +963,7 @@ const ReviewCompletedCommand = Schema.Struct({
   verdict: Schema.optional(ReviewRunVerdict),
   summary: Schema.optional(TrimmedNonEmptyString),
   filesReviewed: Schema.optional(Schema.Array(TrimmedNonEmptyString)),
+  lineCoverage: Schema.optional(Schema.Array(ReviewFileLineCoverage)),
 });
 
 const ReviewProgressCommand = Schema.Struct({
@@ -1432,6 +1434,7 @@ export const ReviewCompletedPayload = Schema.Struct({
   verdict: Schema.optional(ReviewRunVerdict),
   summary: Schema.optional(TrimmedNonEmptyString),
   filesReviewed: Schema.optional(Schema.Array(TrimmedNonEmptyString)),
+  lineCoverage: Schema.optional(Schema.Array(ReviewFileLineCoverage)),
 });
 export type ReviewCompletedPayload = typeof ReviewCompletedPayload.Type;
 

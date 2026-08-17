@@ -1480,6 +1480,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           ...(command.verdict !== undefined ? { verdict: command.verdict } : {}),
           ...(command.summary !== undefined ? { summary: command.summary } : {}),
           ...(command.filesReviewed !== undefined ? { filesReviewed: command.filesReviewed } : {}),
+          ...(command.lineCoverage !== undefined ? { lineCoverage: command.lineCoverage } : {}),
         },
       };
     }

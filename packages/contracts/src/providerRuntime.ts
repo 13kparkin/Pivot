@@ -14,7 +14,7 @@ import {
   TurnId,
 } from "./baseSchemas.ts";
 import { ProviderInstanceId, ProviderDriverKind } from "./providerInstance.ts";
-import { ReviewFinding, ReviewRunVerdict } from "./review.ts";
+import { ReviewFileLineCoverage, ReviewFinding, ReviewRunVerdict } from "./review.ts";
 
 const TrimmedNonEmptyStringSchema = TrimmedNonEmptyString;
 const UnknownRecordSchema = Schema.Record(Schema.String, Schema.Unknown);
@@ -387,6 +387,8 @@ const TurnCompletedPayload = Schema.Struct({
   summary: Schema.optional(TrimmedNonEmptyStringSchema),
   // Review mode: the changed-file coverage ledger from the findings block.
   filesReviewed: Schema.optional(Schema.Array(TrimmedNonEmptyStringSchema)),
+  // Review mode: the per-file line-coverage attestation from the findings block.
+  lineCoverage: Schema.optional(Schema.Array(ReviewFileLineCoverage)),
 });
 export type TurnCompletedPayload = typeof TurnCompletedPayload.Type;
 

@@ -9,6 +9,7 @@ import {
   type ReviewRunActivityItem,
   type ReviewRunProgress,
   type ReviewRunVerdict,
+  ReviewFileLineCoverage,
   ReviewStartedPayload,
   REVIEW_SESSION_THREAD_ID_PREFIX,
   defaultInstanceIdForDriver,
@@ -230,6 +231,7 @@ const make = Effect.gen(function* () {
     verdict?: ReviewRunVerdict,
     summary?: string,
     filesReviewed?: ReadonlyArray<string>,
+    lineCoverage?: ReadonlyArray<ReviewFileLineCoverage>,
   ) {
     const commandId = yield* serverCommandId("review-completed");
     yield* orchestrationEngine
@@ -241,6 +243,7 @@ const make = Effect.gen(function* () {
         ...(verdict === undefined ? {} : { verdict }),
         ...(summary === undefined ? {} : { summary }),
         ...(filesReviewed === undefined ? {} : { filesReviewed }),
+        ...(lineCoverage === undefined ? {} : { lineCoverage }),
       })
       .pipe(Effect.catch(() => Effect.void));
     yield* receiptBus.publish({
@@ -474,6 +477,7 @@ const make = Effect.gen(function* () {
           event.payload.verdict,
           event.payload.summary,
           event.payload.filesReviewed,
+          event.payload.lineCoverage,
         );
       }
       yield* finalizeReview(sessionThreadId);

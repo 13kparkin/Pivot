@@ -122,8 +122,26 @@ export const ReviewFinding = Schema.Struct({
   severity: ReviewFindingSeverity,
   message: TrimmedNonEmptyString,
   symbol: Schema.NullOr(TrimmedNonEmptyString),
+  /**
+   * The call sites / consumers the orchestrator verified for this finding's
+   * symbol before emitting it (cross-file attestation). Empty when the finding
+   * names no symbol or nothing was traced.
+   */
+  verifiedCallSites: Schema.optional(Schema.Array(TrimmedNonEmptyString)),
 });
 export type ReviewFinding = typeof ReviewFinding.Type;
+
+/**
+ * The review's per-file line-coverage attestation: the line ranges (new-file
+ * line numbers, "1-50, 60-90" style) each file's subagent reported reviewing.
+ * The client cross-checks these against the rendered diff's changed lines to
+ * surface any changed lines the review did not explicitly account for.
+ */
+export const ReviewFileLineCoverage = Schema.Struct({
+  file: TrimmedNonEmptyString,
+  lines: Schema.Array(TrimmedNonEmptyString),
+});
+export type ReviewFileLineCoverage = typeof ReviewFileLineCoverage.Type;
 
 export const ReviewRunStatus = Schema.Literals(["running", "completed", "failed"]);
 export type ReviewRunStatus = typeof ReviewRunStatus.Type;
@@ -181,6 +199,13 @@ export const ReviewRun = Schema.Struct({
    * completed before the field existed still decode.
    */
   filesReviewed: Schema.optional(Schema.Array(TrimmedNonEmptyString)),
+  /**
+   * The per-file line-coverage attestation from the review block. The client
+   * cross-checks it against the rendered diff to flag changed lines the
+   * review did not explicitly account for. Optional so runs completed before
+   * the field existed still decode.
+   */
+  lineCoverage: Schema.optional(Schema.Array(ReviewFileLineCoverage)),
   /**
    * The thread this review was started from, when it was. Absent for a review
    * started from the Pull Requests page. A review run is never a thread turn;

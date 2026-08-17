@@ -885,6 +885,9 @@ export function projectEvent(
                   ...(payload.filesReviewed !== undefined
                     ? { filesReviewed: payload.filesReviewed }
                     : {}),
+                  ...(payload.lineCoverage !== undefined
+                    ? { lineCoverage: payload.lineCoverage }
+                    : {}),
                   updatedAt: event.occurredAt,
                 }
               : run,

@@ -21,6 +21,7 @@ import {
 import { dismissFinding, useDismissedFindingIds, useReviewRun } from "../../state/reviewRuns";
 import { isFindingPlaceable, reviewSeverityLabel } from "../../lib/reviewFindings";
 import { deriveReviewFileProgress } from "@t3tools/client-runtime/state/review-progress";
+import { deriveUnreviewedLines } from "../../lib/reviewLineCoverage";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { threadEnvironment } from "../../state/threads";
 import { newMessageId } from "~/lib/utils";
@@ -254,8 +255,13 @@ export function ReviewRunPanel({
             No changed files in this diff.
           </div>
         ) : (
-          roster.map((filePath) => {
+          files.map(({ fileDiff, filePath }) => {
             const state = states.get(filePath) ?? "pending";
+            const coverageEntry = run.lineCoverage?.find((entry) => entry.file === filePath);
+            const unreviewedLines = deriveUnreviewedLines({
+              fileDiff,
+              coveredRanges: coverageEntry?.lines,
+            });
             const fileFindings = run.findings.filter(
               (finding) => finding.file === filePath && !dismissed.has(finding.id),
             );
@@ -282,6 +288,14 @@ export function ReviewRunPanel({
                     </span>
                   ) : null}
                 </div>
+                {run.status === "completed" && unreviewedLines.length > 0 ? (
+                  <div className="ml-6 flex items-center gap-1 text-[11px] font-medium text-amber-500">
+                    <TriangleAlertIcon className="size-3 shrink-0" />
+                    {unreviewedLines.length}{" "}
+                    {unreviewedLines.length === 1 ? "changed line" : "changed lines"} not explicitly
+                    reviewed
+                  </div>
+                ) : null}
                 {fileFindings.map((finding) => (
                   <div
                     key={finding.id}

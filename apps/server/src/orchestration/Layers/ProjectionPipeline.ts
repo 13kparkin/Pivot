@@ -1691,6 +1691,9 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             ...(event.payload.filesReviewed !== undefined
               ? { filesReviewed: event.payload.filesReviewed }
               : {}),
+            ...(event.payload.lineCoverage !== undefined
+              ? { lineCoverage: event.payload.lineCoverage }
+              : {}),
             updatedAt: event.occurredAt,
           });
           return;

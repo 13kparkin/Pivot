@@ -4,6 +4,7 @@ import * as Schema from "effect/Schema";
 import {
   PositiveInt,
   PullRequestDiffSide,
+  ReviewFileLineCoverage,
   ReviewFindingSeverity,
   ReviewRunVerdict,
   TrimmedNonEmptyString,
@@ -18,6 +19,7 @@ const ReviewFindingInputSchema = Schema.Struct({
   symbol: Schema.NullOr(TrimmedNonEmptyString).pipe(
     Schema.withDecodingDefault(Effect.succeed(null)),
   ),
+  verifiedCallSites: Schema.optional(Schema.Array(TrimmedNonEmptyString)),
 });
 export type ReviewFindingInput = typeof ReviewFindingInputSchema.Type;
 
@@ -26,6 +28,7 @@ const ReviewFindingsBlockSchema = Schema.Struct({
   verdict: Schema.optional(ReviewRunVerdict),
   summary: Schema.optional(TrimmedNonEmptyString),
   filesReviewed: Schema.optional(Schema.Array(TrimmedNonEmptyString)),
+  coverage: Schema.optional(Schema.Array(ReviewFileLineCoverage)),
 });
 
 const decodeReviewFindingsBlock = Schema.decodeUnknownOption(ReviewFindingsBlockSchema);
@@ -44,6 +47,7 @@ export interface DecodedReviewBlock {
   readonly verdict?: ReviewRunVerdict;
   readonly summary?: string;
   readonly filesReviewed?: ReadonlyArray<string>;
+  readonly coverage?: ReadonlyArray<ReviewFileLineCoverage>;
 }
 
 /**
@@ -79,12 +83,13 @@ export class ReviewBlockDecoder {
     if (Option.isNone(decoded)) {
       return null;
     }
-    const { verdict, summary, filesReviewed } = decoded.value;
+    const { verdict, summary, filesReviewed, coverage } = decoded.value;
     return {
       findings: decoded.value.findings,
       ...(verdict === undefined ? {} : { verdict }),
       ...(summary === undefined ? {} : { summary }),
       ...(filesReviewed === undefined ? {} : { filesReviewed }),
+      ...(coverage === undefined ? {} : { coverage }),
     };
   }
 }
