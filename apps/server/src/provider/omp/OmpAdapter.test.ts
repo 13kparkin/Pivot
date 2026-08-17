@@ -2140,6 +2140,44 @@ describe("OmpAdapter review mode", () => {
     }),
   );
 
+  it.effect("keeps the findings block when the agent works after emitting it", () =>
+    Effect.gen(function* () {
+      const fake = new FakeOmpRpc();
+      const adapter = new OmpAdapter(fake, testRandomUUID, {
+        resolveRoleModel: () => Effect.succeed(undefined),
+      });
+      const eventsFiber = yield* collectUntilTurnCompleted(adapter.streamEvents).pipe(
+        Effect.forkChild,
+      );
+      yield* adapter.startSession(startInput);
+      yield* adapter.sendTurn({
+        threadId: THREAD_ID,
+        input: "review it",
+        interactionMode: "review",
+      });
+      // The agent emits the findings block, then keeps working — a trailing
+      // tool call (a new assistant run) and a closing prose run. The block
+      // must survive to the terminal extraction.
+      yield* feedAssistantText(
+        fake,
+        '```json\n{"verdict":"approve","summary":"Clean.","filesReviewed":["src/a.ts"],"findings":[{"file":"src/a.ts","line":12,"severity":"blocking","message":"Inline the helper.","symbol":"doThing"}]}\n```',
+      );
+      yield* fake.offer(THREAD_ID, { type: "message_end", message: { role: "assistant" } });
+      yield* fake.offer(THREAD_ID, { type: "message_start", message: { role: "assistant" } });
+      yield* feedAssistantText(fake, "Review complete.");
+      yield* fake.offer(THREAD_ID, { type: "message_end", message: { role: "assistant" } });
+      yield* fake.offer(THREAD_ID, { type: "agent_end", messages: [], isTerminal: true });
+      const events = yield* Fiber.join(eventsFiber);
+
+      const findings = events.filter((event) => event.type === "review.finding");
+      NodeAssert.equal(findings.length, 1);
+      const completed = events.filter((event) => event.type === "turn.completed");
+      NodeAssert.equal(completed.length, 1);
+      NodeAssert.equal(completed[0]?.payload.state, "completed");
+      NodeAssert.deepEqual(completed[0]?.payload.filesReviewed, ["src/a.ts"]);
+    }),
+  );
+
   it.effect("defaults side and severity when a finding omits them", () =>
     Effect.gen(function* () {
       const fake = new FakeOmpRpc();
