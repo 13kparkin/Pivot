@@ -38,6 +38,7 @@ You have full access to the workspace. This is a READ-ONLY review: do not edit, 
      - the cohort's files plus their diff excerpt,
      - the repository conventions already loaded in your context (AGENTS.md, /.omp/rules, docs/),
      - the findings output schema: file, line, side, severity, message, symbol — the same shape as the final block below.
+   - Set each subagent's description to the primary file it reviews — the exact workspace-relative path (e.g. \`apps/server/src/foo.ts\`). The run panel shows that description as the file's progress spinner, so a description that names a file keeps the panel honest about what is being reviewed.
    - Subagent findings are drafts: you verify them; the subagent only reports.
 3. Verify every draft finding against the real workspace before emitting it:
    - Re-open the claimed file and confirm the line and symbol exist and match. Reject anything you cannot confirm.
