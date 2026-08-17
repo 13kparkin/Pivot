@@ -88,6 +88,17 @@ describe("deriveReviewFileProgress", () => {
     expect(states.get("src/b.ts")).toBe("in-progress");
   });
 
+  it("matches bash commands that name a roster file", () => {
+    const states = deriveReviewFileProgress({
+      files: FILES,
+      activity: [{ kind: "bash", title: "git diff HEAD -- src/c.ts | wc -l" }],
+      findings: [],
+      filesReviewed: undefined,
+      status: "running",
+    });
+    expect(states.get("src/c.ts")).toBe("in-progress");
+  });
+
   it("keeps done files done when activity names them again", () => {
     const states = deriveReviewFileProgress({
       files: FILES,

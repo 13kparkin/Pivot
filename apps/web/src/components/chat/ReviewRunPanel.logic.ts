@@ -50,16 +50,11 @@ export function deriveReviewFileProgress(input: {
   }
   for (const item of (input.activity ?? []).slice(-IN_PROGRESS_WINDOW)) {
     const target = normalizeActivityTarget(item.title);
-    if (item.kind === "subagent") {
-      for (const file of input.files) {
-        if (states.get(file) === "pending" && item.title.includes(file)) {
-          states.set(file, "in-progress");
-        }
-      }
-      continue;
-    }
     for (const file of input.files) {
-      if (states.get(file) === "pending" && matchesRosterPath(target, file)) {
+      if (
+        states.get(file) === "pending" &&
+        (matchesRosterPath(target, file) || item.title.includes(file))
+      ) {
         states.set(file, "in-progress");
       }
     }
