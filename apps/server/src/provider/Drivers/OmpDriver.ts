@@ -39,18 +39,19 @@ import * as ProcessRunner from "../../processRunner.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { makeOmpTextGeneration } from "../../textGeneration/OmpTextGeneration.ts";
 import { ProjectionSnapshotQuery } from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
-import { OmpAdapter } from "../omp/OmpAdapter.ts";
-import { OmpCapabilitiesService } from "../omp/OmpCapabilitiesService.ts";
-import { enrichOmpManagedBundleVersionAdvisory } from "../omp/OmpManagedBundleAdvisory.ts";
 import {
+  enrichOmpManagedBundleVersionAdvisory,
   makeOmpManagedBinary,
   OMP_MANAGED_UPDATE_EXECUTABLE,
   OMP_MANAGED_UPDATE_LOCK_KEY,
   OMP_NPM_PACKAGE_NAME,
-} from "../omp/OmpManagedBinary.ts";
-import { OmpConfigStore, syncOmpSettingsToConfigStore } from "../omp/OmpConfigStore.ts";
-import { parseOmpModelRoleSlug } from "../omp/ompModelRoles.ts";
-import { OmpRpcRuntime } from "../omp/OmpRpcRuntime.ts";
+  OmpAdapter,
+  OmpCapabilitiesService,
+  OmpConfigStore,
+  OmpRpcRuntime,
+  parseOmpModelRoleSlug,
+  syncOmpSettingsToConfigStore,
+} from "../omp/index.ts";
 import {
   defaultProviderContinuationIdentity,
   type ProviderDriver,
