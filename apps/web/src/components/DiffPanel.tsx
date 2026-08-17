@@ -83,7 +83,7 @@ import {
   useReviewModelConfigured,
   useReviewRun,
 } from "../state/reviewRuns";
-import { ReviewFindingsPanel } from "./chat/ReviewFindingsPanel";
+import { ReviewRunPanel } from "./chat/ReviewRunPanel";
 import { ReviewModelConfirmDialog } from "./chat/ReviewModelConfirmDialog";
 import { ReviewId } from "@t3tools/contracts";
 import { vcsEnvironment } from "../state/vcs";
@@ -960,7 +960,7 @@ export default function DiffPanel({
       ) : (
         <>
           {reviewId ? (
-            <ReviewFindingsPanel
+            <ReviewRunPanel
               environmentId={activeThread?.environmentId ?? null}
               reviewId={reviewId}
               files={codeViewFiles.map(({ fileDiff, filePath }) => ({ fileDiff, filePath }))}
