@@ -67,7 +67,11 @@ describe("OmpAdapter", () => {
       );
       yield* adapter.startSession(startInput);
       yield* adapter.sendTurn({ threadId: THREAD_ID, input: "hi" });
-      yield* fake.offer(THREAD_ID, { type: "agent_end", messages: [], isTerminal: true });
+      yield* fake.offer(THREAD_ID, {
+        type: "agent_end",
+        messages: [],
+        isTerminal: true,
+      });
       const events = yield* Fiber.join(eventsFiber);
       const completed = events.filter((event) => event.type === "turn.completed");
       NodeAssert.equal(completed.length, 1);
@@ -88,7 +92,10 @@ describe("OmpAdapter", () => {
         Effect.forkChild,
       );
       yield* adapter.startSession(startInput);
-      const result = yield* adapter.sendTurn({ threadId: THREAD_ID, input: "hi" });
+      const result = yield* adapter.sendTurn({
+        threadId: THREAD_ID,
+        input: "hi",
+      });
       const events = yield* Fiber.join(eventsFiber);
       const started = events.find((event) => event.type === "turn.started");
       NodeAssert.ok(started);
@@ -123,13 +130,21 @@ describe("OmpAdapter", () => {
       );
       yield* adapter.startSession(startInput);
       yield* adapter.sendTurn({ threadId: THREAD_ID, input: "hi" });
-      yield* fake.offer(THREAD_ID, { type: "agent_end", messages: [], isTerminal: false });
+      yield* fake.offer(THREAD_ID, {
+        type: "agent_end",
+        messages: [],
+        isTerminal: false,
+      });
       yield* fake.offer(THREAD_ID, {
         type: "message_update",
         assistantMessageEvent: { type: "text_delta", delta: "hi" },
         message: { role: "assistant", content: [] },
       });
-      yield* fake.offer(THREAD_ID, { type: "agent_end", messages: [], isTerminal: true });
+      yield* fake.offer(THREAD_ID, {
+        type: "agent_end",
+        messages: [],
+        isTerminal: true,
+      });
       const events = yield* Fiber.join(eventsFiber);
       NodeAssert.equal(events.filter((event) => event.type === "turn.completed").length, 1);
       const assistantDeltas = events
@@ -156,7 +171,10 @@ describe("OmpAdapter", () => {
         Effect.forkChild,
       );
       yield* adapter.startSession(startInput);
-      const result = yield* adapter.sendTurn({ threadId: THREAD_ID, input: "/help" });
+      const result = yield* adapter.sendTurn({
+        threadId: THREAD_ID,
+        input: "/help",
+      });
       const events = yield* Fiber.join(eventsFiber);
       NodeAssert.equal(result.threadId, THREAD_ID);
       NodeAssert.equal(result.resumeCursor, "/tmp/omp-session.jsonl");
@@ -178,7 +196,11 @@ describe("OmpAdapter", () => {
       );
       yield* adapter.startSession(startInput);
       yield* adapter.sendTurn({ threadId: THREAD_ID, input: "/help" });
-      yield* fake.offer(THREAD_ID, { type: "prompt_result", id: "req_1", agentInvoked: false });
+      yield* fake.offer(THREAD_ID, {
+        type: "prompt_result",
+        id: "req_1",
+        agentInvoked: false,
+      });
       const events = yield* Fiber.join(eventsFiber);
       NodeAssert.equal(events.filter((event) => event.type === "turn.completed").length, 1);
     }),
@@ -198,7 +220,11 @@ describe("OmpAdapter", () => {
         type: "command_output",
         text: "No background jobs running.",
       });
-      yield* fake.offer(THREAD_ID, { type: "prompt_result", id: "req_1", agentInvoked: false });
+      yield* fake.offer(THREAD_ID, {
+        type: "prompt_result",
+        id: "req_1",
+        agentInvoked: false,
+      });
       const events = yield* Fiber.join(eventsFiber);
       const statusDeltas = events
         .filter(
@@ -217,7 +243,7 @@ describe("OmpAdapter", () => {
     }),
   );
 
-  it.effect("emits only the final assistant run as assistant_text", () =>
+  it.effect("flushes every completed assistant prose run as assistant_text", () =>
     Effect.gen(function* () {
       const fake = new FakeOmpRpc();
       const adapter = new OmpAdapter(fake, testRandomUUID);
@@ -232,7 +258,10 @@ describe("OmpAdapter", () => {
       });
       yield* fake.offer(THREAD_ID, {
         type: "message_update",
-        assistantMessageEvent: { type: "text_delta", delta: "Fetching latest upstream." },
+        assistantMessageEvent: {
+          type: "text_delta",
+          delta: "Fetching latest upstream.",
+        },
         message: { role: "assistant", content: [] },
       });
       yield* fake.offer(THREAD_ID, {
@@ -245,10 +274,17 @@ describe("OmpAdapter", () => {
       });
       yield* fake.offer(THREAD_ID, {
         type: "message_update",
-        assistantMessageEvent: { type: "text_delta", delta: "24 commits behind." },
+        assistantMessageEvent: {
+          type: "text_delta",
+          delta: "24 commits behind.",
+        },
         message: { role: "assistant", content: [] },
       });
-      yield* fake.offer(THREAD_ID, { type: "agent_end", messages: [], isTerminal: true });
+      yield* fake.offer(THREAD_ID, {
+        type: "agent_end",
+        messages: [],
+        isTerminal: true,
+      });
       const events = yield* Fiber.join(eventsFiber);
       const statusDeltas = events
         .filter(
@@ -261,8 +297,83 @@ describe("OmpAdapter", () => {
             event.type === "content.delta" && event.payload.streamKind === "assistant_text",
         )
         .map((event) => (event as { payload: { delta: string } }).payload.delta);
-      NodeAssert.deepEqual(statusDeltas, ["Fetching latest upstream."]);
-      NodeAssert.deepEqual(assistantDeltas, ["24 commits behind."]);
+      // Completed prose is never demoted to status: every run lands in the
+      // assistant text stream in order.
+      NodeAssert.deepEqual(statusDeltas, []);
+      NodeAssert.deepEqual(assistantDeltas, ["Fetching latest upstream.", "24 commits behind."]);
+    }),
+  );
+
+  it.effect("keeps a finished answer in assistant_text when an interrupt message follows it", () =>
+    Effect.gen(function* () {
+      const fake = new FakeOmpRpc();
+      const adapter = new OmpAdapter(fake, testRandomUUID);
+      const eventsFiber = yield* collectUntilTurnCompleted(adapter.streamEvents).pipe(
+        Effect.forkChild,
+      );
+      yield* adapter.startSession(startInput);
+      yield* adapter.sendTurn({ threadId: THREAD_ID, input: "hi" });
+      // The substantive answer.
+      yield* fake.offer(THREAD_ID, {
+        type: "message_start",
+        message: { role: "assistant", content: [] },
+      });
+      yield* fake.offer(THREAD_ID, {
+        type: "message_update",
+        assistantMessageEvent: {
+          type: "text_delta",
+          delta: "Investigation complete. Answer.",
+        },
+        message: { role: "assistant", content: [] },
+      });
+      yield* fake.offer(THREAD_ID, {
+        type: "message_end",
+        message: { role: "assistant", content: [] },
+      });
+      // A rule-interrupt response: a new assistant message (tool-only run).
+      yield* fake.offer(THREAD_ID, {
+        type: "message_start",
+        message: { role: "assistant", content: [] },
+      });
+      yield* fake.offer(THREAD_ID, {
+        type: "message_update",
+        assistantMessageEvent: { type: "toolcall_start" },
+        message: { role: "assistant", content: [] },
+      });
+      yield* fake.offer(THREAD_ID, {
+        type: "message_end",
+        message: { role: "assistant", content: [] },
+      });
+      // The closing acknowledgment.
+      yield* fake.offer(THREAD_ID, {
+        type: "message_start",
+        message: { role: "assistant", content: [] },
+      });
+      yield* fake.offer(THREAD_ID, {
+        type: "message_update",
+        assistantMessageEvent: { type: "text_delta", delta: "Acknowledged." },
+        message: { role: "assistant", content: [] },
+      });
+      yield* fake.offer(THREAD_ID, {
+        type: "agent_end",
+        messages: [],
+        isTerminal: true,
+      });
+      const events = yield* Fiber.join(eventsFiber);
+      const statusDeltas = events
+        .filter(
+          (event) => event.type === "content.delta" && event.payload.streamKind === "status_text",
+        )
+        .map((event) => (event as { payload: { delta: string } }).payload.delta);
+      const assistantDeltas = events
+        .filter(
+          (event) =>
+            event.type === "content.delta" && event.payload.streamKind === "assistant_text",
+        )
+        .map((event) => (event as { payload: { delta: string } }).payload.delta);
+      // The answer must survive in the body; nothing prose is demoted.
+      NodeAssert.deepEqual(statusDeltas, []);
+      NodeAssert.deepEqual(assistantDeltas, ["Investigation complete. Answer.", "Acknowledged."]);
     }),
   );
 
@@ -288,7 +399,11 @@ describe("OmpAdapter", () => {
         type: "message_end",
         message: { role: "assistant", content: [] },
       });
-      yield* fake.offer(THREAD_ID, { type: "agent_end", messages: [], isTerminal: true });
+      yield* fake.offer(THREAD_ID, {
+        type: "agent_end",
+        messages: [],
+        isTerminal: true,
+      });
       const events = yield* Fiber.join(eventsFiber);
       NodeAssert.equal(
         events.some(
@@ -313,7 +428,11 @@ describe("OmpAdapter", () => {
       yield* adapter.startSession(startInput);
       yield* adapter.sendTurn({ threadId: THREAD_ID, input: "/jobs" });
       yield* fake.offer(THREAD_ID, { type: "command_output", text: "" });
-      yield* fake.offer(THREAD_ID, { type: "prompt_result", id: "req_1", agentInvoked: false });
+      yield* fake.offer(THREAD_ID, {
+        type: "prompt_result",
+        id: "req_1",
+        agentInvoked: false,
+      });
       const events = yield* Fiber.join(eventsFiber);
       NodeAssert.equal(
         events.some(
@@ -345,7 +464,11 @@ describe("OmpAdapter", () => {
         assistantMessageEvent: { type: "text_delta", delta: "" },
         message: { role: "assistant", content: [] },
       });
-      yield* fake.offer(THREAD_ID, { type: "agent_end", messages: [], isTerminal: true });
+      yield* fake.offer(THREAD_ID, {
+        type: "agent_end",
+        messages: [],
+        isTerminal: true,
+      });
       const events = yield* Fiber.join(eventsFiber);
       NodeAssert.equal(
         events.some(
@@ -412,7 +535,11 @@ describe("OmpAdapter", () => {
         },
         isError: false,
       });
-      yield* fake.offer(THREAD_ID, { type: "agent_end", messages: [], isTerminal: true });
+      yield* fake.offer(THREAD_ID, {
+        type: "agent_end",
+        messages: [],
+        isTerminal: true,
+      });
       const events = yield* Fiber.join(eventsFiber);
       const started = events.find(
         (event) =>
@@ -470,7 +597,11 @@ describe("OmpAdapter", () => {
         },
         isError: false,
       });
-      yield* fake.offer(THREAD_ID, { type: "agent_end", messages: [], isTerminal: true });
+      yield* fake.offer(THREAD_ID, {
+        type: "agent_end",
+        messages: [],
+        isTerminal: true,
+      });
       const events = yield* Fiber.join(eventsFiber);
       const started = events.find(
         (event) => event.type === "item.started" && event.payload.title === "read",
@@ -503,10 +634,17 @@ describe("OmpAdapter", () => {
       yield* adapter.sendTurn({ threadId: THREAD_ID, input: "think" });
       yield* fake.offer(THREAD_ID, {
         type: "message_update",
-        assistantMessageEvent: { type: "thinking_delta", delta: "consider options" },
+        assistantMessageEvent: {
+          type: "thinking_delta",
+          delta: "consider options",
+        },
         message: { role: "assistant", content: [] },
       });
-      yield* fake.offer(THREAD_ID, { type: "agent_end", messages: [], isTerminal: true });
+      yield* fake.offer(THREAD_ID, {
+        type: "agent_end",
+        messages: [],
+        isTerminal: true,
+      });
       const events = yield* Fiber.join(eventsFiber);
       NodeAssert.equal(
         events.some(
@@ -523,7 +661,11 @@ describe("OmpAdapter", () => {
   it.effect("emits thread token usage from get_state contextUsage on turn complete", () =>
     Effect.gen(function* () {
       const fake = new FakeOmpRpc();
-      fake.contextUsage = { tokens: 1100, contextWindow: 200_000, percent: 55 };
+      fake.contextUsage = {
+        tokens: 1100,
+        contextWindow: 200_000,
+        percent: 55,
+      };
       fake.tokensPerSecond = 42;
       fake.queuedMessageCount = 2;
       const adapter = new OmpAdapter(fake, testRandomUUID);
@@ -532,7 +674,11 @@ describe("OmpAdapter", () => {
       );
       yield* adapter.startSession(startInput);
       yield* adapter.sendTurn({ threadId: THREAD_ID, input: "hi" });
-      yield* fake.offer(THREAD_ID, { type: "agent_end", messages: [], isTerminal: true });
+      yield* fake.offer(THREAD_ID, {
+        type: "agent_end",
+        messages: [],
+        isTerminal: true,
+      });
       const events = yield* Fiber.join(eventsFiber);
       NodeAssert.equal(
         events.some(
@@ -628,7 +774,11 @@ describe("OmpAdapter", () => {
         yield* Effect.yieldNow;
         yield* Effect.yieldNow;
         fake.contextUsage = undefined; // turn-complete emit becomes a no-op
-        yield* fake.offer(THREAD_ID, { type: "agent_end", messages: [], isTerminal: true });
+        yield* fake.offer(THREAD_ID, {
+          type: "agent_end",
+          messages: [],
+          isTerminal: true,
+        });
         const events = yield* Fiber.join(eventsFiber);
         // AC1: exactly one live usage event. Pre-fix this is 2 (both fibers emitted).
         NodeAssert.equal(
@@ -681,7 +831,11 @@ describe("OmpAdapter", () => {
         // AC2: only the "a" and "c" frames passed the window guard.
         NodeAssert.equal(fake.sent.filter((c) => c.type === "get_state").length, 2);
         yield* Effect.yieldNow;
-        yield* fake.offer(THREAD_ID, { type: "agent_end", messages: [], isTerminal: true });
+        yield* fake.offer(THREAD_ID, {
+          type: "agent_end",
+          messages: [],
+          isTerminal: true,
+        });
         const events = yield* Fiber.join(eventsFiber);
         // Live emits for "a" and "c" plus the unthrottled turn-complete snapshot.
         NodeAssert.equal(
@@ -767,11 +921,18 @@ describe("OmpAdapter", () => {
       });
       yield* fake.offer(THREAD_ID, {
         type: "message_update",
-        assistantMessageEvent: { type: "text_delta", delta: "partial answer" },
+        assistantMessageEvent: {
+          type: "text_delta",
+          delta: "partial answer",
+        },
         message: { role: "assistant", content: [] },
       });
       yield* adapter.interruptTurn(THREAD_ID);
-      yield* fake.offer(THREAD_ID, { type: "agent_end", messages: [], isTerminal: true });
+      yield* fake.offer(THREAD_ID, {
+        type: "agent_end",
+        messages: [],
+        isTerminal: true,
+      });
       const events = yield* Fiber.join(eventsFiber);
       const assistantDeltas = events
         .filter(
@@ -814,7 +975,11 @@ describe("OmpAdapter", () => {
       yield* adapter.startSession(startInput);
       yield* adapter.sendTurn({ threadId: THREAD_ID, input: "hi" });
       yield* adapter.interruptTurn(THREAD_ID);
-      yield* fake.offer(THREAD_ID, { type: "agent_end", messages: [], isTerminal: true });
+      yield* fake.offer(THREAD_ID, {
+        type: "agent_end",
+        messages: [],
+        isTerminal: true,
+      });
       const events = yield* Fiber.join(eventsFiber);
       NodeAssert.equal(
         events.some(
@@ -838,7 +1003,11 @@ describe("OmpAdapter", () => {
       );
       yield* adapter.startSession(startInput);
       yield* adapter.sendTurn({ threadId: THREAD_ID, input: "hi" });
-      yield* fake.offer(THREAD_ID, { type: "agent_end", messages: [], isTerminal: true });
+      yield* fake.offer(THREAD_ID, {
+        type: "agent_end",
+        messages: [],
+        isTerminal: true,
+      });
       const events = yield* Fiber.join(eventsFiber);
       NodeAssert.equal(
         events.some(
@@ -874,7 +1043,11 @@ describe("OmpAdapter", () => {
         payload: { id: "agent-1", agent: "scout", status: "started" },
       });
       yield* adapter.interruptTurn(THREAD_ID);
-      yield* fake.offer(THREAD_ID, { type: "agent_end", messages: [], isTerminal: true });
+      yield* fake.offer(THREAD_ID, {
+        type: "agent_end",
+        messages: [],
+        isTerminal: true,
+      });
       const events = yield* Fiber.join(eventsFiber);
       NodeAssert.equal(
         events.some(
@@ -914,7 +1087,11 @@ describe("OmpAdapter", () => {
         payload: { id: "agent-1", agent: "scout", status: "started" },
       });
       yield* adapter.interruptTurn(THREAD_ID);
-      yield* fake.offer(THREAD_ID, { type: "agent_end", messages: [], isTerminal: true });
+      yield* fake.offer(THREAD_ID, {
+        type: "agent_end",
+        messages: [],
+        isTerminal: true,
+      });
       const events = yield* Fiber.join(eventsFiber);
       NodeAssert.equal(
         events.some((event) => event.type === "session.exited"),
@@ -1318,17 +1495,29 @@ describe("OmpAdapter", () => {
       const fake = new FakeOmpRpc();
       fake.availableModels = [
         { provider: "openai", id: "gpt-5", name: "GPT-5" },
-        { provider: "anthropic", id: "claude-sonnet-4", name: "Claude Sonnet 4" },
+        {
+          provider: "anthropic",
+          id: "claude-sonnet-4",
+          name: "Claude Sonnet 4",
+        },
       ];
       const adapter = new OmpAdapter(fake, testRandomUUID);
       yield* adapter.startSession(startInput);
       const models = yield* adapter.discoverModels(THREAD_ID);
       NodeAssert.equal(fake.sent.at(-1)?.type, "get_available_models");
       NodeAssert.deepEqual(
-        models.map((model) => ({ slug: model.slug, name: model.name, isCustom: model.isCustom })),
+        models.map((model) => ({
+          slug: model.slug,
+          name: model.name,
+          isCustom: model.isCustom,
+        })),
         [
           { slug: "openai/gpt-5", name: "GPT-5", isCustom: false },
-          { slug: "anthropic/claude-sonnet-4", name: "Claude Sonnet 4", isCustom: false },
+          {
+            slug: "anthropic/claude-sonnet-4",
+            name: "Claude Sonnet 4",
+            isCustom: false,
+          },
         ],
       );
     }),
@@ -1340,7 +1529,11 @@ describe("OmpAdapter", () => {
       Effect.gen(function* () {
         const fake = new FakeOmpRpc();
         fake.availableCommands = [
-          { name: "model", description: "Switch model", input: { hint: "provider/model" } },
+          {
+            name: "model",
+            description: "Switch model",
+            input: { hint: "provider/model" },
+          },
           { name: "review", description: "Review changes" },
           { name: "vibe", description: "Enter vibe mode" },
         ];
@@ -1594,7 +1787,11 @@ describe("OmpAdapter", () => {
           index: 0,
         },
       });
-      yield* fake.offer(THREAD_ID, { type: "agent_end", messages: [], isTerminal: true });
+      yield* fake.offer(THREAD_ID, {
+        type: "agent_end",
+        messages: [],
+        isTerminal: true,
+      });
       const events = yield* Fiber.join(eventsFiber);
       const started = events.find((event) => event.type === "task.started");
       const progress = events.find((event) => event.type === "task.progress");
@@ -1632,7 +1829,11 @@ describe("OmpAdapter", () => {
           index: 1,
         },
       });
-      yield* fake.offer(THREAD_ID, { type: "agent_end", messages: [], isTerminal: true });
+      yield* fake.offer(THREAD_ID, {
+        type: "agent_end",
+        messages: [],
+        isTerminal: true,
+      });
       const events = yield* Fiber.join(eventsFiber);
       const completed = events.find((event) => event.type === "task.completed");
       NodeAssert.equal(completed?.payload.taskId, RuntimeTaskId.make("agent-2"));
@@ -1792,7 +1993,11 @@ describe("OmpAdapter", () => {
           },
         },
       });
-      yield* fake.offer(THREAD_ID, { type: "agent_end", messages: [], isTerminal: true });
+      yield* fake.offer(THREAD_ID, {
+        type: "agent_end",
+        messages: [],
+        isTerminal: true,
+      });
       const events = yield* Fiber.join(eventsFiber);
       const advisorEvents = events.filter((event) => event.type === "advisor.comment");
       NodeAssert.equal(advisorEvents.length, 1);
@@ -1845,7 +2050,11 @@ describe("OmpAdapter", () => {
           },
         ],
       });
-      yield* fake.offer(THREAD_ID, { type: "agent_end", messages: [], isTerminal: true });
+      yield* fake.offer(THREAD_ID, {
+        type: "agent_end",
+        messages: [],
+        isTerminal: true,
+      });
       const events = yield* Fiber.join(eventsFiber);
       const ttsrEvents = events.filter((event) => event.type === "ttsr.triggered");
       NodeAssert.equal(ttsrEvents.length, 1);
@@ -1870,7 +2079,12 @@ describe("OmpAdapter", () => {
   );
 
   describe("capabilities delegation", () => {
-    const snapshot = { settings: { entries: [] }, resources: [], skills: [], rules: [] } as const;
+    const snapshot = {
+      settings: { entries: [] },
+      resources: [],
+      skills: [],
+      rules: [],
+    } as const;
 
     it.effect("capabilitiesSnapshot delegates to the injected service", () =>
       Effect.gen(function* () {
@@ -1890,12 +2104,19 @@ describe("OmpAdapter", () => {
             return Effect.succeed(snapshot);
           },
           readResource: () =>
-            Effect.succeed({ name: "x", scope: "global" as const, content: "", exists: false }),
+            Effect.succeed({
+              name: "x",
+              scope: "global" as const,
+              content: "",
+              exists: false,
+            }),
           writeResource: () => Effect.succeed(snapshot),
           deleteResource: () => Effect.succeed(snapshot),
           moveItemToOmp: () => Effect.succeed(snapshot),
         };
-        const adapter = new OmpAdapter(fake, testRandomUUID, { capabilitiesService: service });
+        const adapter = new OmpAdapter(fake, testRandomUUID, {
+          capabilitiesService: service,
+        });
         const result = yield* adapter.capabilitiesSnapshot();
         NodeAssert.equal(result, snapshot);
         NodeAssert.equal(received.length, 1);
@@ -1918,12 +2139,19 @@ describe("OmpAdapter", () => {
           },
           resetSetting: () => Effect.succeed(snapshot),
           readResource: () =>
-            Effect.succeed({ name: "x", scope: "global" as const, content: "", exists: false }),
+            Effect.succeed({
+              name: "x",
+              scope: "global" as const,
+              content: "",
+              exists: false,
+            }),
           writeResource: () => Effect.succeed(snapshot),
           deleteResource: () => Effect.succeed(snapshot),
           moveItemToOmp: () => Effect.succeed(snapshot),
         };
-        const adapter = new OmpAdapter(fake, testRandomUUID, { capabilitiesService: service });
+        const adapter = new OmpAdapter(fake, testRandomUUID, {
+          capabilitiesService: service,
+        });
         const result = yield* adapter.capabilitiesWriteSetting({
           key: "theme.dark",
           value: "midnight",
@@ -1940,16 +2168,27 @@ describe("OmpAdapter", () => {
           getSnapshot: () => Effect.succeed(snapshot),
           writeSetting: () => Effect.succeed(snapshot),
           resetSetting: (input: unknown) => {
-            NodeAssert.deepEqual(input, { key: "autoResume", scope: "global", confirm: true });
+            NodeAssert.deepEqual(input, {
+              key: "autoResume",
+              scope: "global",
+              confirm: true,
+            });
             return Effect.succeed(snapshot);
           },
           readResource: () =>
-            Effect.succeed({ name: "x", scope: "global" as const, content: "", exists: false }),
+            Effect.succeed({
+              name: "x",
+              scope: "global" as const,
+              content: "",
+              exists: false,
+            }),
           writeResource: () => Effect.succeed(snapshot),
           deleteResource: () => Effect.succeed(snapshot),
           moveItemToOmp: () => Effect.succeed(snapshot),
         };
-        const adapter = new OmpAdapter(fake, testRandomUUID, { capabilitiesService: service });
+        const adapter = new OmpAdapter(fake, testRandomUUID, {
+          capabilitiesService: service,
+        });
         const result = yield* adapter.capabilitiesResetSetting({
           key: "autoResume",
           scope: "global",
@@ -1967,7 +2206,11 @@ describe("OmpAdapter", () => {
           writeSetting: () => Effect.succeed(snapshot),
           resetSetting: () => Effect.succeed(snapshot),
           readResource: (input: unknown) => {
-            NodeAssert.deepEqual(input, { kind: "rules", name: "codegraph", scope: "global" });
+            NodeAssert.deepEqual(input, {
+              kind: "rules",
+              name: "codegraph",
+              scope: "global",
+            });
             return Effect.succeed({
               name: "codegraph",
               scope: "global" as const,
@@ -1979,7 +2222,9 @@ describe("OmpAdapter", () => {
           deleteResource: () => Effect.succeed(snapshot),
           moveItemToOmp: () => Effect.succeed(snapshot),
         };
-        const adapter = new OmpAdapter(fake, testRandomUUID, { capabilitiesService: service });
+        const adapter = new OmpAdapter(fake, testRandomUUID, {
+          capabilitiesService: service,
+        });
         const result = yield* adapter.capabilitiesReadResource({
           kind: "rules",
           name: "codegraph",
@@ -1998,7 +2243,12 @@ describe("OmpAdapter", () => {
           writeSetting: () => Effect.succeed(snapshot),
           resetSetting: () => Effect.succeed(snapshot),
           readResource: () =>
-            Effect.succeed({ name: "x", scope: "global" as const, content: "", exists: false }),
+            Effect.succeed({
+              name: "x",
+              scope: "global" as const,
+              content: "",
+              exists: false,
+            }),
           writeResource: (input: unknown) => {
             NodeAssert.deepEqual(input, {
               kind: "skills",
@@ -2012,7 +2262,9 @@ describe("OmpAdapter", () => {
           deleteResource: () => Effect.succeed(snapshot),
           moveItemToOmp: () => Effect.succeed(snapshot),
         };
-        const adapter = new OmpAdapter(fake, testRandomUUID, { capabilitiesService: service });
+        const adapter = new OmpAdapter(fake, testRandomUUID, {
+          capabilitiesService: service,
+        });
         const result = yield* adapter.capabilitiesWriteResource({
           kind: "skills",
           name: "create-ticket",
@@ -2032,7 +2284,12 @@ describe("OmpAdapter", () => {
           writeSetting: () => Effect.succeed(snapshot),
           resetSetting: () => Effect.succeed(snapshot),
           readResource: () =>
-            Effect.succeed({ name: "x", scope: "global" as const, content: "", exists: false }),
+            Effect.succeed({
+              name: "x",
+              scope: "global" as const,
+              content: "",
+              exists: false,
+            }),
           writeResource: () => Effect.succeed(snapshot),
           deleteResource: (input: unknown) => {
             NodeAssert.deepEqual(input, {
@@ -2045,7 +2302,9 @@ describe("OmpAdapter", () => {
           },
           moveItemToOmp: () => Effect.succeed(snapshot),
         };
-        const adapter = new OmpAdapter(fake, testRandomUUID, { capabilitiesService: service });
+        const adapter = new OmpAdapter(fake, testRandomUUID, {
+          capabilitiesService: service,
+        });
         const result = yield* adapter.capabilitiesDeleteResource({
           kind: "rules",
           name: "codegraph",
@@ -2093,7 +2352,11 @@ describe("OmpAdapter review mode", () => {
         interactionMode: "review",
       });
       yield* feedAssistantText(fake, findingsJson);
-      yield* fake.offer(THREAD_ID, { type: "agent_end", messages: [], isTerminal: true });
+      yield* fake.offer(THREAD_ID, {
+        type: "agent_end",
+        messages: [],
+        isTerminal: true,
+      });
       const events = yield* Fiber.join(eventsFiber);
 
       const findings = events.filter((event) => event.type === "review.finding");
@@ -2131,7 +2394,11 @@ describe("OmpAdapter review mode", () => {
         fake,
         '```json\n{"findings":[],"verdict":"approve","summary":"Clean.","filesReviewed":["src/a.ts","src/b.ts"]}\n```',
       );
-      yield* fake.offer(THREAD_ID, { type: "agent_end", messages: [], isTerminal: true });
+      yield* fake.offer(THREAD_ID, {
+        type: "agent_end",
+        messages: [],
+        isTerminal: true,
+      });
       const events = yield* Fiber.join(eventsFiber);
 
       const completed = events.filter((event) => event.type === "turn.completed");
@@ -2162,11 +2429,24 @@ describe("OmpAdapter review mode", () => {
         fake,
         '```json\n{"verdict":"approve","summary":"Clean.","filesReviewed":["src/a.ts"],"findings":[{"file":"src/a.ts","line":12,"severity":"blocking","message":"Inline the helper.","symbol":"doThing"}]}\n```',
       );
-      yield* fake.offer(THREAD_ID, { type: "message_end", message: { role: "assistant" } });
-      yield* fake.offer(THREAD_ID, { type: "message_start", message: { role: "assistant" } });
+      yield* fake.offer(THREAD_ID, {
+        type: "message_end",
+        message: { role: "assistant" },
+      });
+      yield* fake.offer(THREAD_ID, {
+        type: "message_start",
+        message: { role: "assistant" },
+      });
       yield* feedAssistantText(fake, "Review complete.");
-      yield* fake.offer(THREAD_ID, { type: "message_end", message: { role: "assistant" } });
-      yield* fake.offer(THREAD_ID, { type: "agent_end", messages: [], isTerminal: true });
+      yield* fake.offer(THREAD_ID, {
+        type: "message_end",
+        message: { role: "assistant" },
+      });
+      yield* fake.offer(THREAD_ID, {
+        type: "agent_end",
+        messages: [],
+        isTerminal: true,
+      });
       const events = yield* Fiber.join(eventsFiber);
 
       const findings = events.filter((event) => event.type === "review.finding");
@@ -2195,7 +2475,11 @@ describe("OmpAdapter review mode", () => {
         fake,
         '```json\n{"findings":[{"file":"b.ts","message":"Nit."}]}\n```',
       );
-      yield* fake.offer(THREAD_ID, { type: "agent_end", messages: [], isTerminal: true });
+      yield* fake.offer(THREAD_ID, {
+        type: "agent_end",
+        messages: [],
+        isTerminal: true,
+      });
       const events = yield* Fiber.join(eventsFiber);
 
       const findings = events.filter((event) => event.type === "review.finding");
@@ -2223,7 +2507,11 @@ describe("OmpAdapter review mode", () => {
         interactionMode: "review",
       });
       yield* feedAssistantText(fake, "I reviewed it and found nothing worth blocking.");
-      yield* fake.offer(THREAD_ID, { type: "agent_end", messages: [], isTerminal: true });
+      yield* fake.offer(THREAD_ID, {
+        type: "agent_end",
+        messages: [],
+        isTerminal: true,
+      });
       const events = yield* Fiber.join(eventsFiber);
 
       NodeAssert.equal(events.filter((event) => event.type === "review.finding").length, 0);

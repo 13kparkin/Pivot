@@ -4,8 +4,10 @@
  * Turn completion (AC11): terminal `agent_end` (`isTerminal !== false`),
  * prompt `data.agentInvoked === false`, and `prompt_result` with
  * `agentInvoked: false`. Local slash results arrive as `command_output`
- * frames and become `status_text` deltas. Interim assistant runs are
- * classified as `status_text`; the held-back run is flushed as
+ * frames and become `status_text` deltas. Every completed assistant prose
+ * run is flushed as `assistant_text` (interim runs included), so a finished
+ * answer followed by a later message — a rule interrupt, a trailing tool
+ * call — stays in the message body; the held-back run is also flushed as
  * `assistant_text` at terminal completion. Empty assistant deltas are
  * not emitted (AC2).
  * Tools: `toolcall_end` / `tool_execution_*` → `item.*` (+ output deltas).
@@ -631,7 +633,9 @@ export class OmpAdapter {
       if (numTurns <= 0) {
         return { threadId, turns: [] as const };
       }
-      const response = yield* this.#send(threadId, { type: "get_branch_messages" });
+      const response = yield* this.#send(threadId, {
+        type: "get_branch_messages",
+      });
       if (
         !isRecord(response) ||
         !isRecord(response.data) ||
@@ -802,7 +806,9 @@ export class OmpAdapter {
           threadId,
         });
       }
-      const response = yield* this.#send(threadId, { type: "get_available_models" });
+      const response = yield* this.#send(threadId, {
+        type: "get_available_models",
+      });
       return yield* modelsFromAvailableModelsResponse(response);
     });
   }
@@ -815,7 +821,9 @@ export class OmpAdapter {
           threadId,
         });
       }
-      const response = yield* this.#send(threadId, { type: "get_available_commands" });
+      const response = yield* this.#send(threadId, {
+        type: "get_available_commands",
+      });
       return yield* slashCommandsFromAvailableCommandsResponse(response);
     });
   }
@@ -828,7 +836,9 @@ export class OmpAdapter {
           threadId,
         });
       }
-      const response = yield* this.#send(threadId, { type: "get_login_providers" });
+      const response = yield* this.#send(threadId, {
+        type: "get_login_providers",
+      });
       return yield* loginProvidersFromResponse(response);
     });
   }
@@ -1349,12 +1359,17 @@ export class OmpAdapter {
       session.openRunText = `${session.openRunText ?? ""}${text}`;
       return Effect.void;
     }
+    // A completed prose run is real assistant output, not status: a new
+    // assistant message may follow it for many reasons (a rule interrupt, a
+    // trailing tool call, a closing run), and demoting it to status_text hid
+    // finished answers from the message body. Flush it as assistant_text so
+    // the body accumulates every completed run.
     return this.#emit({
       type: "content.delta",
       threadId: session.threadId,
       turnId: session.turnId,
       payload: {
-        streamKind: "status_text",
+        streamKind: "assistant_text",
         delta: text,
       },
     });
@@ -1533,9 +1548,10 @@ export class OmpAdapter {
     return Effect.gen({ self: this }, function* () {
       for (const subagentId of ids) {
         const outcome = yield* Effect.exit(
-          this.#send(session.threadId, { type: "cancel_subagent", subagentId }).pipe(
-            Effect.timeout(OMP_ABORT_ACK_TIMEOUT),
-          ),
+          this.#send(session.threadId, {
+            type: "cancel_subagent",
+            subagentId,
+          }).pipe(Effect.timeout(OMP_ABORT_ACK_TIMEOUT)),
         );
         // `cancel_subagent` acknowledges with a response; a `success: false`
         // response means the command is unknown (pre-`cancel_subagent` omp) or
@@ -1573,7 +1589,9 @@ export class OmpAdapter {
       // D2/D3: claim the throttle slot synchronously, before any RPC yield. The
       // slot is consumed even if the emit later fails or early-returns (no tokens).
       session.lastTokenUsageEmitAtMs = now;
-      const response = yield* this.#send(session.threadId, { type: "get_state" });
+      const response = yield* this.#send(session.threadId, {
+        type: "get_state",
+      });
       if (!isRecord(response) || !isRecord(response.data)) {
         return;
       }
@@ -1602,9 +1620,9 @@ export class OmpAdapter {
         typeof state.queuedMessageCount === "number" && state.queuedMessageCount >= 0
           ? Math.floor(state.queuedMessageCount)
           : undefined;
-      const statsResponse = yield* this.#send(session.threadId, { type: "get_session_stats" }).pipe(
-        Effect.orElseSucceed(() => undefined),
-      );
+      const statsResponse = yield* this.#send(session.threadId, {
+        type: "get_session_stats",
+      }).pipe(Effect.orElseSucceed(() => undefined));
       const stats =
         statsResponse !== undefined && isRecord(statsResponse) && isRecord(statsResponse.data)
           ? statsResponse.data
@@ -1628,7 +1646,9 @@ export class OmpAdapter {
               ? { outputTokens: Math.max(0, Math.floor(tokens.output)) }
               : {}),
             ...(tokens !== undefined && typeof tokens.reasoning === "number"
-              ? { reasoningOutputTokens: Math.max(0, Math.floor(tokens.reasoning)) }
+              ? {
+                  reasoningOutputTokens: Math.max(0, Math.floor(tokens.reasoning)),
+                }
               : {}),
             ...(stats !== undefined && typeof stats.toolUses === "number"
               ? { toolUses: Math.max(0, Math.floor(stats.toolUses)) }
@@ -1658,10 +1678,16 @@ export class OmpAdapter {
             option.id === "thinkingLevel") &&
           typeof option.value === "string"
         ) {
-          yield* this.#send(threadId, { type: "set_thinking_level", level: option.value });
+          yield* this.#send(threadId, {
+            type: "set_thinking_level",
+            level: option.value,
+          });
         }
         if (option.id === "fastMode" && typeof option.value === "boolean") {
-          yield* this.#send(threadId, { type: "set_fast_mode", enabled: option.value });
+          yield* this.#send(threadId, {
+            type: "set_fast_mode",
+            enabled: option.value,
+          });
         }
       }
     });
@@ -1678,7 +1704,10 @@ export class OmpAdapter {
     const url = typeof frame.url === "string" ? frame.url : "";
     const title = operation === "write" ? "Accept proposed edit" : "Allow host URI read";
     const detail = url.length > 0 ? `${title}\n${url}` : title;
-    session.pendingUiRequests.set(frame.id, { kind: "host_uri", ompId: frame.id });
+    session.pendingUiRequests.set(frame.id, {
+      kind: "host_uri",
+      ompId: frame.id,
+    });
     return this.#emit({
       type: "request.opened",
       threadId: session.threadId,
@@ -1915,7 +1944,10 @@ export class OmpAdapter {
       const title = typeof frame.title === "string" ? frame.title : "Confirm";
       const message = typeof frame.message === "string" ? frame.message : "";
       const detail = message.length > 0 ? `${title}\n${message}` : title;
-      session.pendingUiRequests.set(frame.id, { kind: "confirm", ompId: frame.id });
+      session.pendingUiRequests.set(frame.id, {
+        kind: "confirm",
+        ompId: frame.id,
+      });
       return this.#emit({
         type: "request.opened",
         threadId: session.threadId,
@@ -1932,7 +1964,10 @@ export class OmpAdapter {
       const options = Array.isArray(frame.options)
         ? frame.options.filter((option): option is string => typeof option === "string")
         : [];
-      session.pendingUiRequests.set(frame.id, { kind: "select", ompId: frame.id });
+      session.pendingUiRequests.set(frame.id, {
+        kind: "select",
+        ompId: frame.id,
+      });
       return this.#emit({
         type: "user-input.requested",
         threadId: session.threadId,
@@ -1944,7 +1979,10 @@ export class OmpAdapter {
               id: "choice",
               header: title,
               question: title,
-              options: options.map((option) => ({ label: option, description: option })),
+              options: options.map((option) => ({
+                label: option,
+                description: option,
+              })),
             },
           ],
         },
