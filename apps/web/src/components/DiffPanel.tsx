@@ -47,6 +47,14 @@ import { resolveThreadRouteRef } from "../threadRoutes";
 import { useClientSettings } from "../hooks/useSettings";
 import { formatShortTimestamp } from "../timestampFormat";
 import { DiffPanelLoadingState, DiffPanelShell, type DiffPanelMode } from "./DiffPanelShell";
+import {
+  deriveDiffEmptyState,
+  diffScopeKind,
+  diffScopeLabel,
+  reviewSectionKey,
+  reviewSectionTitle as deriveReviewSectionTitle,
+  reviewSourceForScope,
+} from "./DiffPanel.logic";
 import { DiffStatLabel } from "./chat/DiffStatLabel";
 import { AnnotatableCodeView, type AnnotatableCodeViewHandle } from "./diffs/AnnotatableCodeView";
 import { Button } from "./ui/button";
@@ -194,10 +202,7 @@ export default function DiffPanel({
       input: {
         environmentId: activeThread.environmentId,
         reviewId: nextReviewId,
-        source:
-          selectedGitScope === "unstaged"
-            ? { kind: "working-tree" }
-            : { kind: "branch-range", baseRef: selectedBaseRef },
+        source: reviewSourceForScope(selectedGitScope, selectedBaseRef),
         threadRef: {
           environmentId: activeThread.environmentId,
           threadId: activeThread.id,
@@ -268,6 +273,7 @@ export default function DiffPanel({
   const selectedTurnId = diffSelection.kind === "turn" ? diffSelection.turnId : null;
   const selectedGitScope = diffSelection.kind === "unstaged" ? "unstaged" : "branch";
   const selectedBaseRef = diffSelection.kind === "branch" ? diffSelection.baseRef : null;
+  const scopeKind = diffScopeKind(diffSelection);
   const selectedFilePath = diffSelection.kind === "turn" ? diffSelection.filePath : null;
   const selectedFileRevealRequestId =
     diffSelection.kind === "turn" ? diffSelection.revealRequestId : 0;
@@ -280,15 +286,17 @@ export default function DiffPanel({
     selectedTurn &&
     (selectedTurn.checkpointTurnCount ?? inferredCheckpointTurnCountByTurnId[selectedTurn.turnId]);
   const latestTurn = orderedTurnDiffSummaries[0];
-  const selectedScopeLabel =
-    selectedTurnId === null
-      ? selectedGitScope === "unstaged"
-        ? "Working tree"
-        : "Branch changes"
-      : selectedTurn?.turnId === latestTurn?.turnId
-        ? "Latest turn"
-        : `Turn ${selectedCheckpointTurnCount ?? "?"}`;
-  const reviewSectionId = selectedTurn ? `turn:${selectedTurn.turnId}` : selectedGitScope;
+  const selectedScopeLabel = diffScopeLabel({
+    scopeKind,
+    gitScope: selectedGitScope,
+    isLatestTurn: selectedTurn?.turnId === latestTurn?.turnId,
+    turnCount: selectedCheckpointTurnCount ?? null,
+  });
+  const reviewSectionId = reviewSectionKey({
+    scopeKind,
+    turnId: selectedTurn?.turnId ?? null,
+    gitScope: selectedGitScope,
+  });
   const collapseScopeKey = routeThreadRef
     ? `${routeThreadRef.environmentId}:${routeThreadRef.threadId}:${reviewSectionId}`
     : null;
@@ -297,11 +305,11 @@ export default function DiffPanel({
     collapsedDiffFiles.scopeKey === collapseScopeKey
       ? collapsedDiffFiles.fileKeys
       : EMPTY_COLLAPSED_DIFF_FILE_KEYS;
-  const reviewSectionTitle = selectedTurn
-    ? `Turn ${selectedCheckpointTurnCount ?? "?"}`
-    : selectedGitScope === "unstaged"
-      ? "Working tree"
-      : "Branch changes";
+  const reviewSectionTitle = deriveReviewSectionTitle({
+    scopeKind,
+    gitScope: selectedGitScope,
+    turnCount: selectedCheckpointTurnCount ?? null,
+  });
   const selectedCheckpointRange = useMemo(
     () =>
       typeof selectedCheckpointTurnCount === "number"
@@ -469,6 +477,13 @@ export default function DiffPanel({
   const selectedPatchError = selectedTurn ? activeCheckpointDiff.error : branchDiffPreview.error;
   const hasResolvedPatch = typeof selectedPatch === "string";
   const hasNoNetChanges = hasResolvedPatch && selectedPatch.trim().length === 0;
+  const diffEmptyState = deriveDiffEmptyState({
+    scopeKind,
+    hasTurnSummaries: orderedTurnDiffSummaries.length > 0,
+    isLoadingPatch: isLoadingSelectedPatch,
+    hasResolvedPatch,
+    hasNetChanges: hasNoNetChanges,
+  });
   const renderablePatch = useMemo(
     () =>
       getRenderablePatch(selectedPatch, `diff-panel:${resolvedTheme}`, {
@@ -994,7 +1009,7 @@ export default function DiffPanel({
         <div className="flex flex-1 items-center justify-center px-5 text-center text-xs text-muted-foreground/70">
           Turn diffs are unavailable because this project is not a git repository.
         </div>
-      ) : selectedTurnId !== null && orderedTurnDiffSummaries.length === 0 ? (
+      ) : diffEmptyState === "no-completed-turns" ? (
         <div className="flex flex-1 items-center justify-center px-5 text-center text-xs text-muted-foreground/70">
           No completed turns yet.
         </div>
@@ -1025,7 +1040,7 @@ export default function DiffPanel({
               </div>
             )}
             {!renderablePatch ? (
-              isLoadingSelectedPatch ? (
+              diffEmptyState === "loading" ? (
                 <DiffPanelLoadingState
                   label={
                     selectedTurn
@@ -1038,7 +1053,7 @@ export default function DiffPanel({
               ) : (
                 <div className="flex h-full items-center justify-center px-3 py-2 text-xs text-muted-foreground/70">
                   <p>
-                    {hasNoNetChanges
+                    {diffEmptyState === "no-net-changes"
                       ? "No net changes in this selection."
                       : "No patch available for this selection."}
                   </p>
