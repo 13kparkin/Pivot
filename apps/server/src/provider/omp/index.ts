@@ -18,3 +18,5 @@ export {
 export { makeRtkManagedBinary, RtkManagedBinaryError } from "./RtkManagedBinary.ts";
 export { ReviewBlockDecoder } from "./ReviewBlockDecoder.ts";
 export { OmpToolPresentation } from "./OmpToolPresentation.ts";
+export { OmpCatalogDecoder } from "./OmpCatalogDecoder.ts";
+export type { OmpLoginProvider } from "./OmpCatalogDecoder.ts";
