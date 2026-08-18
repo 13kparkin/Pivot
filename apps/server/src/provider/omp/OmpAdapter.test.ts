@@ -83,7 +83,9 @@ class OverlayObservingFakeOmpRpc extends FakeOmpRpc {
     const startSession = FakeOmpRpc.prototype.ensureSession.call(this, input);
     return Effect.gen({ self: this }, function* () {
       this.extraEnv = input.extraEnv;
-      this.overlayExistedAtSpawn = yield* this.#fileSystem.exists(this.#overlayMcpJsonPath);
+      this.overlayExistedAtSpawn = yield* this.#fileSystem
+        .exists(this.#overlayMcpJsonPath)
+        .pipe(Effect.orDie);
       if (this.failEnsureSession) {
         return yield* new OmpSpawnError({
           operation: "ensureSession",
