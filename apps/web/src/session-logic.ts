@@ -268,6 +268,11 @@ export function workEntryIndicatesToolNeutralStatus(entry: WorkLogEntry): boolea
   if (entry.agentSpawn !== undefined) {
     return false;
   }
+  // Thinking rows (task progress, inter-tool narration) are content, not
+  // neutral noise — same reason the agentSpawn guard above exists.
+  if (entry.tone === "thinking") {
+    return false;
+  }
   if (!workLogEntryIsToolLike(entry)) {
     return false;
   }
@@ -736,7 +741,13 @@ function isAgentInternalActivity(activity: OrchestrationThreadActivity): boolean
 
 export function deriveWorkLogEntries(
   activities: ReadonlyArray<OrchestrationThreadActivity>,
+  options?: {
+    readonly showTools?: boolean;
+    readonly showThinking?: boolean;
+  },
 ): WorkLogEntry[] {
+  const showTools = options?.showTools ?? true;
+  const showThinking = options?.showThinking ?? true;
   const ordered = [...activities].toSorted(compareActivitiesByOrder);
   const entries: DerivedWorkLogEntry[] = [];
   for (const activity of ordered) {
@@ -752,7 +763,12 @@ export function deriveWorkLogEntries(
     if (activity.summary === "Checkpoint captured") continue;
     if (isPlanBoundaryToolActivity(activity)) continue;
     if (isAgentInternalActivity(activity)) continue;
-    entries.push(toDerivedWorkLogEntry(activity));
+    const entry = toDerivedWorkLogEntry(activity);
+    // Category visibility: tool rows and thinking rows (narration, task
+    // progress) hide independently; everything else always shows.
+    if (entry.tone === "tool" && !showTools) continue;
+    if (entry.tone === "thinking" && !showThinking) continue;
+    entries.push(entry);
   }
   return collapseDerivedWorkLogEntries(entries).map((entry) => {
     const { activityKind, collapseKey: _collapseKey, ...rest } = entry;
@@ -830,7 +846,7 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
     turnId: activity.turnId,
     label: taskLabel || activity.summary,
     tone:
-      activity.kind === "task.progress"
+      activity.kind === "task.progress" || (payload !== null && payload.itemType === "reasoning")
         ? "thinking"
         : activity.tone === "approval"
           ? "info"

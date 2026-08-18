@@ -2263,6 +2263,44 @@ export function GeneralSettingsPanel() {
         />
       </SettingsSection>
 
+      <SettingsSection title="Timeline">
+        <SettingsRow
+          {...searchableSetting("timeline-tools")}
+          description="Show tool calls as line items in the thread timeline."
+          control={
+            <Switch
+              checked={settings.workLogShowTools}
+              onCheckedChange={(checked) => updateSettings({ workLogShowTools: Boolean(checked) })}
+              aria-label="Timeline tool calls"
+            />
+          }
+        />
+        <SettingsRow
+          {...searchableSetting("timeline-thinking")}
+          description="Show thinking and narration as line items in the thread timeline."
+          control={
+            <Switch
+              checked={settings.workLogShowThinking}
+              onCheckedChange={(checked) =>
+                updateSettings({ workLogShowThinking: Boolean(checked) })
+              }
+              aria-label="Timeline thinking"
+            />
+          }
+        />
+        <SettingsRow
+          {...searchableSetting("timeline-plans")}
+          description="Show proposed plans and plan steps in the thread timeline."
+          control={
+            <Switch
+              checked={settings.workLogShowPlans}
+              onCheckedChange={(checked) => updateSettings({ workLogShowPlans: Boolean(checked) })}
+              aria-label="Timeline plans"
+            />
+          }
+        />
+      </SettingsSection>
+
       <SettingsSection title="About">
         {isElectron || HOSTED_APP_CHANNEL ? (
           <AboutVersionSection />

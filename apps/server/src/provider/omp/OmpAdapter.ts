@@ -5,10 +5,11 @@
  * prompt `data.agentInvoked === false`, and `prompt_result` with
  * `agentInvoked: false`. Local slash results arrive as `command_output`
  * frames and become `status_text` deltas. Every completed assistant prose
- * run is flushed as `assistant_text` (interim runs included), so a finished
- * answer followed by a later message — a rule interrupt, a trailing tool
- * call — stays in the message body; the held-back run is also flushed as
- * `assistant_text` at terminal completion. Empty assistant deltas are
+ * run that is superseded by a later message (a rule interrupt, a trailing
+ * tool call, the closing answer) is surfaced as a `reasoning` line item —
+ * narration between tool calls renders as its own work-log row instead of
+ * piling into the message body. Only the final run of the turn is flushed
+ * as `assistant_text` at terminal completion. Empty assistant deltas are
  * not emitted (AC2).
  * Tools: `toolcall_end` / `tool_execution_*` → `item.*` (+ output deltas).
  * Thinking: `thinking_delta` → `content.delta` (`reasoning_text`).
@@ -18,7 +19,9 @@
  * user-input events; replies via `extension_ui_response`.
  * Plan mode: on `interactionMode: "plan"` remember the current model via
  * `get_state`, `set_model` to the resolved plan role, and restore on exit.
- * While plan is active, turn `modelSelection` is ignored.
+ * While plan is active, turn `modelSelection` is ignored. The turn's final
+ * text is surfaced as a proposed plan (`turn.proposed.completed`) so the
+ * timeline renders the plan card.
  *
  * @module provider/omp/OmpAdapter
  */
@@ -1330,19 +1333,37 @@ export class OmpAdapter {
       session.openRunText = `${session.openRunText ?? ""}${text}`;
       return Effect.void;
     }
-    // A completed prose run is real assistant output, not status: a new
-    // assistant message may follow it for many reasons (a rule interrupt, a
-    // trailing tool call, a closing run), and demoting it to status_text hid
-    // finished answers from the message body. Flush it as assistant_text so
-    // the body accumulates every completed run.
-    return this.#emit({
-      type: "content.delta",
-      threadId: session.threadId,
-      turnId: session.turnId,
-      payload: {
-        streamKind: "assistant_text",
-        delta: text,
-      },
+    // A completed prose run superseded by a later message (a rule interrupt,
+    // a trailing tool call, the closing answer) is real assistant output the
+    // user already saw. Surface it as a reasoning line item instead of
+    // concatenating it into the message body — only the turn's final run
+    // becomes the assistant message body.
+    return Effect.gen({ self: this }, function* () {
+      const itemId = RuntimeItemId.make(yield* this.#randomUUID);
+      yield* this.#emit({
+        type: "item.started",
+        threadId: session.threadId,
+        turnId: session.turnId,
+        itemId,
+        payload: {
+          itemType: "reasoning",
+          status: "inProgress",
+          title: "Thinking",
+          detail: text,
+        },
+      });
+      yield* this.#emit({
+        type: "item.completed",
+        threadId: session.threadId,
+        turnId: session.turnId,
+        itemId,
+        payload: {
+          itemType: "reasoning",
+          status: "completed",
+          title: "Thinking",
+          detail: text,
+        },
+      });
     });
   }
 
@@ -1369,6 +1390,19 @@ export class OmpAdapter {
       // Capture the final assistant text before the flush nulls it; a review
       // turn's findings are decoded from it.
       const runText = session.heldBackRunText ?? session.openRunText;
+      // Plan-mode turns produce the plan as their final text. Surface it as a
+      // first-class proposed plan so the timeline renders the plan card —
+      // workflow-agnostic: any provider's plan mode lands here.
+      if (session.interactionMode === "plan" && runText !== null && runText.trim().length > 0) {
+        yield* this.#emit({
+          type: "turn.proposed.completed",
+          threadId: session.threadId,
+          turnId: session.turnId,
+          payload: {
+            planMarkdown: runText,
+          },
+        });
+      }
       yield* this.#flushFinalAssistantRun(session);
       const now = yield* Clock.currentTimeMillis;
       yield* this.#emitTokenUsageFromState(session, now).pipe(Effect.ignore);

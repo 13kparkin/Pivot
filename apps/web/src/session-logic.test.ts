@@ -709,6 +709,16 @@ describe("workEntryIndicatesToolFailure", () => {
     ).toBe(false);
   });
 
+  it("keeps thinking rows out of the neutral-hidden set", () => {
+    expect(
+      workEntryIndicatesToolNeutralStatus({
+        ...base,
+        tone: "thinking",
+        detail: "Inspecting repository state",
+      }),
+    ).toBe(false);
+  });
+
   it("keeps in-progress tool rows out of the neutral-hidden set", () => {
     // AC6: live rows must render (pulse dots + elapsed), so in-progress tool
     // rows are live, not neutral-hidden like empty/incomplete rows.
@@ -788,6 +798,57 @@ describe("deriveWorkLogEntries", () => {
 
     const entries = deriveWorkLogEntries(activities);
     expect(entries.map((entry) => entry.id)).toEqual(["task-progress", "task-complete"]);
+  });
+
+  it("maps reasoning activities to the thinking tone", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "reasoning-complete",
+        createdAt: "2026-02-23T00:00:02.000Z",
+        kind: "tool.completed",
+        summary: "Thinking",
+        tone: "info",
+        payload: { itemType: "reasoning", detail: "Checking the adapter path" },
+      }),
+    ];
+
+    const entries = deriveWorkLogEntries(activities);
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.tone).toBe("thinking");
+    expect(entries[0]?.label).toBe("Thinking");
+    expect(entries[0]?.detail).toBe("Checking the adapter path");
+  });
+
+  it("hides tool and thinking rows independently by category", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "tool-complete",
+        createdAt: "2026-02-23T00:00:01.000Z",
+        kind: "tool.completed",
+        summary: "Ran tests",
+        tone: "tool",
+        payload: { itemType: "command_execution", detail: "bun test" },
+      }),
+      makeActivity({
+        id: "reasoning-complete",
+        createdAt: "2026-02-23T00:00:02.000Z",
+        kind: "tool.completed",
+        summary: "Thinking",
+        tone: "info",
+        payload: { itemType: "reasoning", detail: "Inspecting the adapter" },
+      }),
+    ];
+
+    expect(deriveWorkLogEntries(activities).map((entry) => entry.id)).toEqual([
+      "tool-complete",
+      "reasoning-complete",
+    ]);
+    expect(deriveWorkLogEntries(activities, { showTools: false }).map((entry) => entry.id)).toEqual(
+      ["reasoning-complete"],
+    );
+    expect(
+      deriveWorkLogEntries(activities, { showThinking: false }).map((entry) => entry.id),
+    ).toEqual(["tool-complete"]);
   });
 
   it("uses payload summary as label for task entries when available", () => {

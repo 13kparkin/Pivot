@@ -243,68 +243,170 @@ describe("OmpAdapter", () => {
     }),
   );
 
-  it.effect("flushes every completed assistant prose run as assistant_text", () =>
-    Effect.gen(function* () {
-      const fake = new FakeOmpRpc();
-      const adapter = new OmpAdapter(fake, testRandomUUID);
-      const eventsFiber = yield* collectUntilTurnCompleted(adapter.streamEvents).pipe(
-        Effect.forkChild,
-      );
-      yield* adapter.startSession(startInput);
-      yield* adapter.sendTurn({ threadId: THREAD_ID, input: "hi" });
-      yield* fake.offer(THREAD_ID, {
-        type: "message_start",
-        message: { role: "assistant", content: [] },
-      });
-      yield* fake.offer(THREAD_ID, {
-        type: "message_update",
-        assistantMessageEvent: {
-          type: "text_delta",
-          delta: "Fetching latest upstream.",
-        },
-        message: { role: "assistant", content: [] },
-      });
-      yield* fake.offer(THREAD_ID, {
-        type: "message_end",
-        message: { role: "assistant", content: [] },
-      });
-      yield* fake.offer(THREAD_ID, {
-        type: "message_start",
-        message: { role: "assistant", content: [] },
-      });
-      yield* fake.offer(THREAD_ID, {
-        type: "message_update",
-        assistantMessageEvent: {
-          type: "text_delta",
-          delta: "24 commits behind.",
-        },
-        message: { role: "assistant", content: [] },
-      });
-      yield* fake.offer(THREAD_ID, {
-        type: "agent_end",
-        messages: [],
-        isTerminal: true,
-      });
-      const events = yield* Fiber.join(eventsFiber);
-      const statusDeltas = events
-        .filter(
-          (event) => event.type === "content.delta" && event.payload.streamKind === "status_text",
-        )
-        .map((event) => (event as { payload: { delta: string } }).payload.delta);
-      const assistantDeltas = events
-        .filter(
-          (event) =>
-            event.type === "content.delta" && event.payload.streamKind === "assistant_text",
-        )
-        .map((event) => (event as { payload: { delta: string } }).payload.delta);
-      // Completed prose is never demoted to status: every run lands in the
-      // assistant text stream in order.
-      NodeAssert.deepEqual(statusDeltas, []);
-      NodeAssert.deepEqual(assistantDeltas, ["Fetching latest upstream.", "24 commits behind."]);
-    }),
+  it.effect(
+    "surfaces superseded prose runs as reasoning items and keeps only the final run in assistant_text",
+    () =>
+      Effect.gen(function* () {
+        const fake = new FakeOmpRpc();
+        const adapter = new OmpAdapter(fake, testRandomUUID);
+        const eventsFiber = yield* collectUntilTurnCompleted(adapter.streamEvents).pipe(
+          Effect.forkChild,
+        );
+        yield* adapter.startSession(startInput);
+        yield* adapter.sendTurn({ threadId: THREAD_ID, input: "hi" });
+        yield* fake.offer(THREAD_ID, {
+          type: "message_start",
+          message: { role: "assistant", content: [] },
+        });
+        yield* fake.offer(THREAD_ID, {
+          type: "message_update",
+          assistantMessageEvent: {
+            type: "text_delta",
+            delta: "Fetching latest upstream.",
+          },
+          message: { role: "assistant", content: [] },
+        });
+        yield* fake.offer(THREAD_ID, {
+          type: "message_end",
+          message: { role: "assistant", content: [] },
+        });
+        yield* fake.offer(THREAD_ID, {
+          type: "message_start",
+          message: { role: "assistant", content: [] },
+        });
+        yield* fake.offer(THREAD_ID, {
+          type: "message_update",
+          assistantMessageEvent: {
+            type: "text_delta",
+            delta: "24 commits behind.",
+          },
+          message: { role: "assistant", content: [] },
+        });
+        yield* fake.offer(THREAD_ID, {
+          type: "agent_end",
+          messages: [],
+          isTerminal: true,
+        });
+        const events = yield* Fiber.join(eventsFiber);
+        const statusDeltas = events
+          .filter(
+            (event) => event.type === "content.delta" && event.payload.streamKind === "status_text",
+          )
+          .map((event) => (event as { payload: { delta: string } }).payload.delta);
+        const assistantDeltas = events
+          .filter(
+            (event) =>
+              event.type === "content.delta" && event.payload.streamKind === "assistant_text",
+          )
+          .map((event) => (event as { payload: { delta: string } }).payload.delta);
+        const reasoningItems = events.filter(
+          (event) => event.type === "item.completed" && event.payload.itemType === "reasoning",
+        );
+        // The superseded run becomes its own reasoning line item; only the
+        // turn's final run lands in the assistant text stream.
+        NodeAssert.deepEqual(statusDeltas, []);
+        NodeAssert.deepEqual(assistantDeltas, ["24 commits behind."]);
+        NodeAssert.equal(reasoningItems.length, 1);
+        const reasoning = reasoningItems[0] as {
+          payload: { title?: string; detail?: string };
+        };
+        NodeAssert.equal(reasoning.payload.title, "Thinking");
+        NodeAssert.equal(reasoning.payload.detail, "Fetching latest upstream.");
+        NodeAssert.equal(
+          events.some(
+            (event) => event.type === "item.started" && event.payload.itemType === "reasoning",
+          ),
+          true,
+        );
+      }),
   );
 
-  it.effect("keeps a finished answer in assistant_text when an interrupt message follows it", () =>
+  it.effect(
+    "surfaces a finished answer as a reasoning item when an interrupt message follows it",
+    () =>
+      Effect.gen(function* () {
+        const fake = new FakeOmpRpc();
+        const adapter = new OmpAdapter(fake, testRandomUUID);
+        const eventsFiber = yield* collectUntilTurnCompleted(adapter.streamEvents).pipe(
+          Effect.forkChild,
+        );
+        yield* adapter.startSession(startInput);
+        yield* adapter.sendTurn({ threadId: THREAD_ID, input: "hi" });
+        // The substantive answer.
+        yield* fake.offer(THREAD_ID, {
+          type: "message_start",
+          message: { role: "assistant", content: [] },
+        });
+        yield* fake.offer(THREAD_ID, {
+          type: "message_update",
+          assistantMessageEvent: {
+            type: "text_delta",
+            delta: "Investigation complete. Answer.",
+          },
+          message: { role: "assistant", content: [] },
+        });
+        yield* fake.offer(THREAD_ID, {
+          type: "message_end",
+          message: { role: "assistant", content: [] },
+        });
+        // A rule-interrupt response: a new assistant message (tool-only run).
+        yield* fake.offer(THREAD_ID, {
+          type: "message_start",
+          message: { role: "assistant", content: [] },
+        });
+        yield* fake.offer(THREAD_ID, {
+          type: "message_update",
+          assistantMessageEvent: { type: "toolcall_start" },
+          message: { role: "assistant", content: [] },
+        });
+        yield* fake.offer(THREAD_ID, {
+          type: "message_end",
+          message: { role: "assistant", content: [] },
+        });
+        // The closing acknowledgment.
+        yield* fake.offer(THREAD_ID, {
+          type: "message_start",
+          message: { role: "assistant", content: [] },
+        });
+        yield* fake.offer(THREAD_ID, {
+          type: "message_update",
+          assistantMessageEvent: { type: "text_delta", delta: "Acknowledged." },
+          message: { role: "assistant", content: [] },
+        });
+        yield* fake.offer(THREAD_ID, {
+          type: "agent_end",
+          messages: [],
+          isTerminal: true,
+        });
+        const events = yield* Fiber.join(eventsFiber);
+        const statusDeltas = events
+          .filter(
+            (event) => event.type === "content.delta" && event.payload.streamKind === "status_text",
+          )
+          .map((event) => (event as { payload: { delta: string } }).payload.delta);
+        const assistantDeltas = events
+          .filter(
+            (event) =>
+              event.type === "content.delta" && event.payload.streamKind === "assistant_text",
+          )
+          .map((event) => (event as { payload: { delta: string } }).payload.delta);
+        const reasoningItems = events.filter(
+          (event) => event.type === "item.completed" && event.payload.itemType === "reasoning",
+        );
+        // The finished answer is preserved as its own reasoning line item
+        // (never demoted to status or dropped), and the turn's closing run is
+        // the assistant message body.
+        NodeAssert.deepEqual(statusDeltas, []);
+        NodeAssert.deepEqual(assistantDeltas, ["Acknowledged."]);
+        NodeAssert.equal(reasoningItems.length, 1);
+        NodeAssert.equal(
+          (reasoningItems[0] as { payload: { detail?: string } }).payload.detail,
+          "Investigation complete. Answer.",
+        );
+      }),
+  );
+
+  it.effect("surfaces the final text of a plan-mode turn as a proposed plan", () =>
     Effect.gen(function* () {
       const fake = new FakeOmpRpc();
       const adapter = new OmpAdapter(fake, testRandomUUID);
@@ -312,8 +414,11 @@ describe("OmpAdapter", () => {
         Effect.forkChild,
       );
       yield* adapter.startSession(startInput);
-      yield* adapter.sendTurn({ threadId: THREAD_ID, input: "hi" });
-      // The substantive answer.
+      yield* adapter.sendTurn({
+        threadId: THREAD_ID,
+        input: "plan the fix",
+        interactionMode: "plan",
+      });
       yield* fake.offer(THREAD_ID, {
         type: "message_start",
         message: { role: "assistant", content: [] },
@@ -322,36 +427,8 @@ describe("OmpAdapter", () => {
         type: "message_update",
         assistantMessageEvent: {
           type: "text_delta",
-          delta: "Investigation complete. Answer.",
+          delta: "## Plan\n\n1. Fix the bug",
         },
-        message: { role: "assistant", content: [] },
-      });
-      yield* fake.offer(THREAD_ID, {
-        type: "message_end",
-        message: { role: "assistant", content: [] },
-      });
-      // A rule-interrupt response: a new assistant message (tool-only run).
-      yield* fake.offer(THREAD_ID, {
-        type: "message_start",
-        message: { role: "assistant", content: [] },
-      });
-      yield* fake.offer(THREAD_ID, {
-        type: "message_update",
-        assistantMessageEvent: { type: "toolcall_start" },
-        message: { role: "assistant", content: [] },
-      });
-      yield* fake.offer(THREAD_ID, {
-        type: "message_end",
-        message: { role: "assistant", content: [] },
-      });
-      // The closing acknowledgment.
-      yield* fake.offer(THREAD_ID, {
-        type: "message_start",
-        message: { role: "assistant", content: [] },
-      });
-      yield* fake.offer(THREAD_ID, {
-        type: "message_update",
-        assistantMessageEvent: { type: "text_delta", delta: "Acknowledged." },
         message: { role: "assistant", content: [] },
       });
       yield* fake.offer(THREAD_ID, {
@@ -360,20 +437,18 @@ describe("OmpAdapter", () => {
         isTerminal: true,
       });
       const events = yield* Fiber.join(eventsFiber);
-      const statusDeltas = events
-        .filter(
-          (event) => event.type === "content.delta" && event.payload.streamKind === "status_text",
-        )
-        .map((event) => (event as { payload: { delta: string } }).payload.delta);
-      const assistantDeltas = events
-        .filter(
+      const proposed = events.filter((event) => event.type === "turn.proposed.completed");
+      NodeAssert.equal(proposed.length, 1);
+      const plan = proposed[0] as { payload: { planMarkdown?: string } };
+      NodeAssert.equal(plan.payload.planMarkdown, "## Plan\n\n1. Fix the bug");
+      // The plan stays the assistant message body too (durable record).
+      NodeAssert.equal(
+        events.some(
           (event) =>
             event.type === "content.delta" && event.payload.streamKind === "assistant_text",
-        )
-        .map((event) => (event as { payload: { delta: string } }).payload.delta);
-      // The answer must survive in the body; nothing prose is demoted.
-      NodeAssert.deepEqual(statusDeltas, []);
-      NodeAssert.deepEqual(assistantDeltas, ["Investigation complete. Answer.", "Acknowledged."]);
+        ),
+        true,
+      );
     }),
   );
 

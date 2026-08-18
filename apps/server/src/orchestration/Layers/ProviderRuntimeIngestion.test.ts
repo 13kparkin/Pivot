@@ -3123,6 +3123,73 @@ describe("ProviderRuntimeIngestion", () => {
     ).toBe(true);
   });
 
+  it("projects reasoning items as work-log activities", async () => {
+    const harness = await createHarness();
+    const now = "2026-01-01T00:00:00.000Z";
+
+    harness.emit({
+      type: "session.started",
+      eventId: asEventId("evt-session-started-reasoning"),
+      provider: ProviderDriverKind.make("omp"),
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      message: "session started",
+    });
+    harness.emit({
+      type: "thread.started",
+      eventId: asEventId("evt-thread-started-reasoning"),
+      provider: ProviderDriverKind.make("omp"),
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+    });
+    harness.emit({
+      type: "item.started",
+      eventId: asEventId("evt-reasoning-started"),
+      provider: ProviderDriverKind.make("omp"),
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-reasoning"),
+      itemId: asItemId("item-reasoning-1"),
+      payload: {
+        itemType: "reasoning",
+        status: "inProgress",
+        title: "Thinking",
+        detail: "Checking the adapter path",
+      },
+    });
+    harness.emit({
+      type: "item.completed",
+      eventId: asEventId("evt-reasoning-completed"),
+      provider: ProviderDriverKind.make("omp"),
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-reasoning"),
+      itemId: asItemId("item-reasoning-1"),
+      payload: {
+        itemType: "reasoning",
+        status: "completed",
+        title: "Thinking",
+        detail: "Checking the adapter path",
+      },
+    });
+
+    const thread = await waitForThread(harness.readModel, (entry) =>
+      entry.activities.some(
+        (activity: ProviderRuntimeTestActivity) =>
+          activity.kind === "tool.completed" &&
+          (activity.payload as { itemType?: string } | null)?.itemType === "reasoning",
+      ),
+    );
+
+    const reasoning = thread.activities.find(
+      (activity: ProviderRuntimeTestActivity) =>
+        activity.kind === "tool.completed" &&
+        (activity.payload as { itemType?: string } | null)?.itemType === "reasoning",
+    );
+    expect(reasoning?.summary).toBe("Thinking");
+    expect((reasoning?.payload as { detail?: string }).detail).toBe("Checking the adapter path");
+  });
+
   it("consumes P1 runtime events into thread metadata, diff checkpoints, and activities", async () => {
     const harness = await createHarness();
     const now = "2026-01-01T00:00:00.000Z";

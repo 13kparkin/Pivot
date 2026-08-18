@@ -843,20 +843,26 @@ export function runtimeEventToActivities(
     }
 
     case "item.updated": {
-      if (!isToolLifecycleItemType(event.payload.itemType)) {
+      if (
+        !isToolLifecycleItemType(event.payload.itemType) &&
+        event.payload.itemType !== "reasoning"
+      ) {
         return [];
       }
+      const reasoning = event.payload.itemType === "reasoning";
       return [
         {
           id: event.eventId,
           createdAt: event.createdAt,
-          tone: "tool",
+          tone: reasoning ? "info" : "tool",
           kind: "tool.updated",
           summary: event.payload.title ?? "Tool updated",
           payload: {
             itemType: event.payload.itemType,
             ...(event.payload.status ? { status: event.payload.status } : {}),
-            ...(event.payload.detail ? { detail: truncateDetail(event.payload.detail) } : {}),
+            ...(event.payload.detail
+              ? { detail: reasoning ? event.payload.detail : truncateDetail(event.payload.detail) }
+              : {}),
             ...(event.payload.data !== undefined ? { data: event.payload.data } : {}),
             ...(event.payload.agentId ? { agentId: event.payload.agentId } : {}),
             ...(event.payload.parentToolUseId
@@ -870,19 +876,25 @@ export function runtimeEventToActivities(
     }
 
     case "item.completed": {
-      if (!isToolLifecycleItemType(event.payload.itemType)) {
+      if (
+        !isToolLifecycleItemType(event.payload.itemType) &&
+        event.payload.itemType !== "reasoning"
+      ) {
         return [];
       }
+      const reasoning = event.payload.itemType === "reasoning";
       return [
         {
           id: event.eventId,
           createdAt: event.createdAt,
-          tone: "tool",
+          tone: reasoning ? "info" : "tool",
           kind: "tool.completed",
           summary: event.payload.title ?? "Tool",
           payload: {
             itemType: event.payload.itemType,
-            ...(event.payload.detail ? { detail: truncateDetail(event.payload.detail) } : {}),
+            ...(event.payload.detail
+              ? { detail: reasoning ? event.payload.detail : truncateDetail(event.payload.detail) }
+              : {}),
             ...(event.payload.data !== undefined ? { data: event.payload.data } : {}),
             ...(event.payload.agentId ? { agentId: event.payload.agentId } : {}),
             ...(event.payload.parentToolUseId
@@ -896,19 +908,25 @@ export function runtimeEventToActivities(
     }
 
     case "item.started": {
-      if (!isToolLifecycleItemType(event.payload.itemType)) {
+      if (
+        !isToolLifecycleItemType(event.payload.itemType) &&
+        event.payload.itemType !== "reasoning"
+      ) {
         return [];
       }
+      const reasoning = event.payload.itemType === "reasoning";
       return [
         {
           id: event.eventId,
           createdAt: event.createdAt,
-          tone: "tool",
+          tone: reasoning ? "info" : "tool",
           kind: "tool.started",
           summary: `${event.payload.title ?? "Tool"} started`,
           payload: {
             itemType: event.payload.itemType,
-            ...(event.payload.detail ? { detail: truncateDetail(event.payload.detail) } : {}),
+            ...(event.payload.detail
+              ? { detail: reasoning ? event.payload.detail : truncateDetail(event.payload.detail) }
+              : {}),
             ...(event.payload.agentId ? { agentId: event.payload.agentId } : {}),
             ...(event.payload.parentToolUseId
               ? { parentToolUseId: event.payload.parentToolUseId }

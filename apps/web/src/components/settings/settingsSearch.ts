@@ -121,6 +121,21 @@ export const SETTINGS_SEARCH_ITEMS = [
     to: "/settings/general",
   },
   {
+    id: "timeline-tools",
+    title: "Timeline: tool calls",
+    to: "/settings/general",
+  },
+  {
+    id: "timeline-thinking",
+    title: "Timeline: thinking",
+    to: "/settings/general",
+  },
+  {
+    id: "timeline-plans",
+    title: "Timeline: plans",
+    to: "/settings/general",
+  },
+  {
     id: "time-format",
     title: "Time format",
     to: "/settings/general",
