@@ -7,7 +7,8 @@ import { ProviderDriverKind, ThreadId } from "@t3tools/contracts";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 
-import type { OmpAdapter, OmpLoginProvider, OmpOpenUrlRequest } from "./OmpAdapter.ts";
+import type { OmpAdapter, OmpOpenUrlRequest } from "./OmpAdapter.ts";
+import type { OmpLoginProvider } from "./OmpCatalogDecoder.ts";
 
 const PROVIDER = ProviderDriverKind.make("omp");
 

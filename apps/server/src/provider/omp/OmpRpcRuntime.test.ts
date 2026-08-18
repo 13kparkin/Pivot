@@ -378,6 +378,30 @@ describe("OmpRpcRuntime", () => {
     }),
   );
 
+  it.effect(
+    "Given settings HOME and extraEnv HOME, When the session child spawns, Then extraEnv HOME wins",
+    () =>
+      Effect.gen(function* () {
+        const fake = makeFakeOmpSpawner({ sessionFile: "/tmp/omp-session.jsonl" });
+        const runtime = new OmpRpcRuntime(fake.spawner, "/opt/omp", {
+          environment: [{ name: "HOME", value: "/from-settings", sensitive: false }],
+        });
+        yield* runtime.ensureSession({
+          sessionKey: "thread-1",
+          cwd: "/proj",
+          resumeCursor: null,
+          extraEnv: {
+            HOME: "/tmp/x",
+            PI_CODING_AGENT_DIR: "/tmp/agent",
+          },
+        });
+        const sessionSpawn = fake.spawns.find((spawn) => hasModeRpcUi(spawn.args));
+        NodeAssert.ok(sessionSpawn);
+        NodeAssert.equal(sessionSpawn?.options.env?.HOME, "/tmp/x");
+        NodeAssert.equal(sessionSpawn?.options.env?.PI_CODING_AGENT_DIR, "/tmp/agent");
+      }),
+  );
+
   it.effect("fails closed when the omp binary does not advertise rpc-ui", () =>
     Effect.gen(function* () {
       const fake = makeFakeOmpSpawner({

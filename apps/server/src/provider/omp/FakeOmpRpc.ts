@@ -61,7 +61,8 @@ export class FakeOmpRpc {
     readonly sessionKey: string;
     readonly cwd: string;
     readonly resumeCursor: string | null;
-  }) {
+    readonly extraEnv?: Record<string, string>;
+  }): Effect.Effect<{ sessionKey: string; sessionFile: string }, OmpSpawnError> {
     return Effect.gen({ self: this }, function* () {
       if (!this.frames.has(input.sessionKey)) {
         this.frames.set(input.sessionKey, yield* Queue.unbounded<object>());

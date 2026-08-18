@@ -26,6 +26,7 @@
  * @module provider/omp/OmpAdapter
  */
 import { ReviewBlockDecoder } from "./ReviewBlockDecoder.ts";
+import { OmpCatalogDecoder } from "./OmpCatalogDecoder.ts";
 import { formatOmpToolOutputText, OmpToolPresentation } from "./OmpToolPresentation.ts";
 import {
   type ApprovalRequestId,
@@ -39,8 +40,6 @@ import {
   RuntimeItemId,
   RuntimeRequestId,
   type RuntimeTaskStatus,
-  type ServerProviderModel,
-  type ServerProviderSlashCommand,
   ProviderDriverKind,
   ReviewFileLineCoverage,
   RuntimeTaskId,
@@ -78,6 +77,8 @@ import type {
 } from "@t3tools/contracts";
 import type { OmpCapabilitiesService } from "./OmpCapabilitiesService.ts";
 import { OmpSpawnError, type OmpRpcRuntime } from "./OmpRpcRuntime.ts";
+import { OmpPreviewMcpInjector } from "../../mcp/OmpPreviewMcpInjector.ts";
+import { readMcpProviderSession } from "../../mcp/McpProviderSession.ts";
 
 const PROVIDER = ProviderDriverKind.make("omp");
 const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
@@ -117,13 +118,6 @@ function mapOmpSpawnError(threadId: ThreadId, cause: OmpSpawnError): ProviderAda
     detail: cause.message,
     cause,
   });
-}
-
-export interface OmpLoginProvider {
-  readonly id: string;
-  readonly name: string;
-  readonly available: boolean;
-  readonly authenticated: boolean;
 }
 
 export interface OmpOpenUrlRequest {
@@ -189,6 +183,8 @@ export interface OmpAdapterOptions {
     | "deleteResource"
     | "moveItemToOmp"
   >;
+  readonly previewMcpInjector?: OmpPreviewMcpInjector;
+  readonly agentDir?: string;
 }
 
 export type OmpSubagentSubscriptionLevel = "off" | "progress" | "events";
@@ -219,8 +215,11 @@ export class OmpAdapter {
   readonly #randomUUID: Effect.Effect<string>;
   readonly #resolveRoleModel: OmpResolveRoleModel;
   readonly #capabilitiesService: OmpAdapterOptions["capabilitiesService"];
+  readonly #previewMcpInjector: OmpPreviewMcpInjector | undefined;
+  readonly #agentDir: string | undefined;
   readonly #reviewBlockDecoder = new ReviewBlockDecoder();
   readonly #toolPresentation = new OmpToolPresentation();
+  readonly #catalogDecoder = new OmpCatalogDecoder();
 
   public constructor(
     runtime: OmpRpcClient,
@@ -231,6 +230,8 @@ export class OmpAdapter {
     this.#randomUUID = randomUUID;
     this.#resolveRoleModel = options.resolveRoleModel ?? (() => Effect.succeed(undefined));
     this.#capabilitiesService = options.capabilitiesService;
+    this.#previewMcpInjector = options.previewMcpInjector;
+    this.#agentDir = options.agentDir;
   }
 
   private requireCapabilitiesService(): Effect.Effect<
@@ -316,13 +317,18 @@ export class OmpAdapter {
         });
       }
       const resumeCursor = typeof input.resumeCursor === "string" ? input.resumeCursor : null;
+      const extraEnv = yield* this.#installPreviewMcp(input.threadId);
       const handle = yield* this.#runtime
         .ensureSession({
           sessionKey: input.threadId,
           cwd,
           resumeCursor,
+          ...(extraEnv === undefined ? {} : { extraEnv }),
         })
-        .pipe(Effect.mapError((cause) => mapOmpSpawnError(input.threadId, cause)));
+        .pipe(
+          Effect.tapError(() => this.#uninstallPreviewMcp(input.threadId)),
+          Effect.mapError((cause) => mapOmpSpawnError(input.threadId, cause)),
+        );
       const createdAt = yield* nowIso;
       const scope = yield* Scope.make("sequential");
       const snapshot: ProviderSession = {
@@ -783,7 +789,7 @@ export class OmpAdapter {
       const response = yield* this.#send(threadId, {
         type: "get_available_models",
       });
-      return yield* modelsFromAvailableModelsResponse(response);
+      return yield* this.#catalogDecoder.decodeModels(response);
     });
   }
 
@@ -798,7 +804,7 @@ export class OmpAdapter {
       const response = yield* this.#send(threadId, {
         type: "get_available_commands",
       });
-      return yield* slashCommandsFromAvailableCommandsResponse(response);
+      return yield* this.#catalogDecoder.decodeSlashCommands(response);
     });
   }
 
@@ -813,7 +819,7 @@ export class OmpAdapter {
       const response = yield* this.#send(threadId, {
         type: "get_login_providers",
       });
-      return yield* loginProvidersFromResponse(response);
+      return yield* this.#catalogDecoder.decodeLoginProviders(response);
     });
   }
 
@@ -1859,6 +1865,7 @@ export class OmpAdapter {
 
   #clearLiveSession(threadId: ThreadId) {
     return Effect.gen({ self: this }, function* () {
+      yield* this.#uninstallPreviewMcp(threadId);
       const session = this.#sessions.get(threadId);
       this.#sessions.delete(threadId);
       if (session) {
@@ -1866,6 +1873,26 @@ export class OmpAdapter {
       }
       yield* this.#runtime.dispose(threadId);
     });
+  }
+
+  #installPreviewMcp(threadId: ThreadId): Effect.Effect<Record<string, string> | undefined> {
+    const injector = this.#previewMcpInjector;
+    const agentDir = this.#agentDir;
+    const mcp = readMcpProviderSession(threadId);
+    if (injector === undefined || agentDir === undefined || mcp === undefined) {
+      return Effect.succeed(undefined);
+    }
+    return injector
+      .install(threadId, mcp, agentDir)
+      .pipe(Effect.map((installed) => installed.extraEnv));
+  }
+
+  #uninstallPreviewMcp(threadId: ThreadId): Effect.Effect<void> {
+    const injector = this.#previewMcpInjector;
+    if (injector === undefined) {
+      return Effect.void;
+    }
+    return injector.uninstall(threadId);
   }
 
   #onExtensionUiRequest(
@@ -2068,126 +2095,6 @@ function runtimeTaskStatusFromOmpProgress(status: unknown): RuntimeTaskStatus | 
 
 function isLocalOnlyPromptResponse(response: object): boolean {
   return isRecord(response) && isRecord(response.data) && response.data.agentInvoked === false;
-}
-
-function loginProvidersFromResponse(
-  response: object,
-): Effect.Effect<ReadonlyArray<OmpLoginProvider>, ProviderAdapterRequestError> {
-  if (!isRecord(response) || !isRecord(response.data) || !Array.isArray(response.data.providers)) {
-    return Effect.fail(
-      new ProviderAdapterRequestError({
-        provider: PROVIDER,
-        method: "get_login_providers",
-        detail: "response data.providers must be an array",
-      }),
-    );
-  }
-  const providers: OmpLoginProvider[] = [];
-  for (const entry of response.data.providers) {
-    if (
-      !isRecord(entry) ||
-      typeof entry.id !== "string" ||
-      typeof entry.name !== "string" ||
-      typeof entry.available !== "boolean" ||
-      typeof entry.authenticated !== "boolean"
-    ) {
-      return Effect.fail(
-        new ProviderAdapterRequestError({
-          provider: PROVIDER,
-          method: "get_login_providers",
-          detail: "each login provider requires id, name, available, authenticated",
-        }),
-      );
-    }
-    providers.push({
-      id: entry.id,
-      name: entry.name,
-      available: entry.available,
-      authenticated: entry.authenticated,
-    });
-  }
-  return Effect.succeed(providers);
-}
-
-function slashCommandsFromAvailableCommandsResponse(
-  response: object,
-): Effect.Effect<ReadonlyArray<ServerProviderSlashCommand>, ProviderAdapterRequestError> {
-  if (!isRecord(response) || !isRecord(response.data) || !Array.isArray(response.data.commands)) {
-    return Effect.fail(
-      new ProviderAdapterRequestError({
-        provider: PROVIDER,
-        method: "get_available_commands",
-        detail: "response data.commands must be an array",
-      }),
-    );
-  }
-  const commands: ServerProviderSlashCommand[] = [];
-  for (const entry of response.data.commands) {
-    if (!isRecord(entry) || typeof entry.name !== "string" || entry.name.trim().length === 0) {
-      return Effect.fail(
-        new ProviderAdapterRequestError({
-          provider: PROVIDER,
-          method: "get_available_commands",
-          detail: "each command requires a non-empty name",
-        }),
-      );
-    }
-    const name = entry.name.trim().replace(/^\//, "");
-    const description =
-      typeof entry.description === "string" && entry.description.trim().length > 0
-        ? entry.description.trim()
-        : undefined;
-    const inputHint =
-      isRecord(entry.input) &&
-      typeof entry.input.hint === "string" &&
-      entry.input.hint.trim().length > 0
-        ? entry.input.hint.trim()
-        : undefined;
-    commands.push({
-      name,
-      ...(description === undefined ? {} : { description }),
-      ...(inputHint === undefined ? {} : { input: { hint: inputHint } }),
-    });
-  }
-  return Effect.succeed(commands);
-}
-
-function modelsFromAvailableModelsResponse(
-  response: object,
-): Effect.Effect<ReadonlyArray<ServerProviderModel>, ProviderAdapterRequestError> {
-  if (!isRecord(response) || !isRecord(response.data) || !Array.isArray(response.data.models)) {
-    return Effect.fail(
-      new ProviderAdapterRequestError({
-        provider: PROVIDER,
-        method: "get_available_models",
-        detail: "response data.models must be an array",
-      }),
-    );
-  }
-  const models: ServerProviderModel[] = [];
-  for (const entry of response.data.models) {
-    if (!isRecord(entry) || typeof entry.provider !== "string" || typeof entry.id !== "string") {
-      return Effect.fail(
-        new ProviderAdapterRequestError({
-          provider: PROVIDER,
-          method: "get_available_models",
-          detail: "each model requires provider and id strings",
-        }),
-      );
-    }
-    const provider = entry.provider.trim();
-    const id = entry.id.trim();
-    const slug = `${provider}/${id}`;
-    const name =
-      typeof entry.name === "string" && entry.name.trim().length > 0 ? entry.name.trim() : slug;
-    models.push({
-      slug,
-      name,
-      isCustom: false,
-      capabilities: null,
-    });
-  }
-  return Effect.succeed(models);
 }
 
 const OMP_THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;

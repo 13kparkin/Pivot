@@ -52,6 +52,7 @@ import {
   parseOmpModelRoleSlug,
   syncOmpSettingsToConfigStore,
 } from "../omp/index.ts";
+import { OmpPreviewMcpInjector } from "../../mcp/OmpPreviewMcpInjector.ts";
 import {
   defaultProviderContinuationIdentity,
   type ProviderDriver,
@@ -64,6 +65,7 @@ import type { ServerProviderShape } from "../Services/ServerProvider.ts";
 
 const decodeOmpSettings = Schema.decodeSync(OmpSettings);
 const DRIVER_KIND = ProviderDriverKind.make("omp");
+const PREVIEW_MCP_OVERLAY_DIRNAME = "pivot-preview-mcp";
 const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
 
 const OMP_PRESENTATION = {
@@ -482,9 +484,16 @@ export const OmpDriver: ProviderDriver<OmpSettings, OmpDriverEnv> = {
         resolveProjectCwd,
         listProjectWorkspaces,
       );
+      const previewMcpInjector = new OmpPreviewMcpInjector(
+        fs,
+        pathService,
+        pathService.join(NodeOS.tmpdir(), PREVIEW_MCP_OVERLAY_DIRNAME),
+      );
       const adapter = new OmpAdapter(runtime, randomUUID, {
         resolveRoleModel,
         capabilitiesService,
+        previewMcpInjector,
+        agentDir,
       });
       yield* Effect.addFinalizer(() => adapter.stopAll());
 
