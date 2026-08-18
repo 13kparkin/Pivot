@@ -78,6 +78,8 @@ import type {
 } from "@t3tools/contracts";
 import type { OmpCapabilitiesService } from "./OmpCapabilitiesService.ts";
 import { OmpSpawnError, type OmpRpcRuntime } from "./OmpRpcRuntime.ts";
+import { OmpPreviewMcpInjector } from "../../mcp/OmpPreviewMcpInjector.ts";
+import { readMcpProviderSession } from "../../mcp/McpProviderSession.ts";
 
 const PROVIDER = ProviderDriverKind.make("omp");
 const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
@@ -189,6 +191,8 @@ export interface OmpAdapterOptions {
     | "deleteResource"
     | "moveItemToOmp"
   >;
+  readonly previewMcpInjector?: OmpPreviewMcpInjector;
+  readonly agentDir?: string;
 }
 
 export type OmpSubagentSubscriptionLevel = "off" | "progress" | "events";
@@ -219,6 +223,8 @@ export class OmpAdapter {
   readonly #randomUUID: Effect.Effect<string>;
   readonly #resolveRoleModel: OmpResolveRoleModel;
   readonly #capabilitiesService: OmpAdapterOptions["capabilitiesService"];
+  readonly #previewMcpInjector: OmpPreviewMcpInjector | undefined;
+  readonly #agentDir: string | undefined;
   readonly #reviewBlockDecoder = new ReviewBlockDecoder();
   readonly #toolPresentation = new OmpToolPresentation();
 
@@ -231,6 +237,8 @@ export class OmpAdapter {
     this.#randomUUID = randomUUID;
     this.#resolveRoleModel = options.resolveRoleModel ?? (() => Effect.succeed(undefined));
     this.#capabilitiesService = options.capabilitiesService;
+    this.#previewMcpInjector = options.previewMcpInjector;
+    this.#agentDir = options.agentDir;
   }
 
   private requireCapabilitiesService(): Effect.Effect<
@@ -316,13 +324,18 @@ export class OmpAdapter {
         });
       }
       const resumeCursor = typeof input.resumeCursor === "string" ? input.resumeCursor : null;
+      const extraEnv = yield* this.#installPreviewMcp(input.threadId);
       const handle = yield* this.#runtime
         .ensureSession({
           sessionKey: input.threadId,
           cwd,
           resumeCursor,
+          ...(extraEnv === undefined ? {} : { extraEnv }),
         })
-        .pipe(Effect.mapError((cause) => mapOmpSpawnError(input.threadId, cause)));
+        .pipe(
+          Effect.tapError(() => this.#uninstallPreviewMcp(input.threadId)),
+          Effect.mapError((cause) => mapOmpSpawnError(input.threadId, cause)),
+        );
       const createdAt = yield* nowIso;
       const scope = yield* Scope.make("sequential");
       const snapshot: ProviderSession = {
@@ -1859,6 +1872,7 @@ export class OmpAdapter {
 
   #clearLiveSession(threadId: ThreadId) {
     return Effect.gen({ self: this }, function* () {
+      yield* this.#uninstallPreviewMcp(threadId);
       const session = this.#sessions.get(threadId);
       this.#sessions.delete(threadId);
       if (session) {
@@ -1866,6 +1880,26 @@ export class OmpAdapter {
       }
       yield* this.#runtime.dispose(threadId);
     });
+  }
+
+  #installPreviewMcp(threadId: ThreadId): Effect.Effect<Record<string, string> | undefined> {
+    const injector = this.#previewMcpInjector;
+    const agentDir = this.#agentDir;
+    const mcp = readMcpProviderSession(threadId);
+    if (injector === undefined || agentDir === undefined || mcp === undefined) {
+      return Effect.succeed(undefined);
+    }
+    return injector
+      .install(threadId, mcp, agentDir)
+      .pipe(Effect.map((installed) => installed.extraEnv));
+  }
+
+  #uninstallPreviewMcp(threadId: ThreadId): Effect.Effect<void> {
+    const injector = this.#previewMcpInjector;
+    if (injector === undefined) {
+      return Effect.void;
+    }
+    return injector.uninstall(threadId);
   }
 
   #onExtensionUiRequest(

@@ -2,6 +2,8 @@
 
 Pivot drives [omp](https://omp.sh) over `omp --mode rpc-ui`. omp is the only built-in agent backend.
 
+omp project threads can use Pivot's in-app collaborative browser automatically; you do not add an MCP server.
+
 ## Install
 
 1. Open **Settings → omp** and click **Install**. Pivot downloads a managed omp binary into the T3 home (`tools/omp/`), then downloads managed [rtk](https://github.com/rtk-ai/rtk) into `tools/rtk/` and runs `rtk init -g --agent pi` so bash rewrite hooks are active for omp.

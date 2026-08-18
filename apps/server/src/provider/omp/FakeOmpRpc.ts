@@ -61,6 +61,7 @@ export class FakeOmpRpc {
     readonly sessionKey: string;
     readonly cwd: string;
     readonly resumeCursor: string | null;
+    readonly extraEnv?: Record<string, string>;
   }) {
     return Effect.gen({ self: this }, function* () {
       if (!this.frames.has(input.sessionKey)) {
