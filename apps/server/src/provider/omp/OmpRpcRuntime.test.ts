@@ -356,6 +356,28 @@ describe("OmpRpcRuntime", () => {
     }),
   );
 
+  it.effect("merges provider-instance environment into omp child spawns", () =>
+    Effect.gen(function* () {
+      const fake = makeFakeOmpSpawner({ sessionFile: "/tmp/omp-session.jsonl" });
+      const runtime = new OmpRpcRuntime(fake.spawner, "/opt/omp", {
+        environment: [
+          { name: "DEEPINFRA_TOKEN", value: "di-test-token", sensitive: true },
+          { name: "OPENROUTER_API_KEY", value: "or-test", sensitive: true },
+        ],
+      });
+      yield* runtime.ensureSession({
+        sessionKey: "thread-1",
+        cwd: "/proj",
+        resumeCursor: null,
+      });
+      NodeAssert.equal(fake.spawns.length, 2);
+      for (const spawn of fake.spawns) {
+        NodeAssert.equal(spawn.options.env?.DEEPINFRA_TOKEN, "di-test-token");
+        NodeAssert.equal(spawn.options.env?.OPENROUTER_API_KEY, "or-test");
+      }
+    }),
+  );
+
   it.effect("fails closed when the omp binary does not advertise rpc-ui", () =>
     Effect.gen(function* () {
       const fake = makeFakeOmpSpawner({
