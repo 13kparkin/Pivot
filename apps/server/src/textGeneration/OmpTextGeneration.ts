@@ -17,7 +17,12 @@ import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import { ChildProcessSpawner } from "effect/unstable/process";
 
-import { type ModelSelection, type OmpSettings, TextGenerationError } from "@t3tools/contracts";
+import {
+  type ModelSelection,
+  type OmpSettings,
+  type ProviderInstanceEnvironment,
+  TextGenerationError,
+} from "@t3tools/contracts";
 import { sanitizeBranchFragment, sanitizeFeatureBranchName } from "@t3tools/shared/git";
 import { extractJsonObject } from "@t3tools/shared/schemaJson";
 
@@ -76,6 +81,7 @@ function mapOmpError(operation: string, cause: unknown, detail: string): TextGen
 export const makeOmpTextGeneration = Effect.fn("makeOmpTextGeneration")(function* (
   ompSettings: OmpSettings & {
     readonly resolveBinaryPath?: Effect.Effect<string>;
+    readonly environment?: ProviderInstanceEnvironment;
   },
 ) {
   const crypto = yield* Crypto.Crypto;
@@ -85,6 +91,7 @@ export const makeOmpTextGeneration = Effect.fn("makeOmpTextGeneration")(function
       ? ompSettings.binaryPath
       : "omp";
   const resolveBinaryPath = ompSettings.resolveBinaryPath ?? Effect.succeed(fallbackBinaryPath);
+  const environment = ompSettings.environment ?? [];
 
   const runOmpJson = <S extends Schema.Top>({
     operation,
@@ -105,7 +112,7 @@ export const makeOmpTextGeneration = Effect.fn("makeOmpTextGeneration")(function
   }): Effect.Effect<S["Type"], TextGenerationError, S["DecodingServices"]> =>
     Effect.gen(function* () {
       const binaryPath = yield* resolveBinaryPath;
-      const runtime = new OmpRpcRuntime(commandSpawner, binaryPath);
+      const runtime = new OmpRpcRuntime(commandSpawner, binaryPath, { environment });
       const sessionKey = yield* crypto.randomUUIDv4.pipe(Effect.orDie);
       yield* Effect.addFinalizer(() => runtime.dispose(sessionKey));
 

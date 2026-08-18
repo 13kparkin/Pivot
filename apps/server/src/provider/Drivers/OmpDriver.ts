@@ -330,7 +330,7 @@ export const OmpDriver: ProviderDriver<OmpSettings, OmpDriverEnv> = {
   },
   configSchema: OmpSettings,
   defaultConfig: (): OmpSettings => decodeOmpSettings({}),
-  create: ({ instanceId, displayName, accentColor, enabled, config }) =>
+  create: ({ instanceId, displayName, accentColor, environment, enabled, config }) =>
     Effect.gen(function* () {
       const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
       const serverConfig = yield* ServerConfig.ServerConfig;
@@ -391,6 +391,7 @@ export const OmpDriver: ProviderDriver<OmpSettings, OmpDriverEnv> = {
 
       const runtime = new OmpRpcRuntime(spawner, launchBinary, {
         pathPrefixDirs: [rtkCurrentDir],
+        environment,
       });
       const fs = yield* FileSystem.FileSystem;
       const ompHomeEnv = process.env.OMP_HOME?.trim();
@@ -508,6 +509,7 @@ export const OmpDriver: ProviderDriver<OmpSettings, OmpDriverEnv> = {
         resolveBinaryPath: resolveBinary.pipe(
           Effect.map((resolved) => resolved.binaryPath ?? launchBinary),
         ),
+        environment,
       });
 
       return {

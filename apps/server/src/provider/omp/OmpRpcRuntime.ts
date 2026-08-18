@@ -10,6 +10,7 @@
  *
  * @module provider/omp/OmpRpcRuntime
  */
+import type { ProviderInstanceEnvironment } from "@t3tools/contracts";
 import { mergePathValues } from "@t3tools/shared/shell";
 import * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
@@ -21,6 +22,8 @@ import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
+
+import { mergeProviderInstanceEnvironment } from "../ProviderInstanceEnvironment.ts";
 
 /** Maximum UTF-8 size of one newline-delimited RPC frame, including the newline. */
 export const MAX_RPC_FRAME_BYTES = 1024 * 1024;
@@ -196,6 +199,12 @@ interface LiveOmpSession {
 export interface OmpRpcRuntimeOptions {
   /** Directories prepended to PATH for the omp child (e.g. managed rtk). */
   readonly pathPrefixDirs?: ReadonlyArray<string>;
+  /**
+   * Provider-instance env from Pivot Settings. Merged into every omp child
+   * spawn (`extendEnv`) so custom `models.yml` providers can resolve keys like
+   * `DEEPINFRA_TOKEN` without exporting them in the server process.
+   */
+  readonly environment?: ProviderInstanceEnvironment;
 }
 
 /**
@@ -207,6 +216,7 @@ export class OmpRpcRuntime {
   readonly #processSpawner: ChildProcessSpawner.ChildProcessSpawner["Service"];
   #binaryPath: string;
   readonly #pathPrefixDirs: ReadonlyArray<string>;
+  readonly #environment: ProviderInstanceEnvironment;
   /** Single-flight capability memo: one `--help` probe per binary path. */
   #rpcUiSupport: Deferred.Deferred<boolean, OmpSpawnError> | null = null;
 
@@ -218,6 +228,30 @@ export class OmpRpcRuntime {
     this.#processSpawner = processSpawner;
     this.#binaryPath = binaryPath;
     this.#pathPrefixDirs = options?.pathPrefixDirs ?? [];
+    this.#environment = options?.environment ?? [];
+  }
+
+  /**
+   * Env overrides for `ChildProcess.make` with `extendEnv: true`: settings
+   * vars first, then PATH when path-prefix dirs are configured (PATH wins).
+   */
+  #childEnvOverrides(platform: NodeJS.Platform): Record<string, string> | undefined {
+    const preferredPath =
+      this.#pathPrefixDirs.length > 0
+        ? this.#pathPrefixDirs.join(platform === "win32" ? ";" : ":")
+        : undefined;
+    const mergedPath = mergePathValues(preferredPath, process.env.PATH, platform);
+    const fromSettings = mergeProviderInstanceEnvironment(this.#environment, {});
+    const env: Record<string, string> = {};
+    for (const [key, value] of Object.entries(fromSettings)) {
+      if (value !== undefined) {
+        env[key] = value;
+      }
+    }
+    if (mergedPath !== undefined) {
+      env.PATH = mergedPath;
+    }
+    return Object.keys(env).length > 0 ? env : undefined;
   }
 
   /** Update the spawn binary after a managed install/refresh. */
@@ -249,18 +283,14 @@ export class OmpRpcRuntime {
       }
 
       const platform = yield* HostProcessPlatform;
-      const preferredPath =
-        this.#pathPrefixDirs.length > 0
-          ? this.#pathPrefixDirs.join(platform === "win32" ? ";" : ":")
-          : undefined;
-      const mergedPath = mergePathValues(preferredPath, process.env.PATH, platform);
+      const env = this.#childEnvOverrides(platform);
       const scope = yield* Scope.make();
       const child = yield* this.#processSpawner
         .spawn(
           ChildProcess.make(this.#binaryPath, ["--mode", "rpc-ui"], {
             cwd: input.cwd,
             extendEnv: true,
-            ...(mergedPath !== undefined ? { env: { PATH: mergedPath } } : {}),
+            ...(env !== undefined ? { env } : {}),
             // Keep stdin open across many RPC writes. Default endOnDone ends the
             // pipe after the first Stream.run, which hangs the next command.
             stdin: { stream: "pipe", endOnDone: false },
@@ -475,17 +505,13 @@ export class OmpRpcRuntime {
   #runCapabilityProbe(cwd: string): Effect.Effect<boolean, OmpSpawnError> {
     return Effect.gen({ self: this }, function* () {
       const platform = yield* HostProcessPlatform;
-      const preferredPath =
-        this.#pathPrefixDirs.length > 0
-          ? this.#pathPrefixDirs.join(platform === "win32" ? ";" : ":")
-          : undefined;
-      const mergedPath = mergePathValues(preferredPath, process.env.PATH, platform);
+      const env = this.#childEnvOverrides(platform);
       const child = yield* this.#processSpawner
         .spawn(
           ChildProcess.make(this.#binaryPath, ["--help"], {
             cwd,
             extendEnv: true,
-            ...(mergedPath !== undefined ? { env: { PATH: mergedPath } } : {}),
+            ...(env !== undefined ? { env } : {}),
           }),
         )
         .pipe(
