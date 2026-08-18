@@ -29,11 +29,17 @@ import {
   setMcpProviderSession,
   type McpProviderSessionConfig,
 } from "../../mcp/McpProviderSession.ts";
-import { ProviderAdapterRequestError, ProviderAdapterSessionNotFoundError } from "../Errors.ts";
+import {
+  ProviderAdapterProcessError,
+  ProviderAdapterRequestError,
+  ProviderAdapterSessionNotFoundError,
+} from "../Errors.ts";
 const isProviderAdapterSessionNotFoundError = Schema.is(ProviderAdapterSessionNotFoundError);
 const isProviderAdapterRequestError = Schema.is(ProviderAdapterRequestError);
+const isProviderAdapterProcessError = Schema.is(ProviderAdapterProcessError);
 import { FakeOmpRpc } from "./FakeOmpRpc.ts";
 import { OmpAdapter } from "./OmpAdapter.ts";
+import { OmpSpawnError } from "./OmpRpcRuntime.ts";
 
 let nextTestUuid = 0;
 const testRandomUUID = Effect.sync(() => {
@@ -63,6 +69,7 @@ type PreviewEnsureSessionInput = {
 class OverlayObservingFakeOmpRpc extends FakeOmpRpc {
   extraEnv: Record<string, string> | undefined;
   overlayExistedAtSpawn = false;
+  failEnsureSession = false;
   readonly #fileSystem: FileSystem.FileSystem;
   readonly #overlayMcpJsonPath: string;
 
@@ -77,6 +84,12 @@ class OverlayObservingFakeOmpRpc extends FakeOmpRpc {
     return Effect.gen({ self: this }, function* () {
       this.extraEnv = input.extraEnv;
       this.overlayExistedAtSpawn = yield* this.#fileSystem.exists(this.#overlayMcpJsonPath);
+      if (this.failEnsureSession) {
+        return yield* new OmpSpawnError({
+          operation: "ensureSession",
+          detail: "spawn failed",
+        });
+      }
       return yield* startSession;
     });
   }
@@ -1640,6 +1653,25 @@ describe("OmpAdapter", () => {
   );
 
   it.effect(
+    "Given get_available_models entries missing id, When discoverModels runs, Then ProviderAdapterRequestError names get_available_models",
+    () =>
+      Effect.gen(function* () {
+        const fake = new FakeOmpRpc();
+        fake.availableModels = [{ provider: "openai" }];
+        const adapter = new OmpAdapter(fake, testRandomUUID);
+        yield* adapter.startSession(startInput);
+
+        const error = yield* adapter.discoverModels(THREAD_ID).pipe(Effect.flip);
+
+        NodeAssert.equal(isProviderAdapterRequestError(error), true);
+        if (isProviderAdapterRequestError(error)) {
+          NodeAssert.equal(error.method, "get_available_models");
+          NodeAssert.equal(error.detail, "each model requires provider and id strings");
+        }
+      }),
+  );
+
+  it.effect(
     "discoverSlashCommands maps get_available_commands into ServerProviderSlashCommand",
     () =>
       Effect.gen(function* () {
@@ -2760,6 +2792,35 @@ describe("OmpAdapter preview MCP overlay", () => {
       }).pipe(
         Effect.ensuring(
           Effect.sync(() => clearMcpProviderSession(ThreadId.make("thread-preview-stop"))),
+        ),
+        Effect.provide(NodeServices.layer),
+      ),
+  );
+
+  it.effect(
+    "Given overlay install then spawn failure, When startSession fails, Then the overlay directory is gone",
+    () =>
+      Effect.gen(function* () {
+        const threadId = ThreadId.make("thread-preview-spawn-fail");
+        const { fs, overlayHome, fake, adapter } = yield* makePreviewHarness(threadId);
+        fake.failEnsureSession = true;
+        setMcpProviderSession(makePreviewSessionConfig(threadId));
+
+        const error = yield* adapter
+          .startSession({
+            threadId,
+            provider: PROVIDER,
+            cwd: "/proj",
+            runtimeMode: "full-access",
+          })
+          .pipe(Effect.flip);
+
+        NodeAssert.equal(fake.overlayExistedAtSpawn, true);
+        NodeAssert.equal(isProviderAdapterProcessError(error), true);
+        NodeAssert.equal(yield* fs.exists(overlayHome), false);
+      }).pipe(
+        Effect.ensuring(
+          Effect.sync(() => clearMcpProviderSession(ThreadId.make("thread-preview-spawn-fail"))),
         ),
         Effect.provide(NodeServices.layer),
       ),

@@ -35,20 +35,26 @@ const sessionConfig: McpProviderSessionConfig = {
   authorizationHeader: "Bearer test-preview-token",
 };
 
+const makeOverlayFixture = Effect.gen(function* () {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const overlayRoot = yield* fs.makeTempDirectoryScoped({ prefix: "pivot-preview-mcp-" });
+  const injector = new OmpPreviewMcpInjector(fs, path, overlayRoot);
+  const overlayHome = path.join(overlayRoot, THREAD_ID);
+  const overlayMcpJsonPath = path.join(overlayHome, ".cursor", "mcp.json");
+  return { fs, path, overlayRoot, overlayHome, overlayMcpJsonPath, injector };
+});
+
 it.layer(NodeServices.layer)("OmpPreviewMcpInjector", (it) => {
   it.effect(
     "Given a minted MCP session, When install runs, Then overlay mcp.json is pivot-preview HTTP with Authorization",
     () =>
       Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        const path = yield* Path.Path;
-        const overlayRoot = yield* fs.makeTempDirectoryScoped({ prefix: "pivot-preview-mcp-" });
-        const injector = new OmpPreviewMcpInjector(fs, path, overlayRoot);
+        const { fs, overlayMcpJsonPath, injector } = yield* makeOverlayFixture;
 
         yield* injector.install(THREAD_ID, sessionConfig, AGENT_DIR);
 
-        const overlayPath = path.join(overlayRoot, THREAD_ID, ".cursor", "mcp.json");
-        const raw = yield* fs.readFileString(overlayPath);
+        const raw = yield* fs.readFileString(overlayMcpJsonPath);
         expect(decodeOverlayMcpJson(raw)).toEqual({
           mcpServers: {
             "pivot-preview": {
@@ -65,17 +71,27 @@ it.layer(NodeServices.layer)("OmpPreviewMcpInjector", (it) => {
     "Given a minted MCP session, When install runs, Then extraEnv sets HOME to the overlay and PI_CODING_AGENT_DIR to the agent dir",
     () =>
       Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        const path = yield* Path.Path;
-        const overlayRoot = yield* fs.makeTempDirectoryScoped({ prefix: "pivot-preview-mcp-" });
-        const injector = new OmpPreviewMcpInjector(fs, path, overlayRoot);
+        const { overlayHome, injector } = yield* makeOverlayFixture;
 
         const installed = yield* injector.install(THREAD_ID, sessionConfig, AGENT_DIR);
 
         expect(installed.extraEnv).toEqual({
-          HOME: path.join(overlayRoot, THREAD_ID),
+          HOME: overlayHome,
           PI_CODING_AGENT_DIR: AGENT_DIR,
         });
+      }),
+  );
+
+  it.effect(
+    "Given a minted MCP session, When install runs, Then overlay mcp.json is mode 0o600",
+    () =>
+      Effect.gen(function* () {
+        const { fs, overlayMcpJsonPath, injector } = yield* makeOverlayFixture;
+
+        yield* injector.install(THREAD_ID, sessionConfig, AGENT_DIR);
+
+        const info = yield* fs.stat(overlayMcpJsonPath);
+        expect(info.mode & 0o777).toBe(0o600);
       }),
   );
 
@@ -83,12 +99,8 @@ it.layer(NodeServices.layer)("OmpPreviewMcpInjector", (it) => {
     "Given an installed overlay, When uninstall runs, Then the overlay directory is gone",
     () =>
       Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        const path = yield* Path.Path;
-        const overlayRoot = yield* fs.makeTempDirectoryScoped({ prefix: "pivot-preview-mcp-" });
-        const injector = new OmpPreviewMcpInjector(fs, path, overlayRoot);
+        const { fs, overlayHome, injector } = yield* makeOverlayFixture;
         yield* injector.install(THREAD_ID, sessionConfig, AGENT_DIR);
-        const overlayHome = path.join(overlayRoot, THREAD_ID);
 
         yield* injector.uninstall(THREAD_ID);
 

@@ -379,11 +379,13 @@ describe("OmpRpcRuntime", () => {
   );
 
   it.effect(
-    "Given extraEnv on ensureSession, When the session child spawns, Then spawn env contains HOME and PI_CODING_AGENT_DIR",
+    "Given settings HOME and extraEnv HOME, When the session child spawns, Then extraEnv HOME wins",
     () =>
       Effect.gen(function* () {
         const fake = makeFakeOmpSpawner({ sessionFile: "/tmp/omp-session.jsonl" });
-        const runtime = new OmpRpcRuntime(fake.spawner, "/opt/omp");
+        const runtime = new OmpRpcRuntime(fake.spawner, "/opt/omp", {
+          environment: [{ name: "HOME", value: "/from-settings", sensitive: false }],
+        });
         yield* runtime.ensureSession({
           sessionKey: "thread-1",
           cwd: "/proj",
