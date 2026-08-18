@@ -25,6 +25,17 @@ const TITLE_JSON = '{"title":"Wire Omp Thread Titles"}';
 const TITLE_MODEL = createModelSelection(ProviderInstanceId.make("omp"), "openai/gpt-5", [
   { id: "reasoningEffort", value: "low" },
 ]);
+const BARE_LUNA_MODEL = createModelSelection(ProviderInstanceId.make("omp"), "gpt-5.6-luna", [
+  { id: "reasoningEffort", value: "low" },
+]);
+const OMP_CATALOG = [
+  { provider: "openai", id: "gpt-5" },
+  { provider: "openai", id: "gpt-5.6-luna" },
+  { provider: "openai-codex", id: "gpt-5.6-luna" },
+  { provider: "deepinfra", id: "deepseek-ai/DeepSeek-V4-Flash-0731" },
+];
+const PROVIDER_ERROR_MESSAGE =
+  "401 User is not authorized to access this resource (type=invalid_request_error param=invalid_api_key)";
 
 function asSpawnedCommand(command: ChildProcess.Command) {
   if (command._tag !== "StandardCommand") {
@@ -37,7 +48,16 @@ function asSpawnedCommand(command: ChildProcess.Command) {
   };
 }
 
-type PromptScript = "text_delta" | "thinking_delta" | "message_end" | "confirm_then_text" | "empty";
+type PromptScript =
+  | "text_delta"
+  | "thinking_delta"
+  | "thinking_content"
+  | "message_end"
+  | "last_assistant_text"
+  | "confirm_then_text"
+  | "select_then_text"
+  | "provider_error"
+  | "empty";
 
 function makeFakeOmpSpawner(sessionFile: string, script: PromptScript = "text_delta") {
   const prompts: string[] = [];
@@ -112,6 +132,22 @@ function makeFakeOmpSpawner(sessionFile: string, script: PromptScript = "text_de
                     success: true,
                     data: { sessionFile },
                   });
+                } else if (rpcCommand.type === "get_available_models") {
+                  yield* offer({
+                    id: rpcCommand.id,
+                    type: "response",
+                    command: "get_available_models",
+                    success: true,
+                    data: { models: OMP_CATALOG },
+                  });
+                } else if (rpcCommand.type === "get_last_assistant_text") {
+                  yield* offer({
+                    id: rpcCommand.id,
+                    type: "response",
+                    command: "get_last_assistant_text",
+                    success: true,
+                    data: { text: script === "last_assistant_text" ? TITLE_JSON : "" },
+                  });
                 } else if (rpcCommand.type === "set_model") {
                   setModels.push({
                     provider: String(rpcCommand.provider),
@@ -147,7 +183,24 @@ function makeFakeOmpSpawner(sessionFile: string, script: PromptScript = "text_de
                         isTerminal: true,
                       },
                     ]);
-                  } else if (script === "confirm_then_text") {
+                  } else if (
+                    script === "select_then_text" &&
+                    typeof rpcCommand.value === "string"
+                  ) {
+                    yield* offerAssistantEnd([
+                      {
+                        type: "message_update",
+                        assistantMessageEvent: {
+                          type: "text_delta",
+                          delta: TITLE_JSON,
+                        },
+                      },
+                      {
+                        type: "agent_end",
+                        isTerminal: true,
+                      },
+                    ]);
+                  } else if (script === "confirm_then_text" || script === "select_then_text") {
                     yield* offer({ type: "agent_end", isTerminal: true });
                   }
                 } else if (rpcCommand.type === "prompt") {
@@ -187,6 +240,20 @@ function makeFakeOmpSpawner(sessionFile: string, script: PromptScript = "text_de
                         isTerminal: true,
                       },
                     ]);
+                  } else if (script === "thinking_content") {
+                    yield* offerAssistantEnd([
+                      {
+                        type: "message_end",
+                        message: {
+                          role: "assistant",
+                          content: [{ type: "thinking", thinking: TITLE_JSON }],
+                        },
+                      },
+                      {
+                        type: "agent_end",
+                        isTerminal: true,
+                      },
+                    ]);
                   } else if (script === "message_end") {
                     yield* offerAssistantEnd([
                       {
@@ -209,6 +276,30 @@ function makeFakeOmpSpawner(sessionFile: string, script: PromptScript = "text_de
                       title: "Allow workspace?",
                       message: "Run in /proj",
                     });
+                  } else if (script === "select_then_text") {
+                    yield* offer({
+                      type: "extension_ui_request",
+                      id: "ui-select-1",
+                      method: "select",
+                      title: "Pick provider",
+                      options: ["openai-codex", "openai"],
+                    });
+                  } else if (script === "provider_error") {
+                    yield* offerAssistantEnd([
+                      {
+                        type: "message_end",
+                        message: {
+                          role: "assistant",
+                          stopReason: "error",
+                          errorMessage: PROVIDER_ERROR_MESSAGE,
+                          content: [],
+                        },
+                      },
+                      {
+                        type: "agent_end",
+                        isTerminal: true,
+                      },
+                    ]);
                   } else {
                     yield* offer({ type: "agent_end", isTerminal: true });
                   }
@@ -268,6 +359,25 @@ describe("OmpTextGeneration", () => {
     }),
   );
 
+  it.effect("generateThreadTitle resolves a bare model id against the omp catalog", () =>
+    Effect.gen(function* () {
+      const fake = makeFakeOmpSpawner("/tmp/omp-textgen.jsonl");
+      const textGeneration = yield* makeTextGeneration(fake);
+
+      const result = yield* textGeneration.generateThreadTitle({
+        cwd: "/proj",
+        message: "Please wire omp text generation so thread titles work again",
+        modelSelection: BARE_LUNA_MODEL,
+      });
+
+      NodeAssert.equal(result.title, "Wire Omp Thread Titles");
+      NodeAssert.deepEqual(fake.setModels[0], {
+        provider: "openai-codex",
+        modelId: "gpt-5.6-luna",
+      });
+    }),
+  );
+
   it.effect("generateThreadTitle falls back to thinking_delta JSON when text_delta is absent", () =>
     Effect.gen(function* () {
       const fake = makeFakeOmpSpawner("/tmp/omp-textgen.jsonl", "thinking_delta");
@@ -283,9 +393,39 @@ describe("OmpTextGeneration", () => {
     }),
   );
 
+  it.effect("generateThreadTitle reads thinking blocks on the completed assistant message", () =>
+    Effect.gen(function* () {
+      const fake = makeFakeOmpSpawner("/tmp/omp-textgen.jsonl", "thinking_content");
+      const textGeneration = yield* makeTextGeneration(fake);
+
+      const result = yield* textGeneration.generateThreadTitle({
+        cwd: "/proj",
+        message: "Please wire omp text generation so thread titles work again",
+        modelSelection: TITLE_MODEL,
+      });
+
+      NodeAssert.equal(result.title, "Wire Omp Thread Titles");
+    }),
+  );
+
   it.effect("generateThreadTitle reads completed assistant message content without deltas", () =>
     Effect.gen(function* () {
       const fake = makeFakeOmpSpawner("/tmp/omp-textgen.jsonl", "message_end");
+      const textGeneration = yield* makeTextGeneration(fake);
+
+      const result = yield* textGeneration.generateThreadTitle({
+        cwd: "/proj",
+        message: "Please wire omp text generation so thread titles work again",
+        modelSelection: TITLE_MODEL,
+      });
+
+      NodeAssert.equal(result.title, "Wire Omp Thread Titles");
+    }),
+  );
+
+  it.effect("generateThreadTitle uses get_last_assistant_text when the stream has no content", () =>
+    Effect.gen(function* () {
+      const fake = makeFakeOmpSpawner("/tmp/omp-textgen.jsonl", "last_assistant_text");
       const textGeneration = yield* makeTextGeneration(fake);
 
       const result = yield* textGeneration.generateThreadTitle({
@@ -317,6 +457,47 @@ describe("OmpTextGeneration", () => {
         confirmed: true,
       });
     }),
+  );
+
+  it.effect("generateThreadTitle answers select UI with the first option then collects text", () =>
+    Effect.gen(function* () {
+      const fake = makeFakeOmpSpawner("/tmp/omp-textgen.jsonl", "select_then_text");
+      const textGeneration = yield* makeTextGeneration(fake);
+
+      const result = yield* textGeneration.generateThreadTitle({
+        cwd: "/proj",
+        message: "Please wire omp text generation so thread titles work again",
+        modelSelection: TITLE_MODEL,
+      });
+
+      NodeAssert.equal(result.title, "Wire Omp Thread Titles");
+      NodeAssert.deepEqual(fake.uiResponses[0], {
+        type: "extension_ui_response",
+        id: "ui-select-1",
+        value: "openai-codex",
+      });
+    }),
+  );
+
+  it.effect(
+    "generateThreadTitle surfaces an assistant provider error instead of empty output",
+    () =>
+      Effect.gen(function* () {
+        const fake = makeFakeOmpSpawner("/tmp/omp-textgen.jsonl", "provider_error");
+        const textGeneration = yield* makeTextGeneration(fake);
+
+        const error = yield* textGeneration
+          .generateThreadTitle({
+            cwd: "/proj",
+            message: "Please wire omp text generation so thread titles work again",
+            modelSelection: TITLE_MODEL,
+          })
+          .pipe(Effect.flip);
+
+        NodeAssert.equal(isTextGenerationError(error), true);
+        NodeAssert.match(error.detail, /401/);
+        NodeAssert.doesNotMatch(error.detail, /empty output/);
+      }),
   );
 
   it.effect("generateThreadTitle still fails when omp emits no assistant text", () =>

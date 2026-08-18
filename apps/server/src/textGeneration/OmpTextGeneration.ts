@@ -1,13 +1,14 @@
 /**
- * OmpTextGeneration — short structured JSON helpers via `omp --mode rpc`.
+ * OmpTextGeneration — short structured JSON helpers via `omp --mode rpc-ui`.
  *
  * Spawns an ephemeral RPC session per call, prompts for JSON, collects
  * assistant text until terminal `agent_end` (or local-only prompt completion),
  * then decodes against the shared prompt schemas. Text is taken from streamed
- * `text_delta` first, then the completed assistant message, then thinking
- * deltas — omp often finishes a short JSON helper without streaming
- * `text_delta`. Confirm UI requests are auto-accepted so a fresh session's
- * workspace/tool prompt cannot abort the helper with empty output.
+ * `text_delta` first, then the completed assistant message, then
+ * `get_last_assistant_text`, then thinking. Bare model ids (the default
+ * `gpt-5.6-luna`) are resolved against `get_available_models` so the helper
+ * does not silently keep omp's default model. Confirm/select UI is answered;
+ * assistant `stopReason: "error"` is surfaced instead of "empty output".
  *
  * @module textGeneration/OmpTextGeneration
  */
@@ -56,6 +57,11 @@ function parseOmpModelSlug(slug: string): { provider: string; modelId: string } 
   return { provider: slug.slice(0, slash), modelId: slug.slice(slash + 1) };
 }
 
+interface OmpCatalogModel {
+  readonly provider: string;
+  readonly id: string;
+}
+
 function textFromContent(content: unknown): string {
   if (typeof content === "string") {
     return content;
@@ -73,22 +79,76 @@ function textFromContent(content: unknown): string {
   return out;
 }
 
-function assistantTextFromMessage(message: unknown): string {
-  if (!isRecord(message) || message.role !== "assistant") {
-    return "";
-  }
-  return textFromContent(message.content);
-}
-
-function assistantTextFromAgentEnd(frame: Record<string, unknown>): string {
-  if (!Array.isArray(frame.messages)) {
+function thinkingFromContent(content: unknown): string {
+  if (!Array.isArray(content)) {
     return "";
   }
   let out = "";
-  for (const message of frame.messages) {
-    out += assistantTextFromMessage(message);
+  for (const block of content) {
+    if (!isRecord(block) || block.type !== "thinking" || typeof block.thinking !== "string") {
+      continue;
+    }
+    out += block.thinking;
   }
   return out;
+}
+
+function assistantErrorFromMessage(message: unknown): string | undefined {
+  if (!isRecord(message) || message.role !== "assistant" || message.stopReason !== "error") {
+    return undefined;
+  }
+  if (typeof message.errorMessage === "string" && message.errorMessage.trim().length > 0) {
+    return message.errorMessage.trim();
+  }
+  return "omp assistant turn failed.";
+}
+
+function modelsFromAvailableModelsResponse(response: unknown): ReadonlyArray<OmpCatalogModel> {
+  if (!isRecord(response) || !isRecord(response.data) || !Array.isArray(response.data.models)) {
+    return [];
+  }
+  const models: OmpCatalogModel[] = [];
+  for (const entry of response.data.models) {
+    if (!isRecord(entry) || typeof entry.provider !== "string" || typeof entry.id !== "string") {
+      continue;
+    }
+    const provider = entry.provider.trim();
+    const id = entry.id.trim();
+    if (provider.length === 0 || id.length === 0) {
+      continue;
+    }
+    models.push({ provider, id });
+  }
+  return models;
+}
+
+function resolveOmpModel(
+  slug: string,
+  models: ReadonlyArray<OmpCatalogModel>,
+): { provider: string; modelId: string } | null {
+  const parsed = parseOmpModelSlug(slug);
+  if (parsed) {
+    return parsed;
+  }
+  const matches = models.filter((model) => model.id === slug || model.id.endsWith(`/${slug}`));
+  if (matches.length === 0) {
+    return null;
+  }
+  const preferred =
+    matches.find((model) => model.provider === "openai-codex") ??
+    matches.find((model) => model.provider === "openai") ??
+    matches[0];
+  if (preferred === undefined) {
+    return null;
+  }
+  return { provider: preferred.provider, modelId: preferred.id };
+}
+
+function textFromLastAssistantResponse(response: unknown): string {
+  if (!isRecord(response) || !isRecord(response.data) || typeof response.data.text !== "string") {
+    return "";
+  }
+  return response.data.text.trim();
 }
 
 function thinkingLevelFromOptions(options: ModelSelection["options"]): string | undefined {
@@ -110,17 +170,36 @@ function thinkingLevelFromOptions(options: ModelSelection["options"]): string | 
   return undefined;
 }
 
+function firstSelectOption(options: unknown): string | undefined {
+  if (!Array.isArray(options)) {
+    return undefined;
+  }
+  for (const option of options) {
+    if (typeof option === "string" && option.length > 0) {
+      return option;
+    }
+  }
+  return undefined;
+}
+
 function uiResponseForRequest(frame: Record<string, unknown>): Record<string, unknown> | null {
   if (typeof frame.id !== "string" || frame.id.length === 0) {
     return null;
   }
-  // A fresh rpc-ui session often asks to confirm the workspace or a tool
-  // before it will emit assistant text. Cancelling that request is what
-  // produced empty output on every new thread title.
   if (frame.method === "confirm") {
     return { type: "extension_ui_response", id: frame.id, confirmed: true };
   }
-  return { type: "extension_ui_response", id: frame.id, cancelled: true };
+  if (frame.method === "select") {
+    const value = firstSelectOption(frame.options);
+    if (value !== undefined) {
+      return { type: "extension_ui_response", id: frame.id, value };
+    }
+    return { type: "extension_ui_response", id: frame.id, cancelled: true };
+  }
+  if (frame.method === "input" || frame.method === "editor") {
+    return { type: "extension_ui_response", id: frame.id, cancelled: true };
+  }
+  return null;
 }
 
 function mapOmpError(operation: string, cause: unknown, detail: string): TextGenerationError {
@@ -196,7 +275,28 @@ export const makeOmpTextGeneration = Effect.fn("makeOmpTextGeneration")(function
       const textDeltaRef = yield* Ref.make("");
       const messageTextRef = yield* Ref.make("");
       const thinkingRef = yield* Ref.make("");
+      const errorRef = yield* Ref.make<string | undefined>(undefined);
       const done = yield* Deferred.make<void, TextGenerationError>();
+
+      const applyAssistantMessage = (message: unknown) => {
+        if (!isRecord(message) || message.role !== "assistant") {
+          return Effect.void;
+        }
+        const text = textFromContent(message.content);
+        const thinking = thinkingFromContent(message.content);
+        const error = assistantErrorFromMessage(message);
+        return Effect.gen(function* () {
+          if (text.length > 0) {
+            yield* Ref.set(messageTextRef, text);
+          }
+          if (thinking.length > 0) {
+            yield* Ref.set(thinkingRef, thinking);
+          }
+          if (error !== undefined) {
+            yield* Ref.set(errorRef, error);
+          }
+        });
+      };
 
       const drainFiber = yield* runtime.streamFrames(sessionKey).pipe(
         Stream.runForEach((frame) => {
@@ -222,9 +322,7 @@ export const makeOmpTextGeneration = Effect.fn("makeOmpTextGeneration")(function
           }
           if (frame.type === "message_update") {
             const event = frame.assistantMessageEvent;
-            const messageText = assistantTextFromMessage(frame.message);
-            const captureMessage =
-              messageText.length > 0 ? Ref.set(messageTextRef, messageText) : Effect.void;
+            const captureMessage = applyAssistantMessage(frame.message);
             if (
               isRecord(event) &&
               event.type === "text_delta" &&
@@ -248,17 +346,14 @@ export const makeOmpTextGeneration = Effect.fn("makeOmpTextGeneration")(function
             return captureMessage;
           }
           if (frame.type === "message_end") {
-            const messageText = assistantTextFromMessage(frame.message);
-            if (messageText.length === 0) {
-              return Effect.void;
-            }
-            return Ref.set(messageTextRef, messageText);
+            return applyAssistantMessage(frame.message);
           }
           if (frame.type === "agent_end" && frame.isTerminal !== false) {
-            const messageText = assistantTextFromAgentEnd(frame);
-            return (
-              messageText.length > 0 ? Ref.set(messageTextRef, messageText) : Effect.void
-            ).pipe(Effect.andThen(Deferred.succeed(done, undefined)), Effect.ignore);
+            const messages = Array.isArray(frame.messages) ? frame.messages : [];
+            return Effect.forEach(messages, applyAssistantMessage, { discard: true }).pipe(
+              Effect.andThen(Deferred.succeed(done, undefined)),
+              Effect.ignore,
+            );
           }
           if (frame.type === "prompt_result" && frame.agentInvoked === false) {
             return Deferred.succeed(done, undefined).pipe(Effect.ignore);
@@ -274,7 +369,13 @@ export const makeOmpTextGeneration = Effect.fn("makeOmpTextGeneration")(function
         Effect.forkChild,
       );
 
-      const parsedModel = parseOmpModelSlug(modelSelection.model);
+      const catalogResponse = yield* runtime
+        .send(sessionKey, { type: "get_available_models" })
+        .pipe(Effect.catch(() => Effect.succeed({})));
+      const parsedModel = resolveOmpModel(
+        modelSelection.model,
+        modelsFromAvailableModelsResponse(catalogResponse),
+      );
       if (parsedModel) {
         yield* runtime
           .send(sessionKey, {
@@ -331,14 +432,22 @@ export const makeOmpTextGeneration = Effect.fn("makeOmpTextGeneration")(function
         Effect.ensuring(Fiber.interrupt(drainFiber)),
       );
 
+      const lastAssistantResponse = yield* runtime
+        .send(sessionKey, { type: "get_last_assistant_text" })
+        .pipe(Effect.catch(() => Effect.succeed({})));
       const textDelta = (yield* Ref.get(textDeltaRef)).trim();
       const messageText = (yield* Ref.get(messageTextRef)).trim();
+      const lastAssistantText = textFromLastAssistantResponse(lastAssistantResponse);
       const thinking = (yield* Ref.get(thinkingRef)).trim();
-      const trimmed = textDelta || messageText || thinking;
+      const trimmed = textDelta || messageText || lastAssistantText || thinking;
       if (!trimmed) {
+        const assistantError = yield* Ref.get(errorRef);
         return yield* new TextGenerationError({
           operation,
-          detail: "omp returned empty output for text generation.",
+          detail:
+            assistantError !== undefined
+              ? assistantError
+              : "omp returned empty output for text generation.",
         });
       }
 
