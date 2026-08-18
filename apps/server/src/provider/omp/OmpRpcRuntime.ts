@@ -171,6 +171,7 @@ export interface OmpEnsureSessionInput {
   readonly sessionKey: string;
   readonly cwd: string;
   readonly resumeCursor: string | null;
+  readonly extraEnv?: Record<string, string>;
 }
 
 export interface OmpSessionHandle {
@@ -233,9 +234,13 @@ export class OmpRpcRuntime {
 
   /**
    * Env overrides for `ChildProcess.make` with `extendEnv: true`: settings
-   * vars first, then PATH when path-prefix dirs are configured (PATH wins).
+   * vars first, then PATH when path-prefix dirs are configured (PATH wins),
+   * then session `extraEnv` last (`HOME` / `PI_CODING_AGENT_DIR` win).
    */
-  #childEnvOverrides(platform: NodeJS.Platform): Record<string, string> | undefined {
+  #childEnvOverrides(
+    platform: NodeJS.Platform,
+    extraEnv?: Record<string, string>,
+  ): Record<string, string> | undefined {
     const preferredPath =
       this.#pathPrefixDirs.length > 0
         ? this.#pathPrefixDirs.join(platform === "win32" ? ";" : ":")
@@ -250,6 +255,11 @@ export class OmpRpcRuntime {
     }
     if (mergedPath !== undefined) {
       env.PATH = mergedPath;
+    }
+    if (extraEnv !== undefined) {
+      for (const [key, value] of Object.entries(extraEnv)) {
+        env[key] = value;
+      }
     }
     return Object.keys(env).length > 0 ? env : undefined;
   }
@@ -283,7 +293,7 @@ export class OmpRpcRuntime {
       }
 
       const platform = yield* HostProcessPlatform;
-      const env = this.#childEnvOverrides(platform);
+      const env = this.#childEnvOverrides(platform, input.extraEnv);
       const scope = yield* Scope.make();
       const child = yield* this.#processSpawner
         .spawn(
