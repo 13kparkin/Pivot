@@ -2,8 +2,12 @@
  * OmpTextGeneration — short structured JSON helpers via `omp --mode rpc`.
  *
  * Spawns an ephemeral RPC session per call, prompts for JSON, collects
- * `message_update` text_delta frames until terminal `agent_end` (or local-only
- * prompt completion), then decodes against the shared prompt schemas.
+ * assistant text until terminal `agent_end` (or local-only prompt completion),
+ * then decodes against the shared prompt schemas. Text is taken from streamed
+ * `text_delta` first, then the completed assistant message, then thinking
+ * deltas — omp often finishes a short JSON helper without streaming
+ * `text_delta`. Confirm UI requests are auto-accepted so a fresh session's
+ * workspace/tool prompt cannot abort the helper with empty output.
  *
  * @module textGeneration/OmpTextGeneration
  */
@@ -38,6 +42,7 @@ import {
 const OMP_TIMEOUT_MS = 180_000;
 
 const isTextGenerationError = Schema.is(TextGenerationError);
+const isOmpSpawnError = Schema.is(OmpSpawnError);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
@@ -51,11 +56,78 @@ function parseOmpModelSlug(slug: string): { provider: string; modelId: string } 
   return { provider: slug.slice(0, slash), modelId: slug.slice(slash + 1) };
 }
 
+function textFromContent(content: unknown): string {
+  if (typeof content === "string") {
+    return content;
+  }
+  if (!Array.isArray(content)) {
+    return "";
+  }
+  let out = "";
+  for (const block of content) {
+    if (!isRecord(block) || typeof block.text !== "string") {
+      continue;
+    }
+    out += block.text;
+  }
+  return out;
+}
+
+function assistantTextFromMessage(message: unknown): string {
+  if (!isRecord(message) || message.role !== "assistant") {
+    return "";
+  }
+  return textFromContent(message.content);
+}
+
+function assistantTextFromAgentEnd(frame: Record<string, unknown>): string {
+  if (!Array.isArray(frame.messages)) {
+    return "";
+  }
+  let out = "";
+  for (const message of frame.messages) {
+    out += assistantTextFromMessage(message);
+  }
+  return out;
+}
+
+function thinkingLevelFromOptions(options: ModelSelection["options"]): string | undefined {
+  if (options === undefined) {
+    return undefined;
+  }
+  for (const option of options) {
+    if (
+      (option.id === "effort" ||
+        option.id === "thinking" ||
+        option.id === "reasoningEffort" ||
+        option.id === "thinkingLevel") &&
+      typeof option.value === "string" &&
+      option.value.length > 0
+    ) {
+      return option.value;
+    }
+  }
+  return undefined;
+}
+
+function uiResponseForRequest(frame: Record<string, unknown>): Record<string, unknown> | null {
+  if (typeof frame.id !== "string" || frame.id.length === 0) {
+    return null;
+  }
+  // A fresh rpc-ui session often asks to confirm the workspace or a tool
+  // before it will emit assistant text. Cancelling that request is what
+  // produced empty output on every new thread title.
+  if (frame.method === "confirm") {
+    return { type: "extension_ui_response", id: frame.id, confirmed: true };
+  }
+  return { type: "extension_ui_response", id: frame.id, cancelled: true };
+}
+
 function mapOmpError(operation: string, cause: unknown, detail: string): TextGenerationError {
   if (isTextGenerationError(cause)) {
     return cause;
   }
-  if (Schema.is(OmpSpawnError)(cause)) {
+  if (isOmpSpawnError(cause)) {
     return new TextGenerationError({
       operation,
       detail: cause.detail.length > 0 ? cause.detail : detail,
@@ -121,7 +193,9 @@ export const makeOmpTextGeneration = Effect.fn("makeOmpTextGeneration")(function
           ),
         );
 
-      const outputRef = yield* Ref.make("");
+      const textDeltaRef = yield* Ref.make("");
+      const messageTextRef = yield* Ref.make("");
+      const thinkingRef = yield* Ref.make("");
       const done = yield* Deferred.make<void, TextGenerationError>();
 
       const drainFiber = yield* runtime.streamFrames(sessionKey).pipe(
@@ -129,29 +203,62 @@ export const makeOmpTextGeneration = Effect.fn("makeOmpTextGeneration")(function
           if (!isRecord(frame) || typeof frame.type !== "string") {
             return Effect.void;
           }
-          if (frame.type === "extension_ui_request" && typeof frame.id === "string") {
+          if (frame.type === "extension_ui_request") {
+            const response = uiResponseForRequest(frame);
+            if (response === null) {
+              return Effect.void;
+            }
+            return runtime.write(sessionKey, response).pipe(Effect.ignore);
+          }
+          if (frame.type === "host_uri_request" && typeof frame.id === "string") {
             return runtime
               .write(sessionKey, {
-                type: "extension_ui_response",
+                type: "host_uri_result",
                 id: frame.id,
-                cancelled: true,
+                isError: true,
+                error: "text generation does not accept host URI requests",
               })
               .pipe(Effect.ignore);
           }
           if (frame.type === "message_update") {
             const event = frame.assistantMessageEvent;
+            const messageText = assistantTextFromMessage(frame.message);
+            const captureMessage =
+              messageText.length > 0 ? Ref.set(messageTextRef, messageText) : Effect.void;
             if (
               isRecord(event) &&
               event.type === "text_delta" &&
               typeof event.delta === "string" &&
               event.delta.length > 0
             ) {
-              return Ref.update(outputRef, (current) => current + event.delta);
+              return Ref.update(textDeltaRef, (current) => current + event.delta).pipe(
+                Effect.andThen(captureMessage),
+              );
             }
-            return Effect.void;
+            if (
+              isRecord(event) &&
+              event.type === "thinking_delta" &&
+              typeof event.delta === "string" &&
+              event.delta.length > 0
+            ) {
+              return Ref.update(thinkingRef, (current) => current + event.delta).pipe(
+                Effect.andThen(captureMessage),
+              );
+            }
+            return captureMessage;
+          }
+          if (frame.type === "message_end") {
+            const messageText = assistantTextFromMessage(frame.message);
+            if (messageText.length === 0) {
+              return Effect.void;
+            }
+            return Ref.set(messageTextRef, messageText);
           }
           if (frame.type === "agent_end" && frame.isTerminal !== false) {
-            return Deferred.succeed(done, undefined).pipe(Effect.ignore);
+            const messageText = assistantTextFromAgentEnd(frame);
+            return (
+              messageText.length > 0 ? Ref.set(messageTextRef, messageText) : Effect.void
+            ).pipe(Effect.andThen(Deferred.succeed(done, undefined)), Effect.ignore);
           }
           if (frame.type === "prompt_result" && frame.agentInvoked === false) {
             return Deferred.succeed(done, undefined).pipe(Effect.ignore);
@@ -180,6 +287,16 @@ export const makeOmpTextGeneration = Effect.fn("makeOmpTextGeneration")(function
               mapOmpError(operation, cause, "Failed to set omp model for text generation."),
             ),
           );
+      }
+
+      const thinkingLevel = thinkingLevelFromOptions(modelSelection.options);
+      if (thinkingLevel !== undefined) {
+        yield* runtime
+          .send(sessionKey, {
+            type: "set_thinking_level",
+            level: thinkingLevel,
+          })
+          .pipe(Effect.ignore);
       }
 
       const response = yield* runtime
@@ -214,7 +331,10 @@ export const makeOmpTextGeneration = Effect.fn("makeOmpTextGeneration")(function
         Effect.ensuring(Fiber.interrupt(drainFiber)),
       );
 
-      const trimmed = (yield* Ref.get(outputRef)).trim();
+      const textDelta = (yield* Ref.get(textDeltaRef)).trim();
+      const messageText = (yield* Ref.get(messageTextRef)).trim();
+      const thinking = (yield* Ref.get(thinkingRef)).trim();
+      const trimmed = textDelta || messageText || thinking;
       if (!trimmed) {
         return yield* new TextGenerationError({
           operation,
