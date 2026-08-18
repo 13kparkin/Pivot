@@ -68,6 +68,23 @@ describe("ClientSettings environment identification", () => {
   });
 });
 
+describe("ClientSettings timeline visibility", () => {
+  it("defaults tools, thinking, and plans on", () => {
+    const settings = decodeClientSettings({});
+    expect(settings.workLogShowTools).toBe(true);
+    expect(settings.workLogShowThinking).toBe(true);
+    expect(settings.workLogShowPlans).toBe(true);
+  });
+
+  it("accepts timeline visibility patches", () => {
+    expect(decodeClientSettingsPatch({ workLogShowTools: false }).workLogShowTools).toBe(false);
+    expect(decodeClientSettingsPatch({ workLogShowThinking: false }).workLogShowThinking).toBe(
+      false,
+    );
+    expect(decodeClientSettingsPatch({ workLogShowPlans: false }).workLogShowPlans).toBe(false);
+  });
+});
+
 describe("ClientSettings sidebar", () => {
   it("defaults to the current sidebar with a three-day auto-settle threshold", () => {
     const settings = decodeClientSettings({});

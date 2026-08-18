@@ -319,7 +319,13 @@ function isAgentInternalActivity(activity: OrchestrationThreadActivity): boolean
 
 function deriveWorkLogEntries(
   activities: ReadonlyArray<OrchestrationThreadActivity>,
+  options?: {
+    readonly showTools?: boolean;
+    readonly showThinking?: boolean;
+  },
 ): DerivedWorkLogEntry[] {
+  const showTools = options?.showTools ?? true;
+  const showThinking = options?.showThinking ?? true;
   const ordered = Arr.sort(activities, activityOrder);
   const entries: DerivedWorkLogEntry[] = [];
   for (const activity of ordered) {
@@ -332,7 +338,12 @@ function deriveWorkLogEntries(
     if (activity.summary === "Checkpoint captured") continue;
     if (isPlanBoundaryToolActivity(activity)) continue;
     if (isAgentInternalActivity(activity)) continue;
-    entries.push(toDerivedWorkLogEntry(activity));
+    const entry = toDerivedWorkLogEntry(activity);
+    // Category visibility: tool rows and thinking rows (narration, task
+    // progress) hide independently; everything else always shows.
+    if (entry.tone === "tool" && !showTools) continue;
+    if (entry.tone === "thinking" && !showThinking) continue;
+    entries.push(entry);
   }
   return collapseDerivedWorkLogEntries(entries);
 }
@@ -387,7 +398,7 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
     ...(taskId ? { taskId } : {}),
     label: taskLabel || activity.summary,
     tone:
-      activity.kind === "task.progress"
+      activity.kind === "task.progress" || (payload !== null && payload.itemType === "reasoning")
         ? "thinking"
         : activity.tone === "approval"
           ? "info"
@@ -1596,12 +1607,17 @@ export function buildThreadFeed(
   thread: OrchestrationThread,
   options?: {
     readonly loadedMessages?: ReadonlyArray<OrchestrationThread["messages"][number]>;
+    readonly showTools?: boolean;
+    readonly showThinking?: boolean;
   },
 ): ThreadFeedEntry[] {
   const loadedMessages = options?.loadedMessages ?? thread.messages;
   const oldestLoadedMessageCreatedAt =
     options?.loadedMessages !== undefined ? (loadedMessages[0]?.createdAt ?? null) : null;
-  const workLogEntries = deriveWorkLogEntries(thread.activities);
+  const workLogEntries = deriveWorkLogEntries(thread.activities, {
+    showTools: options?.showTools,
+    showThinking: options?.showThinking,
+  });
   const entries = Arr.sortWith(
     [
       ...loadedMessages.map<RawThreadFeedEntry>((message) => ({

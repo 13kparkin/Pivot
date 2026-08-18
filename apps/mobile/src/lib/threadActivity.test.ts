@@ -203,6 +203,108 @@ describe("buildThreadFeed", () => {
     ]);
   });
 
+  it("renders reasoning rows with the thinking tone and full detail", () => {
+    const thread = makeThread({
+      id: ThreadId.make("thread-reasoning"),
+      projectId: ProjectId.make("project-1"),
+      title: "Reasoning rows",
+      latestTurn: {
+        turnId: TurnId.make("turn-1"),
+        state: "completed",
+        requestedAt: "2026-04-01T00:00:00.000Z",
+        startedAt: "2026-04-01T00:00:01.000Z",
+        completedAt: "2026-04-01T00:00:03.000Z",
+        assistantMessageId: null,
+      },
+      activities: [
+        makeActivity({
+          id: EventId.make("reasoning-completed"),
+          kind: "tool.completed",
+          tone: "info",
+          summary: "Thinking",
+          createdAt: "2026-04-01T00:00:02.000Z",
+          turnId: TurnId.make("turn-1"),
+          payload: {
+            itemType: "reasoning",
+            detail: "Checking the adapter path",
+          },
+        }),
+      ],
+    });
+
+    const feed = buildThreadFeed(thread);
+    const group = feed[0];
+    expect(group).toMatchObject({ type: "activity-group" });
+    if (!group || group.type !== "activity-group") {
+      return;
+    }
+
+    expect(group.activities).toHaveLength(1);
+    const row = group.activities[0];
+    expect(row).toMatchObject({
+      id: "reasoning-completed",
+      turnId: "turn-1",
+      summary: "Thinking",
+      detail: "Checking the adapter path",
+      icon: "agent",
+      status: "neutral",
+      toolLike: true,
+      canExpand: true,
+    });
+    expect(row.getFullDetail()).toContain("Checking the adapter path");
+  });
+
+  it("hides tool and thinking rows independently by category", () => {
+    const thread = makeThread({
+      id: ThreadId.make("thread-categories"),
+      projectId: ProjectId.make("project-1"),
+      title: "Category visibility",
+      latestTurn: {
+        turnId: TurnId.make("turn-1"),
+        state: "completed",
+        requestedAt: "2026-04-01T00:00:00.000Z",
+        startedAt: "2026-04-01T00:00:01.000Z",
+        completedAt: "2026-04-01T00:00:03.000Z",
+        assistantMessageId: null,
+      },
+      activities: [
+        makeActivity({
+          id: EventId.make("tool-complete"),
+          kind: "tool.completed",
+          tone: "tool",
+          summary: "Ran tests",
+          createdAt: "2026-04-01T00:00:01.000Z",
+          turnId: TurnId.make("turn-1"),
+          payload: {
+            itemType: "command_execution",
+            detail: "bun test",
+          },
+        }),
+        makeActivity({
+          id: EventId.make("reasoning-complete"),
+          kind: "tool.completed",
+          tone: "info",
+          summary: "Thinking",
+          createdAt: "2026-04-01T00:00:02.000Z",
+          turnId: TurnId.make("turn-1"),
+          payload: {
+            itemType: "reasoning",
+            detail: "Inspecting the adapter",
+          },
+        }),
+      ],
+    });
+
+    const ids = (feed: ThreadFeedEntry[]) =>
+      feed.flatMap((entry) =>
+        entry.type === "activity-group" ? entry.activities.map((row) => row.id) : [],
+      );
+
+    expect(ids(buildThreadFeed(thread))).toEqual(["tool-complete", "reasoning-complete"]);
+    expect(ids(buildThreadFeed(thread, { showTools: false }))).toEqual(["reasoning-complete"]);
+    expect(ids(buildThreadFeed(thread, { showThinking: false }))).toEqual(["tool-complete"]);
+  });
+
   it("collapses matching tool lifecycle rows like desktop", () => {
     const thread = makeThread({
       id: ThreadId.make("thread-2"),

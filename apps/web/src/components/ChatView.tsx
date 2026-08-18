@@ -2208,7 +2208,14 @@ function ChatViewContent(props: ChatViewProps) {
   const removeFollowUpMessage = useFollowUpQueueStore((store) => store.remove);
   const dequeueFollowUpMessage = useFollowUpQueueStore((store) => store.dequeue);
   const threadActivities = activeThread?.activities ?? EMPTY_ACTIVITIES;
-  const workLogEntries = useMemo(() => deriveWorkLogEntries(threadActivities), [threadActivities]);
+  const workLogEntries = useMemo(
+    () =>
+      deriveWorkLogEntries(threadActivities, {
+        showTools: settings.workLogShowTools,
+        showThinking: settings.workLogShowThinking,
+      }),
+    [settings.workLogShowThinking, settings.workLogShowTools, threadActivities],
+  );
   const turnPlans = useMemo(() => deriveTurnPlans(threadActivities), [threadActivities]);
   // Native subagent fold: memoized by activity-list identity, shared by the
   // Agents surface, live strip, and workflow cards. v2Projection is null
@@ -2561,11 +2568,17 @@ function ChatViewContent(props: ChatViewProps) {
     () =>
       deriveTimelineEntries(
         timelineMessages,
-        activeThread?.proposedPlans ?? [],
+        settings.workLogShowPlans ? (activeThread?.proposedPlans ?? []) : [],
         workLogEntries,
-        turnPlans,
+        settings.workLogShowPlans ? turnPlans : [],
       ),
-    [activeThread?.proposedPlans, timelineMessages, turnPlans, workLogEntries],
+    [
+      activeThread?.proposedPlans,
+      settings.workLogShowPlans,
+      timelineMessages,
+      turnPlans,
+      workLogEntries,
+    ],
   );
   const [dockedDraftHeroThreadKey, setDockedDraftHeroThreadKey] = useState<string | null>(null);
   const draftHeroDockRequested =
