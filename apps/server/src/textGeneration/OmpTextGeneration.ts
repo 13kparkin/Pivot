@@ -1,14 +1,9 @@
 /**
- * OmpTextGeneration — short structured JSON helpers via `omp --mode rpc-ui`.
+ * OmpTextGeneration — short structured JSON helpers via `omp --mode rpc`.
  *
  * Spawns an ephemeral RPC session per call, prompts for JSON, collects
- * assistant text until terminal `agent_end` (or local-only prompt completion),
- * then decodes against the shared prompt schemas. Text is taken from streamed
- * `text_delta` first, then the completed assistant message, then
- * `get_last_assistant_text`, then thinking. Bare model ids (the default
- * `gpt-5.6-luna`) are resolved against `get_available_models` so the helper
- * does not silently keep omp's default model. Confirm/select UI is answered;
- * assistant `stopReason: "error"` is surfaced instead of "empty output".
+ * `message_update` text_delta frames until terminal `agent_end` (or local-only
+ * prompt completion), then decodes against the shared prompt schemas.
  *
  * @module textGeneration/OmpTextGeneration
  */
@@ -43,7 +38,6 @@ import {
 const OMP_TIMEOUT_MS = 180_000;
 
 const isTextGenerationError = Schema.is(TextGenerationError);
-const isOmpSpawnError = Schema.is(OmpSpawnError);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
@@ -57,156 +51,11 @@ function parseOmpModelSlug(slug: string): { provider: string; modelId: string } 
   return { provider: slug.slice(0, slash), modelId: slug.slice(slash + 1) };
 }
 
-interface OmpCatalogModel {
-  readonly provider: string;
-  readonly id: string;
-}
-
-function textFromContent(content: unknown): string {
-  if (typeof content === "string") {
-    return content;
-  }
-  if (!Array.isArray(content)) {
-    return "";
-  }
-  let out = "";
-  for (const block of content) {
-    if (!isRecord(block) || typeof block.text !== "string") {
-      continue;
-    }
-    out += block.text;
-  }
-  return out;
-}
-
-function thinkingFromContent(content: unknown): string {
-  if (!Array.isArray(content)) {
-    return "";
-  }
-  let out = "";
-  for (const block of content) {
-    if (!isRecord(block) || block.type !== "thinking" || typeof block.thinking !== "string") {
-      continue;
-    }
-    out += block.thinking;
-  }
-  return out;
-}
-
-function assistantErrorFromMessage(message: unknown): string | undefined {
-  if (!isRecord(message) || message.role !== "assistant" || message.stopReason !== "error") {
-    return undefined;
-  }
-  if (typeof message.errorMessage === "string" && message.errorMessage.trim().length > 0) {
-    return message.errorMessage.trim();
-  }
-  return "omp assistant turn failed.";
-}
-
-function modelsFromAvailableModelsResponse(response: unknown): ReadonlyArray<OmpCatalogModel> {
-  if (!isRecord(response) || !isRecord(response.data) || !Array.isArray(response.data.models)) {
-    return [];
-  }
-  const models: OmpCatalogModel[] = [];
-  for (const entry of response.data.models) {
-    if (!isRecord(entry) || typeof entry.provider !== "string" || typeof entry.id !== "string") {
-      continue;
-    }
-    const provider = entry.provider.trim();
-    const id = entry.id.trim();
-    if (provider.length === 0 || id.length === 0) {
-      continue;
-    }
-    models.push({ provider, id });
-  }
-  return models;
-}
-
-function resolveOmpModel(
-  slug: string,
-  models: ReadonlyArray<OmpCatalogModel>,
-): { provider: string; modelId: string } | null {
-  const parsed = parseOmpModelSlug(slug);
-  if (parsed) {
-    return parsed;
-  }
-  const matches = models.filter((model) => model.id === slug || model.id.endsWith(`/${slug}`));
-  if (matches.length === 0) {
-    return null;
-  }
-  const preferred =
-    matches.find((model) => model.provider === "openai-codex") ??
-    matches.find((model) => model.provider === "openai") ??
-    matches[0];
-  if (preferred === undefined) {
-    return null;
-  }
-  return { provider: preferred.provider, modelId: preferred.id };
-}
-
-function textFromLastAssistantResponse(response: unknown): string {
-  if (!isRecord(response) || !isRecord(response.data) || typeof response.data.text !== "string") {
-    return "";
-  }
-  return response.data.text.trim();
-}
-
-function thinkingLevelFromOptions(options: ModelSelection["options"]): string | undefined {
-  if (options === undefined) {
-    return undefined;
-  }
-  for (const option of options) {
-    if (
-      (option.id === "effort" ||
-        option.id === "thinking" ||
-        option.id === "reasoningEffort" ||
-        option.id === "thinkingLevel") &&
-      typeof option.value === "string" &&
-      option.value.length > 0
-    ) {
-      return option.value;
-    }
-  }
-  return undefined;
-}
-
-function firstSelectOption(options: unknown): string | undefined {
-  if (!Array.isArray(options)) {
-    return undefined;
-  }
-  for (const option of options) {
-    if (typeof option === "string" && option.length > 0) {
-      return option;
-    }
-  }
-  return undefined;
-}
-
-function uiResponseForRequest(frame: Record<string, unknown>): Record<string, unknown> | null {
-  if (typeof frame.id !== "string" || frame.id.length === 0) {
-    return null;
-  }
-  if (frame.method === "confirm") {
-    return { type: "extension_ui_response", id: frame.id, confirmed: true };
-  }
-  if (frame.method === "select") {
-    const value = firstSelectOption(frame.options);
-    if (value !== undefined) {
-      return { type: "extension_ui_response", id: frame.id, value };
-    }
-    return { type: "extension_ui_response", id: frame.id, cancelled: true };
-  }
-  if (frame.method === "input" || frame.method === "editor") {
-    return { type: "extension_ui_response", id: frame.id, cancelled: true };
-  }
-  return null;
-}
-
 function mapOmpError(operation: string, cause: unknown, detail: string): TextGenerationError {
   if (isTextGenerationError(cause)) {
     return cause;
   }
-  if (isOmpSpawnError(cause)) {
+  if (Schema.is(OmpSpawnError)(cause)) {
     return new TextGenerationError({
       operation,
       detail: cause.detail.length > 0 ? cause.detail : detail,
@@ -272,88 +121,37 @@ export const makeOmpTextGeneration = Effect.fn("makeOmpTextGeneration")(function
           ),
         );
 
-      const textDeltaRef = yield* Ref.make("");
-      const messageTextRef = yield* Ref.make("");
-      const thinkingRef = yield* Ref.make("");
-      const errorRef = yield* Ref.make<string | undefined>(undefined);
+      const outputRef = yield* Ref.make("");
       const done = yield* Deferred.make<void, TextGenerationError>();
-
-      const applyAssistantMessage = (message: unknown) => {
-        if (!isRecord(message) || message.role !== "assistant") {
-          return Effect.void;
-        }
-        const text = textFromContent(message.content);
-        const thinking = thinkingFromContent(message.content);
-        const error = assistantErrorFromMessage(message);
-        return Effect.gen(function* () {
-          if (text.length > 0) {
-            yield* Ref.set(messageTextRef, text);
-          }
-          if (thinking.length > 0) {
-            yield* Ref.set(thinkingRef, thinking);
-          }
-          if (error !== undefined) {
-            yield* Ref.set(errorRef, error);
-          }
-        });
-      };
 
       const drainFiber = yield* runtime.streamFrames(sessionKey).pipe(
         Stream.runForEach((frame) => {
           if (!isRecord(frame) || typeof frame.type !== "string") {
             return Effect.void;
           }
-          if (frame.type === "extension_ui_request") {
-            const response = uiResponseForRequest(frame);
-            if (response === null) {
-              return Effect.void;
-            }
-            return runtime.write(sessionKey, response).pipe(Effect.ignore);
-          }
-          if (frame.type === "host_uri_request" && typeof frame.id === "string") {
+          if (frame.type === "extension_ui_request" && typeof frame.id === "string") {
             return runtime
               .write(sessionKey, {
-                type: "host_uri_result",
+                type: "extension_ui_response",
                 id: frame.id,
-                isError: true,
-                error: "text generation does not accept host URI requests",
+                cancelled: true,
               })
               .pipe(Effect.ignore);
           }
           if (frame.type === "message_update") {
             const event = frame.assistantMessageEvent;
-            const captureMessage = applyAssistantMessage(frame.message);
             if (
               isRecord(event) &&
               event.type === "text_delta" &&
               typeof event.delta === "string" &&
               event.delta.length > 0
             ) {
-              return Ref.update(textDeltaRef, (current) => current + event.delta).pipe(
-                Effect.andThen(captureMessage),
-              );
+              return Ref.update(outputRef, (current) => current + event.delta);
             }
-            if (
-              isRecord(event) &&
-              event.type === "thinking_delta" &&
-              typeof event.delta === "string" &&
-              event.delta.length > 0
-            ) {
-              return Ref.update(thinkingRef, (current) => current + event.delta).pipe(
-                Effect.andThen(captureMessage),
-              );
-            }
-            return captureMessage;
-          }
-          if (frame.type === "message_end") {
-            return applyAssistantMessage(frame.message);
+            return Effect.void;
           }
           if (frame.type === "agent_end" && frame.isTerminal !== false) {
-            const messages = Array.isArray(frame.messages) ? frame.messages : [];
-            return Effect.forEach(messages, applyAssistantMessage, { discard: true }).pipe(
-              Effect.andThen(Deferred.succeed(done, undefined)),
-              Effect.ignore,
-            );
+            return Deferred.succeed(done, undefined).pipe(Effect.ignore);
           }
           if (frame.type === "prompt_result" && frame.agentInvoked === false) {
             return Deferred.succeed(done, undefined).pipe(Effect.ignore);
@@ -369,13 +167,7 @@ export const makeOmpTextGeneration = Effect.fn("makeOmpTextGeneration")(function
         Effect.forkChild,
       );
 
-      const catalogResponse = yield* runtime
-        .send(sessionKey, { type: "get_available_models" })
-        .pipe(Effect.catch(() => Effect.succeed({})));
-      const parsedModel = resolveOmpModel(
-        modelSelection.model,
-        modelsFromAvailableModelsResponse(catalogResponse),
-      );
+      const parsedModel = parseOmpModelSlug(modelSelection.model);
       if (parsedModel) {
         yield* runtime
           .send(sessionKey, {
@@ -388,16 +180,6 @@ export const makeOmpTextGeneration = Effect.fn("makeOmpTextGeneration")(function
               mapOmpError(operation, cause, "Failed to set omp model for text generation."),
             ),
           );
-      }
-
-      const thinkingLevel = thinkingLevelFromOptions(modelSelection.options);
-      if (thinkingLevel !== undefined) {
-        yield* runtime
-          .send(sessionKey, {
-            type: "set_thinking_level",
-            level: thinkingLevel,
-          })
-          .pipe(Effect.ignore);
       }
 
       const response = yield* runtime
@@ -432,22 +214,11 @@ export const makeOmpTextGeneration = Effect.fn("makeOmpTextGeneration")(function
         Effect.ensuring(Fiber.interrupt(drainFiber)),
       );
 
-      const lastAssistantResponse = yield* runtime
-        .send(sessionKey, { type: "get_last_assistant_text" })
-        .pipe(Effect.catch(() => Effect.succeed({})));
-      const textDelta = (yield* Ref.get(textDeltaRef)).trim();
-      const messageText = (yield* Ref.get(messageTextRef)).trim();
-      const lastAssistantText = textFromLastAssistantResponse(lastAssistantResponse);
-      const thinking = (yield* Ref.get(thinkingRef)).trim();
-      const trimmed = textDelta || messageText || lastAssistantText || thinking;
+      const trimmed = (yield* Ref.get(outputRef)).trim();
       if (!trimmed) {
-        const assistantError = yield* Ref.get(errorRef);
         return yield* new TextGenerationError({
           operation,
-          detail:
-            assistantError !== undefined
-              ? assistantError
-              : "omp returned empty output for text generation.",
+          detail: "omp returned empty output for text generation.",
         });
       }
 
