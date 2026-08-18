@@ -2,11 +2,7 @@
 
 ## Read This First
 
-We are not actively accepting contributions right now.
-
-You can still open an issue or PR, but please do so knowing there is a high chance we close it, defer it forever, or never look at it.
-
-If that sounds annoying, that is because it is. This project is still early and we are trying to keep scope, quality, and direction under control.
+If the following sounds annoying, that is because it is. This project is still early and I am trying to keep scope, quality, and direction under control.
 
 PRs are automatically labeled with a `vouch:*` trust status and a `size:*` diff size based on changed lines.
 
